@@ -1083,7 +1083,9 @@ async def test_resync_model_deployments_by_ids_reloads_credentials_only_for_one_
     model_params: Final = {"model": "openai/gpt-backup"}
     row: Final = _stored_model_row(
         "backup-id",
-        model_params if stored_credential_name is None else model_params | {"litellm_credential_name": stored_credential_name},
+        model_params
+        if stored_credential_name is None
+        else model_params | {"litellm_credential_name": stored_credential_name},
     )
     stored_credential: Final = CredentialItem(
         credential_name="shared-openai",

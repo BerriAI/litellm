@@ -118,10 +118,13 @@ def test_disabled_tracking_does_not_hide_other_connections_quality_counts(
     github: Final = _source(ROISettings(repos=("org/docs",)), issues=None)
     gitlab: Final = _source(ROISettings(source_provider="gitlab", repos=("org/service",)), issues=issues)
     report: Final = summarize_workspace(combine_observed((github, gitlab), ("org/docs", "org/service")), ())
-    assert tuple(
-        (period.new_bug_labeled_issues, period.new_regression_labeled_issues)
-        for period in (report.periods.current, report.periods.previous, report.periods.last_year)
-    ) == ((expected, expected),) * 3
+    assert (
+        tuple(
+            (period.new_bug_labeled_issues, period.new_regression_labeled_issues)
+            for period in (report.periods.current, report.periods.previous, report.periods.last_year)
+        )
+        == ((expected, expected),) * 3
+    )
     assert report.periods.current.merged_prs == 2
 
 

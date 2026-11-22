@@ -107,6 +107,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -159,6 +160,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     publish(litellm.model_cost)
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -178,6 +180,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -201,10 +204,9 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.fixture
-def helicone_global_state(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Iterator[Path]:
+def helicone_global_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[Path]:
     root_logger: Final = logging.getLogger()
     original_handlers: Final = tuple(root_logger.handlers)
     original_level: Final = root_logger.level
@@ -217,13 +219,12 @@ def helicone_global_state(
         monkeypatch.setenv("LITELLM_LOG", "DEBUG")
         yield tmp_path
     finally:
-        added_handlers: Final = tuple(
-            handler for handler in root_logger.handlers if handler not in original_handlers
-        )
+        added_handlers: Final = tuple(handler for handler in root_logger.handlers if handler not in original_handlers)
         root_logger.handlers = list(original_handlers)
         root_logger.setLevel(original_level)
         for handler in added_handlers:
             handler.close()
+
 
 def pre_helicone_setup(log_path: Path) -> None:
     """
@@ -237,6 +238,7 @@ def pre_helicone_setup(log_path: Path) -> None:
     file_handler = logging.FileHandler(log_path, mode="w")
     file_handler.setLevel(logging.DEBUG)
     logger.addHandler(file_handler)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 def test_helicone_logging_async(helicone_global_state: Path):
@@ -261,6 +263,7 @@ def test_helicone_logging_async(helicone_global_state: Path):
     except Exception as e:
         pytest.fail(f"An exception occurred - {e}")
 
+
 async def make_async_calls(metadata=None, **completion_kwargs):
     tasks = []
     for _ in range(5):
@@ -277,6 +280,7 @@ async def make_async_calls(metadata=None, **completion_kwargs):
 
     return total_time
 
+
 def create_async_task(**completion_kwargs):
     completion_args = {
         "model": "azure/gpt-4.1-mini",
@@ -290,6 +294,7 @@ def create_async_task(**completion_kwargs):
     }
     completion_args.update(completion_kwargs)
     return asyncio.create_task(litellm.acompletion(**completion_args))
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 @pytest.mark.asyncio
@@ -324,6 +329,7 @@ async def test_helicone_logging_metadata():
     print(response)
 
     time.sleep(3)
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown", "helicone_global_state")
 def test_helicone_removes_otel_span_from_metadata():

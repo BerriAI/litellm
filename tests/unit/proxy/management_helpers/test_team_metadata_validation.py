@@ -27,6 +27,7 @@ def _registry_with(validator):
     registry.set(validator)
     return registry
 
+
 UNAVAILABLE_MESSAGE = "validation system down, contact ops"
 
 
@@ -410,9 +411,7 @@ async def _drive_update(kind, existing_metadata, payload):
         ),
     ):
         pc.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
-        pc.db.litellm_teamtable.update = AsyncMock(
-            return_value=LiteLLM_TeamTable(team_id=team_id, team_alias="matrix")
-        )
+        pc.db.litellm_teamtable.update = AsyncMock(return_value=LiteLLM_TeamTable(team_id=team_id, team_alias="matrix"))
         pc.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
 
         req = Mock(spec=Request)
@@ -570,6 +569,7 @@ async def test_http_validator_service_outage_fails_closed(monkeypatch, kind, exi
     monkeypatch.setenv("TEAM_METADATA_VALIDATION_SERVICE_URL", _closed_port_url())
 
     with _configured(impls.validate_via_http):
+
         async def _drive():
             if kind == "create":
                 await _drive_create(metadata=request_payload)
@@ -668,7 +668,7 @@ async def test_non_callable_validator_is_rejected_with_clean_500():
 
 
 def test_parse_schema_duplicate_error_lists_offending_keys():
-    with pytest.raises(ValueError, match='team_metadata_schema contains duplicate keys: app_name') as exc_info:
+    with pytest.raises(ValueError, match="team_metadata_schema contains duplicate keys: app_name") as exc_info:
         parse_team_metadata_schema(
             [{"key": "cost_center"}, {"key": "app_name"}, {"key": "cost_center"}, {"key": "app_name"}]
         )

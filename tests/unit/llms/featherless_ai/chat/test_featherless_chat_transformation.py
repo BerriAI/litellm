@@ -5,7 +5,6 @@ These tests validate the FeatherlessAIConfig class which extends OpenAIGPTConfig
 Featherless AI is an OpenAI-compatible provider with a few customizations.
 """
 
-
 import pytest
 
 
@@ -39,7 +38,7 @@ class TestFeatherlessAIConfig:
         """Test error handling when API key is missing"""
         config = FeatherlessAIConfig()
 
-        with pytest.raises(ValueError, match='Missing Featherless AI API Key') as excinfo:
+        with pytest.raises(ValueError, match="Missing Featherless AI API Key") as excinfo:
             config.validate_environment(
                 headers={},
                 model="featherless-ai/Qwerky-72B",
@@ -90,9 +89,7 @@ class TestFeatherlessAIConfig:
         assert result["tool_choice"] == "none"
 
         # Test with unsupported value and drop_params=True
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
+        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
         optional_params = {}
         result = config.map_openai_params(
             non_default_params=non_default_params,
@@ -103,9 +100,7 @@ class TestFeatherlessAIConfig:
         assert "tool_choice" not in result
 
         # Test with unsupported value and drop_params=False
-        non_default_params = {
-            "tool_choice": {"type": "function", "function": {"name": "get_weather"}}
-        }
+        non_default_params = {"tool_choice": {"type": "function", "function": {"name": "get_weather"}}}
         optional_params = {}
         with pytest.raises(Exception, match="litellm\\.UnsupportedParamsError: Featherless AI doesn't") as excinfo:
             config.map_openai_params(
@@ -219,9 +214,7 @@ class TestFeatherlessAIConfig:
         """
         import litellm
 
-        litellm.disable_aiohttp_transport = (
-            True  # since this uses respx, we need to set use_aiohttp_transport to False
-        )
+        litellm.disable_aiohttp_transport = True  # since this uses respx, we need to set use_aiohttp_transport to False
         from litellm import completion
 
         # Set up environment variables for the test
@@ -259,9 +252,7 @@ class TestFeatherlessAIConfig:
         # Make the actual API call through LiteLLM
         response = completion(
             model=model,
-            messages=[
-                {"role": "user", "content": "write code for saying hi from LiteLLM"}
-            ],
+            messages=[{"role": "user", "content": "write code for saying hi from LiteLLM"}],
             api_key=api_key,
             api_base=api_base,
         )

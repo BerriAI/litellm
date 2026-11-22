@@ -42,9 +42,7 @@ def guardrail():
 
 
 @pytest.mark.asyncio
-async def test_code_execution_compliance_dataset_scores_100_percent(
-    guardrail, compliance_dataset
-):
+async def test_code_execution_compliance_dataset_scores_100_percent(guardrail, compliance_dataset):
     """Run full compliance dataset against apply_guardrail; expect 100% match."""
     request_data = {}
     passed = 0
@@ -70,14 +68,10 @@ async def test_code_execution_compliance_dataset_scores_100_percent(
                     "id": item["id"],
                     "expected": expected,
                     "actual": actual,
-                    "prompt_preview": (
-                        prompt[:80] + "..." if len(prompt) > 80 else prompt
-                    ),
+                    "prompt_preview": (prompt[:80] + "..." if len(prompt) > 80 else prompt),
                 }
             )
     total = len(compliance_dataset)
     pct = 100.0 * passed / total if total else 0
-    assert (
-        failed == []
-    ), f"Compliance score {passed}/{total} ({pct:.1f}%). Failures: {failed}"
+    assert failed == [], f"Compliance score {passed}/{total} ({pct:.1f}%). Failures: {failed}"
     assert pct == 100.0, f"Expected 100% compliance, got {pct:.1f}%"

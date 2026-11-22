@@ -70,10 +70,12 @@ def test_naive_now_is_treated_as_utc():
 
 def test_team_in_second_window_is_kept():
     deployments: Final = (
-        _deployment([
-            {"start": "01:00", "end": "02:00", "timezone": "UTC", "team_ids": ["team-other"]},
-            {"start": "20:00", "end": "23:59", "timezone": "UTC", "team_ids": ["team-a"]},
-        ]),
+        _deployment(
+            [
+                {"start": "01:00", "end": "02:00", "timezone": "UTC", "team_ids": ["team-other"]},
+                {"start": "20:00", "end": "23:59", "timezone": "UTC", "team_ids": ["team-a"]},
+            ]
+        ),
     )
     result: Final = filter_reserved_deployments(
         deployments, "team-a", now=datetime(2026, 3, 9, 21, 0, tzinfo=timezone.utc)
@@ -112,9 +114,7 @@ def test_listed_team_is_kept():
 
 def test_deployment_without_windows_kept_for_anyone():
     deployments: Final = (_deployment(),)
-    result: Final = filter_reserved_deployments(
-        deployments, None, now=datetime(2026, 3, 10, 4, 0, tzinfo=timezone.utc)
-    )
+    result: Final = filter_reserved_deployments(deployments, None, now=datetime(2026, 3, 10, 4, 0, tzinfo=timezone.utc))
     assert result.deployments == deployments
     assert result.blocking_window is None
 

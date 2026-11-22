@@ -164,9 +164,7 @@ async def test_static_headers_do_not_leak_between_agents():
     Agent B has no headers.
     After invoking A then B, B must NOT receive X-Agent-A-Token.
     """
-    agent_a = _make_agent(
-        "id-a", "agent-a", static_headers={"X-Agent-A-Token": "secret-a"}
-    )
+    agent_a = _make_agent("id-a", "agent-a", static_headers={"X-Agent-A-Token": "secret-a"})
     agent_b = _make_agent("id-b", "agent-b")
 
     headers_a = await _invoke_agent(agent_a, _make_request())

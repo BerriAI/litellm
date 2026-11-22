@@ -54,9 +54,7 @@ def test_register_clears_stale_entries_on_reload():
     )
 
     assert sandbox_tools.resolve_sandbox_tool("new") is not None
-    assert (
-        sandbox_tools.resolve_sandbox_tool("old") is None
-    ), "stale tool must be gone after the config is reloaded"
+    assert sandbox_tools.resolve_sandbox_tool("old") is None, "stale tool must be gone after the config is reloaded"
     _reset()
 
 
@@ -76,9 +74,9 @@ def test_register_empty_list_clears_removed_tools():
 
     sandbox_tools.register_sandbox_tools([])
 
-    assert (
-        sandbox_tools.resolve_sandbox_tool("e2b_default") is None
-    ), "removing sandbox_tools from config must clear stale credentials"
+    assert sandbox_tools.resolve_sandbox_tool("e2b_default") is None, (
+        "removing sandbox_tools from config must clear stale credentials"
+    )
     _reset()
 
 
@@ -162,9 +160,7 @@ def test_register_swaps_registry_atomically():
     concurrent resolve never observes a half-populated or transiently empty
     registry between clearing and repopulating."""
     _reset()
-    sandbox_tools.register_sandbox_tools(
-        [{"sandbox_tool_name": "a", "litellm_params": {"sandbox_provider": "e2b"}}]
-    )
+    sandbox_tools.register_sandbox_tools([{"sandbox_tool_name": "a", "litellm_params": {"sandbox_provider": "e2b"}}])
     before = sandbox_tools._SANDBOX_TOOL_REGISTRY
 
     sandbox_tools.register_sandbox_tools(

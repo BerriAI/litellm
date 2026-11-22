@@ -78,9 +78,7 @@ class TestDashScopeImageGenerationConfig:
             "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/",
         ],
     )
-    def test_get_complete_url_ignores_chat_compatible_mode_base(
-        self, chat_api_base: str
-    ):
+    def test_get_complete_url_ignores_chat_compatible_mode_base(self, chat_api_base: str):
         url = self.cfg.get_complete_url(chat_api_base, None, "qwen-image-3.0", {}, {})
         assert url == DEFAULT_API_BASE
 
@@ -105,9 +103,7 @@ class TestDashScopeImageGenerationConfig:
             ),
         ],
     )
-    def test_get_complete_url_derives_from_the_domain(
-        self, api_base: str, expected: str
-    ):
+    def test_get_complete_url_derives_from_the_domain(self, api_base: str, expected: str):
         url: Final = self.cfg.get_complete_url(api_base, None, "qwen-image-3.0", {}, {})
         assert url == expected
 
@@ -182,9 +178,7 @@ class TestDashScopeImageGenerationConfig:
             headers={},
         )
         assert req["model"] == model
-        assert req["input"]["messages"][0]["content"][0]["text"] == (
-            "a poster with small multilingual text"
-        )
+        assert req["input"]["messages"][0]["content"][0]["text"] == ("a poster with small multilingual text")
         assert req["parameters"]["size"] == "2048*2048"
         assert req["parameters"]["n"] == 6
 
@@ -449,11 +443,7 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
                     "finish_reason": "stop",
                     "message": {
                         "role": "assistant",
-                        "content": [
-                            {
-                                "image": "https://dashscope-result.oss.aliyuncs.com/test.png"
-                            }
-                        ],
+                        "content": [{"image": "https://dashscope-result.oss.aliyuncs.com/test.png"}],
                     },
                 }
             ]
@@ -467,9 +457,7 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         },
     }
 
-    with patch(
-        "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
-    ) as mock_post:
+    with patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post") as mock_post:
         mock_http_response = MagicMock()
         mock_http_response.json.return_value = mock_response_body
         mock_http_response.status_code = 200
@@ -486,15 +474,11 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
         assert response is not None
         assert response.data is not None
         assert len(response.data) == 1
-        assert (
-            response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
-        )
+        assert response.data[0].url == "https://dashscope-result.oss.aliyuncs.com/test.png"
 
         # Verify the HTTP call was made to the DashScope endpoint
         call_args = mock_post.call_args
-        called_url = (
-            call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
-        )
+        called_url = call_args[0][0] if call_args[0] else call_args.kwargs.get("url", "")
         assert called_url == DEFAULT_API_BASE
 
         # Verify request body contains DashScope format
@@ -504,7 +488,6 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             assert "input" in body
             assert "messages" in body["input"]
             assert body["parameters"]["size"] == "1024*1024"
-
 
 
 @pytest.mark.parametrize(
@@ -520,7 +503,12 @@ def test_litellm_image_generation_dashscope_end_to_end(model: str):
             "https://images.example.com/generate",
         ),
         (None, "https://gateway.example.com/dashscope/images", "", "https://gateway.example.com/dashscope/images"),
-        (None, "https://dashscope-us.aliyuncs.com", "https://images.example.com/generate", "https://images.example.com/generate"),
+        (
+            None,
+            "https://dashscope-us.aliyuncs.com",
+            "https://images.example.com/generate",
+            "https://images.example.com/generate",
+        ),
         (
             None,
             f"https://dashscope-us.aliyuncs.com{DASHSCOPE_IMAGE_PATH}",
@@ -652,9 +640,7 @@ def test_transform_response_skips_content_items_without_an_image():
         ({"code": 429, "message": {"detail": "slow down"}}, "{'detail': 'slow down'}"),
     ],
 )
-def test_transform_response_reports_api_error_bodies(
-    payload: dict[str, object], message: str
-):
+def test_transform_response_reports_api_error_bodies(payload: dict[str, object], message: str):
     with pytest.raises(BaseLLMException) as exc_info:
         _transform_response(payload)
 

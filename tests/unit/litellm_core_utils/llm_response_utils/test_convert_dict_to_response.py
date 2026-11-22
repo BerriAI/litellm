@@ -9,8 +9,27 @@ import pytest
 
 import litellm
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import LiteLLMResponseObjectHandler, convert_to_model_response_object, convert_to_streaming_response, handle_invalid_parallel_tool_calls, safe_convert_created_field, should_convert_tool_call_to_json_mode
-from litellm.types.utils import ChatCompletionMessageCustomToolCall, ChatCompletionMessageToolCall, Choices, CompletionTokensDetailsWrapper, Function, ImageObject, ImageResponse, Message, ModelResponse, PromptTokensDetailsWrapper, Usage
+from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+    LiteLLMResponseObjectHandler,
+    convert_to_model_response_object,
+    convert_to_streaming_response,
+    handle_invalid_parallel_tool_calls,
+    safe_convert_created_field,
+    should_convert_tool_call_to_json_mode,
+)
+from litellm.types.utils import (
+    ChatCompletionMessageCustomToolCall,
+    ChatCompletionMessageToolCall,
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Function,
+    ImageObject,
+    ImageResponse,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
@@ -107,7 +126,7 @@ OPENAI_CUSTOM_TOOL_CALL_RESPONSE = {
                         "type": "custom",
                         "custom": {
                             "name": "ApplyPatch",
-                            "input": "*** Begin Patch\n*** Update File: main.py\n@@\n+def hello():\n+    print(\"Hello\")\n*** End Patch\n",
+                            "input": '*** Begin Patch\n*** Update File: main.py\n@@\n+def hello():\n+    print("Hello")\n*** End Patch\n',
                         },
                     }
                 ],
@@ -291,6 +310,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="session")
 def event_loop():
     try:
@@ -299,6 +319,7 @@ def event_loop():
         loop = asyncio.new_event_loop()
     yield loop
     loop.close()
+
 
 @pytest.fixture(scope="function")
 def setup_and_teardown(event_loop):
@@ -333,6 +354,7 @@ def setup_and_teardown(event_loop):
     if pending:
         event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "set_verbose": getattr(litellm, "set_verbose", False),
@@ -347,12 +369,16 @@ _SCALAR_DEFAULTS = {
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.parametrize("reuse_response", [False, True])
 def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: bool) -> None:
     svg_usage: Final = {
-        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
-        "reasoning_tokens": 5, "total_tokens": 30,
+        "model": "gpt-6.2-sol",
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "reasoning_tokens": 5,
+        "total_tokens": 30,
     }
     result: Final = convert_to_model_response_object(
         response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
@@ -365,10 +391,13 @@ def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: boo
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
-@pytest.mark.parametrize("svg_usage", [
-    {"input_tokens": 10, "output_tokens": 20},
-    {"model": "gpt-6.2-sol", "input_tokens": "invalid", "output_tokens": 20},
-])
+@pytest.mark.parametrize(
+    "svg_usage",
+    [
+        {"input_tokens": 10, "output_tokens": 20},
+        {"model": "gpt-6.2-sol", "input_tokens": "invalid", "output_tokens": 20},
+    ],
+)
 def test_malformed_svg_usage_keeps_image_response_intact(svg_usage: dict[str, object]) -> None:
     result: Final = convert_to_model_response_object(
         response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
@@ -390,12 +419,18 @@ def test_negative_svg_tokens_keep_image_response_and_rendering_cost(
                 "created": 1234567890,
                 "data": [{"b64_json": "image"}],
                 "usage": {
-                    "input_tokens": 10, "output_tokens": 20, "total_tokens": 30,
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
                     "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
                 },
                 "svg_usage": {
-                    "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
-                    "reasoning_tokens": 5, "total_tokens": 30, token_field: -1,
+                    "model": "gpt-6.2-sol",
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "reasoning_tokens": 5,
+                    "total_tokens": 30,
+                    token_field: -1,
                 },
             },
             response_type="image_generation",
@@ -419,8 +454,11 @@ def test_svg_usage_defaults_optional_token_counts() -> None:
     result: Final = ImageResponse(svg_usage={"model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20})
     assert result.svg_usage is not None
     assert result.svg_usage.model_dump() == {
-        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
-        "reasoning_tokens": 0, "total_tokens": 0,
+        "model": "gpt-6.2-sol",
+        "input_tokens": 10,
+        "output_tokens": 20,
+        "reasoning_tokens": 0,
+        "total_tokens": 0,
     }
 
 
@@ -438,6 +476,7 @@ def test_convert_to_image_response_basic():
     assert result.created == 1234567890
     assert result.data[0].url == "http://example.com/image.jpg"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_hidden_params():
     # Test with hidden params
@@ -450,6 +489,7 @@ def test_convert_to_image_response_with_hidden_params():
     result = LiteLLMResponseObjectHandler.convert_to_image_response(response_dict, hidden_params=hidden_params)
 
     assert result._hidden_params == {"api_key": "test_key"}
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_multiple_images():
@@ -468,6 +508,7 @@ def test_convert_to_image_response_multiple_images():
     assert result.data[0].url == "http://example.com/image1.jpg"
     assert result.data[1].url == "http://example.com/image2.jpg"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_b64_json():
     # Test handling b64_json in response
@@ -479,6 +520,7 @@ def test_convert_to_image_response_with_b64_json():
     result = LiteLLMResponseObjectHandler.convert_to_image_response(response_dict)
 
     assert result.data[0].b64_json == "base64encodedstring"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_extra_fields():
@@ -500,6 +542,7 @@ def test_convert_to_image_response_with_extra_fields():
 
     assert result.data[0].url == "http://example.com/image1.jpg"
     assert result.data[1].url == "http://example.com/image2.jpg"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_extra_fields_2():
@@ -524,6 +567,7 @@ def test_convert_to_image_response_with_extra_fields_2():
 
     assert result.data[0].url == "http://example.com/image1.jpg"
     assert result.data[1].url == "http://example.com/image2.jpg"
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_none_usage_fields():
@@ -562,6 +606,7 @@ def test_convert_to_image_response_with_none_usage_fields():
     assert result.usage.input_tokens_details.image_tokens == 0
     assert result.usage.input_tokens_details.text_tokens == 0
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_partial_none_usage_fields():
     """
@@ -594,6 +639,7 @@ def test_convert_to_image_response_with_partial_none_usage_fields():
     assert result.usage.input_tokens_details is not None
     assert result.usage.input_tokens_details.image_tokens == 0
     assert result.usage.input_tokens_details.text_tokens == 0
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_with_valid_usage_fields():
@@ -628,6 +674,7 @@ def test_convert_to_image_response_with_valid_usage_fields():
     assert result.usage.input_tokens_details is not None
     assert result.usage.input_tokens_details.image_tokens == 30
     assert result.usage.input_tokens_details.text_tokens == 20
+
 
 def test_convert_to_model_response_object_basic():
     """Test basic conversion with all fields present."""
@@ -691,18 +738,15 @@ def test_convert_to_model_response_object_basic():
     assert result.usage.prompt_tokens == 19
     assert result.usage.completion_tokens == 10
     assert result.usage.total_tokens == 29
-    assert result.usage.prompt_tokens_details == PromptTokensDetailsWrapper(
-        cached_tokens=0
-    )
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.prompt_tokens_details == PromptTokensDetailsWrapper(cached_tokens=0)
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     # Other fields
     assert result.system_fingerprint == "fp_6b68a8204b"
 
     # hidden params
     assert result._hidden_params is not None
+
 
 def test_convert_image_input_dict_response_to_chat_completion_response():
     """Test conversion on a response with an image input."""
@@ -754,20 +798,16 @@ def test_convert_image_input_dict_response_to_chat_completion_response():
     assert choice.index == 0
     assert isinstance(choice.message, Message)
     assert choice.message.role == "assistant"
-    assert (
-        choice.message.content
-        == "\n\nThis image shows a wooden boardwalk extending through a lush green marshland."
-    )
+    assert choice.message.content == "\n\nThis image shows a wooden boardwalk extending through a lush green marshland."
     assert choice.finish_reason == "stop"
 
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 12
     assert result.usage.total_tokens == 21
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result._hidden_params is not None
+
 
 def test_convert_to_model_response_object_tool_calls_invalid_json_arguments():
     """
@@ -831,13 +871,8 @@ def test_convert_to_model_response_object_tool_calls_invalid_json_arguments():
     assert len(result.choices) == 1
     assert result.choices[0].message.content is None
     assert len(result.choices[0].message.tool_calls) == 1
-    assert (
-        result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
-    )
-    assert (
-        result.choices[0].message.tool_calls[0].function.arguments
-        == '{"location":"Boston, MA","unit":"fahren'
-    )
+    assert result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location":"Boston, MA","unit":"fahren'
     assert result.choices[0].finish_reason == "length"
     assert result.model == "gpt-4o-2024-08-06"
     assert result.created == 1729337288
@@ -845,6 +880,7 @@ def test_convert_to_model_response_object_tool_calls_invalid_json_arguments():
     assert result.usage.prompt_tokens == 92
     assert result.usage.total_tokens == 102
     assert result.system_fingerprint == "fp_45c6de4934"
+
 
 def test_convert_to_model_response_object_tool_calls_valid_json_arguments():
     """
@@ -908,13 +944,8 @@ def test_convert_to_model_response_object_tool_calls_valid_json_arguments():
     assert len(result.choices) == 1
     assert result.choices[0].message.content is None
     assert len(result.choices[0].message.tool_calls) == 1
-    assert (
-        result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
-    )
-    assert (
-        result.choices[0].message.tool_calls[0].function.arguments
-        == '{"location":"Boston, MA","unit":"fahrenheit"}'
-    )
+    assert result.choices[0].message.tool_calls[0].function.name == "get_current_weather"
+    assert result.choices[0].message.tool_calls[0].function.arguments == '{"location":"Boston, MA","unit":"fahrenheit"}'
     assert result.choices[0].finish_reason == "length"
     assert result.model == "gpt-4o-2024-08-06"
     assert result.created == 1729337288
@@ -922,6 +953,7 @@ def test_convert_to_model_response_object_tool_calls_valid_json_arguments():
     assert result.usage.prompt_tokens == 92
     assert result.usage.total_tokens == 102
     assert result.system_fingerprint == "fp_45c6de4934"
+
 
 def test_convert_to_model_response_object_json_mode():
     """
@@ -972,6 +1004,7 @@ def test_convert_to_model_response_object_json_mode():
     assert result.usage.total_tokens == 10
     assert result.usage.prompt_tokens == 5
     assert result.usage.completion_tokens == 5
+
 
 def test_convert_to_model_response_object_with_logprobs():
     """
@@ -1208,9 +1241,7 @@ def test_convert_to_model_response_object_with_logprobs():
     assert result.usage.prompt_tokens == 9
     assert result.usage.completion_tokens == 9
     assert result.usage.total_tokens == 18
-    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(
-        reasoning_tokens=0
-    )
+    assert result.usage.completion_tokens_details == CompletionTokensDetailsWrapper(reasoning_tokens=0)
 
     assert result.system_fingerprint is None
     assert result._hidden_params is not None
@@ -1267,6 +1298,7 @@ def test_convert_to_model_response_object_error():
             convert_tool_call_to_json_mode=False,
         )
 
+
 def test_image_generation_openai_with_pydantic_warning(caplog):
     try:
         import logging
@@ -1303,6 +1335,7 @@ def test_image_generation_openai_with_pydantic_warning(caplog):
         assert isinstance(resp.data[0], ImageObject)
     except Exception as e:
         pytest.fail(f"Test failed with exception: {e}")
+
 
 def test_convert_to_model_response_object_with_empty_str():
     """Test that convert_to_model_response_object handles empty strings correctly."""
@@ -1407,6 +1440,7 @@ def test_convert_to_model_response_object_with_empty_str():
     assert resp is not None
     assert resp.choices[0].message.content is not None
 
+
 def test_convert_to_model_response_object_with_thinking_content():
     """Test that convert_to_model_response_object handles thinking content correctly."""
 
@@ -1453,6 +1487,7 @@ def test_convert_to_model_response_object_with_thinking_content():
     resp: ModelResponse = convert_to_model_response_object(**args)
     assert resp is not None
     assert resp.choices[0].message.reasoning_content is not None
+
 
 def test_convert_to_model_response_object_with_empty_error_object():
     """
@@ -1511,9 +1546,8 @@ def test_convert_to_model_response_object_with_empty_error_object():
     assert isinstance(result, ModelResponse)
     assert result.model == "minimax-m2.1"
     assert len(result.choices) == 1
-    assert (
-        result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
-    )
+    assert result.choices[0].message.content == "Hey! I'm doing well, thanks for asking!"
+
 
 def test_convert_to_model_response_object_with_real_error():
     """
@@ -1545,6 +1579,7 @@ def test_convert_to_model_response_object_with_real_error():
     # The exception should have the error message
     assert hasattr(exc_info.value, "message")
     assert "Rate limit exceeded" in str(exc_info.value.message)
+
 
 def test_convert_to_model_response_object_with_empty_dict_error():
     """
@@ -1584,6 +1619,7 @@ def test_convert_to_model_response_object_with_empty_dict_error():
 
     assert isinstance(result, ModelResponse)
     assert result.choices[0].message.content == "Hello!"
+
 
 def test_convert_to_model_response_object_preserves_provider_specific_fields_from_proxy():
     """
@@ -1662,18 +1698,13 @@ def test_convert_to_model_response_object_preserves_provider_specific_fields_fro
     assert result.id == "chatcmpl-proxy-123"
 
     choice = result.choices[0]
-    assert (
-        choice.message.content
-        == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
-    )
+    assert choice.message.content == "Based on current reviews, the Sony WH-1000XM5 remains one of the best headphones."
     assert choice.message.provider_specific_fields is not None
     assert "citations" in choice.message.provider_specific_fields
     assert choice.message.provider_specific_fields["citations"] == citations
     assert "web_search_results" in choice.message.provider_specific_fields
-    assert (
-        choice.message.provider_specific_fields["web_search_results"]
-        == web_search_results
-    )
+    assert choice.message.provider_specific_fields["web_search_results"] == web_search_results
+
 
 def test_convert_to_model_response_object_keeps_reasoning_items_from_a_cached_response():
     reasoning_items: Final = [
@@ -1761,6 +1792,7 @@ def test_convert_to_model_response_object_provider_specific_fields_merges_extra_
     assert "custom_extra_field" in psf
     assert psf["custom_extra_field"] == "extra_value"
 
+
 def test_convert_to_model_response_object_no_provider_specific_fields_still_works():
     """
     Test that responses without provider_specific_fields continue to work as before.
@@ -1806,6 +1838,7 @@ def test_convert_to_model_response_object_no_provider_specific_fields_still_work
     assert result.choices[0].message.refusal is None
     assert result.choices[0].message.provider_specific_fields is None
 
+
 def test_convert_to_model_response_object_with_error_code_only():
     """
     Test that errors with only a code (no message) are still treated as real errors.
@@ -1830,6 +1863,7 @@ def test_convert_to_model_response_object_with_error_code_only():
         )
 
     assert exc_info.value.status_code == 500
+
 
 def test_model_prefix_preservation():
     """
@@ -1859,6 +1893,7 @@ def test_model_prefix_preservation():
 
     assert result.model == "openai/gpt-4o"
 
+
 def test_model_without_prefix():
     """
     Test that when model_response_object has no prefix (e.g. 'gpt-4'),
@@ -1886,6 +1921,7 @@ def test_model_without_prefix():
     )
 
     assert result.model == "gpt-4"
+
 
 def test_extra_response_fields_preserved():
     """
@@ -1915,6 +1951,7 @@ def test_extra_response_fields_preserved():
     )
 
     assert result.service_tier == "default"
+
 
 def test_hidden_params_and_response_headers_set():
     """
@@ -1950,6 +1987,7 @@ def test_hidden_params_and_response_headers_set():
     assert "additional_headers" in result._hidden_params
     assert result._response_headers == response_headers
 
+
 def test_response_ms_computed():
     """
     Test that _response_ms is computed correctly from start_time and end_time.
@@ -1979,6 +2017,7 @@ def test_response_ms_computed():
 
     assert result._response_ms == pytest.approx(250.0)
 
+
 def test_error_message_includes_function_args():
     """
     Test that when an exception occurs, the error message includes
@@ -1991,7 +2030,7 @@ def test_error_message_includes_function_args():
         "choices": [{"index": 0}],
     }
 
-    with pytest.raises(Exception, match='in convert_to_model_response_object') as exc_info:
+    with pytest.raises(Exception, match="in convert_to_model_response_object") as exc_info:
         convert_to_model_response_object(
             model_response_object=ModelResponse(),
             response_object=response_object,
@@ -2004,6 +2043,7 @@ def test_error_message_includes_function_args():
     assert "received_args=" in error_msg
     assert "response_object" in error_msg
     assert "response_type" in error_msg
+
 
 @pytest.mark.parametrize("falsy_id", [None, ""])
 def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(falsy_id):
@@ -2031,6 +2071,7 @@ def test_convert_to_model_response_object_falsy_id_preserves_auto_generated(fals
     )
     assert result.id == original_id
     assert result.id.startswith("chatcmpl-")
+
 
 def test_convert_to_model_response_object_default_usage_overwritten():
     """
@@ -2074,6 +2115,7 @@ def test_convert_to_model_response_object_default_usage_overwritten():
     assert result.usage.prompt_tokens == 15
     assert result.usage.completion_tokens == 7
     assert result.usage.total_tokens == 22
+
 
 def test_convert_to_model_response_object_with_null_top_logprobs():
     """
@@ -2165,6 +2207,7 @@ def test_convert_to_model_response_object_with_null_top_logprobs():
     for token_logprob in choice.logprobs.content:
         assert token_logprob.top_logprobs == []
         assert isinstance(token_logprob.top_logprobs, list)
+
 
 class TestMissingChoicesGuard:
     """
@@ -2291,9 +2334,7 @@ class TestMissingChoicesGuard:
 
         async def consume():
             chunks = []
-            async for chunk in convert_to_streaming_response_async(
-                response_object=response_object
-            ):
+            async for chunk in convert_to_streaming_response_async(response_object=response_object):
                 chunks.append(chunk)
             return chunks
 
@@ -2320,6 +2361,7 @@ class TestMissingChoicesGuard:
             )
 
         assert "copilot_usage" in exc_info.value.message
+
 
 class TestNormalizeImagesForMessage:
     def test_none_returns_none(self):
@@ -2355,6 +2397,7 @@ class TestNormalizeImagesForMessage:
         images = [{"url": "http://a.png", "index": 5}]
         result = _normalize_images_for_message(images)
         assert result[0]["index"] == 5
+
 
 class TestSafeConvertCreatedField:
     def test_none_returns_current_time(self):
@@ -2397,6 +2440,7 @@ class TestSafeConvertCreatedField:
 
         result = safe_convert_created_field("not-a-number")
         assert abs(result - int(time.time())) <= 1
+
 
 class TestConvertToStreamingResponse:
     def test_none_raises(self):
@@ -2491,12 +2535,7 @@ class TestConvertToStreamingResponse:
         }
 
         async def run():
-            return [
-                chunk
-                async for chunk in convert_to_streaming_response_async(
-                    response_object=response_object
-                )
-            ]
+            return [chunk async for chunk in convert_to_streaming_response_async(response_object=response_object)]
 
         chunks = asyncio.run(run())
         assert len(chunks) == 2
@@ -2505,6 +2544,7 @@ class TestConvertToStreamingResponse:
         assert chunks[0].choices[0].finish_reason is None
         assert chunks[1].choices[0].delta.tool_calls is None
         assert chunks[1].choices[0].finish_reason == "tool_calls"
+
 
 class TestConvertToStreamingResponseAsync:
     def test_none_raises(self):
@@ -2542,12 +2582,7 @@ class TestConvertToStreamingResponseAsync:
         }
 
         async def run():
-            return [
-                chunk
-                async for chunk in convert_to_streaming_response_async(
-                    response_object=response_object
-                )
-            ]
+            return [chunk async for chunk in convert_to_streaming_response_async(response_object=response_object)]
 
         chunks = asyncio.run(run())
         # Cached replay is sliced into word-shaped chunks to preserve
@@ -2605,34 +2640,19 @@ class TestConvertToStreamingResponseAsync:
         }
 
         async def run():
-            return [
-                chunk
-                async for chunk in convert_to_streaming_response_async(
-                    response_object=response_object
-                )
-            ]
+            return [chunk async for chunk in convert_to_streaming_response_async(response_object=response_object)]
 
         chunks = asyncio.run(run())
 
-        assert (
-            "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
-        )
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == "Final answer"
         assert chunks[0].choices[0].delta.content is None
         assert chunks[0].choices[0].delta.reasoning_content == "cached reasoning"
         assert chunks[0].choices[0].delta.thinking_blocks == thinking_blocks
-        last_content = max(
-            i for i, c in enumerate(chunks) if c.choices[0].delta.content
-        )
+        last_content = max(i for i, c in enumerate(chunks) if c.choices[0].delta.content)
         assert chunks[last_content].choices[0].delta.annotations == annotations
-        assert [
-            i for i, c in enumerate(chunks) if c.choices[0].delta.get("annotations")
-        ] == [last_content]
-        assert not any(
-            hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:]
-        )
-        assert not any(
-            hasattr(c.choices[0].delta, "thinking_blocks") for c in chunks[1:]
-        )
+        assert [i for i, c in enumerate(chunks) if c.choices[0].delta.get("annotations")] == [last_content]
+        assert not any(hasattr(c.choices[0].delta, "reasoning_content") for c in chunks[1:])
+        assert not any(hasattr(c.choices[0].delta, "thinking_blocks") for c in chunks[1:])
 
 
 class TestHandleInvalidParallelToolCalls:
@@ -2714,6 +2734,7 @@ class TestHandleInvalidParallelToolCalls:
         assert len(result) == 1
         assert result[0].id == "call_1"
 
+
 class TestShouldConvertToolCallToJsonMode:
     def test_returns_true_when_conditions_met(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2722,12 +2743,7 @@ class TestShouldConvertToolCallToJsonMode:
         from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
-        assert (
-            should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is True
-        )
+        assert should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is True
 
     def test_returns_false_when_flag_off(self):
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -2737,10 +2753,7 @@ class TestShouldConvertToolCallToJsonMode:
 
         tool_calls = [{"function": {"name": RESPONSE_FORMAT_TOOL_NAME}}]
         assert (
-            should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=False
-            )
-            is False
+            should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=False) is False
         )
 
     def test_returns_false_when_wrong_tool_name(self):
@@ -2750,10 +2763,7 @@ class TestShouldConvertToolCallToJsonMode:
 
         tool_calls = [{"function": {"name": "some_other_tool"}}]
         assert (
-            should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is False
+            should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is False
         )
 
     def test_returns_false_when_multiple_tool_calls(self):
@@ -2767,10 +2777,7 @@ class TestShouldConvertToolCallToJsonMode:
             {"function": {"name": "other"}},
         ]
         assert (
-            should_convert_tool_call_to_json_mode(
-                tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-            )
-            is False
+            should_convert_tool_call_to_json_mode(tool_calls=tool_calls, convert_tool_call_to_json_mode=True) is False
         )
 
     def test_returns_false_when_none(self):
@@ -2778,12 +2785,8 @@ class TestShouldConvertToolCallToJsonMode:
             should_convert_tool_call_to_json_mode,
         )
 
-        assert (
-            should_convert_tool_call_to_json_mode(
-                tool_calls=None, convert_tool_call_to_json_mode=True
-            )
-            is False
-        )
+        assert should_convert_tool_call_to_json_mode(tool_calls=None, convert_tool_call_to_json_mode=True) is False
+
 
 class TestConvertToolCallToJsonMode:
     def test_converts_when_should(self):
@@ -2803,9 +2806,7 @@ class TestConvertToolCallToJsonMode:
                 ),
             )
         ]
-        message, finish_reason = convert_fn(
-            tool_calls=tool_calls, convert_tool_call_to_json_mode=True
-        )
+        message, finish_reason = convert_fn(tool_calls=tool_calls, convert_tool_call_to_json_mode=True)
         assert message is not None
         assert message.content == '{"key": "value"}'
         assert finish_reason == "stop"
@@ -2827,11 +2828,10 @@ class TestConvertToolCallToJsonMode:
                 ),
             )
         ]
-        message, finish_reason = convert_fn(
-            tool_calls=tool_calls, convert_tool_call_to_json_mode=False
-        )
+        message, finish_reason = convert_fn(tool_calls=tool_calls, convert_tool_call_to_json_mode=False)
         assert message is None
         assert finish_reason is None
+
 
 class TestConvertToModelResponseObjectEmbedding:
     def test_basic_embedding_response(self):
@@ -2857,6 +2857,7 @@ class TestConvertToModelResponseObjectEmbedding:
         assert result.object == "list"
         assert result.data == [{"embedding": [0.1, 0.2, 0.3], "index": 0}]
         assert result.usage.prompt_tokens == 5
+
 
 class TestConvertToModelResponseObjectAudioTranscription:
     def test_basic_transcription(self):
@@ -2935,6 +2936,7 @@ class TestConvertToModelResponseObjectAudioTranscription:
         assert "received_args=" in rendered
         assert "CANARYTRANSCRIPT" not in rendered
 
+
 class TestConvertToModelResponseObjectRerank:
     def test_basic_rerank(self):
         from litellm.types.utils import RerankResponse
@@ -2952,6 +2954,7 @@ class TestConvertToModelResponseObjectRerank:
         )
         assert result.id == "rerank-123"
         assert result.results[0]["relevance_score"] == 0.9
+
 
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
@@ -3212,7 +3215,11 @@ def test_convert_to_model_response_object_function_output():
 
 @pytest.mark.parametrize(
     "vllm_choice_fields",
-    [{"stop_reason": ", 5", "token_ids": [16, 11, 220]}, {"stop_reason": 151645}, {"stop_reason": None, "token_ids": None}],
+    [
+        {"stop_reason": ", 5", "token_ids": [16, 11, 220]},
+        {"stop_reason": 151645},
+        {"stop_reason": None, "token_ids": None},
+    ],
     ids=["stop-string-with-token-ids", "stop-token", "natural-stop"],
 )
 def test_vllm_choice_fields_stay_on_the_choice_through_a_cache_round_trip(
@@ -3352,9 +3359,13 @@ def _message_with_annotations(annotations: list[dict[str, object]]) -> Message:
         ],
         "usage": {"completion_tokens": 1, "prompt_tokens": 1, "total_tokens": 2},
     }
-    return convert_to_model_response_object(
-        response_object=response, model_response_object=ModelResponse(), response_type="completion"
-    ).choices[0].message
+    return (
+        convert_to_model_response_object(
+            response_object=response, model_response_object=ModelResponse(), response_type="completion"
+        )
+        .choices[0]
+        .message
+    )
 
 
 def test_annotations_typed_other_than_url_citation_move_to_provider_specific_fields() -> None:

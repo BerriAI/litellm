@@ -16,9 +16,7 @@ def _request(
     headers: Optional[Dict[str, str]] = None,
     client: Optional[Tuple[str, int]] = ("203.0.113.7", 5555),
 ) -> Request:
-    raw: List[Tuple[bytes, bytes]] = [
-        (k.lower().encode(), v.encode()) for k, v in (headers or {}).items()
-    ]
+    raw: List[Tuple[bytes, bytes]] = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
     scope: Dict[str, Any] = {
         "type": "http",
         "http_version": "1.1",
@@ -87,9 +85,7 @@ def test_seam_stamps_direct_peer_when_no_trusted_proxy_configured():
 
 
 def test_seam_detects_jwt_auth_method():
-    token = UserAPIKeyAuth(
-        token="hashed-token", user_id="u-2", jwt_claims={"sub": "u-2"}
-    )
+    token = UserAPIKeyAuth(token="hashed-token", user_id="u-2", jwt_claims={"sub": "u-2"})
 
     principal = _resolve_request_principal(_request(), token)
 

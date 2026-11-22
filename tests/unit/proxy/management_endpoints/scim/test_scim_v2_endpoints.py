@@ -1555,9 +1555,11 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
         return_value={"user_id": "leaver", "user_email": "leaver@example.com", "teams": [], "metadata": "{}"}
     )
     mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
-    mock_patch_team_membership: Final = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
-        "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
-        AsyncMock(),
+    mock_patch_team_membership: Final = (
+        mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+            "litellm.proxy.management_endpoints.scim.scim_v2.patch_team_membership",
+            AsyncMock(),
+        )
     )
     mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
@@ -1567,9 +1569,11 @@ async def test_update_user_put_deactivates_and_blocks_keys_when_a_group_has_no_t
         "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
         AsyncMock(return_value=existing_user),
     )
-    set_keys_blocked_mock: Final = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
-        "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
-        AsyncMock(return_value=1),
+    set_keys_blocked_mock: Final = (
+        mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+            "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+            AsyncMock(return_value=1),
+        )
     )
     mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
         "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
@@ -7397,7 +7401,9 @@ async def test_a_user_whose_email_matches_another_only_ignoring_case_answers_409
 
     async def find_first(where: dict[str, object]) -> LiteLLM_UserTable | None:
         match where:
-            case {"user_email": {"equals": str() as email, "mode": "insensitive"}} if email.casefold() == "erin@example.com":
+            case {"user_email": {"equals": str() as email, "mode": "insensitive"}} if (
+                email.casefold() == "erin@example.com"
+            ):
                 return existing
             case _:
                 return None

@@ -106,6 +106,7 @@ def test_vertex_chat_completions_pinned_to_interactions_authenticates_and_hits_g
         assert json.loads(request.body) == {
             "model": "gemini-3-flash-preview",
             "input": [{"type": "user_input", "content": [{"type": "text", "text": "hello vertex"}]}],
+            "store": False,
         }
         return Reply(
             body=json.dumps(

@@ -29,9 +29,7 @@ class TestKeyRotationLock:
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         # Mock _find_keys_needing_rotation to return empty list (no keys to rotate)
         manager._find_keys_needing_rotation = AsyncMock(return_value=[])
@@ -66,9 +64,7 @@ class TestKeyRotationLock:
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         manager._find_keys_needing_rotation = AsyncMock()
         manager._cleanup_expired_deprecated_keys = AsyncMock()
@@ -96,9 +92,7 @@ class TestKeyRotationLock:
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         # Simulate finding and rotating a key successfully
         mock_key = LiteLLM_VerificationToken(
@@ -135,14 +129,10 @@ class TestKeyRotationLock:
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         # Simulate an error during cleanup
-        manager._cleanup_expired_deprecated_keys = AsyncMock(
-            side_effect=Exception("Database connection failed")
-        )
+        manager._cleanup_expired_deprecated_keys = AsyncMock(side_effect=Exception("Database connection failed"))
 
         await manager.process_rotations()
 
@@ -181,9 +171,7 @@ class TestKeyRotationLock:
         mock_pod_lock_manager = MagicMock()
         mock_pod_lock_manager.redis_cache = None  # No Redis available
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         manager._find_keys_needing_rotation = AsyncMock(return_value=[])
         manager._cleanup_expired_deprecated_keys = AsyncMock()
@@ -209,9 +197,7 @@ class TestKeyRotationLock:
         mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=None)
         mock_pod_lock_manager.release_lock = AsyncMock()
 
-        manager = KeyRotationManager(
-            mock_prisma_client, pod_lock_manager=mock_pod_lock_manager
-        )
+        manager = KeyRotationManager(mock_prisma_client, pod_lock_manager=mock_pod_lock_manager)
 
         manager._find_keys_needing_rotation = AsyncMock()
         manager._cleanup_expired_deprecated_keys = AsyncMock()

@@ -706,9 +706,7 @@ def test_a_key_scoped_to_the_requested_alias_or_wildcard_name_can_poll_its_video
     checked = _resolve_model_id_with_router(model_id, router)
     assert _can_object_call_model(model=checked, llm_router=router, models=[requested], object_type="key")
 
-    router.video_status(
-        model=_proxy_poll_model(router, created.id), video_id=created.id
-    )
+    router.video_status(model=_proxy_poll_model(router, created.id), video_id=created.id)
 
     assert [call.request.headers["authorization"] for call in task_get.calls] == [f"Bearer {api_key}"]
 
@@ -1447,4 +1445,6 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = DashScopeVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
+        {}, "video-model", True
+    )

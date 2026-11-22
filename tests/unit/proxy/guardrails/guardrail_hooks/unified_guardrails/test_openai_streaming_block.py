@@ -241,9 +241,7 @@ async def test_chat_end_of_stream_block_terminates_cleanly():
 async def test_chat_end_of_stream_pass_releases_withheld_finish_chunk():
     """When end-of-stream moderation passes, the withheld finish chunk is
     released so a clean stream still terminates normally."""
-    collected = await _run_hook(
-        "/v1/chat/completions", _chat_stream(end=True), end_of_stream_only=True, blocks=False
-    )
+    collected = await _run_hook("/v1/chat/completions", _chat_stream(end=True), end_of_stream_only=True, blocks=False)
     assert not [chunk for chunk in collected if isinstance(chunk, bytes)], (
         "a clean stream must carry no synthetic block frames"
     )

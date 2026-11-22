@@ -21,9 +21,7 @@ def test_claude_platform_rows_exist() -> None:
 
 @pytest.mark.parametrize("inference_geo", ["global", "us"])
 @pytest.mark.parametrize("key", CLAUDE_PLATFORM_KEYS)
-def test_claude_platform_cost_matches_claude_api_cost(
-    local_model_cost_map: None, key: str, inference_geo: str
-) -> None:
+def test_claude_platform_cost_matches_claude_api_cost(local_model_cost_map: None, key: str, inference_geo: str) -> None:
     usage: Final = Usage(
         prompt_tokens=1_000,
         completion_tokens=200,

@@ -371,9 +371,7 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
             # Check if this is the follow-up call
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool"
-                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
-                for msg in messages
+                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg)) for msg in messages
             )
             if is_follow_up:
                 # Follow-up call (streaming)
@@ -432,9 +430,7 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
         # completion() returns a coroutine when MCP tools are present
         import asyncio
 
-        assert asyncio.iscoroutine(
-            response
-        ), "completion() should return a coroutine when MCP tools are present"
+        assert asyncio.iscoroutine(response), "completion() should return a coroutine when MCP tools are present"
 
         # Await the coroutine (this is what acompletion() does internally)
         # This should not raise RuntimeError: Timeout context manager should be used inside a task
@@ -555,9 +551,7 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
         )
     ]
     initial_chunks = [
-        create_chunk(
-            "", finish_reason="tool_calls", tool_calls=tool_calls
-        ),  # Final chunk with tool_calls
+        create_chunk("", finish_reason="tool_calls", tool_calls=tool_calls),  # Final chunk with tool_calls
     ]
 
     # Create follow-up streaming chunks
@@ -660,9 +654,7 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
             # Check if this is the follow-up call (has tool results in messages)
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool"
-                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
-                for msg in messages
+                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg)) for msg in messages
             )
 
             if is_follow_up:
@@ -740,18 +732,11 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
         for chunk in all_chunks:
             if hasattr(chunk, "choices") and chunk.choices:
                 choice = chunk.choices[0]
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
+                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
                     initial_chunks_list.append(chunk)
-                elif (
-                    hasattr(choice, "finish_reason") and choice.finish_reason == "stop"
-                ):
+                elif hasattr(choice, "finish_reason") and choice.finish_reason == "stop":
                     follow_up_chunks_list.append(chunk)
-                elif (
-                    not hasattr(choice, "finish_reason") or choice.finish_reason is None
-                ):
+                elif not hasattr(choice, "finish_reason") or choice.finish_reason is None:
                     # Chunks without finish_reason could be from either stream
                     # Check if we've seen tool_calls yet
                     if initial_chunks_list:
@@ -767,19 +752,14 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
         for chunk in initial_chunks_list:
             if hasattr(chunk, "choices") and chunk.choices:
                 choice = chunk.choices[0]
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
+                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
                     initial_final_chunk = chunk
                     break
 
         if initial_final_chunk is None and initial_chunks_list:
             initial_final_chunk = initial_chunks_list[-1]
 
-        assert (
-            initial_final_chunk is not None
-        ), "Should have a final chunk from initial response"
+        assert initial_final_chunk is not None, "Should have a final chunk from initial response"
 
         # Verify mcp_list_tools is in the first chunk of initial response
         first_chunk = initial_chunks_list[0] if initial_chunks_list else None
@@ -787,30 +767,18 @@ async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
         if hasattr(first_chunk, "choices") and first_chunk.choices:
             choice = first_chunk.choices[0]
             if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(
-                    choice.delta, "provider_specific_fields", None
-                )
-                assert (
-                    provider_fields is not None
-                ), "First chunk should have provider_specific_fields"
-                assert (
-                    "mcp_list_tools" in provider_fields
-                ), "First chunk should have mcp_list_tools"
+                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                assert provider_fields is not None, "First chunk should have provider_specific_fields"
+                assert "mcp_list_tools" in provider_fields, "First chunk should have mcp_list_tools"
 
         # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
         if hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices:
             choice = initial_final_chunk.choices[0]
             if hasattr(choice, "delta") and choice.delta:
-                provider_fields = getattr(
-                    choice.delta, "provider_specific_fields", None
-                )
-                assert (
-                    provider_fields is not None
-                ), "Final chunk should have provider_specific_fields"
+                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                assert provider_fields is not None, "Final chunk should have provider_specific_fields"
                 assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
-                assert (
-                    "mcp_call_results" in provider_fields
-                ), "Should have mcp_call_results"
+                assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
 
         # Verify follow-up response chunks are present
         assert len(follow_up_chunks_list) > 0, "Should have follow-up response chunks"
@@ -910,9 +878,7 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
         )
     ]
     initial_chunks = [
-        create_chunk(
-            "", finish_reason="tool_calls", tool_calls=tool_calls
-        ),  # Final chunk with tool_calls
+        create_chunk("", finish_reason="tool_calls", tool_calls=tool_calls),  # Final chunk with tool_calls
     ]
 
     # Create follow-up streaming chunks
@@ -1015,9 +981,7 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
             # Check if this is the follow-up call (has tool results in messages)
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool"
-                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
-                for msg in messages
+                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg)) for msg in messages
             )
 
             if is_follow_up:
@@ -1080,55 +1044,44 @@ async def test_mcp_streaming_metadata_ordering(monkeypatch):
             if hasattr(chunk, "choices") and chunk.choices:
                 choice = chunk.choices[0]
                 if hasattr(choice, "delta") and choice.delta:
-                    provider_fields = getattr(
-                        choice.delta, "provider_specific_fields", None
-                    )
+                    provider_fields = getattr(choice.delta, "provider_specific_fields", None)
                     if provider_fields:
                         if "mcp_list_tools" in provider_fields:
                             mcp_list_tools_seen = True
                             # mcp_list_tools should appear before tool_calls finish_reason
-                            assert (
-                                not tool_calls_finish_reason_seen
-                            ), "mcp_list_tools should appear before tool_calls finish_reason"
+                            assert not tool_calls_finish_reason_seen, (
+                                "mcp_list_tools should appear before tool_calls finish_reason"
+                            )
                         if "mcp_tool_calls" in provider_fields:
                             mcp_tool_calls_seen = True
                         if "mcp_call_results" in provider_fields:
                             mcp_call_results_seen = True
 
-                if (
-                    hasattr(choice, "finish_reason")
-                    and choice.finish_reason == "tool_calls"
-                ):
+                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
                     tool_calls_finish_reason_seen = True
                     # mcp_tool_calls and mcp_call_results should be in the same chunk as tool_calls finish_reason
                     if hasattr(choice, "delta") and choice.delta:
-                        provider_fields = getattr(
-                            choice.delta, "provider_specific_fields", None
-                        )
+                        provider_fields = getattr(choice.delta, "provider_specific_fields", None)
                         assert provider_fields is not None
-                        assert (
-                            "mcp_tool_calls" in provider_fields
-                        ), "mcp_tool_calls should be in the chunk with tool_calls finish_reason"
-                        assert (
-                            "mcp_call_results" in provider_fields
-                        ), "mcp_call_results should be in the chunk with tool_calls finish_reason"
+                        assert "mcp_tool_calls" in provider_fields, (
+                            "mcp_tool_calls should be in the chunk with tool_calls finish_reason"
+                        )
+                        assert "mcp_call_results" in provider_fields, (
+                            "mcp_call_results should be in the chunk with tool_calls finish_reason"
+                        )
 
                 if hasattr(choice, "delta") and choice.delta and choice.delta.content:
                     content = choice.delta.content
-                    if content and (
-                        "Hello" in content or "world" in content or "!" in content
-                    ):
+                    if content and ("Hello" in content or "world" in content or "!" in content):
                         follow_up_content_seen = True
                         # Follow-up content should appear after tool_calls finish_reason
-                        assert (
-                            tool_calls_finish_reason_seen
-                        ), "Follow-up content should appear after tool_calls finish_reason"
+                        assert tool_calls_finish_reason_seen, (
+                            "Follow-up content should appear after tool_calls finish_reason"
+                        )
 
         # Verify all metadata was seen
         assert mcp_list_tools_seen, "Should have seen mcp_list_tools"
         assert mcp_tool_calls_seen, "Should have seen mcp_tool_calls"
         assert mcp_call_results_seen, "Should have seen mcp_call_results"
-        assert (
-            tool_calls_finish_reason_seen
-        ), "Should have seen tool_calls finish_reason"
+        assert tool_calls_finish_reason_seen, "Should have seen tool_calls finish_reason"
         assert follow_up_content_seen, "Should have seen follow-up content"

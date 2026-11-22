@@ -4,7 +4,6 @@ Tests for Vertex AI Agent Engine transformation.
 Tests the request transformation and streaming chunk parsing without making real API calls.
 """
 
-
 import json
 from datetime import datetime
 from typing import Final
@@ -103,10 +102,7 @@ class TestVertexAgentEngineChunkParser:
 
         result = iterator.chunk_parser(chunk)
 
-        assert (
-            result.choices[0].delta.content
-            == "Hello! I can help you with financial analysis."
-        )
+        assert result.choices[0].delta.content == "Hello! I can help you with financial analysis."
         assert result.choices[0].delta.role == "assistant"
         assert result.choices[0].finish_reason == "stop"
         assert result.usage["prompt_tokens"] == 100

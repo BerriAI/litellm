@@ -435,15 +435,19 @@ def _update_dashboard_user(stores: RustAuthStores, **update: object) -> None:
 def dashboard_teams(request: pytest.FixtureRequest, rust_auth_stores: RustAuthStores) -> FakeTeamStore:
     team_id: Final = request.node.name
     rust_auth_stores.team.rows[team_id] = LiteLLM_TeamTable(
-        team_id=team_id, members_with_roles=[Member(user_id="dashboard-member", role="user")],
-        object_permission=_perm(["team-skill"]), access_group_ids=["team-group"],
+        team_id=team_id,
+        members_with_roles=[Member(user_id="dashboard-member", role="user")],
+        object_permission=_perm(["team-skill"]),
+        access_group_ids=["team-group"],
     )
     return rust_auth_stores.team
 
 
 @pytest.fixture
 def dashboard_db(
-    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, rust_auth_stores: RustAuthStores,
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+    rust_auth_stores: RustAuthStores,
     dashboard_teams: FakeTeamStore,
 ) -> MagicMock:
     from litellm.proxy import proxy_server
@@ -452,15 +456,24 @@ def dashboard_db(
     prisma: Final = MagicMock()
     prisma.db = prisma.writer_db
     team_id: Final = request.node.name
-    rust_auth_stores.user.writer = {"dashboard-member": LiteLLM_UserTable(
-        user_id="dashboard-member", teams=[team_id], object_permission_id="user-permission",
-    ).model_dump()}
+    rust_auth_stores.user.writer = {
+        "dashboard-member": LiteLLM_UserTable(
+            user_id="dashboard-member",
+            teams=[team_id],
+            object_permission_id="user-permission",
+        ).model_dump()
+    }
     rust_auth_stores.object_permission.seed(
         "user-permission", _perm(["user-only"]).model_copy(update={"object_permission_id": "user-permission"})
     )
-    rust_auth_stores.access_group.seed("team-group", LiteLLM_AccessGroupTable(
-        access_group_id="team-group", access_group_name="team-group", access_skill_names=["group-skill"],
-    ))
+    rust_auth_stores.access_group.seed(
+        "team-group",
+        LiteLLM_AccessGroupTable(
+            access_group_id="team-group",
+            access_group_name="team-group",
+            access_skill_names=["group-skill"],
+        ),
+    )
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
@@ -469,7 +482,9 @@ def dashboard_db(
 
 def _dashboard_caller(role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER) -> UserAPIKeyAuth:
     return UserAPIKeyAuth(
-        user_id="dashboard-member", team_id=UI_TEAM_ID, user_role=role,
+        user_id="dashboard-member",
+        team_id=UI_TEAM_ID,
+        user_role=role,
         object_permission=_perm(["session-only"]),
     )
 
@@ -485,7 +500,8 @@ async def test_dashboard_visibility_without_user_identity_is_public_only(dashboa
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
 async def test_dashboard_reads_own_user_team_and_group_grants_without_session_grants(
-    dashboard_db: MagicMock, role: LitellmUserRoles,
+    dashboard_db: MagicMock,
+    role: LitellmUserRoles,
 ) -> None:
     visibility: Final = await resolve_skill_visibility(_dashboard_caller(role))
     assert visibility.granted == frozenset({"team-skill", "group-skill", "user-only"})
@@ -493,25 +509,34 @@ async def test_dashboard_reads_own_user_team_and_group_grants_without_session_gr
     assert visibility.allows(_plugin("team-skill", enabled=False))
     assert visibility.allows(_plugin("user-only", enabled=False))
     assert not visibility.allows(_plugin("session-only", enabled=False))
-    assert visibility.where() == {"OR": [
-        {"enabled": True}, {"name": {"in": ["group-skill", "team-skill", "user-only"]}},
-    ]}
+    assert visibility.where() == {
+        "OR": [
+            {"enabled": True},
+            {"name": {"in": ["group-skill", "team-skill", "user-only"]}},
+        ]
+    }
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ("roster", "blocked", "grants", "team", "group", "memberships", "user"))
 async def test_dashboard_revocation_is_visible_with_warm_caches(
     rust_auth_stores: RustAuthStores,
-    dashboard_db: MagicMock, dashboard_teams: FakeTeamStore, change: str,
+    dashboard_db: MagicMock,
+    dashboard_teams: FakeTeamStore,
+    change: str,
 ) -> None:
     caller: Final = _dashboard_caller()
     assert (await resolve_skill_visibility(caller)).granted == frozenset({"team-skill", "group-skill", "user-only"})
     [(team_id, team)] = dashboard_teams.rows.items()
     assert isinstance(team, LiteLLM_TeamTable)
     if change == "roster":
-        dashboard_teams.rows[team_id] = team.model_copy(update={"members_with_roles": [
-            Member(user_id="another-user", role="admin"),
-        ]})
+        dashboard_teams.rows[team_id] = team.model_copy(
+            update={
+                "members_with_roles": [
+                    Member(user_id="another-user", role="admin"),
+                ]
+            }
+        )
     elif change == "blocked":
         dashboard_teams.rows[team_id] = team.model_copy(update={"blocked": True})
     elif change == "grants":
@@ -532,24 +557,38 @@ async def test_dashboard_revocation_is_visible_with_warm_caches(
 
 @pytest.mark.asyncio
 async def test_dashboard_unions_independent_team_grants(
-    dashboard_db: MagicMock, dashboard_teams: FakeTeamStore, rust_auth_stores: RustAuthStores,
+    dashboard_db: MagicMock,
+    dashboard_teams: FakeTeamStore,
+    rust_auth_stores: RustAuthStores,
 ) -> None:
     [first] = dashboard_teams.rows.values()
     assert isinstance(first, LiteLLM_TeamTable)
-    second: Final = first.model_copy(update={
-        "team_id": "second-team", "object_permission": _perm(["second-skill"]), "access_group_ids": [],
-    })
+    second: Final = first.model_copy(
+        update={
+            "team_id": "second-team",
+            "object_permission": _perm(["second-skill"]),
+            "access_group_ids": [],
+        }
+    )
     _update_dashboard_user(rust_auth_stores, teams=[first.team_id, second.team_id])
     dashboard_teams.rows[second.team_id] = second
-    assert (await resolve_skill_visibility(_dashboard_caller())).granted == frozenset({
-        "team-skill", "group-skill", "second-skill", "user-only",
-    })
+    assert (await resolve_skill_visibility(_dashboard_caller())).granted == frozenset(
+        {
+            "team-skill",
+            "group-skill",
+            "second-skill",
+            "user-only",
+        }
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ("team", "litellm_accessgrouptable"))
 async def test_dashboard_team_read_fault_keeps_only_independent_grants(
-    dashboard_db: MagicMock, dashboard_teams: FakeTeamStore, rust_auth_stores: RustAuthStores, source: str,
+    dashboard_db: MagicMock,
+    dashboard_teams: FakeTeamStore,
+    rust_auth_stores: RustAuthStores,
+    source: str,
 ) -> None:
     caller: Final = _dashboard_caller()
     assert (await resolve_skill_visibility(caller)).granted == frozenset({"team-skill", "group-skill", "user-only"})
@@ -563,7 +602,9 @@ async def test_dashboard_team_read_fault_keeps_only_independent_grants(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("team_id", (None, "ordinary-team"))
 async def test_ordinary_key_does_not_inherit_owners_other_teams(
-    dashboard_db: MagicMock, rust_auth_stores: RustAuthStores, team_id: str | None,
+    dashboard_db: MagicMock,
+    rust_auth_stores: RustAuthStores,
+    team_id: str | None,
 ) -> None:
     caller: Final = _dashboard_caller().model_copy(update={"team_id": team_id})
     loader: Final = AsyncMock(return_value=AccessGroupSkills())
@@ -574,7 +615,9 @@ async def test_ordinary_key_does_not_inherit_owners_other_teams(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ("clear", "unlink", "deleted", "malformed", "fault"))
 async def test_dashboard_direct_grant_revocation_preserves_independent_team_grants(
-    dashboard_db: MagicMock, rust_auth_stores: RustAuthStores, change: str,
+    dashboard_db: MagicMock,
+    rust_auth_stores: RustAuthStores,
+    change: str,
 ) -> None:
     caller: Final = _dashboard_caller()
     assert "user-only" in (await resolve_skill_visibility(caller)).granted
@@ -596,7 +639,10 @@ async def test_dashboard_direct_grant_revocation_preserves_independent_team_gran
 @pytest.mark.asyncio
 @pytest.mark.parametrize("change", ("inactive", "malformed", "fault", "database"))
 async def test_dashboard_unreadable_or_inactive_user_never_reuses_grants(
-    dashboard_db: MagicMock, rust_auth_stores: RustAuthStores, change: str, monkeypatch: pytest.MonkeyPatch,
+    dashboard_db: MagicMock,
+    rust_auth_stores: RustAuthStores,
+    change: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
 

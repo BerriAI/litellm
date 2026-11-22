@@ -33,9 +33,7 @@ class TestConditionEvaluator:
         assert ConditionEvaluator.evaluate(condition, context) is True
 
         # No match
-        context_other = PolicyMatchContext(
-            team_alias="team", key_alias="key", model="gpt-3.5"
-        )
+        context_other = PolicyMatchContext(team_alias="team", key_alias="key", model="gpt-3.5")
         assert ConditionEvaluator.evaluate(condition, context_other) is False
 
     def test_regex_pattern_match(self):

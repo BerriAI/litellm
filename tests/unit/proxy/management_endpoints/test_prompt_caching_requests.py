@@ -43,11 +43,17 @@ async def test_non_admin_is_denied_before_database_access(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("params", [
-    {"filter": "savings"}, {"page_size": 0}, {"page_size": 101}, {"start_date": "invalid"},
-    {"cursor_start_time": "invalid", "cursor_request_id": "request"},
-    {"cursor_start_time": _START, "cursor_request_id": ""},
-])
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"filter": "savings"},
+        {"page_size": 0},
+        {"page_size": 101},
+        {"start_date": "invalid"},
+        {"cursor_start_time": "invalid", "cursor_request_id": "request"},
+        {"cursor_start_time": _START, "cursor_request_id": ""},
+    ],
+)
 async def test_invalid_request_is_rejected(params: Mapping[str, str | int]) -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app(LitellmUserRoles.PROXY_ADMIN)), base_url="http://test"
@@ -59,7 +65,8 @@ async def test_invalid_request_is_rejected(params: Mapping[str, str | int]) -> N
 @pytest.mark.asyncio
 @pytest.mark.parametrize("params", [{"cursor_start_time": _START}, {"cursor_request_id": "request"}])
 async def test_incomplete_cursor_is_rejected(
-    params: Mapping[str, str], monkeypatch: pytest.MonkeyPatch,
+    params: Mapping[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
 

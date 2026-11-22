@@ -38,9 +38,7 @@ def client():
 def enable_drain(monkeypatch):
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"enable_drain_endpoint": True}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_drain_endpoint": True})
 
 
 @pytest.fixture
@@ -68,17 +66,13 @@ def test_drain_disabled_ignores_token_header(client, monkeypatch):
     token side-channel would silently enable the endpoint."""
     from litellm.proxy import proxy_server
 
-    monkeypatch.setattr(
-        proxy_server, "general_settings", {"drain_endpoint_token": "secret-123"}
-    )
+    monkeypatch.setattr(proxy_server, "general_settings", {"drain_endpoint_token": "secret-123"})
     resp = client.get("/health/drain", headers={"X-Drain-Token": "secret-123"})
     assert resp.status_code == 404
     assert GracefulShutdownManager.is_shutting_down() is False
 
 
-def test_drain_when_enabled_without_token_sets_shutting_down_and_returns_drained(
-    client, enable_drain
-):
+def test_drain_when_enabled_without_token_sets_shutting_down_and_returns_drained(client, enable_drain):
     resp = client.get("/health/drain")
     assert resp.status_code == 200
     body = resp.json()
@@ -87,25 +81,19 @@ def test_drain_when_enabled_without_token_sets_shutting_down_and_returns_drained
     assert GracefulShutdownManager.is_shutting_down() is True
 
 
-def test_drain_with_token_configured_rejects_missing_header(
-    client, enable_drain_with_token
-):
+def test_drain_with_token_configured_rejects_missing_header(client, enable_drain_with_token):
     resp = client.get("/health/drain")
     assert resp.status_code == 401
     assert GracefulShutdownManager.is_shutting_down() is False
 
 
-def test_drain_with_token_configured_rejects_wrong_header(
-    client, enable_drain_with_token
-):
+def test_drain_with_token_configured_rejects_wrong_header(client, enable_drain_with_token):
     resp = client.get("/health/drain", headers={"X-Drain-Token": "wrong-value"})
     assert resp.status_code == 401
     assert GracefulShutdownManager.is_shutting_down() is False
 
 
-def test_drain_with_token_configured_accepts_correct_header(
-    client, enable_drain_with_token
-):
+def test_drain_with_token_configured_accepts_correct_header(client, enable_drain_with_token):
     resp = client.get("/health/drain", headers={"X-Drain-Token": "secret-123"})
     assert resp.status_code == 200
     assert resp.json()["status"] == "drained"

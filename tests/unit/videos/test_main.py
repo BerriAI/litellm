@@ -459,7 +459,13 @@ def test_video_generation__custom_provider_map_base_video_config_is_dispatched(m
             api_base="http://backend.test",
             duration=8,
             aspect_ratio="16:9",
-            frame_images=[{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+            frame_images=[
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "https://example.com/first.png"},
+                    "frame_type": "first_frame",
+                }
+            ],
             input_references=[{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
             generate_audio=False,
             seed=0,
@@ -471,7 +477,9 @@ def test_video_generation__custom_provider_map_base_video_config_is_dispatched(m
     assert kw["video_generation_optional_request_params"] == {
         "duration": 8,
         "aspect_ratio": "16:9",
-        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        "frame_images": [
+            {"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}
+        ],
         "input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
         "generate_audio": False,
         "seed": 0,

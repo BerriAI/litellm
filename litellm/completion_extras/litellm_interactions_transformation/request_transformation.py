@@ -194,6 +194,16 @@ def _validate_request_params(
             model=model,
             llm_provider=custom_llm_provider,
         )
+    tools: Final = params.get("tools")
+    if isinstance(tools, list) and any(
+        isinstance(tool, dict) and (tool.get("type") == "file_search" or "file_search" in tool) for tool in tools
+    ):
+        raise litellm.BadRequestError(
+            message="'file_search' tools are not supported for chat completions on the Gemini Interactions API. "
+            "Use the Interactions API directly to search a file search store.",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
     if params.get("previous_interaction_id") is not None:
         raise litellm.BadRequestError(
             message="'previous_interaction_id' is not supported for chat completions on the Gemini Interactions API. "
@@ -699,7 +709,6 @@ def _convert_single_tool(tool: JsonValue) -> tuple[JsonValue, ...]:
     if isinstance(tool_type, str) and tool_type in _BUILTIN_TOOL_TYPES:
         return ({**dict(tool), "type": _BUILTIN_TOOL_TYPES[tool_type]},)
     if isinstance(tool_type, str) and tool_type in (
-        "file_search",
         "computer_use",
         "mcp_server",
     ):

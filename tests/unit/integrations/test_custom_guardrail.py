@@ -2842,8 +2842,7 @@ class TestLoggingOnlyApplyGuardrail:
         assert out_response is response
         assert out_kwargs["messages"] == kwargs["messages"]
         assert (
-            out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"]
-            == "guardrail_flagged"
+            out_kwargs["standard_logging_object"]["guardrail_information"][0]["guardrail_status"] == "guardrail_flagged"
         )
 
     @pytest.mark.asyncio
@@ -3001,7 +3000,12 @@ class TestLoggingOnlyApplyGuardrail:
     @pytest.mark.parametrize(
         "scope,continue_on_input_failure,expected_calls,expected_statuses",
         (
-            (None, True, [("request", ["hello there"]), ("response", ["general kenobi"])], ["guardrail_failed_to_respond", "success"]),
+            (
+                None,
+                True,
+                [("request", ["hello there"]), ("response", ["general kenobi"])],
+                ["guardrail_failed_to_respond", "success"],
+            ),
             ("output", True, [("response", ["general kenobi"])], ["success"]),
             ("input", True, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
             (None, False, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
@@ -3762,13 +3766,13 @@ def test_get_guardrail_from_metadata() -> None:
     guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
 
     assert guardrail.get_guardrail_from_metadata({}) == []
-    assert guardrail.get_guardrail_from_metadata(
-        {"metadata": {"guardrails": ["guardrail1", "guardrail2"]}}
-    ) == ["guardrail1", "guardrail2"]
+    assert guardrail.get_guardrail_from_metadata({"metadata": {"guardrails": ["guardrail1", "guardrail2"]}}) == [
+        "guardrail1",
+        "guardrail2",
+    ]
     assert guardrail.get_guardrail_from_metadata(
         {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
     ) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
-
 
 
 @pytest.mark.parametrize(
@@ -3789,26 +3793,33 @@ def test_guardrail_is_in_requested_guardrails() -> None:
 
     assert guardrail._guardrail_is_in_requested_guardrails(["test-guardrail", "other"]) is True
     assert guardrail._guardrail_is_in_requested_guardrails(["other"]) is False
-    assert guardrail._guardrail_is_in_requested_guardrails(
-        [{"test-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
-    ) is True
-    assert guardrail._guardrail_is_in_requested_guardrails(
-        [
-            {
-                "other-guardrail": {"extra_body": {"extra_key": "extra_value"}},
-                "test-guardrail": {"extra_body": {"extra_key": "extra_value"}},
-            }
-        ]
-    ) is True
-    assert guardrail._guardrail_is_in_requested_guardrails(
-        [{"other-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
-    ) is False
+    assert (
+        guardrail._guardrail_is_in_requested_guardrails(
+            [{"test-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+        )
+        is True
+    )
+    assert (
+        guardrail._guardrail_is_in_requested_guardrails(
+            [
+                {
+                    "other-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+                    "test-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+                }
+            ]
+        )
+        is True
+    )
+    assert (
+        guardrail._guardrail_is_in_requested_guardrails(
+            [{"other-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+        )
+        is False
+    )
 
 
 def test_should_run_guardrail() -> None:
-    guardrail: Final = CustomGuardrail(
-        guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call
-    )
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call)
 
     assert (
         guardrail.should_run_guardrail(
@@ -3837,15 +3848,19 @@ def test_get_guardrail_dynamic_request_body_params(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
 
-    assert guardrail.get_guardrail_dynamic_request_body_params(
-        {"metadata": {"guardrails": [{"test-guardrail": {}}]}}
-    ) == {}
+    assert (
+        guardrail.get_guardrail_dynamic_request_body_params({"metadata": {"guardrails": [{"test-guardrail": {}}]}})
+        == {}
+    )
     assert guardrail.get_guardrail_dynamic_request_body_params(
         {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
     ) == {"key": "value"}
-    assert guardrail.get_guardrail_dynamic_request_body_params(
-        {"metadata": {"guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]}}
-    ) == {}
+    assert (
+        guardrail.get_guardrail_dynamic_request_body_params(
+            {"metadata": {"guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]}}
+        )
+        == {}
+    )
 
 
 def test_default_on_guardrail() -> None:

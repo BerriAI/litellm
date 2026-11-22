@@ -110,7 +110,9 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_does_not_cache_when_ttl_non_positive(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):
+    def test_does_not_cache_when_ttl_non_positive(
+        self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
+    ):
         expires_at = int(time.time() * 1000) + TOKEN_EXPIRY_BUFFER_MS - 1000
         mock_request.return_value = ("token", expires_at)
 
@@ -140,7 +142,9 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_requests_new_token_when_cache_expired(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):
+    def test_requests_new_token_when_cache_expired(
+        self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
+    ):
         cached_token = "stale-token"
         cached_expires_at = _past_expires_at_ms(offset_seconds=10)
         authenticator._token_cache.get_cache.return_value = (cached_token, cached_expires_at)
@@ -158,7 +162,9 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_litellm_params_override_scope_and_auth_url(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):  # test-quality-ok: mock-echo of internal wiring
+    def test_litellm_params_override_scope_and_auth_url(
+        self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
+    ):  # test-quality-ok: mock-echo of internal wiring
         mock_request.return_value = ("token", _future_expires_at_ms())
 
         get_access_token(
@@ -177,7 +183,9 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="env-creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_explicit_args_override_everything(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):  # test-quality-ok: mock-echo of internal wiring
+    def test_explicit_args_override_everything(
+        self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
+    ):  # test-quality-ok: mock-echo of internal wiring
         mock_request.return_value = ("token", _future_expires_at_ms())
 
         get_access_token(
@@ -199,7 +207,9 @@ class TestGetAccessTokenSync:
     @patch(f"{AUTH_MODULE}._get_scope", return_value="GIGACHAT_API_PERS")
     @patch(f"{AUTH_MODULE}._get_credentials", return_value="creds")
     @patch(f"{AUTH_MODULE}.get_secret_str", return_value=None)
-    def test_propagates_auth_error_from_request(self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request):
+    def test_propagates_auth_error_from_request(
+        self, mock_get_secret, mock_creds, mock_scope, mock_auth_url, mock_request
+    ):
         mock_request.side_effect = GigaChatAuthError(status_code=403, message="forbidden")
 
         with pytest.raises(GigaChatAuthError) as exc_info:
@@ -211,9 +221,7 @@ class TestGetAccessTokenSync:
 class TestGetAccessTokenAsync:
     @pytest.mark.asyncio
     async def test_returns_token_from_litellm_params(self):
-        token = await get_access_token_async(
-            litellm_params={"gigachat_access_token": "param-token"}
-        )
+        token = await get_access_token_async(litellm_params={"gigachat_access_token": "param-token"})
         assert token == "param-token"
         authenticator._token_cache.get_cache.assert_not_called()
 
@@ -249,9 +257,7 @@ class TestGetAccessTokenAsync:
         result = await get_access_token_async()
 
         assert result == token
-        mock_request.assert_called_once_with(
-            "creds-from-env", "GIGACHAT_API_PERS", "https://auth.example.com"
-        )
+        mock_request.assert_called_once_with("creds-from-env", "GIGACHAT_API_PERS", "https://auth.example.com")
         authenticator._token_cache.set_cache.assert_called_once()
         call_args = authenticator._token_cache.set_cache.call_args
         assert call_args.args[1] == (token, expires_at)
@@ -453,9 +459,7 @@ class TestParseTokenResponse:
     def test_parses_tok_exp_fields(self):
         from litellm.llms.gigachat.authenticator import _parse_token_response
 
-        token, expires_at = _parse_token_response(
-            self._make_response({"tok": "abc", "exp": 1700000000000})
-        )
+        token, expires_at = _parse_token_response(self._make_response({"tok": "abc", "exp": 1700000000000}))
         assert token == "abc"
         assert expires_at == 1700000000000
 
@@ -471,9 +475,7 @@ class TestParseTokenResponse:
     def test_parses_string_expires_at(self):
         from litellm.llms.gigachat.authenticator import _parse_token_response
 
-        token, expires_at = _parse_token_response(
-            self._make_response({"tok": "abc", "exp": "1700000000000"})
-        )
+        token, expires_at = _parse_token_response(self._make_response({"tok": "abc", "exp": "1700000000000"}))
         assert token == "abc"
         assert expires_at == 1700000000000
         assert isinstance(expires_at, int)

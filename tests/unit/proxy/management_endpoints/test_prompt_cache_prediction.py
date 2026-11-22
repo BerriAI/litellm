@@ -180,9 +180,7 @@ async def test_custom_api_base_from_environment_returns_unknown_before_counting(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_BASE", "https://custom.invalid")
     body: Final = _body()
-    arm: Final = await endpoint.predict_arm(
-        _deployment(), body, _prefix(body), _CALLER, DualCache(), _unexpected_count
-    )
+    arm: Final = await endpoint.predict_arm(_deployment(), body, _prefix(body), _CALLER, DualCache(), _unexpected_count)
 
     assert arm.cache_state == "unknown"
     assert arm.reason == "unsupported_provider_endpoint"
@@ -352,9 +350,7 @@ async def test_other_callers_warm_cache_is_not_prediction_evidence(monkeypatch: 
 
 @pytest.mark.asyncio
 async def test_count_failure_nulls_switch_comparison(monkeypatch: pytest.MonkeyPatch) -> None:
-    app: Final = _app(
-        monkeypatch, DualCache(), caller=UserAPIKeyAuth(api_key=_CALLER), counts=Counts(total=None)
-    )
+    app: Final = _app(monkeypatch, DualCache(), caller=UserAPIKeyAuth(api_key=_CALLER), counts=Counts(total=None))
     response: Final = await _post(app, _body())
 
     assert response.status_code == 200, response.text
@@ -410,9 +406,7 @@ async def test_each_count_consumes_the_deployment_group_rpm_limit(monkeypatch: p
 
     assert response.status_code == 429, response.text
     assert calls.qsize() == 3
-    assert tuple(calls.get_nowait() for _ in range(3)) == (
-        "claude-opus-5", "claude-opus-5", "claude-sonnet-5"
-    )
+    assert tuple(calls.get_nowait() for _ in range(3)) == ("claude-opus-5", "claude-opus-5", "claude-sonnet-5")
 
 
 @pytest.mark.asyncio
@@ -467,9 +461,7 @@ def request_mutator() -> Iterator[RequestMutator]:
 async def test_request_transform_callback_returns_unknown_before_token_counting(
     monkeypatch: pytest.MonkeyPatch, request_mutator: RequestMutator
 ) -> None:
-    app: Final = _app(
-        monkeypatch, DualCache(), caller=UserAPIKeyAuth(api_key=_CALLER), counts=_unexpected_count
-    )
+    app: Final = _app(monkeypatch, DualCache(), caller=UserAPIKeyAuth(api_key=_CALLER), counts=_unexpected_count)
     response: Final = await _post(app, _body())
 
     assert response.status_code == 200, response.text
@@ -498,19 +490,20 @@ async def test_key_config_returns_unknown_before_token_counting(monkeypatch: pyt
     assert result.switch_delta is None and result.cache_rebuild_penalty is None
 
 
-@pytest.mark.parametrize("headers", [
-    {"anthropic-version": "2099-01-01"},
-    {"anthropic-beta": "future-feature"},
-])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"anthropic-version": "2099-01-01"},
+        {"anthropic-beta": "future-feature"},
+    ],
+)
 @pytest.mark.asyncio
 async def test_unsupported_provider_headers_cannot_reuse_default_version_evidence(
     monkeypatch: pytest.MonkeyPatch, headers: dict[str, str]
 ) -> None:
     cache: Final = DualCache()
     await _observe(cache, _body(), deployment_id="sonnet")
-    app: Final = _app(
-        monkeypatch, cache, caller=UserAPIKeyAuth(api_key=_CALLER), counts=_unexpected_count
-    )
+    app: Final = _app(monkeypatch, cache, caller=UserAPIKeyAuth(api_key=_CALLER), counts=_unexpected_count)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response: Final = await client.post(
             "/cost/predict-cache",

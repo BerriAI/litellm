@@ -166,7 +166,9 @@ def test_api_base_line_keeps_an_at_sign_in_the_path(api_base: str) -> None:
     ("provider_error", "mapped_class"),
     [
         (
-            httpx.ReadError("peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")),
+            httpx.ReadError(
+                "peer closed connection", request=httpx.Request("POST", "https://relay.example/v1/messages")
+            ),
             litellm.APIConnectionError,
         ),
         (RuntimeError("stream decoder failed"), litellm.APIConnectionError),
@@ -1531,7 +1533,11 @@ def _openai_like_403(message: str) -> Exception:
 @pytest.mark.parametrize("make_error", [_openai_sdk_403, _openai_like_403], ids=["openai_sdk", "openai_like_httpx"])
 @pytest.mark.parametrize(
     ("provider", "exception_provider"),
-    [("openai", "OpenAIException"), ("deepseek", "DeepseekException"), ("hostinger_router", "Hostinger_routerException")],
+    [
+        ("openai", "OpenAIException"),
+        ("deepseek", "DeepseekException"),
+        ("hostinger_router", "Hostinger_routerException"),
+    ],
 )
 def test_an_openai_style_403_maps_to_permission_denied(
     provider: str, exception_provider: str, make_error: Callable[[str], Exception], quiet_exception_mapping
@@ -3489,9 +3495,7 @@ def test_bedrock_server_error_keeps_the_aws_body_without_the_signed_request() ->
         headers={"authorization": "AWS4-HMAC-SHA256 Credential=AKIDSIGNED/20261029/us-east-1/bedrock/aws4_request"},
         content=b'{"messages":[{"role":"user","content":[{"text":"hi"}]}]}',
     )
-    upstream: Final = httpx.Response(
-        500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request
-    )
+    upstream: Final = httpx.Response(500, content=body, headers={"x-amzn-requestid": "req-aws"}, request=signed_request)
 
     with pytest.raises(litellm.ServiceUnavailableError) as raised:
         exception_type(
@@ -3685,8 +3689,7 @@ def _copilot_model_not_supported_message(request_kwargs: dict[str, object]) -> s
                     },
                 },
             },
-            "GitHub account 'alice-gh', which LiteLLM user 'dev-alice' connected for LiteLLM credential "
-            "'team-copilot'",
+            "GitHub account 'alice-gh', which LiteLLM user 'dev-alice' connected for LiteLLM credential 'team-copilot'",
             id="per-user-connected-login",
         ),
         pytest.param(

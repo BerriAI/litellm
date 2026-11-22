@@ -701,9 +701,7 @@ def test_kimi_k3_registry_context_is_exposed_by_model_info() -> None:
     row: Final = GetModelCostMap.load_local_model_cost_map()["moonshot/kimi-k3"]
     info: Final = litellm.get_model_info("moonshot/kimi-k3")
 
-    assert (info["max_input_tokens"], info["max_output_tokens"]) == (
-        row["max_input_tokens"], row["max_output_tokens"]
-    )
+    assert (info["max_input_tokens"], info["max_output_tokens"]) == (row["max_input_tokens"], row["max_output_tokens"])
 
 
 class TestMoonshotResponseSchemaSupport:

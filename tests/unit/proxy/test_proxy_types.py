@@ -14,7 +14,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-
 def test_audit_log_masking():
     from datetime import datetime
 
@@ -54,9 +53,7 @@ def test_team_membership_null_budget_table():
     membership = LiteLLM_TeamMembership(user_id="u1", team_id="t1")
     assert membership.litellm_budget_table is None
 
-    membership_explicit = LiteLLM_TeamMembership(
-        user_id="u1", team_id="t1", litellm_budget_table=None
-    )
+    membership_explicit = LiteLLM_TeamMembership(user_id="u1", team_id="t1", litellm_budget_table=None)
     assert membership_explicit.litellm_budget_table is None
 
 
@@ -190,10 +187,7 @@ def test_a_jwt_issuer_must_pick_audience_validation_or_opt_out():
         )
 
     assert JWTIssuerConfig(issuer="https://issuer.example.com", audience="litellm-proxy").audience == "litellm-proxy"
-    assert (
-        JWTIssuerConfig(issuer="https://issuer.example.com", disable_audience_validation=True).audience
-        is None
-    )
+    assert JWTIssuerConfig(issuer="https://issuer.example.com", disable_audience_validation=True).audience is None
 
 
 def test_a_jwt_issuer_rejects_a_field_it_does_not_define():
@@ -233,9 +227,7 @@ def test_an_organization_member_can_only_take_a_role_the_organization_has():
     from litellm.proxy._types import LitellmUserRoles, OrganizationMemberUpdateRequest
 
     with pytest.raises(ValidationError, match="Invalid role"):
-        OrganizationMemberUpdateRequest(
-            organization_id="org-1", user_id="user-1", role=LitellmUserRoles.PROXY_ADMIN
-        )
+        OrganizationMemberUpdateRequest(organization_id="org-1", user_id="user-1", role=LitellmUserRoles.PROXY_ADMIN)
 
     allowed = OrganizationMemberUpdateRequest(
         organization_id="org-1", user_id="user-1", role=LitellmUserRoles.ORG_ADMIN

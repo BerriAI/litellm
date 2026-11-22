@@ -243,7 +243,8 @@ def test_anthropic_completion_answers_400_when_extra_body_raises_max_tokens_with
     route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
 
     with pytest.raises(
-        litellm.BadRequestError, match=re.escape("extra_body can't raise max_tokens above the request's max_tokens (16)")
+        litellm.BadRequestError,
+        match=re.escape("extra_body can't raise max_tokens above the request's max_tokens (16)"),
     ):
         litellm.completion(
             model="anthropic/claude-sonnet-5-5",

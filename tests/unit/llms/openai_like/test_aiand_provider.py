@@ -214,7 +214,10 @@ async def test_aiand_anthropic_messages_reach_ai_and_with_the_thinking_budget(mo
                 "type": "message",
                 "role": "assistant",
                 "model": "zai-org/glm-5.3",
-                "content": [{"type": "thinking", "thinking": "A greeting", "signature": ""}, {"type": "text", "text": "Hello"}],
+                "content": [
+                    {"type": "thinking", "thinking": "A greeting", "signature": ""},
+                    {"type": "text", "text": "Hello"},
+                ],
                 "stop_reason": "end_turn",
                 "stop_sequence": None,
                 "usage": {"input_tokens": 4, "output_tokens": 3},

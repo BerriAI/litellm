@@ -1,7 +1,6 @@
 import io
 
 
-
 import asyncio
 import gzip
 import json
@@ -39,9 +38,7 @@ def create_standard_logging_payload() -> StandardLoggingPayload:
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
-        model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-5-mini", model_map_value=None
-        ),
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5-mini", model_map_value=None),
         model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",
@@ -90,9 +87,7 @@ def create_standard_logging_payload_with_long_content() -> StandardLoggingPayloa
         startTime=1234567890.0,
         endTime=1234567891.0,
         completionStartTime=1234567890.5,
-        model_map_information=StandardLoggingModelInformation(
-            model_map_key="gpt-5-mini", model_map_value=None
-        ),
+        model_map_information=StandardLoggingModelInformation(model_map_key="gpt-5-mini", model_map_value=None),
         model="gpt-5-mini",
         model_id="model-123",
         model_group="openai-gpt",

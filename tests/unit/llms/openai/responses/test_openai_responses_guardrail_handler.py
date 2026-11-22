@@ -4585,7 +4585,11 @@ class TestOpenAIResponsesHandlerNamespaceTools:
     @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
     async def test_scanning_tools_whose_chat_names_collide_leaves_them_for_the_route_to_judge(self, top_level: bool):
         namespace: Final = "mcp__codex_apps__codex_document_control"
-        long_member: Final = {"type": "function", "name": "_get_document_tool_schemas", "parameters": {"type": "object"}}
+        long_member: Final = {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "parameters": {"type": "object"},
+        }
         shortened: Final = chat_member_name(namespace, long_member["name"])
         colliding: Final = {
             "type": "function",

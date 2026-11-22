@@ -143,13 +143,9 @@ def test_inkling_alias_preserves_registry_metadata_and_pricing(model: str, cost_
     input_rate: Final = TypeAdapter(float).validate_python(canonical["input_cost_per_token"])
     output_rate: Final = TypeAdapter(float).validate_python(canonical["output_cost_per_token"])
 
-    response: Final = litellm.ModelResponse(
-        model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=50)
-    )
+    response: Final = litellm.ModelResponse(model=model, usage=litellm.Usage(prompt_tokens=100, completion_tokens=50))
 
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(
-        100 * input_rate + 50 * output_rate
-    )
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(100 * input_rate + 50 * output_rate)
     assert litellm.supports_audio_input(model=model) == canonical.get("supports_audio_input", False)
     assert litellm.supports_vision(model=model) == canonical.get("supports_vision", False)
     assert litellm.supports_reasoning(model=model) == canonical.get("supports_reasoning", False)
@@ -157,9 +153,7 @@ def test_inkling_alias_preserves_registry_metadata_and_pricing(model: str, cost_
 
 def _together_rows(cost_map: CostMap, mode: str) -> tuple[tuple[str, dict[str, object]], ...]:
     return tuple(
-        (model, info)
-        for model, info in cost_map.items()
-        if model in ABSORBED_MODELS and info.get("mode") == mode
+        (model, info) for model, info in cost_map.items() if model in ABSORBED_MODELS and info.get("mode") == mode
     )
 
 

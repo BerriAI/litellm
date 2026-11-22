@@ -32,6 +32,7 @@ def _isolate_host_aws_config(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(env_var, raising=False)
 
+
 # Mock response for Bedrock rerank
 # Format based on Bedrock rerank API response structure
 bedrock_rerank_response = {
@@ -102,7 +103,6 @@ def test_bedrock_rerank_header_forwarding_sync(model):
         ),
         patch("botocore.auth.SigV4Auth") as mock_sigv4,
     ):
-
         # Mock SigV4Auth to not actually sign the request
         mock_sigv4_instance = MagicMock()
         mock_sigv4.return_value = mock_sigv4_instance
@@ -147,8 +147,7 @@ def test_bedrock_rerank_header_forwarding_sync(model):
                     or any(k.lower() == header_key.lower() for k in headers.keys())
                 )
                 assert header_found, (
-                    f"Header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
             print(f"✓ Test passed for {model} (sync)")
@@ -195,7 +194,6 @@ async def test_bedrock_rerank_header_forwarding_async(model):
         ),
         patch("botocore.auth.SigV4Auth") as mock_sigv4,
     ):
-
         # Mock SigV4Auth to not actually sign the request
         mock_sigv4_instance = MagicMock()
         mock_sigv4.return_value = mock_sigv4_instance
@@ -239,8 +237,7 @@ async def test_bedrock_rerank_header_forwarding_async(model):
                     or any(k.lower() == header_key.lower() for k in headers.keys())
                 )
                 assert header_found, (
-                    f"Header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
             print(f"✓ Test passed for {model} (async)")
@@ -266,7 +263,6 @@ def test_bedrock_rerank_timeout_sync():
         ),
         patch("botocore.auth.SigV4Auth") as mock_sigv4,
     ):
-
         mock_sigv4.return_value = MagicMock()
         mock_response = Mock()
         mock_response.status_code = 200
@@ -288,9 +284,7 @@ def test_bedrock_rerank_timeout_sync():
 
         assert mock_post.called
         call_kwargs = mock_post.call_args.kwargs
-        assert (
-            call_kwargs.get("timeout") == 0.001
-        ), f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
+        assert call_kwargs.get("timeout") == 0.001, f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
 
 
 @pytest.mark.asyncio
@@ -310,7 +304,6 @@ async def test_bedrock_rerank_timeout_async():
         ),
         patch("botocore.auth.SigV4Auth") as mock_sigv4,
     ):
-
         mock_sigv4.return_value = MagicMock()
         mock_response = AsyncMock()
         mock_response.status_code = 200
@@ -332,9 +325,7 @@ async def test_bedrock_rerank_timeout_async():
 
         assert mock_post.called
         call_kwargs = mock_post.call_args.kwargs
-        assert (
-            call_kwargs.get("timeout") == 0.001
-        ), f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
+        assert call_kwargs.get("timeout") == 0.001, f"Expected timeout=0.001, got timeout={call_kwargs.get('timeout')}"
 
 
 def test_bedrock_rerank_extra_headers_and_headers_merge():
@@ -365,7 +356,6 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
         ),
         patch("botocore.auth.SigV4Auth") as mock_sigv4,
     ):
-
         # Mock SigV4Auth to not actually sign the request
         mock_sigv4_instance = MagicMock()
         mock_sigv4.return_value = mock_sigv4_instance
@@ -398,20 +388,14 @@ def test_bedrock_rerank_extra_headers_and_headers_merge():
 
             # Both sets of headers should be present
             # Note: AWS SigV4 signing may modify header names to lowercase
-            proxy_header_found = any(
-                k.lower() == "x-forwarded-header" for k in headers.keys()
-            )
+            proxy_header_found = any(k.lower() == "x-forwarded-header" for k in headers.keys())
             assert proxy_header_found, (
-                "Proxy forwarded header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Proxy forwarded header should be present. Found headers: {list(headers.keys())}"
             )
 
-            explicit_header_found = any(
-                k.lower() == "x-explicit-header" for k in headers.keys()
-            )
+            explicit_header_found = any(k.lower() == "x-explicit-header" for k in headers.keys())
             assert explicit_header_found, (
-                "Explicitly passed header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Explicitly passed header should be present. Found headers: {list(headers.keys())}"
             )
 
             print("✓ Both header sources correctly merged and forwarded")

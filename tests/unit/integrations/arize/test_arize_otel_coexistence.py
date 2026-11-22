@@ -202,12 +202,8 @@ class TestPhoenixAutoInitWithOtelOnly(unittest.TestCase):
         _in_memory_loggers = []
         _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
 
-        phoenix_loggers = [
-            cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)
-        ]
-        assert (
-            len(phoenix_loggers) == 1
-        ), "Phoenix logger should be auto-initialized when env vars are set"
+        phoenix_loggers = [cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)]
+        assert len(phoenix_loggers) == 1, "Phoenix logger should be auto-initialized when env vars are set"
 
     def test_no_auto_init_without_env_vars(self):
         from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
@@ -225,9 +221,7 @@ class TestPhoenixAutoInitWithOtelOnly(unittest.TestCase):
                 os.environ.pop(k, None)
             _in_memory_loggers = []
             _maybe_auto_initialize_arize_phoenix(_in_memory_loggers)
-            phoenix_loggers = [
-                cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)
-            ]
+            phoenix_loggers = [cb for cb in _in_memory_loggers if isinstance(cb, ArizePhoenixLogger)]
             assert len(phoenix_loggers) == 0
 
 

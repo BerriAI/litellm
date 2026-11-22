@@ -343,7 +343,9 @@ def test_another_teams_single_team_reservation_sizes_nothing_on_a_teams_page(
     assert attached.metadata.total_ptu_hours == pytest.approx(expected_on_the_provider_model)
 
 
-_ONE_GPT_41_PTU_HOUR_ON_GPT_55: Final = _ONE_PTU_HOUR_OF_INPUT / AZURE_PTU_CAPACITY["gpt-5.5"].normalized_tokens_per_ptu_hour
+_ONE_GPT_41_PTU_HOUR_ON_GPT_55: Final = (
+    _ONE_PTU_HOUR_OF_INPUT / AZURE_PTU_CAPACITY["gpt-5.5"].normalized_tokens_per_ptu_hour
+)
 
 
 @pytest.mark.parametrize(

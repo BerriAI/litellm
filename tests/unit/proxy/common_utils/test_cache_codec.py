@@ -76,9 +76,7 @@ class TestCacheCodecSerialize:
     def test_with_model_type_dict_input_goes_through_model_validate(self):
         """A dict value (not yet an instance) must still go through model_validate."""
         raw = {"name": "via-dict", "count": 5}
-        with patch.object(
-            _SampleModel, "model_validate", wraps=_SampleModel.model_validate
-        ) as mock_validate:
+        with patch.object(_SampleModel, "model_validate", wraps=_SampleModel.model_validate) as mock_validate:
             out = CacheCodec.serialize(raw, model_type=_SampleModel)
         assert out == {"name": "via-dict", "count": 5}
         mock_validate.assert_called_once()

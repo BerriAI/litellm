@@ -5754,7 +5754,8 @@ async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend
 @pytest.mark.parametrize("send_percentage_alerts", [False, True])
 @pytest.mark.asyncio
 async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
-    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
+    send_percentage_alerts: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     team_object: Final = LiteLLM_TeamTable(
         team_id="team-1",

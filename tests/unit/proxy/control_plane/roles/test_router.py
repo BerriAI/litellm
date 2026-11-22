@@ -275,9 +275,12 @@ async def test_runtime_denial_flood_preserves_strict_write_capacity_and_history(
             )
             assert denied.status_code == 403, denied.text
         assert store.rows == stream.entries == ()
-        assert tuple(
-            (event.path, event.status, event.kind) for event in rig.audit_log.recent(10) if event.actor == "blocked"
-        ) == ((path, 403, "authentication"),) * 2
+        assert (
+            tuple(
+                (event.path, event.status, event.kind) for event in rig.audit_log.recent(10) if event.actor == "blocked"
+            )
+            == ((path, 403, "authentication"),) * 2
+        )
         assert tuple(event.path for event in rig.audit_log.recent(10) if event.actor == "seed") == ("/existing",)
         assert rig.audit_log.accepting()
         allowed: Final = await client.put(path, headers=HEADERS, json=body)

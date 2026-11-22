@@ -382,7 +382,9 @@ async def _answer_like_the_proxy(request: Request, exception: Exception) -> None
     ("wrapper_name", "exports_payload"),
     [("management_endpoint_wrapper", True), ("management_endpoint_span_wrapper", False)],
 )
-def test_span_wrapper_omits_payload(server_span_factory, otel_with_exporter, monkeypatch, wrapper_name, exports_payload):
+def test_span_wrapper_omits_payload(
+    server_span_factory, otel_with_exporter, monkeypatch, wrapper_name, exports_payload
+):
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy.management_helpers import utils as mgmt_utils
 

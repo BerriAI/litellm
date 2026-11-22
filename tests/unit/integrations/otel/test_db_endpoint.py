@@ -34,9 +34,7 @@ def _resolve(service, call_type=None, database_url=None, read_replica_url=None):
 
 
 def test_local_prisma_engine_endpoint_is_the_postgres_server_not_the_engine():
-    assert parse_database_endpoint(LOCAL_DSN) == DatabaseEndpoint(
-        address="localhost", port=5432, namespace="litellm"
-    )
+    assert parse_database_endpoint(LOCAL_DSN) == DatabaseEndpoint(address="localhost", port=5432, namespace="litellm")
 
 
 def test_remote_endpoint_keeps_host_port_and_schema_qualified_namespace():

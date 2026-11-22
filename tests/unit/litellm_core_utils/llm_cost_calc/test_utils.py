@@ -125,9 +125,7 @@ def test_completion_cost_uses_priority_image_input_and_cache_read_rates(
     cost: Final = litellm.completion_cost(
         completion_response=response, model=model, custom_llm_provider="vertex_ai", service_tier=service_tier
     )
-    assert cost == pytest.approx(
-        40 * 5e-07 + 10 * 5e-08 + 20 * image_input_rate + 30 * cached_image_rate + 4 * 3e-06
-    )
+    assert cost == pytest.approx(40 * 5e-07 + 10 * 5e-08 + 20 * image_input_rate + 30 * cached_image_rate + 4 * 3e-06)
 
 
 @pytest.mark.parametrize(

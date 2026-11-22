@@ -158,7 +158,10 @@ def test_premium_builds_recorder_and_logs_enabled(
             premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
         )
         assert recorder is not None
-        assert "Enterprise billing metrics enabled: exporting to https://collector.example:4318 every 60000 ms" in caplog.text
+        assert (
+            "Enterprise billing metrics enabled: exporting to https://collector.example:4318 every 60000 ms"
+            in caplog.text
+        )
         bm.shutdown_billing_metrics_recorder()
 
 
@@ -371,9 +374,7 @@ def test_resource_attributes_omit_license_id_when_absent() -> None:
 
 
 def test_billable_attributes_include_model_id() -> None:
-    assert bm.billable_attributes(
-        BillableCategory.LLM, "/chat/completions", 200, "deploy-3"
-    ) == {
+    assert bm.billable_attributes(BillableCategory.LLM, "/chat/completions", 200, "deploy-3") == {
         "litellm.endpoint.category": "llm",
         "http.route": "/chat/completions",
         "http.response.status_code": 200,
@@ -382,9 +383,7 @@ def test_billable_attributes_include_model_id() -> None:
 
 
 def test_billable_attributes_omit_model_id_when_none() -> None:
-    attributes: Final = bm.billable_attributes(
-        BillableCategory.MCP, "/mcp", 200, None
-    )
+    attributes: Final = bm.billable_attributes(BillableCategory.MCP, "/mcp", 200, None)
     assert "litellm.model_id" not in attributes
 
 

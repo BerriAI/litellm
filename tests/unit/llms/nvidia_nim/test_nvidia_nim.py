@@ -93,9 +93,7 @@ def test_chat_completion_nvidia_nim_with_tools():
         },
     ]
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             completion(
                 model=model_name,

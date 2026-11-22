@@ -71,7 +71,7 @@ def test_model_info_accepts_valid_ptu_fields():
 
 
 def test_model_info_rejects_non_positive_count():
-    with pytest.raises(ValueError, match='value_error, input_value'):
+    with pytest.raises(ValueError, match="value_error, input_value"):
         ModelInfo(
             id="x",
             team_id="t",
@@ -82,7 +82,7 @@ def test_model_info_rejects_non_positive_count():
 
 
 def test_model_info_rejects_negative_rate():
-    with pytest.raises(ValueError, match='value_error, input_value'):
+    with pytest.raises(ValueError, match="value_error, input_value"):
         ModelInfo(
             id="x",
             team_id="t",
@@ -95,7 +95,7 @@ def test_model_info_rejects_negative_rate():
 def test_model_info_rejects_a_count_beyond_the_cap():
     """flat cost multiplies the count by a float, and an unbounded int overflows that
     conversion, which aborted the rollup for every team rather than skipping one model."""
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", team_id="t", ptu_count=10**400, cost_per_ptu_per_hour=2.0)
 
 
@@ -108,12 +108,12 @@ def test_model_info_accepts_a_count_at_the_cap():
 def test_model_info_rejects_a_non_finite_rate(rate):
     """NaN compares False against every bound, so a bare `< 0` check let it through and the
     deployment then accrued a flat cost of nan."""
-    with pytest.raises(ValueError, match='value_error, input_value'):
+    with pytest.raises(ValueError, match="value_error, input_value"):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=rate)
 
 
 def test_model_info_rejects_a_rate_beyond_the_cap():
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(id="x", team_id="t", ptu_count=5, cost_per_ptu_per_hour=ModelInfo.MAX_COST_PER_PTU_PER_HOUR * 2)
 
 
@@ -176,7 +176,7 @@ def test_validate_helper_passes_full_config():
 def test_model_info_rejects_effective_to_before_from():
     import datetime
 
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(
             id="x",
             team_id="t",
@@ -214,7 +214,7 @@ def test_model_info_compares_mixed_naive_and_aware_timestamps():
     )
     assert info.ptu_effective_to is not None
 
-    with pytest.raises(ValueError, match='validation error for ModelInfo'):
+    with pytest.raises(ValueError, match="validation error for ModelInfo"):
         ModelInfo(
             id="x",
             team_id="t",
@@ -680,9 +680,7 @@ class TestAddNewModelPtuGate:
         # Both fields None: no reconcile state was captured, so the serving verdict
         # falls back to reading the router live -- which is what mock_router below
         # drives. These tests are about the PTU gate, not the reload verdict.
-        mock_proxy_config.add_deployment = AsyncMock(
-            return_value=ReconcileOutcome(still_desired=None, live_after=None)
-        )
+        mock_proxy_config.add_deployment = AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None))
 
         mock_router = MagicMock()
         mock_router.registry.return_value.names.return_value = [model_id]
@@ -727,7 +725,7 @@ class TestAddNewModelPtuGate:
         with ExitStack() as stack:
             for active_patch in patches:
                 stack.enter_context(active_patch)
-            with pytest.raises(Exception, match='PTU cost attribution is disabled, so ptu_count') as exc:
+            with pytest.raises(Exception, match="PTU cost attribution is disabled, so ptu_count") as exc:
                 await add_new_model(model_params=self._ptu_deployment("ptu-gate-model"), user_api_key_dict=admin)
 
         assert PTU_COST_ATTRIBUTION_ENV_VAR in str(exc.value)
@@ -766,7 +764,6 @@ class TestAddNewModelPtuGate:
 
         assert result.model_id == "ptu-gate-model"
         add_team_model_to_db.assert_called_once()
-
 
 
 class TestPtuDeploymentsAreNotBilledPerToken:
@@ -819,7 +816,9 @@ class TestPtuDeploymentsAreNotBilledPerToken:
     def test_a_tiered_price_the_caller_supplies_is_refused(self):
         """Tier rates bill the traffic per token just as surely as a flat rate does."""
         with pytest.raises(HTTPException) as exc:
-            self._zeroed(model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]})
+            self._zeroed(
+                model_info=self.PTU, supplied={"tiered_pricing": [{"range": [0, 100], "input_cost_per_token": 1e-06}]}
+            )
         assert exc.value.status_code == 400
         assert "tiered_pricing" in str(exc.value.detail)
 
@@ -827,7 +826,9 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         """The rates sit in a table keyed by context size, so a guard that only reads numbers
         lets a per-request charge onto a deployment its reserved capacity already pays for."""
         with pytest.raises(HTTPException) as exc:
-            self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": {"search_context_size_medium": 0.05}})
+            self._zeroed(
+                model_info=self.PTU, supplied={"search_context_cost_per_query": {"search_context_size_medium": 0.05}}
+            )
         assert exc.value.status_code == 400
         assert "search_context_cost_per_query" in str(exc.value.detail)
 
@@ -845,7 +846,12 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         and replacing it would restore the provider default."""
         free = dict.fromkeys(_SEARCH_CONTEXT_SIZES, 0.0)
         assert self._zeroed(model_info=self.PTU, supplied={"search_context_cost_per_query": free})
-        assert cost_per_web_search_request(usage=self._grounded_usage(), model_info={"search_context_cost_per_query": free}) == 0
+        assert (
+            cost_per_web_search_request(
+                usage=self._grounded_usage(), model_info={"search_context_cost_per_query": free}
+            )
+            == 0
+        )
 
     @staticmethod
     def _grounded_usage():
@@ -898,9 +904,12 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             assert stored["input_cost_per_token"] == 0, blob
 
     def test_a_price_the_caller_supplies_as_zero_is_accepted(self):
-        assert self._zeroed(model_info={**self.PTU, "input_cost_per_token": 0}, supplied={"input_cost_per_token": 0})[
-            "input_cost_per_token"
-        ] == 0
+        assert (
+            self._zeroed(model_info={**self.PTU, "input_cost_per_token": 0}, supplied={"input_cost_per_token": 0})[
+                "input_cost_per_token"
+            ]
+            == 0
+        )
 
     def test_a_price_already_on_the_row_is_zeroed_rather_than_refused(self):
         """A row priced through a path this rule does not cover must heal on its next save. The
@@ -932,7 +941,9 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         update_existing = AsyncMock()
         with ExitStack() as stack:
             stack.enter_context(
-                patch_ctx(f"{endpoints}.ModelManagementAuthChecks.allow_team_model_action", AsyncMock(return_value=True))
+                patch_ctx(
+                    f"{endpoints}.ModelManagementAuthChecks.allow_team_model_action", AsyncMock(return_value=True)
+                )
             )
             stack.enter_context(patch_ctx(f"{endpoints}._setup_new_team_model_assignment", setup_new))
             stack.enter_context(patch_ctx(f"{endpoints}._update_existing_team_model_assignment", update_existing))
@@ -1067,9 +1078,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         Router(model_list=[priced.to_json(exclude_none=True)])
         registered = litellm.model_cost["dep-ptu"]
         charged = {
-            k: v
-            for k, v in registered.items()
-            if "cost" in k and k != "cost_per_ptu_per_hour" and _is_nonzero_price(v)
+            k: v for k, v in registered.items() if "cost" in k and k != "cost_per_ptu_per_hour" and _is_nonzero_price(v)
         }
         assert charged == {}
 
@@ -1209,17 +1218,27 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         for blob in ("model_info", "litellm_params"):
             assert json.loads(written[blob])["input_cost_per_token"] == 0, blob
 
-    @pytest.mark.parametrize("field,activating", [
-        ("input_cost_per_token", False), ("cache_read_input_token_cost", False),
-        ("input_cost_per_second", False), ("tiered_pricing", False), ("search_context_cost_per_query", False),
-        ("input_cost_per_token", True), ("cache_read_input_token_cost", True),
-        ("tiered_pricing", True), ("search_context_cost_per_query", True),
-    ])
+    @pytest.mark.parametrize(
+        "field,activating",
+        [
+            ("input_cost_per_token", False),
+            ("cache_read_input_token_cost", False),
+            ("input_cost_per_second", False),
+            ("tiered_pricing", False),
+            ("search_context_cost_per_query", False),
+            ("input_cost_per_token", True),
+            ("cache_read_input_token_cost", True),
+            ("tiered_pricing", True),
+            ("search_context_cost_per_query", True),
+        ],
+    )
     def test_removing_ptu_managed_pricing_is_rejected(self, field: str, activating: bool) -> None:
         original: Final = _deployment_without_ptu() if activating else _deployment_with_stored_ptu()
-        configured: Final = original.model_copy(update={
-            "litellm_params": original.litellm_params.model_copy(update={"input_cost_per_second": 0.0}),
-        })
+        configured: Final = original.model_copy(
+            update={
+                "litellm_params": original.litellm_params.model_copy(update={"input_cost_per_second": 0.0}),
+            }
+        )
         with pytest.raises(HTTPException) as exc:
             update_db_model(
                 db_model=configured if activating else _ptu_priced_deployment(configured),
@@ -1232,51 +1251,69 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         assert field in exc.value.detail
         assert "ptu_count and cost_per_ptu_per_hour" in exc.value.detail
 
-    @pytest.mark.parametrize("mode,field", [
-        ("extra", "temperature"), ("disabled", "input_cost_per_token"),
-        ("disabled", "input_cost_per_second"), ("cleared", "input_cost_per_token"),
-        ("cleared", "input_cost_per_second"), ("activating", "input_cost_per_second"),
-        ("ordinary", "input_cost_per_second"),
-        ("ordinary", "input_cost_per_token_above_123k_tokens"),
-        ("ordinary", "regional_endpoint_uplift_multiplier"),
-    ])
+    @pytest.mark.parametrize(
+        "mode,field",
+        [
+            ("extra", "temperature"),
+            ("disabled", "input_cost_per_token"),
+            ("disabled", "input_cost_per_second"),
+            ("cleared", "input_cost_per_token"),
+            ("cleared", "input_cost_per_second"),
+            ("activating", "input_cost_per_second"),
+            ("ordinary", "input_cost_per_second"),
+            ("ordinary", "input_cost_per_token_above_123k_tokens"),
+            ("ordinary", "regional_endpoint_uplift_multiplier"),
+        ],
+    )
     def test_allowed_ptu_removals_stay_absent_after_another_save(
         self, monkeypatch: pytest.MonkeyPatch, mode: str, field: str
     ) -> None:
         original: Final = (
-            _deployment_without_ptu() if mode in ("activating", "ordinary")
+            _deployment_without_ptu()
+            if mode in ("activating", "ordinary")
             else _ptu_priced_deployment(_deployment_with_stored_ptu())
         )
         rate: Final = 0.5 if mode in ("activating", "ordinary") else 0.0
         price_field: Final = field if mode == "ordinary" else "input_cost_per_second"
-        configured: Final = original.model_copy(update={
-            "litellm_params": original.litellm_params.model_copy(update={
-                "temperature": 0.4, price_field: rate,
-            }),
-            "model_info": original.model_info.model_copy(update={price_field: rate}),
-        })
+        configured: Final = original.model_copy(
+            update={
+                "litellm_params": original.litellm_params.model_copy(
+                    update={
+                        "temperature": 0.4,
+                        price_field: rate,
+                    }
+                ),
+                "model_info": original.model_info.model_copy(update={price_field: rate}),
+            }
+        )
         if mode == "disabled":
             monkeypatch.delenv(PTU_COST_ATTRIBUTION_ENV_VAR)
         incoming_info: Final = (
-            ModelInfo(ptu_count=None, cost_per_ptu_per_hour=None) if mode == "cleared"
-            else _deployment_with_stored_ptu().model_info if mode == "activating" else ModelInfo()
+            ModelInfo(ptu_count=None, cost_per_ptu_per_hour=None)
+            if mode == "cleared"
+            else _deployment_with_stored_ptu().model_info
+            if mode == "activating"
+            else ModelInfo()
         )
         patch: Final = PatchModelRequest(
             litellm_params_to_remove=(field,),
             model_info=incoming_info.model_copy(update={price_field: rate}),
         )
         written: Final = update_db_model(db_model=configured, updated_patch=patch)
-        assert json.loads(written["model_info"]).get("ptu_count") == (
-            None if mode in ("cleared", "ordinary") else 15
+        assert json.loads(written["model_info"]).get("ptu_count") == (None if mode in ("cleared", "ordinary") else 15)
+        reloaded: Final = Deployment.model_validate(
+            {
+                "model_name": written["model_name"],
+                "litellm_params": json.loads(written["litellm_params"]),
+                "model_info": json.loads(written["model_info"]),
+            }
         )
-        reloaded: Final = Deployment.model_validate({
-            "model_name": written["model_name"], "litellm_params": json.loads(written["litellm_params"]),
-            "model_info": json.loads(written["model_info"]),
-        })
         saved_again: Final = update_db_model(
-            db_model=reloaded, updated_patch=updateDeployment(
-                model_name="renamed", model_info=ModelInfo.model_validate({price_field: rate}),
-            )
+            db_model=reloaded,
+            updated_patch=updateDeployment(
+                model_name="renamed",
+                model_info=ModelInfo.model_validate({price_field: rate}),
+            ),
         )
         retried: Final = update_db_model(db_model=reloaded, updated_patch=patch)
         for result in (written, saved_again, retried):
@@ -1361,7 +1398,11 @@ class TestPtuDeploymentsAreNotBilledPerToken:
             )
 
         written = add_team_model_to_db.call_args.kwargs["model_params"]
-        assert all(getattr(written.model_info, field, None) == 0 for field in SPECIAL_MODEL_INFO_PARAMS if field != "tiered_pricing")
+        assert all(
+            getattr(written.model_info, field, None) == 0
+            for field in SPECIAL_MODEL_INFO_PARAMS
+            if field != "tiered_pricing"
+        )
         assert written.model_info.tiered_pricing == []
         assert all(written.litellm_params.get(field) == 0 for field in _PTU_ZEROED_PRICING_FIELDS)
         assert written.litellm_params.tiered_pricing == []
@@ -1378,7 +1419,7 @@ class TestPtuDeploymentsAreNotBilledPerToken:
         with ExitStack() as stack:
             for active_patch in patches:
                 stack.enter_context(active_patch)
-            with pytest.raises(Exception, match='A PTU deployment bills by reserved capacity, so') as exc:
+            with pytest.raises(Exception, match="A PTU deployment bills by reserved capacity, so") as exc:
                 await add_new_model(model_params=deployment, user_api_key_dict=admin)
 
         assert "input_cost_per_token" in str(exc.value)

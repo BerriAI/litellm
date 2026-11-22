@@ -94,7 +94,4 @@ def test_neosantara_responses_api_config():
 
     assert isinstance(config, OpenAIResponsesAPIConfig)
     assert config.custom_llm_provider == "neosantara"
-    assert (
-        config.get_complete_url(api_base=None, litellm_params={})
-        == "https://api.neosantara.xyz/v1/responses"
-    )
+    assert config.get_complete_url(api_base=None, litellm_params={}) == "https://api.neosantara.xyz/v1/responses"

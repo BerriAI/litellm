@@ -116,7 +116,10 @@ class TestGetChatGPTSessionId:
             {"litellm_call_id": "call-1"},
             get_litellm_params(metadata={"trace_id": "trace-1"}),
             get_litellm_params(litellm_metadata={"trace_id": "trace-1"}),
-            {"litellm_session_id": "gen-1", "metadata": {"session_id": "gen-1", SESSION_ID_GENERATED_METADATA_KEY: True}},
+            {
+                "litellm_session_id": "gen-1",
+                "metadata": {"session_id": "gen-1", SESSION_ID_GENERATED_METADATA_KEY: True},
+            },
             {
                 "litellm_session_id": "gen-1",
                 "litellm_metadata": {"session_id": "gen-1", SESSION_ID_GENERATED_METADATA_KEY: True},

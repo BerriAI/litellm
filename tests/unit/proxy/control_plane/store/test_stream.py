@@ -70,11 +70,7 @@ async def test_malformed_stream_entries_become_resync_markers_without_losing_the
     stream: Final = RedisStream(client, "cp:config", 100)
     await stream.append(Change(op="resync", actor="operator"))
     client.fields = fields
-    assert await stream.read("123-3") == (
-        Entry(revision="123-4", change=Change(op="resync", actor=CONTROL_PLANE_ID)),
-    )
+    assert await stream.read("123-3") == (Entry(revision="123-4", change=Change(op="resync", actor=CONTROL_PLANE_ID)),)
     client.revision = "123-5"
     await stream.append(Change(op="resync", actor="next-writer"))
-    assert await stream.read("123-4") == (
-        Entry(revision="123-5", change=Change(op="resync", actor="next-writer")),
-    )
+    assert await stream.read("123-4") == (Entry(revision="123-5", change=Change(op="resync", actor="next-writer")),)

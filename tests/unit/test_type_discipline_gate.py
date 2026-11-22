@@ -40,13 +40,7 @@ def test_parse_changed_lines_groups_hunks_under_their_own_file() -> None:
 
 
 def test_parse_changed_lines_handles_several_hunks_in_one_file() -> None:
-    diff: Final = (
-        "+++ b/litellm/a.py\n"
-        "@@ -0,0 +1,2 @@\n"
-        "+a\n"
-        "@@ -9,0 +20,1 @@\n"
-        "+b\n"
-    )
+    diff: Final = "+++ b/litellm/a.py\n@@ -0,0 +1,2 @@\n+a\n@@ -9,0 +20,1 @@\n+b\n"
     assert gate.parse_changed_lines(diff)["litellm/a.py"] == {1, 2, 20}
 
 

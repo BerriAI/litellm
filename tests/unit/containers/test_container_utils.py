@@ -1,4 +1,3 @@
-
 import pytest
 
 
@@ -79,9 +78,7 @@ class TestContainerRequestUtils:
         }
 
         # Execute
-        result = ContainerRequestUtils.get_requested_container_create_optional_param(
-            params
-        )
+        result = ContainerRequestUtils.get_requested_container_create_optional_param(params)
 
         # Assert
         assert "expires_after" in result
@@ -104,9 +101,7 @@ class TestContainerRequestUtils:
         }
 
         # Execute
-        result = ContainerRequestUtils.get_requested_container_list_optional_param(
-            params
-        )
+        result = ContainerRequestUtils.get_requested_container_list_optional_param(params)
 
         # Assert
         assert "after" in result
@@ -138,9 +133,7 @@ class TestContainerRequestUtils:
         """Test handling of None values in optional parameters."""
         # Setup
         config = OpenAIContainerConfig()
-        optional_params = ContainerCreateOptionalRequestParams(
-            {"expires_after": None, "file_ids": None}
-        )
+        optional_params = ContainerCreateOptionalRequestParams({"expires_after": None, "file_ids": None})
 
         # Execute
         result = ContainerRequestUtils.get_optional_params_container_create(
@@ -165,9 +158,7 @@ class TestContainerRequestUtils:
         }
 
         # Execute
-        result = ContainerRequestUtils.get_requested_container_list_optional_param(
-            params
-        )
+        result = ContainerRequestUtils.get_requested_container_list_optional_param(params)
 
         # Assert
         assert "limit" in result
@@ -194,9 +185,7 @@ class TestContainerRequestUtils:
     def test_container_list_optional_params_type_validation(self):
         """Test that ContainerListOptionalRequestParams validates types correctly."""
         # Test with valid parameters
-        valid_params = ContainerListOptionalRequestParams(
-            {"after": "cntr_123", "limit": 10, "order": "desc"}
-        )
+        valid_params = ContainerListOptionalRequestParams({"after": "cntr_123", "limit": 10, "order": "desc"})
 
         assert valid_params["after"] == "cntr_123"
         assert valid_params["limit"] == 10
@@ -233,9 +222,7 @@ class TestContainerRequestUtils:
         )
         assert len(managed) > len(inner)
         litellm_params: GenericLiteLLMParams = GenericLiteLLMParams()
-        original_id, provider, updated = decode_managed_container_id_for_request(
-            managed, "openai", litellm_params
-        )
+        original_id, provider, updated = decode_managed_container_id_for_request(managed, "openai", litellm_params)
         assert original_id == inner
         assert provider == "openai"
         assert updated is litellm_params

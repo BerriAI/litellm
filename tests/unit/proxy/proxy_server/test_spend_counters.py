@@ -911,7 +911,9 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
 
 @pytest.mark.asyncio
 async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
-    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(
+        budget_reservation=None, response_cost=1.0
+    )
     assert result.reserved_counter_keys == frozenset()
     assert result.pending == ()
 

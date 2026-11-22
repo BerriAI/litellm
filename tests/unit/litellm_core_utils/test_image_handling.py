@@ -853,7 +853,9 @@ async def test_serves_pdf_is_false_when_the_host_refuses_the_connection(probe_se
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
-async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_the_link(probe_server, monkeypatch, mode):
+async def test_serves_pdf_is_false_without_a_request_when_the_ssrf_check_blocks_the_link(
+    probe_server, monkeypatch, mode
+):
     monkeypatch.setattr(litellm, "user_url_validation", True)
     url = probe_server.serve("/report.pdf", _Served(content_type="application/pdf"))
 
@@ -944,7 +946,11 @@ async def test_format_pdf_links_marks_only_links_that_serve_a_pdf(probe_server, 
             "role": "user",
             "content": [
                 {"type": "text", "text": "compare"},
-                {"type": "image_url", "image_url": {"url": pdf_link, "detail": "high"}, "cache_control": {"type": "ephemeral"}},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": pdf_link, "detail": "high"},
+                    "cache_control": {"type": "ephemeral"},
+                },
                 {"type": "image_url", "image_url": query_link},
                 {"type": "image_url", "image_url": {"url": png_at_pdf_link}},
                 {"type": "image_url", "image_url": {"url": png_link}},
@@ -975,9 +981,16 @@ async def test_format_pdf_links_marks_only_links_that_serve_a_pdf(probe_server, 
                 {"type": "image_url", "image_url": {"url": pdf_link, "format": "image/png"}},
             ],
         },
-        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": pdf_link, "format": "application/pdf"}}]},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": pdf_link, "format": "application/pdf"}}],
+        },
     )
-    assert sorted(path for path, _ in probe_server.seen) == ["/a/download?file=summary.pdf", "/a/page.pdf?fm=png", "/a/report.pdf"]
+    assert sorted(path for path, _ in probe_server.seen) == [
+        "/a/download?file=summary.pdf",
+        "/a/page.pdf?fm=png",
+        "/a/report.pdf",
+    ]
 
 
 @pytest.mark.parametrize("mode", ("sync", "async"))
@@ -995,7 +1008,10 @@ async def test_format_pdf_links_probes_every_link_at_once(probe_server, mode):
 async def test_format_pdf_links_leaves_messages_without_pdf_links_alone(probe_server, mode):
     messages = [
         {"role": "user", "content": [{"type": "image_url", "image_url": {"url": f"{probe_server.base_url}/a.png"}}]},
-        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBERi0="}}]},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": "data:application/pdf;base64,JVBERi0="}}],
+        },
     ]
 
     assert await _format_pdf_links(mode, messages) == tuple(messages)

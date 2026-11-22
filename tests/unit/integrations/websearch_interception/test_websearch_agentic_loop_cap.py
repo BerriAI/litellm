@@ -567,9 +567,7 @@ class TestCappedLoopReturnsTerminalResponse:
         assert fingerprints == []
         assert max_loops >= 1
 
-        depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(
-            kwargs={"max_agentic_loops": 1}
-        )
+        depth, max_loops, fingerprints = BaseLLMHTTPHandler._get_agentic_loop_settings(kwargs={"max_agentic_loops": 1})
 
         assert max_loops == 1
         assert BaseLLMHTTPHandler._check_agentic_loop_safety(
@@ -912,7 +910,10 @@ class TestFailedSearchEndsTheTurn:
             "text",
         ]
         assert result["content"][0]["input"] == {"query": "fails"}
-        assert result["content"][1]["content"] == {"type": "web_search_tool_result_error", "error_code": "too_many_requests"}
+        assert result["content"][1]["content"] == {
+            "type": "web_search_tool_result_error",
+            "error_code": "too_many_requests",
+        }
         assert result["content"][2]["input"] == {"query": "works"}
         assert result["content"][3]["content"][0]["url"] == "https://example.com"
 
@@ -1161,9 +1162,7 @@ class TestRebuiltStreamIsWellFormed:
     def test_search_blocks_reach_the_client(self):
         events = _stream_events(self._capped_search_turn())
 
-        started_types = [
-            event["content_block"]["type"] for event in events if event["type"] == "content_block_start"
-        ]
+        started_types = [event["content_block"]["type"] for event in events if event["type"] == "content_block_start"]
 
         assert started_types == ["server_tool_use", "web_search_tool_result", "text"]
 
@@ -1173,8 +1172,7 @@ class TestRebuiltStreamIsWellFormed:
         result_block = next(
             event["content_block"]
             for event in events
-            if event["type"] == "content_block_start"
-            and event["content_block"]["type"] == "web_search_tool_result"
+            if event["type"] == "content_block_start" and event["content_block"]["type"] == "web_search_tool_result"
         )
 
         assert result_block["tool_use_id"] == "srvtoolu_01"
@@ -1414,9 +1412,7 @@ async def test_responses_pinned_openai_chat_completion_bills_every_search_round_
     perplexity_search: respx.Route,
 ):
     recorder: Final = _ModelSpendRowRecorder(rows_expected=loops_allowed + 1)
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder])
     litellm.in_memory_llm_clients_cache.flush_cache()
     responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
         side_effect=_responses_reply_asking_for_another_search_until_enough_results
@@ -1447,9 +1443,7 @@ async def test_streamed_responses_pinned_openai_chat_completion_bills_every_sear
     perplexity_search: respx.Route,
 ):
     recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder])
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
         side_effect=_responses_reply_asking_for_another_search_until_enough_results
@@ -1494,9 +1488,7 @@ async def test_responses_pinned_openai_chat_completion_bills_each_served_round_o
     perplexity_search: respx.Route,
 ):
     recorder: Final = _ModelSpendRowRecorder(rows_expected=2 if stream else 2 * rounds_served + 1)
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder])
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
         side_effect=_responses_reply_failing_after(rounds_served)
@@ -1721,9 +1713,7 @@ async def test_streamed_responses_pinned_openai_chat_completion_prices_each_roun
 ):
     expected_cost: Final = _price_of_rounds_priced_one_by_one(loops_allowed + 1)
     recorder: Final = _ModelSpendRowRecorder(rows_expected=2)
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"]), recorder])
     litellm.in_memory_llm_clients_cache.flush_cache()
     respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(side_effect=_long_context_round_reply)
 

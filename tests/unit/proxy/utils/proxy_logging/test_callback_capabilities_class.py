@@ -319,9 +319,7 @@ def test_get_combined_callback_list_matrix(proxy_logging):
         "none_dynamic_returns_global_copy": proxy_logging.get_combined_callback_list(
             dynamic_success_callbacks=None, global_callbacks=["a", "b", "c"]
         ),
-        "empty_both": proxy_logging.get_combined_callback_list(
-            dynamic_success_callbacks=[], global_callbacks=[]
-        ),
+        "empty_both": proxy_logging.get_combined_callback_list(dynamic_success_callbacks=[], global_callbacks=[]),
     }
     assert snapshot == {
         "merge_dedupes_shared": ["dyn-1", "glob-1", "shared"],

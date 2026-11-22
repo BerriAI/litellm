@@ -47,14 +47,10 @@ class TestCustomGuardrailRecursion:
                 event_type=GuardrailEventHooks.pre_call,
             )
         except RecursionError:
-            pytest.fail(
-                "RecursionError raised! The cyclic reference sanitization failed."
-            )
+            pytest.fail("RecursionError raised! The cyclic reference sanitization failed.")
 
         # 3. Verify the data stored is safe
-        stored_info = request_data["metadata"][
-            "standard_logging_guardrail_information"
-        ][0]
+        stored_info = request_data["metadata"]["standard_logging_guardrail_information"][0]
         stored_response = stored_info["guardrail_response"]
 
         # Check that we can dump it to JSON without crashing (Ultimate proof)

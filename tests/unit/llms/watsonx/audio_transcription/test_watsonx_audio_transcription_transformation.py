@@ -36,7 +36,9 @@ class TestWatsonXAudioTranscription:
             "model": "whisper-large-v3-turbo",  # This field should be removed
             "duration": 5.5,
         }
-        mock_response.text = '{"text": "Hello, this is a test transcription.", "model": "whisper-large-v3-turbo", "duration": 5.5}'
+        mock_response.text = (
+            '{"text": "Hello, this is a test transcription.", "model": "whisper-large-v3-turbo", "duration": 5.5}'
+        )
 
         # This should not raise a TypeError - model field should be removed
         result = handler.transform_audio_transcription_response(mock_response)
@@ -74,9 +76,7 @@ class TestWatsonXAudioTranscription:
             "text": "Hello, this is a test transcription.",
             "duration": 5.5,
         }
-        mock_response.text = (
-            '{"text": "Hello, this is a test transcription.", "duration": 5.5}'
-        )
+        mock_response.text = '{"text": "Hello, this is a test transcription.", "duration": 5.5}'
 
         result = handler.transform_audio_transcription_response(mock_response)
 

@@ -36,9 +36,7 @@ def test_two_exporters_receive_the_same_span():
     provider = build_tracer_provider(cfg)
     # Clear out any auto-built export processors and attach our pair.
     while provider._active_span_processor._span_processors:
-        provider._active_span_processor._span_processors = (
-            provider._active_span_processor._span_processors[:-1]
-        )
+        provider._active_span_processor._span_processors = provider._active_span_processor._span_processors[:-1]
     provider.add_span_processor(SimpleSpanProcessor(exporter_a))
     provider.add_span_processor(SimpleSpanProcessor(exporter_b))
 
@@ -81,9 +79,7 @@ def test_config_normalizer_no_legacy_when_compat_off():
 
 def test_config_folds_legacy_exporter_triple_into_exporters_list():
     """When ``exporters`` is empty, the validator folds the legacy single triple."""
-    cfg = OpenTelemetryV2Config(
-        exporter="otlp_http", endpoint="https://api.example.com", headers="k=v"
-    )
+    cfg = OpenTelemetryV2Config(exporter="otlp_http", endpoint="https://api.example.com", headers="k=v")
     assert len(cfg.exporters) == 1
     assert cfg.exporters[0].kind == "otlp_http"
     assert cfg.exporters[0].endpoint == "https://api.example.com"

@@ -475,7 +475,10 @@ async def test_long_verdict_explanations_still_route_by_validated_probabilities(
     if field == "crux":
         content: Final = json.dumps({**verdict, "crux": explanation})
     else:
-        forecasts: Final = {**verdict["forecasts"], "efficient": {**verdict["forecasts"]["efficient"], field: explanation}}
+        forecasts: Final = {
+            **verdict["forecasts"],
+            "efficient": {**verdict["forecasts"]["efficient"], field: explanation},
+        }
         content = json.dumps({**verdict, "forecasts": forecasts})
     router, _ = _router(content)
     outcome: Final = await router.aclassify("Fix nested behavior")
@@ -513,7 +516,9 @@ async def test_unparseable_reply_is_logged_with_its_text_unless_message_logging_
 
 _MESSAGE_LOGGING_OPT_OUTS: Final = (
     pytest.param({"turn_off_message_logging": "True"}, False, id="key-logging-settings-string"),
-    pytest.param({"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}, False, id="redaction-header"),
+    pytest.param(
+        {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}, False, id="redaction-header"
+    ),
     pytest.param({}, True, id="global-setting"),
     pytest.param({"metadata": {"headers": None}}, False, id="undecidable-headers-fail-closed"),
 )

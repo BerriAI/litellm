@@ -113,9 +113,7 @@ class TestSyncPoliciesFromDbProductionOnly:
         prod_row = _make_row(policy_id="prod-1", version_status="production")
         prisma.db.litellm_policytable.find_many = AsyncMock(return_value=[prod_row])
 
-        result = await registry.get_all_policies_from_db(
-            prisma, version_status="production"
-        )
+        result = await registry.get_all_policies_from_db(prisma, version_status="production")
 
         assert len(result) == 1
         assert result[0].version_status == "production"
@@ -157,16 +155,13 @@ class TestUpdatePolicyDraftOnly:
         prod_row = _make_row(policy_id="pid-1", version_status="production")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=prod_row)
 
-        with pytest.raises(Exception, match='Error updating policy in DB: Only draft versions can be') as exc_info:
+        with pytest.raises(Exception, match="Error updating policy in DB: Only draft versions can be") as exc_info:
             await registry.update_policy_in_db(
                 policy_id="pid-1",
                 policy_request=PolicyUpdateRequest(description="new"),
                 prisma_client=prisma,
             )
-        assert (
-            "Only draft" in str(exc_info.value)
-            or "draft" in str(exc_info.value).lower()
-        )
+        assert "Only draft" in str(exc_info.value) or "draft" in str(exc_info.value).lower()
         prisma.db.litellm_policytable.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -341,16 +336,13 @@ class TestUpdateVersionStatus:
         draft = _make_row(policy_id="d-1", version_status="draft")
         prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=draft)
 
-        with pytest.raises(Exception, match='Error updating version status: Cannot promote draft') as exc_info:
+        with pytest.raises(Exception, match="Error updating version status: Cannot promote draft") as exc_info:
             await registry.update_version_status(
                 policy_id="d-1",
                 new_status="production",
                 prisma_client=prisma,
             )
-        assert (
-            "publish" in str(exc_info.value).lower()
-            or "draft" in str(exc_info.value).lower()
-        )
+        assert "publish" in str(exc_info.value).lower() or "draft" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
     async def test_published_to_production_demotes_old_and_updates_registry(self):
@@ -367,9 +359,7 @@ class TestUpdateVersionStatus:
             version_status="production",
             production_at=datetime.now(timezone.utc),
         )
-        prisma.db.litellm_policytable.find_unique = AsyncMock(
-            return_value=published_row
-        )
+        prisma.db.litellm_policytable.find_unique = AsyncMock(return_value=published_row)
         prisma.db.litellm_policytable.update_many = AsyncMock()
         prisma.db.litellm_policytable.update = AsyncMock(return_value=updated_row)
 

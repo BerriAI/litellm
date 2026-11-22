@@ -1067,4 +1067,3 @@ def test_a_database_outage_while_listing_members_is_a_503_problem_document_so_ca
     assert response.headers["content-type"] == "application/problem+json"
     assert response.json()["type"] == "urn:litellm:error:database-unavailable"
     assert "connection refused" not in response.text
-

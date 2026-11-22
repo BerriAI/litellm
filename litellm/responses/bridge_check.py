@@ -406,7 +406,16 @@ def _relies_on_ambient_vertex_location(custom_llm_provider: str, *param_sources:
 def _needs_generate_content(*param_sources: Mapping[str, object] | None) -> bool:
     sources: Final = tuple(source or {} for source in param_sources)
     extra_bodies: Final = (str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
-    return any(not _GENERATE_CONTENT_ONLY_KEYS.isdisjoint(params) for params in (*sources, *extra_bodies))
+    return any(
+        not _GENERATE_CONTENT_ONLY_KEYS.isdisjoint(params) or _names_a_file_search_store(params.get("tools"))
+        for params in (*sources, *extra_bodies)
+    )
+
+
+def _names_a_file_search_store(tools: object) -> bool:
+    return isinstance(tools, list) and any(
+        isinstance(tool, Mapping) and (tool.get("type") == "file_search" or "file_search" in tool) for tool in tools
+    )
 
 
 def _is_gemini_4_or_newer(model: str) -> bool:

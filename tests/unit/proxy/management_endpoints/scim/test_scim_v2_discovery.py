@@ -27,9 +27,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 )
 
 
-def _make_mock_request(
-    base_url="http://localhost:4000/", url="http://localhost:4000/scim/v2"
-):
+def _make_mock_request(base_url="http://localhost:4000/", url="http://localhost:4000/scim/v2"):
     """Create a mock FastAPI Request object."""
     request = MagicMock()
     request.method = "GET"
@@ -67,9 +65,7 @@ class TestGetResourceTypes:
     def test_custom_base_url(self):
         resource_types = _get_resource_types("https://example.com/scim/v2")
         user_rt = next(rt for rt in resource_types if rt.id == "User")
-        assert (
-            user_rt.meta["location"] == "https://example.com/scim/v2/ResourceTypes/User"
-        )
+        assert user_rt.meta["location"] == "https://example.com/scim/v2/ResourceTypes/User"
 
     def test_model_dump_uses_schema_key(self):
         """Ensure model_dump() outputs 'schema' not 'schema_'."""
@@ -89,9 +85,7 @@ class TestGetSchemas:
 
     def test_user_schema_has_required_attributes(self):
         schemas = _get_schemas()
-        user_schema = next(
-            s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:User"
-        )
+        user_schema = next(s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:User")
         attr_names = [a.name for a in user_schema.attributes]
         assert "userName" in attr_names
         assert "name" in attr_names
@@ -101,9 +95,7 @@ class TestGetSchemas:
 
     def test_group_schema_has_required_attributes(self):
         schemas = _get_schemas()
-        group_schema = next(
-            s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:Group"
-        )
+        group_schema = next(s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:Group")
         attr_names = [a.name for a in group_schema.attributes]
         assert "displayName" in attr_names
         assert "members" in attr_names
@@ -112,9 +104,7 @@ class TestGetSchemas:
         """IdPs read the schema to learn we understand ``members.type``, which is how
         a nested group announces itself."""
         schemas = _get_schemas()
-        group_schema = next(
-            s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:Group"
-        )
+        group_schema = next(s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:Group")
         members = next(a for a in group_schema.attributes if a.name == "members")
         member_type = next(a for a in members.subAttributes or [] if a.name == "type")
         assert member_type.type == "string"
@@ -123,9 +113,7 @@ class TestGetSchemas:
 
     def test_schema_meta_fields(self):
         schemas = _get_schemas()
-        user_schema = next(
-            s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:User"
-        )
+        user_schema = next(s for s in schemas if s.id == "urn:ietf:params:scim:schemas:core:2.0:User")
         assert user_schema.meta is not None
         assert user_schema.meta["resourceType"] == "Schema"
 
@@ -139,9 +127,7 @@ class TestGetScimBase:
         request = _make_mock_request()
         result = await get_scim_base(request)
 
-        assert result["schemas"] == [
-            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
-        ]
+        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
         assert result["totalResults"] == 2
         assert len(result["Resources"]) == 2
 
@@ -170,10 +156,7 @@ class TestGetScimBase:
         result = await get_scim_base(request)
 
         user_resource = next(r for r in result["Resources"] if r["id"] == "User")
-        assert (
-            user_resource["meta"]["location"]
-            == "https://proxy.example.com/scim/v2/ResourceTypes/User"
-        )
+        assert user_resource["meta"]["location"] == "https://proxy.example.com/scim/v2/ResourceTypes/User"
 
 
 class TestGetResourceTypesEndpoint:
@@ -182,9 +165,7 @@ class TestGetResourceTypesEndpoint:
         request = _make_mock_request()
         result = await get_resource_types(request)
 
-        assert result["schemas"] == [
-            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
-        ]
+        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
         assert result["totalResults"] == 2
 
     @pytest.mark.asyncio
@@ -232,9 +213,7 @@ class TestGetSchemasEndpoint:
         request = _make_mock_request()
         result = await get_schemas(request)
 
-        assert result["schemas"] == [
-            "urn:ietf:params:scim:api:messages:2.0:ListResponse"
-        ]
+        assert result["schemas"] == ["urn:ietf:params:scim:api:messages:2.0:ListResponse"]
         assert result["totalResults"] == 2
 
     @pytest.mark.asyncio
@@ -251,9 +230,7 @@ class TestGetSchemaById:
     @pytest.mark.asyncio
     async def test_get_user_schema(self):
         request = _make_mock_request()
-        result = await get_schema(
-            request, schema_id="urn:ietf:params:scim:schemas:core:2.0:User"
-        )
+        result = await get_schema(request, schema_id="urn:ietf:params:scim:schemas:core:2.0:User")
 
         assert result["id"] == "urn:ietf:params:scim:schemas:core:2.0:User"
         assert result["name"] == "User"
@@ -262,9 +239,7 @@ class TestGetSchemaById:
     @pytest.mark.asyncio
     async def test_get_group_schema(self):
         request = _make_mock_request()
-        result = await get_schema(
-            request, schema_id="urn:ietf:params:scim:schemas:core:2.0:Group"
-        )
+        result = await get_schema(request, schema_id="urn:ietf:params:scim:schemas:core:2.0:Group")
 
         assert result["id"] == "urn:ietf:params:scim:schemas:core:2.0:Group"
         assert result["name"] == "Group"

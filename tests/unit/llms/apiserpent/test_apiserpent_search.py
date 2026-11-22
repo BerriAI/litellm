@@ -15,9 +15,7 @@ from litellm.llms.base_llm.search.transformation import SearchResponse
 
 
 def _params(config, query, optional_params):
-    return config.transform_search_request(
-        query=query, optional_params=optional_params
-    )["_apiserpent_params"]
+    return config.transform_search_request(query=query, optional_params=optional_params)["_apiserpent_params"]
 
 
 class TestAPISerpentDefaults:
@@ -60,9 +58,7 @@ class TestAPISerpentConfig:
     @patch("litellm.llms.apiserpent.search.transformation.get_secret_str")
     def test_validate_environment_with_api_key(self, mock_get_secret):
         mock_get_secret.return_value = None
-        headers = APISerpentSearchConfig().validate_environment(
-            {}, api_key="test-api-key"
-        )
+        headers = APISerpentSearchConfig().validate_environment({}, api_key="test-api-key")
         assert headers["X-API-Key"] == "test-api-key"
         assert headers["Content-Type"] == "application/json"
 
@@ -91,9 +87,7 @@ class TestAPISerpentConfig:
         assert params["num"] == 10
 
     def test_country_lowercased(self):
-        assert (
-            _params(APISerpentSearchConfig(), "q", {"country": "US"})["country"] == "us"
-        )
+        assert _params(APISerpentSearchConfig(), "q", {"country": "US"})["country"] == "us"
 
     def test_engine_and_optional_passthrough(self):
         params = _params(
@@ -125,23 +119,15 @@ class TestAPISerpentConfig:
         data = {"_apiserpent_params": {"q": "test", "num": 5}}
         url = config.get_complete_url(api_base=None, optional_params={}, data=data)
         parsed = urlparse(url)
-        assert (
-            f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-            == "https://apiserpent.com/api/search/quick"
-        )
+        assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://apiserpent.com/api/search/quick"
         assert parse_qs(parsed.query)["q"] == ["test"]
 
     def test_get_complete_url_deep_path(self):
         config = APISerpentSearchConfig()
         data = {"_apiserpent_params": {"q": "test"}}
-        url = config.get_complete_url(
-            api_base=None, optional_params={"deep": True}, data=data
-        )
+        url = config.get_complete_url(api_base=None, optional_params={"deep": True}, data=data)
         parsed = urlparse(url)
-        assert (
-            f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-            == "https://apiserpent.com/api/search"
-        )
+        assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://apiserpent.com/api/search"
 
     def test_explicit_api_base_swaps_host_and_keeps_routing(self):
         config = APISerpentSearchConfig()
@@ -151,17 +137,12 @@ class TestAPISerpentConfig:
             data={"_apiserpent_params": {"q": "x"}},
         )
         parsed = urlparse(url)
-        assert (
-            f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-            == "https://staging.apiserpent.com/api/search"
-        )
+        assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://staging.apiserpent.com/api/search"
 
     def test_get_complete_url_is_idempotent(self):
         """The handler re-invokes get_complete_url with the resolved URL as api_base."""
         config = APISerpentSearchConfig()
-        resolved = config.get_complete_url(
-            api_base=None, optional_params={"deep": True}, data=None
-        )
+        resolved = config.get_complete_url(api_base=None, optional_params={"deep": True}, data=None)
         again = config.get_complete_url(
             api_base=resolved,
             optional_params={"deep": True},
@@ -181,9 +162,7 @@ class TestAPISerpentConfig:
                 ]
             },
         }
-        response = APISerpentSearchConfig().transform_search_response(
-            raw_response=raw_response, logging_obj=None
-        )
+        response = APISerpentSearchConfig().transform_search_response(raw_response=raw_response, logging_obj=None)
         assert isinstance(response, SearchResponse)
         assert len(response.results) == 2
         assert response.results[0].title == "R1"
@@ -195,27 +174,21 @@ class TestAPISerpentConfig:
             "success": True,
             "results": [{"position": 1, "title": "R1", "url": "https://example.com/1"}],
         }
-        response = APISerpentSearchConfig().transform_search_response(
-            raw_response=raw_response, logging_obj=None
-        )
+        response = APISerpentSearchConfig().transform_search_response(raw_response=raw_response, logging_obj=None)
         assert len(response.results) == 1
         assert response.results[0].title == "R1"
 
     def test_transform_response_empty(self):
         raw_response = MagicMock()
         raw_response.json.return_value = {"success": True, "results": {}}
-        response = APISerpentSearchConfig().transform_search_response(
-            raw_response=raw_response, logging_obj=None
-        )
+        response = APISerpentSearchConfig().transform_search_response(raw_response=raw_response, logging_obj=None)
         assert len(response.results) == 0
 
     def test_transform_response_null_results(self):
         """An error response with `results: null` must not raise."""
         raw_response = MagicMock()
         raw_response.json.return_value = {"success": False, "results": None}
-        response = APISerpentSearchConfig().transform_search_response(
-            raw_response=raw_response, logging_obj=None
-        )
+        response = APISerpentSearchConfig().transform_search_response(raw_response=raw_response, logging_obj=None)
         assert response.results == []
 
 
@@ -255,10 +228,7 @@ class TestAPISerpentSearchIntegration:
             )
 
             parsed = urlparse(mock_get.call_args.kwargs["url"])
-            assert (
-                f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                == "https://apiserpent.com/api/search/quick"
-            )
+            assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://apiserpent.com/api/search/quick"
             qs = parse_qs(parsed.query)
             assert qs["q"] == ["latest developments in AI"]
             assert qs["num"] == ["5"]
@@ -285,8 +255,5 @@ class TestAPISerpentSearchIntegration:
             )
 
             parsed = urlparse(mock_get.call_args.kwargs["url"])
-            assert (
-                f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-                == "https://apiserpent.com/api/search"
-            )
+            assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == "https://apiserpent.com/api/search"
             assert parse_qs(parsed.query)["num"] == ["40"]

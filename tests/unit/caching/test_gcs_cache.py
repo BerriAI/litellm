@@ -179,5 +179,3 @@ async def test_gcs_cache_completion_hit_and_param_sensitivity(mock_gcs_dependenc
         litellm.cache = None
         litellm.success_callback = []
         litellm._async_success_callback = []
-
-

@@ -89,9 +89,7 @@ def test_existing_file_id_fails_for_unsupported_ingestion_provider():
 
 
 async def _run_unsupported_existing_file_id_test():
-    ingestion = UnsupportedExistingFileIngestion(
-        {"vector_store": {"custom_llm_provider": "unsupported"}}
-    )
+    ingestion = UnsupportedExistingFileIngestion({"vector_store": {"custom_llm_provider": "unsupported"}})
 
     response = await ingestion.ingest(file_id="file_existing")
 

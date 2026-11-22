@@ -181,12 +181,16 @@ class TestModelBaseUrls:
         self, monkeypatch: pytest.MonkeyPatch, model: str, api_base: str | None, expected: str
     ) -> None:
         monkeypatch.delenv("MB_UNSET_BASE", raising=False)
-        config: Final = create_config_class(_provider("mb", model_base_urls=self._LEGACY, api_base_env="MB_UNSET_BASE"))()
+        config: Final = create_config_class(
+            _provider("mb", model_base_urls=self._LEGACY, api_base_env="MB_UNSET_BASE")
+        )()
         assert config.get_model_provider_info(model, api_base, "sk-test")[0] == expected
 
     def test_api_base_env_wins_over_the_model_base_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MB_ENV_BASE", "https://from-env/v1")
-        config: Final = create_config_class(_provider("mb_env", model_base_urls=self._LEGACY, api_base_env="MB_ENV_BASE"))()
+        config: Final = create_config_class(
+            _provider("mb_env", model_base_urls=self._LEGACY, api_base_env="MB_ENV_BASE")
+        )()
         assert config.get_model_provider_info("legacy-model", None, "sk-test")[0] == "https://from-env/v1"
 
     def test_chat_url_without_api_base_uses_the_model_base_url(self) -> None:
@@ -200,33 +204,53 @@ class TestModelBaseUrls:
 
 
 class TestModelSpecialHandling:
-    _TEXT_LIST: Final = ({"role": "user", "content": [{"type": "text", "text": "Say "}, {"type": "text", "text": "hi"}]},)
+    _TEXT_LIST: Final = (
+        {"role": "user", "content": [{"type": "text", "text": "Say "}, {"type": "text", "text": "hi"}]},
+    )
 
     @pytest.mark.parametrize(
         ("provider_flags", "model_flags", "model", "expected_content"),
         [
             pytest.param(
-                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "legacy-model", "Say hi",
+                {},
+                {"legacy-model": {"convert_content_list_to_string": True}},
+                "legacy-model",
+                "Say hi",
                 id="listed_model",
             ),
             pytest.param(
-                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "msh/legacy-model", "Say hi",
+                {},
+                {"legacy-model": {"convert_content_list_to_string": True}},
+                "msh/legacy-model",
+                "Say hi",
                 id="listed_model_with_prefix",
             ),
             pytest.param(
-                {}, {"legacy-model": {"convert_content_list_to_string": True}}, "new-model", _TEXT_LIST[0]["content"],
+                {},
+                {"legacy-model": {"convert_content_list_to_string": True}},
+                "new-model",
+                _TEXT_LIST[0]["content"],
                 id="unlisted_model_keeps_lists",
             ),
             pytest.param(
-                {"convert_content_list_to_string": True}, {"list-model": {"convert_content_list_to_string": False}},
-                "list-model", _TEXT_LIST[0]["content"], id="model_flag_overrides_provider_flag",
+                {"convert_content_list_to_string": True},
+                {"list-model": {"convert_content_list_to_string": False}},
+                "list-model",
+                _TEXT_LIST[0]["content"],
+                id="model_flag_overrides_provider_flag",
             ),
             pytest.param(
-                {"convert_content_list_to_string": True}, {"list-model": {"convert_content_list_to_string": False}},
-                "other-model", "Say hi", id="provider_flag_applies_to_unlisted_models",
+                {"convert_content_list_to_string": True},
+                {"list-model": {"convert_content_list_to_string": False}},
+                "other-model",
+                "Say hi",
+                id="provider_flag_applies_to_unlisted_models",
             ),
             pytest.param(
-                {}, {"legacy-model": {"convert_text_content_list_to_string": True}}, "legacy-model", "Say \nhi",
+                {},
+                {"legacy-model": {"convert_text_content_list_to_string": True}},
+                "legacy-model",
+                "Say \nhi",
                 id="text_only_flag_joins_parts_by_line",
             ),
         ],

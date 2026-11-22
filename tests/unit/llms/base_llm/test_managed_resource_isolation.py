@@ -70,12 +70,7 @@ def test_owner_filter_no_identity_returns_none():
 )
 def test_access_admin_can_read_any_resource(role, created_by, resource_team_id):
     admin = UserAPIKeyAuth(user_role=role)
-    assert (
-        can_access_resource(
-            admin, created_by=created_by, resource_team_id=resource_team_id
-        )
-        is True
-    )
+    assert can_access_resource(admin, created_by=created_by, resource_team_id=resource_team_id) is True
 
 
 @pytest.mark.parametrize(
@@ -88,10 +83,7 @@ def test_access_admin_can_read_any_resource(role, created_by, resource_team_id):
 )
 def test_access_user_id_match(user_id, created_by, expected):
     user = UserAPIKeyAuth(user_id=user_id)
-    assert (
-        can_access_resource(user, created_by=created_by, resource_team_id=None)
-        is expected
-    )
+    assert can_access_resource(user, created_by=created_by, resource_team_id=None) is expected
 
 
 @pytest.mark.parametrize(
@@ -102,16 +94,9 @@ def test_access_user_id_match(user_id, created_by, expected):
         ("team-eng", None, False),
     ],
 )
-def test_access_service_account_team_id_match(
-    caller_team_id, resource_team_id, expected
-):
+def test_access_service_account_team_id_match(caller_team_id, resource_team_id, expected):
     service_account = UserAPIKeyAuth(team_id=caller_team_id)
-    assert (
-        can_access_resource(
-            service_account, created_by=None, resource_team_id=resource_team_id
-        )
-        is expected
-    )
+    assert can_access_resource(service_account, created_by=None, resource_team_id=resource_team_id) is expected
 
 
 def test_access_user_can_see_team_match_when_no_user_id_match():
@@ -119,20 +104,12 @@ def test_access_user_can_see_team_match_when_no_user_id_match():
     team member read a resource created by a sibling service account in the
     same team."""
     user = UserAPIKeyAuth(user_id="alice", team_id="team-eng")
-    assert (
-        can_access_resource(user, created_by="service-bot", resource_team_id="team-eng")
-        is True
-    )
+    assert can_access_resource(user, created_by="service-bot", resource_team_id="team-eng") is True
 
 
 def test_access_service_account_denied_user_resource_in_different_team():
     service_account = UserAPIKeyAuth(team_id="team-eng")
-    assert (
-        can_access_resource(
-            service_account, created_by="bob", resource_team_id="team-sales"
-        )
-        is False
-    )
+    assert can_access_resource(service_account, created_by="bob", resource_team_id="team-sales") is False
 
 
 @pytest.mark.parametrize(
@@ -149,12 +126,7 @@ def test_access_identity_less_caller_always_denied(created_by, resource_team_id)
     no identifying ids is denied against every resource regardless of how
     the resource was tagged."""
     nobody = UserAPIKeyAuth()
-    assert (
-        can_access_resource(
-            nobody, created_by=created_by, resource_team_id=resource_team_id
-        )
-        is False
-    )
+    assert can_access_resource(nobody, created_by=created_by, resource_team_id=resource_team_id) is False
 
 
 # ---------------------------------------------------------------------------
@@ -179,9 +151,7 @@ def test_keyless_key_can_access_its_own_resource():
     owner_id = resolve_resource_owner_id(keyless)
 
     assert build_owner_filter(keyless) == {"created_by": owner_id}
-    assert (
-        can_access_resource(keyless, created_by=owner_id, resource_team_id=None) is True
-    )
+    assert can_access_resource(keyless, created_by=owner_id, resource_team_id=None) is True
 
 
 def test_keyless_key_denied_another_keyless_keys_resource():

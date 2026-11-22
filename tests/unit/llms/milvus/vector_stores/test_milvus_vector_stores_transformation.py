@@ -90,9 +90,7 @@ ALIAS_EMBEDDING_RESPONSE = EmbeddingResponse(
 )
 OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 MILVUS_SEARCH_URL = "https://milvus.example/v2/vectordb/entities/search"
-ZILLIZ_SEARCH_URL = (
-    "https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/search"
-)
+ZILLIZ_SEARCH_URL = "https://in03-test.serverless.aws-eu-central-1.cloud.zilliz.com/v2/vectordb/entities/search"
 ALIAS_SEARCH_KWARGS = {
     "query": "what is machine learning?",
     "vector_store_id": "book_2",

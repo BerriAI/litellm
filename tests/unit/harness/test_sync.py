@@ -44,9 +44,7 @@ def test_sync_stream_from_plain_code(monkeypatch, sandbox):
 
 def test_sync_stream_answers_approval(monkeypatch, sandbox):
     adapter_cls = install_adapter(monkeypatch, script=script_approval)
-    for event in sync.agent(
-        Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True
-    ):
+    for event in sync.agent(Harness.CLAUDE_CODE, "hi", sandbox=sandbox, permissions="ask", stream=True):
         if isinstance(event, Approval):
             event.allow()
     assert adapter_cls.instances[0].approvals[0][0] is True

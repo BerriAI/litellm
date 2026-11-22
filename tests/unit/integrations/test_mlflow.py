@@ -92,18 +92,14 @@ async def test_mlflow_logging_functionality():
             "jobID": "214590dsff09fds",
             "taskName": "run_page_classification",
         }
-        assert (
-            tags_param == expected_tags
-        ), f"Expected tags {expected_tags}, got {tags_param}"
+        assert tags_param == expected_tags, f"Expected tags {expected_tags}, got {tags_param}"
 
         # Check that prediction parameter was included in inputs
         inputs_param = call_args.kwargs.get("inputs", {})
-        assert (
-            "prediction" in inputs_param
-        ), "Prediction should be included in span inputs"
-        assert (
-            inputs_param["prediction"] == test_prediction
-        ), f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        assert "prediction" in inputs_param, "Prediction should be included in span inputs"
+        assert inputs_param["prediction"] == test_prediction, (
+            f"Expected prediction {test_prediction}, got {inputs_param['prediction']}"
+        )
 
 
 def test_mlflow_token_usage_attribute_structure():
@@ -196,10 +192,7 @@ def test_mlflow_stream_handler_uses_async_complete_response():
         )
 
         mlflow_logger._end_span_or_trace.assert_called_once()
-        assert (
-            mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"]
-            is final_response
-        )
+        assert mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"] is final_response
         assert "abc123" not in mlflow_logger._stream_id_to_span
 
 
@@ -210,9 +203,7 @@ def test_mlflow_stream_handler_pops_span_when_end_raises():
 
         mlflow_logger = MlflowLogger()
         mlflow_logger._start_span_or_trace = MagicMock(return_value="mock_span")
-        mlflow_logger._end_span_or_trace = MagicMock(
-            side_effect=TypeError("unexpected keyword argument 'trace_id'")
-        )
+        mlflow_logger._end_span_or_trace = MagicMock(side_effect=TypeError("unexpected keyword argument 'trace_id'"))
         mlflow_logger._extract_and_set_chat_attributes = MagicMock()
 
         response_obj = MagicMock()
@@ -258,13 +249,9 @@ def test_mlflow_end_span_or_trace_works_with_mlflow_2x_client():
         mlflow_logger._client = client
 
         root_span = MagicMock(parent_id=None, request_id="req-1")
-        mlflow_logger._end_span_or_trace(
-            span=root_span, outputs="out", end_time_ns=1, status="OK"
-        )
+        mlflow_logger._end_span_or_trace(span=root_span, outputs="out", end_time_ns=1, status="OK")
         assert client.ended_traces == ["req-1"]
 
         child_span = MagicMock(parent_id="parent-1", request_id="req-2", span_id="span-2")
-        mlflow_logger._end_span_or_trace(
-            span=child_span, outputs="out", end_time_ns=1, status="OK"
-        )
+        mlflow_logger._end_span_or_trace(span=child_span, outputs="out", end_time_ns=1, status="OK")
         assert client.ended_spans == [("req-2", "span-2")]

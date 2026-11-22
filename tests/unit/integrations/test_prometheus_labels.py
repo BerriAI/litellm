@@ -27,12 +27,7 @@ def _clear_prometheus_registry() -> None:
 def _collected_samples(metric_name: str):
     from prometheus_client import REGISTRY
 
-    return [
-        sample
-        for metric in REGISTRY.collect()
-        for sample in metric.samples
-        if sample.name == metric_name
-    ]
+    return [sample for metric in REGISTRY.collect() for sample in metric.samples if sample.name == metric_name]
 
 
 def test_user_email_in_required_metrics():
@@ -59,9 +54,7 @@ def test_user_email_in_required_metrics():
 
     for metric_name in metrics_with_user_email:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            user_email_label in labels
-        ), f"Metric {metric_name} should contain user_email label"
+        assert user_email_label in labels, f"Metric {metric_name} should contain user_email label"
         print(f"✅ {metric_name} contains user_email label")
 
 
@@ -91,9 +84,7 @@ def test_model_id_in_extended_metric_set():
 
     for metric_name in metrics_with_model_id:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            model_id_label in labels
-        ), f"Metric {metric_name} should contain model_id label"
+        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
 
 
@@ -106,9 +97,7 @@ def test_api_provider_in_spend_and_requests_metrics():
 
     for metric_name in ["litellm_spend_metric", "litellm_requests_metric"]:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            api_provider_label in labels
-        ), f"Metric {metric_name} should contain api_provider label"
+        assert api_provider_label in labels, f"Metric {metric_name} should contain api_provider label"
         print(f"✅ {metric_name} contains api_provider label")
 
 
@@ -147,9 +136,7 @@ def test_api_provider_in_token_latency_and_request_metrics():
 
     for metric_name in metrics_with_api_provider:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            api_provider_label in labels
-        ), f"Metric {metric_name} should contain api_provider label"
+        assert api_provider_label in labels, f"Metric {metric_name} should contain api_provider label"
 
 
 def test_api_provider_value_flows_through_label_factory():
@@ -171,9 +158,7 @@ def test_api_provider_value_flows_through_label_factory():
     prometheus_logger = MagicMock()
     prometheus_logger._cached_metric_labels = {}
     prometheus_logger.label_filters = {}
-    prometheus_logger.get_labels_for_metric = (
-        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
-    )
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
 
     enum_values = UserAPIKeyLabelValues(
         api_provider="anthropic",
@@ -192,14 +177,12 @@ def test_api_provider_value_flows_through_label_factory():
         "litellm_cache_hits_metric",
     ]:
         labels = prometheus_label_factory(
-            supported_enum_labels=prometheus_logger.get_labels_for_metric(
-                metric_name=metric_name
-            ),
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(metric_name=metric_name),
             enum_values=enum_values,
         )
-        assert (
-            labels.get("api_provider") == "anthropic"
-        ), f"{metric_name} should emit api_provider=anthropic, got {labels.get('api_provider')!r}"
+        assert labels.get("api_provider") == "anthropic", (
+            f"{metric_name} should emit api_provider=anthropic, got {labels.get('api_provider')!r}"
+        )
 
 
 def test_extract_api_provider_from_request_data_failure_path():
@@ -215,10 +198,7 @@ def test_extract_api_provider_from_request_data_failure_path():
     extract = PrometheusLogger._extract_api_provider_from_request_data
 
     assert extract({"litellm_params": {"custom_llm_provider": "bedrock"}}) == "bedrock"
-    assert (
-        extract({"standard_logging_object": {"custom_llm_provider": "vertex_ai"}})
-        == "vertex_ai"
-    )
+    assert extract({"standard_logging_object": {"custom_llm_provider": "vertex_ai"}}) == "vertex_ai"
     # litellm_params wins over standard_logging_object when both are present
     assert (
         extract(
@@ -304,9 +284,7 @@ def test_extract_api_provider_swallows_unknown_model_but_logs_unexpected_errors(
     with patch.object(
         litellm,
         "get_llm_provider",
-        side_effect=litellm.exceptions.BadRequestError(
-            message="no provider", model="x", llm_provider="y"
-        ),
+        side_effect=litellm.exceptions.BadRequestError(message="no provider", model="x", llm_provider="y"),
     ):
         with patch("litellm.integrations.prometheus.verbose_logger") as mock_logger:
             assert extract({"model": "x"}) is None
@@ -341,9 +319,9 @@ def test_prometheus_metric_labels_structure():
 
     for metric_name in test_metrics:
         # Check metric is in DEFINED_PROMETHEUS_METRICS
-        assert metric_name in get_args(
-            DEFINED_PROMETHEUS_METRICS
-        ), f"{metric_name} should be in DEFINED_PROMETHEUS_METRICS"
+        assert metric_name in get_args(DEFINED_PROMETHEUS_METRICS), (
+            f"{metric_name} should be in DEFINED_PROMETHEUS_METRICS"
+        )
 
         # Check labels can be retrieved
         labels = PrometheusMetricLabels.get_labels(metric_name)
@@ -376,9 +354,7 @@ def test_model_id_in_required_metrics():
 
     for metric_name in metrics_with_model_id:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            model_id_label in labels
-        ), f"Metric {metric_name} should contain model_id label"
+        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
         print(f"✅ {metric_name} contains model_id label")
 
 
@@ -405,9 +381,7 @@ def test_requested_model_in_spend_and_requests_metrics():
 
     for metric_name in metrics_with_requested_model:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert requested_model_label in labels, (
-            f"Metric {metric_name} should contain requested_model label"
-        )
+        assert requested_model_label in labels, f"Metric {metric_name} should contain requested_model label"
 
 
 def test_route_normalization_for_responses_api():
@@ -434,21 +408,15 @@ def test_route_normalization_for_responses_api():
 
     for original, expected in responses_routes:
         normalized = normalize_request_route(original)
-        assert (
-            normalized == expected
-        ), f"Failed: {original} -> {normalized} (expected {expected})"
+        assert normalized == expected, f"Failed: {original} -> {normalized} (expected {expected})"
 
     # Verify cardinality reduction
-    unique_normalized = set(
-        normalize_request_route(route) for route, _ in responses_routes
+    unique_normalized = set(normalize_request_route(route) for route, _ in responses_routes)
+    assert len(unique_normalized) == 1, (
+        f"Expected 1 unique normalized route, got {len(unique_normalized)}: {unique_normalized}"
     )
-    assert (
-        len(unique_normalized) == 1
-    ), f"Expected 1 unique normalized route, got {len(unique_normalized)}: {unique_normalized}"
 
-    print(
-        f"✅ Responses API routes: {len(responses_routes)} different IDs normalized to 1 metric label"
-    )
+    print(f"✅ Responses API routes: {len(responses_routes)} different IDs normalized to 1 metric label")
 
 
 def test_route_normalization_for_sub_routes():
@@ -467,9 +435,7 @@ def test_route_normalization_for_sub_routes():
 
     for original, expected in sub_routes:
         normalized = normalize_request_route(original)
-        assert (
-            normalized == expected
-        ), f"Failed: {original} -> {normalized} (expected {expected})"
+        assert normalized == expected, f"Failed: {original} -> {normalized} (expected {expected})"
 
     print("✅ Sub-routes normalized correctly")
 
@@ -490,9 +456,7 @@ def test_route_normalization_preserves_static_routes():
 
     for route in static_routes:
         normalized = normalize_request_route(route)
-        assert (
-            normalized == route
-        ), f"Static route should not be modified: {route} -> {normalized}"
+        assert normalized == route, f"Static route should not be modified: {route} -> {normalized}"
 
     print(f"✅ {len(static_routes)} static routes preserved")
 
@@ -524,9 +488,7 @@ def test_route_normalization_other_dynamic_apis():
 
     for original, expected in test_cases:
         normalized = normalize_request_route(original)
-        assert (
-            normalized == expected
-        ), f"Failed: {original} -> {normalized} (expected {expected})"
+        assert normalized == expected, f"Failed: {original} -> {normalized} (expected {expected})"
 
     print(f"✅ {len(test_cases)} other API routes normalized correctly")
 
@@ -552,9 +514,7 @@ def test_prometheus_metrics_use_normalized_routes():
     # containers before binding the real method.
     prometheus_logger._cached_metric_labels = {}
     prometheus_logger.label_filters = {}
-    prometheus_logger.get_labels_for_metric = (
-        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
-    )
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
 
     # Test with a normalized route
     enum_values = UserAPIKeyLabelValues(
@@ -571,9 +531,9 @@ def test_prometheus_metrics_use_normalized_routes():
     )
 
     # Verify the route is normalized in labels
-    assert (
-        labels["route"] == "/v1/responses/{response_id}"
-    ), f"Expected normalized route in labels, got: {labels.get('route')}"
+    assert labels["route"] == "/v1/responses/{response_id}", (
+        f"Expected normalized route in labels, got: {labels.get('route')}"
+    )
 
     print("✅ Prometheus metrics use normalized routes in labels")
 
@@ -597,9 +557,7 @@ def test_prometheus_label_value_sanitization():
     prometheus_logger = MagicMock()
     prometheus_logger._cached_metric_labels = {}
     prometheus_logger.label_filters = {}
-    prometheus_logger.get_labels_for_metric = (
-        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
-    )
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
 
     # Simulate a model name with U+2028 (Unicode Line Separator) appended
     # and an api_key_alias with newlines and quotes
@@ -618,9 +576,9 @@ def test_prometheus_label_value_sanitization():
     )
 
     # U+2028 must be stripped
-    assert (
-        "\u2028" not in (labels["requested_model"] or "")
-    ), f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
+    assert "\u2028" not in (labels["requested_model"] or ""), (
+        f"U+2028 should be removed from label value, got: {repr(labels['requested_model'])}"
+    )
     assert labels["requested_model"] == "claude-haiku-4-5-20251001"
 
     # Newlines must be replaced with spaces, quotes must be escaped
@@ -837,9 +795,7 @@ async def test_failure_counters_keep_logged_deployment_attribution(
         )
         for metric_name in ("litellm_proxy_failed_requests_metric_total", "litellm_proxy_total_requests_metric_total"):
             samples: Final = _collected_samples(metric_name)
-            assert [(sample.labels["model_id"], sample.value) for sample in samples] == [
-                (expected, 1.0)
-            ]
+            assert [(sample.labels["model_id"], sample.value) for sample in samples] == [(expected, 1.0)]
     finally:
         _clear_prometheus_registry()
 
@@ -861,7 +817,9 @@ async def test_failure_hook_labels_a_cli_session_with_the_per_user_alias_not_the
                 is_session_token=True,
             ),
         )
-        hashed_keys = {s.labels.get("hashed_api_key") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")}
+        hashed_keys = {
+            s.labels.get("hashed_api_key") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
+        }
         assert hashed_keys == {"cli-session-alice"}, hashed_keys
     finally:
         _clear_prometheus_registry()
@@ -881,10 +839,7 @@ async def _failed_requests_api_provider_labels(
             original_exception=original_exception,
             user_api_key_dict=UserAPIKeyAuth(token="tok"),
         )
-        return [
-            s.labels.get("api_provider")
-            for s in _collected_samples("litellm_proxy_failed_requests_metric_total")
-        ]
+        return [s.labels.get("api_provider") for s in _collected_samples("litellm_proxy_failed_requests_metric_total")]
     finally:
         _clear_prometheus_registry()
 
@@ -906,9 +861,7 @@ async def test_failure_hook_emits_api_provider_from_pre_call_rate_limit_error_fo
         llm_provider="openai",
     )
 
-    assert await _failed_requests_api_provider_labels(
-        {"model": "team-chat-model", "metadata": {}}, err
-    ) == ["openai"]
+    assert await _failed_requests_api_provider_labels({"model": "team-chat-model", "metadata": {}}, err) == ["openai"]
 
 
 @pytest.mark.asyncio
@@ -917,9 +870,7 @@ async def test_failure_hook_leaves_api_provider_unset_when_rate_limiter_could_no
 
     err = ProxyRateLimitError(detail={"error": "rpm exceeded"}, model="unknown-alias")
 
-    assert await _failed_requests_api_provider_labels(
-        {"model": "unknown-alias", "metadata": {}}, err
-    ) == ["None"]
+    assert await _failed_requests_api_provider_labels({"model": "unknown-alias", "metadata": {}}, err) == ["None"]
 
 
 @pytest.mark.asyncio
@@ -969,7 +920,9 @@ async def test_failure_hook_labels_a_pass_through_failure_with_the_router_model_
     )
     _clear_prometheus_registry()
     try:
-        with patch("litellm.proxy.proxy_server.llm_router", router, create=True):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
+        with patch(
+            "litellm.proxy.proxy_server.llm_router", router, create=True
+        ):  # test-quality-ok: production reads proxy_server.llm_router lazily, no injection seam
             await PrometheusLogger().async_post_call_failure_hook(
                 request_data={
                     "model": "gemini-2.5-flash",
@@ -1008,9 +961,7 @@ def test_model_group_in_deployment_metrics():
 
     for metric_name in metrics_with_model_group:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            model_group_label in labels
-        ), f"Metric {metric_name} should contain model_group label"
+        assert model_group_label in labels, f"Metric {metric_name} should contain model_group label"
         print(f"✅ {metric_name} contains model_group label")
 
 
@@ -1033,9 +984,7 @@ def test_model_group_value_flows_through_deployment_metrics_label_factory():
     prometheus_logger = MagicMock()
     prometheus_logger._cached_metric_labels = {}
     prometheus_logger.label_filters = {}
-    prometheus_logger.get_labels_for_metric = (
-        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
-    )
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
 
     enum_values = UserAPIKeyLabelValues(
         model_group="example-model-group",
@@ -1052,14 +1001,12 @@ def test_model_group_value_flows_through_deployment_metrics_label_factory():
         "litellm_deployment_rpm_limit",
     ]:
         labels = prometheus_label_factory(
-            supported_enum_labels=prometheus_logger.get_labels_for_metric(
-                metric_name=metric_name
-            ),
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(metric_name=metric_name),
             enum_values=enum_values,
         )
-        assert (
-            labels.get("model_group") == "example-model-group"
-        ), f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+        assert labels.get("model_group") == "example-model-group", (
+            f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+        )
 
 
 def test_deployment_failure_metrics_emit_model_group_from_standard_logging_payload():
@@ -1289,9 +1236,7 @@ def test_model_group_in_latency_metrics():
 
     for metric_name in metrics_with_model_group:
         labels = PrometheusMetricLabels.get_labels(metric_name)
-        assert (
-            model_group_label in labels
-        ), f"Metric {metric_name} should contain model_group label"
+        assert model_group_label in labels, f"Metric {metric_name} should contain model_group label"
         print(f"✅ {metric_name} contains model_group label")
 
 
@@ -1314,9 +1259,7 @@ def test_model_group_value_flows_through_latency_metrics_label_factory():
     prometheus_logger = MagicMock()
     prometheus_logger._cached_metric_labels = {}
     prometheus_logger.label_filters = {}
-    prometheus_logger.get_labels_for_metric = (
-        PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
-    )
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
 
     enum_values = UserAPIKeyLabelValues(
         model_group="example-model-group",
@@ -1332,14 +1275,12 @@ def test_model_group_value_flows_through_latency_metrics_label_factory():
         "litellm_deployment_latency_per_output_token",
     ]:
         labels = prometheus_label_factory(
-            supported_enum_labels=prometheus_logger.get_labels_for_metric(
-                metric_name=metric_name
-            ),
+            supported_enum_labels=prometheus_logger.get_labels_for_metric(metric_name=metric_name),
             enum_values=enum_values,
         )
-        assert (
-            labels.get("model_group") == "example-model-group"
-        ), f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+        assert labels.get("model_group") == "example-model-group", (
+            f"{metric_name} should emit model_group=example-model-group, got {labels.get('model_group')!r}"
+        )
 
 
 def test_latency_metrics_emit_model_group_from_set_latency_metrics():

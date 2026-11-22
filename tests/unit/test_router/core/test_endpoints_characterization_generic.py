@@ -442,7 +442,10 @@ async def test_a_deployments_raw_retrieval_query_never_reaches_a_routed_vector_s
             deployment(
                 "g",
                 "d1",
-                **{retrieval_query_param: from_deployment, "extra_body": {retrieval_query_param: from_deployment, "kept": 1}},
+                **{
+                    retrieval_query_param: from_deployment,
+                    "extra_body": {retrieval_query_param: from_deployment, "kept": 1},
+                },
             )
         ]
     )

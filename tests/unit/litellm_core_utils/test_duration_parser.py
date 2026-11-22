@@ -555,7 +555,9 @@ def test_a_month_starting_now_matches_duration_in_seconds():
     (("1d", (2026, 11, 2)), ("30d", (2026, 12, 1)), ("1mo", (2026, 12, 1))),
 )
 @pytest.mark.parametrize("fold", (0, 1))
-def test_calendar_reset_uses_only_the_first_occurrence(duration: str, next_date: tuple[int, int, int], fold: int) -> None:
+def test_calendar_reset_uses_only_the_first_occurrence(
+    duration: str, next_date: tuple[int, int, int], fold: int
+) -> None:
     zone: Final = ZoneInfo("America/New_York")
     now: Final = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=fold)
     expected: Final = datetime(*(next_date if fold else (2026, 11, 1)), 1, 30, tzinfo=zone)
@@ -592,9 +594,7 @@ def test_daily_reset_resolves_the_spring_gap_before_comparing(hour: int, minute:
 def test_window_start_keeps_calendar_rules_and_elapsed_units(
     duration: str, reset_at: str, wall_time: time, expected: str
 ) -> None:
-    result: Final = get_budget_window_start(
-        duration, datetime.fromisoformat(reset_at), "America/New_York", wall_time
-    )
+    result: Final = get_budget_window_start(duration, datetime.fromisoformat(reset_at), "America/New_York", wall_time)
 
     assert result.astimezone(timezone.utc) == datetime.fromisoformat(expected)
 
@@ -670,9 +670,9 @@ def test_elapsed_schedule_never_shortens_a_later_allowance(
     current: Final = datetime.fromisoformat(now)
     anchor: Final = datetime(2026, 1, 1, 4, 17, tzinfo=timezone.utc) if saved_schedule else None
     interval: Final = timedelta(seconds=duration_in_seconds(duration))
-    first: Final = get_next_standardized_reset_time(
-        duration, current, zone, elapsed_anchor=anchor
-    ).astimezone(timezone.utc)
+    first: Final = get_next_standardized_reset_time(duration, current, zone, elapsed_anchor=anchor).astimezone(
+        timezone.utc
+    )
     assert first - interval <= current < first
     for offset in range(6):
         boundary: Final = first + offset * interval
@@ -740,8 +740,10 @@ def test_whole_day_hour_durations_reset_at_local_midnight(duration: str, zone: s
     )
     start: Final = get_budget_window_start(duration, reset, zone)
     previous_midnight: Final = datetime(
-        current.astimezone(ZoneInfo(zone)).year, current.astimezone(ZoneInfo(zone)).month,
-        current.astimezone(ZoneInfo(zone)).day, tzinfo=ZoneInfo(zone),
+        current.astimezone(ZoneInfo(zone)).year,
+        current.astimezone(ZoneInfo(zone)).month,
+        current.astimezone(ZoneInfo(zone)).day,
+        tzinfo=ZoneInfo(zone),
     )
 
     assert reset == datetime.fromisoformat(expected)
@@ -752,10 +754,16 @@ def test_whole_day_hour_durations_reset_at_local_midnight(duration: str, zone: s
 
 @pytest.mark.parametrize(
     "duration,expected",
-    (("48h", "2026-07-17T00:00:00+09:00"), ("168h", "2026-07-22T00:00:00+09:00"), ("720h", "2026-08-14T00:00:00+09:00")),
+    (
+        ("48h", "2026-07-17T00:00:00+09:00"),
+        ("168h", "2026-07-22T00:00:00+09:00"),
+        ("720h", "2026-08-14T00:00:00+09:00"),
+    ),
 )
 def test_multi_day_hour_durations_count_local_days_from_today(duration: str, expected: str) -> None:
-    reset: Final = get_next_standardized_reset_time(duration, datetime(2026, 7, 15, 10, 17, tzinfo=timezone.utc), "Asia/Tokyo")
+    reset: Final = get_next_standardized_reset_time(
+        duration, datetime(2026, 7, 15, 10, 17, tzinfo=timezone.utc), "Asia/Tokyo"
+    )
 
     assert reset == datetime.fromisoformat(expected)
 

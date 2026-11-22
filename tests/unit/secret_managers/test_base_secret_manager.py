@@ -3,7 +3,6 @@ Test raise_if_unsafe_secret_name, the shared guard applied before secret_name
 reaches a secret manager backend.
 """
 
-
 import pytest
 
 
@@ -29,7 +28,7 @@ from litellm.secret_managers.base_secret_manager import raise_if_unsafe_secret_n
     ],
 )
 def test_raise_if_unsafe_secret_name_rejects_traversal_and_line_breaks(secret_name):
-    with pytest.raises(ValueError, match='Invalid secret_name'):
+    with pytest.raises(ValueError, match="Invalid secret_name"):
         raise_if_unsafe_secret_name(secret_name)
 
 

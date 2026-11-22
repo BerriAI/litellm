@@ -79,9 +79,7 @@ def multimodal_embedding_labels(
     return request.get("labels")
 
 
-def google_genai_labels(
-    litellm_params: Mapping[str, JsonValue], optional_params: Mapping[str, JsonValue]
-) -> object:
+def google_genai_labels(litellm_params: Mapping[str, JsonValue], optional_params: Mapping[str, JsonValue]) -> object:
     fields: Final = VertexAIGoogleGenAIConfig().transform_top_level_request_fields(
         optional_params or None, GenericLiteLLMParams(**litellm_params)
     )
@@ -295,6 +293,7 @@ def test_setting_off_merges_gemini_extra_body_labels_as_sent(setting: object, mo
     optional_params: Final = {"labels": {"env": "prod"}, "extra_body": {"labels": {"user_api_key_team_alias": "x"}}}
 
     assert gemini_labels(metadata(**IDENTITY), optional_params) == {"env": "prod", "user_api_key_team_alias": "x"}
+
 
 def test_a_caller_set_claude_labels_header_cannot_forge_identity_and_is_replaced(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "vertex_request_label_fields", FIELDS)

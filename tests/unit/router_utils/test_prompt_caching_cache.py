@@ -454,9 +454,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     assert key1 is not None
     assert key1 == key2 == key3
 
-    response1: Final = await router.acompletion(
-        model="test-model", messages=messages1, mock_response="ok"
-    )
+    response1: Final = await router.acompletion(model="test-model", messages=messages1, mock_response="ok")
     model_id_1: Final = response1._hidden_params["model_id"]
     assert model_id_1 in {"deployment-1", "deployment-2", "deployment-3"}
 
@@ -478,21 +476,15 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
     )
     assert cached_2 == {"model_id": model_id_1}
 
-    response2: Final = await router.acompletion(
-        model="test-model", messages=messages2, mock_response="ok"
-    )
-    response3: Final = await router.acompletion(
-        model="test-model", messages=messages3, mock_response="ok"
-    )
+    response2: Final = await router.acompletion(model="test-model", messages=messages2, mock_response="ok")
+    response3: Final = await router.acompletion(model="test-model", messages=messages3, mock_response="ok")
     model_id_2: Final = response2._hidden_params["model_id"]
     model_id_3: Final = response3._hidden_params["model_id"]
 
     assert model_id_1 == model_id_2 == model_id_3
 
 
-def _marked_tool(
-    name: str, cache_control: dict | None = None, *, nested: bool = False
-) -> ChatCompletionToolParam:
+def _marked_tool(name: str, cache_control: dict | None = None, *, nested: bool = False) -> ChatCompletionToolParam:
     tool: Final = {
         "type": "function",
         "function": {"name": name, "description": "word " * 40, "parameters": {"type": "object", "properties": {}}},
@@ -610,9 +602,7 @@ def test_a_nested_function_cache_control_marks_a_boundary_and_strips_from_the_ke
     assert len(positions) == 1
     assert positions[0].position == 0
 
-    key_nested: Final = PromptCachingCache.get_prompt_caching_cache_key(
-        [], [_marked_tool("read", marked, nested=True)]
-    )
+    key_nested: Final = PromptCachingCache.get_prompt_caching_cache_key([], [_marked_tool("read", marked, nested=True)])
     key_nested_retimed: Final = PromptCachingCache.get_prompt_caching_cache_key(
         [], [_marked_tool("read", retimed, nested=True)]
     )

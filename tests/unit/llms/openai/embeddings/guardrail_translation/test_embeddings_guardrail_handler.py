@@ -25,9 +25,7 @@ async def test_embeddings_handler_string_input():
 
     # Mock guardrail
     mock_guardrail = MagicMock()
-    mock_guardrail.apply_guardrail = AsyncMock(
-        return_value={"texts": ["processed text"]}
-    )
+    mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["processed text"]})
 
     data = {"input": "Hello, world!", "model": "text-embedding-3-small"}
 
@@ -53,9 +51,7 @@ async def test_embeddings_handler_list_of_strings_input():
 
     # Mock guardrail
     mock_guardrail = MagicMock()
-    mock_guardrail.apply_guardrail = AsyncMock(
-        return_value={"texts": ["processed text 1", "processed text 2"]}
-    )
+    mock_guardrail.apply_guardrail = AsyncMock(return_value={"texts": ["processed text 1", "processed text 2"]})
 
     data = {
         "input": ["Hello, world!", "How are you?"],
@@ -84,12 +80,8 @@ def test_embeddings_guardrail_translation_mappings():
 
     assert CallTypes.embedding in guardrail_translation_mappings
     assert CallTypes.aembedding in guardrail_translation_mappings
-    assert (
-        guardrail_translation_mappings[CallTypes.embedding] == OpenAIEmbeddingsHandler
-    )
-    assert (
-        guardrail_translation_mappings[CallTypes.aembedding] == OpenAIEmbeddingsHandler
-    )
+    assert guardrail_translation_mappings[CallTypes.embedding] == OpenAIEmbeddingsHandler
+    assert guardrail_translation_mappings[CallTypes.aembedding] == OpenAIEmbeddingsHandler
 
 
 SECRET: Final = "sk-live-0123456789"

@@ -36,9 +36,7 @@ def mock_auth():
 class TestEmptyModelListHandling:
     """Test suite for empty model list scenarios."""
 
-    def test_v2_model_info_returns_empty_data_when_router_is_none(
-        self, client, monkeypatch
-    ):
+    def test_v2_model_info_returns_empty_data_when_router_is_none(self, client, monkeypatch):
         """
         Test that /v2/model/info returns paginated empty response instead of 500
         when llm_router is None.
@@ -61,9 +59,7 @@ class TestEmptyModelListHandling:
         assert data["total_pages"] == 0
         assert data["size"] == 50  # default page size
 
-    def test_v2_model_info_returns_empty_data_when_model_list_empty(
-        self, client, monkeypatch
-    ):
+    def test_v2_model_info_returns_empty_data_when_model_list_empty(self, client, monkeypatch):
         """
         Test that /v2/model/info returns paginated empty response instead of 500
         when llm_router exists but model_list is empty.
@@ -117,9 +113,7 @@ class TestEmptyModelListHandling:
         assert data["total_pages"] == 0
         assert data["size"] == 25  # Should respect the size parameter
 
-    def test_model_group_info_returns_empty_data_when_model_list_none(
-        self, client, monkeypatch
-    ):
+    def test_model_group_info_returns_empty_data_when_model_list_none(self, client, monkeypatch):
         """
         Test that /model_group/info returns {"data": []} instead of 500
         when llm_model_list is None.
@@ -137,9 +131,7 @@ class TestEmptyModelListHandling:
         assert response.status_code == 200
         assert response.json() == {"data": []}
 
-    def test_model_group_info_returns_empty_data_when_model_list_empty(
-        self, client, monkeypatch
-    ):
+    def test_model_group_info_returns_empty_data_when_model_list_empty(self, client, monkeypatch):
         """
         Test that /model_group/info returns {"data": []} instead of 500
         when llm_model_list is empty.

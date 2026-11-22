@@ -765,8 +765,6 @@ class TestEstimateCostOnPremProvider:
         assert response.output_cost_per_token == pytest.approx(0.000002)
 
 
-
-
 class TestCostSettingsPatchAgainstConfigReload:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -1266,7 +1264,6 @@ class TestEstimateCostCacheAndReasoningTokens:
         assert response.output_cost_per_token == pytest.approx(5e-6)
         assert response.input_cost_per_request == pytest.approx(INPUT_TOKENS * response.input_cost_per_token)
         assert response.output_cost_per_request == pytest.approx(OUTPUT_TOKENS * response.output_cost_per_token)
-
 
     @pytest.mark.asyncio
     async def test_an_unrouted_model_reports_the_rates_of_the_provider_the_calculator_inferred(self, monkeypatch):

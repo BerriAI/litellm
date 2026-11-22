@@ -55,9 +55,7 @@ class TestGetProviderAgentsApiConfig:
         assert isinstance(cfg, GeminiAgentsConfig)
         assert isinstance(cfg, BaseAgentsAPIConfig)
 
-    @pytest.mark.parametrize(
-        "provider", ["openai", "anthropic", "bedrock", "vertex_ai", "unknown"]
-    )
+    @pytest.mark.parametrize("provider", ["openai", "anthropic", "bedrock", "vertex_ai", "unknown"])
     def test_returns_none_for_non_gemini(self, provider):
         assert get_provider_agents_api_config(provider) is None
 
@@ -415,9 +413,7 @@ class TestCreateRequestBody:
         instruction: Mapping[str, str],
         expected: Mapping[str, str],
     ) -> None:
-        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
-        )
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(return_value=httpx.Response(200, json={"id": "slides"}))
 
         create(**identifier, **instruction, base_agent="antigravity-preview-09-2026", api_key="AIza-test")
 
@@ -444,12 +440,8 @@ class TestCreateRequestBody:
         assert exc_info.value.status_code == 400
         assert not respx_mock.calls
 
-    def test_create_with_drop_params_drops_only_the_invalid_optional_fields(
-        self, respx_mock: respx.MockRouter
-    ) -> None:
-        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
-        )
+    def test_create_with_drop_params_drops_only_the_invalid_optional_fields(self, respx_mock: respx.MockRouter) -> None:
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(return_value=httpx.Response(200, json={"id": "slides"}))
 
         create(
             id="slides",
@@ -463,9 +455,7 @@ class TestCreateRequestBody:
         assert _sent_json(route) == {"id": "slides", "system_instruction": "Make slides."}
 
     def test_create_with_drop_params_drops_a_clashing_instructions_alias(self, respx_mock: respx.MockRouter) -> None:
-        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(
-            return_value=httpx.Response(200, json={"id": "slides"})
-        )
+        route: Final = respx_mock.post(_GEMINI_AGENTS_URL).mock(return_value=httpx.Response(200, json={"id": "slides"}))
 
         create(
             id="slides",
@@ -551,9 +541,7 @@ class TestAgentIdentifier:
         assert (response.id, response.base_agent) == ("slides", "antigravity-preview-09-2026")
 
     def test_delete_by_id_deletes_that_agent(self, respx_mock: respx.MockRouter) -> None:
-        route: Final = respx_mock.delete(f"{_GEMINI_AGENTS_URL}/slides").mock(
-            return_value=httpx.Response(200, json={})
-        )
+        route: Final = respx_mock.delete(f"{_GEMINI_AGENTS_URL}/slides").mock(return_value=httpx.Response(200, json={}))
 
         result: Final = delete(id="slides", api_key="AIza-test")
 
@@ -573,7 +561,11 @@ class TestAgentIdentifier:
 
     @pytest.mark.parametrize(
         "operation",
-        [pytest.param(get, id="get"), pytest.param(delete, id="delete"), pytest.param(list_versions, id="list_versions")],
+        [
+            pytest.param(get, id="get"),
+            pytest.param(delete, id="delete"),
+            pytest.param(list_versions, id="list_versions"),
+        ],
     )
     @pytest.mark.parametrize(
         "identifier",

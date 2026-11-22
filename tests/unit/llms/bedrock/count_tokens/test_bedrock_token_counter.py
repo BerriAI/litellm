@@ -352,7 +352,10 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
         {
             "response_format": {
                 "type": "json_schema",
-                "json_schema": {"name": "city", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}},
+                "json_schema": {
+                    "name": "city",
+                    "schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                },
             }
         },
         {"reasoning_effort": "low"},
@@ -478,7 +481,6 @@ async def test_claude_count_rejects_a_lone_responses_tool_without_calling_bedroc
     assert result is not None
     assert (result.error, result.status_code, result.rejected_before_provider_call) == (True, 400, True)
     assert bedrock.posted_hosts() == ()
-
 
 
 def _deployment(model: str) -> dict[str, JsonValue]:
@@ -623,6 +625,7 @@ async def test_claude_count_sends_a_chat_tool_call_turn_sent_without_a_content_k
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 412)
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
+
 
 _CLAUDE_REPLY: Final = {
     "id": "msg_1",
@@ -1129,7 +1132,9 @@ async def test_claude_converse_count_sends_system_messages_where_converse_infere
 
 
 @pytest.mark.asyncio
-async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_claude_converse_count_keeps_tool_history_when_neutralizing_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "modify_params", True)
     monkeypatch.setattr(litellm, "bedrock_neutralize_orphaned_tool_blocks", False)
 
@@ -1425,7 +1430,9 @@ async def test_claude_converse_count_of_a_message_without_a_role_answers_bedrock
         model_to_use="us.anthropic.claude-haiku-5-5",
         messages=[{"content": "What is 2+2?"}],
         contents=None,
-        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}},
+        deployment={
+            "litellm_params": {**DEPLOYMENT["litellm_params"], "model": "bedrock/us.anthropic.claude-haiku-5-5"}
+        },
         request_model="claude-haiku-5-5",
         messages_format="openai",
     )

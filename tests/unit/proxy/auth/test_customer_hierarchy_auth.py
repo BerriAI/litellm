@@ -728,9 +728,7 @@ def test_configured_customer_header_does_not_fall_back_to_the_standard_header() 
 def test_an_issuer_specific_customer_mapping_alone_stops_header_fallback() -> None:
     settings: Final = LiteLLM_JWTAuth(
         issuers=[
-            JWTIssuerConfig(
-                issuer="https://issuer.test", audience="litellm", customer_member_id_jwt_field="member"
-            )
+            JWTIssuerConfig(issuer="https://issuer.test", audience="litellm", customer_member_id_jwt_field="member")
         ]
     )
     assert (

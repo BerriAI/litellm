@@ -115,7 +115,9 @@ def test_a_google_metadata_assertion_is_exchanged_again_inside_the_mandatory_win
     """A Google metadata-server token carries no ``jti``, so Anthropic exchanges it as often as asked. The
     store used to answer a mandatory refresh with the stored token minted from that same assertion, which
     was the 20-seconds-left token the refresh existed to replace."""
-    poster = ScriptedPoster([token_response("sk-ant-oat01-first", expires_in=600), token_response("sk-ant-oat01-second")])
+    poster = ScriptedPoster(
+        [token_response("sk-ant-oat01-first", expires_in=600), token_response("sk-ant-oat01-second")]
+    )
     clock = FakeClock()
     google_ref = "oidc/google/https://api.anthropic.com"
     engine = store_engine(

@@ -135,9 +135,7 @@ class TestQualifireGuardrailInit:
         )
 
         with pytest.raises(ValueError, match="does not support on_flagged"):
-            QualifireGuardrail(
-                api_key="test_key", guardrail_name="test_guardrail", on_flagged="inject_system_message"
-            )
+            QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail", on_flagged="inject_system_message")
 
     def test_in_memory_update_reintroducing_inject_system_message_raises(self):
         """
@@ -154,9 +152,7 @@ class TestQualifireGuardrailInit:
         from litellm.types.guardrails import LitellmParams
 
         guardrail = QualifireGuardrail(api_key="test_key", guardrail_name="test_guardrail", on_flagged="block")
-        updated_params = LitellmParams(
-            guardrail="qualifire", mode="pre_call", on_flagged="inject_system_message"
-        )
+        updated_params = LitellmParams(guardrail="qualifire", mode="pre_call", on_flagged="inject_system_message")
         with pytest.raises(ValueError, match="does not support on_flagged"):
             guardrail.update_in_memory_litellm_params(litellm_params=updated_params)
         assert guardrail.on_flagged == "block", "a rejected update must leave the live instance untouched"
@@ -333,9 +329,7 @@ class TestQualifireGuardrailAPICall:
 
         messages = [{"role": "user", "content": "Hello, world!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output=None, dynamic_params={}
-        )
+        await guardrail._run_qualifire_check(messages=messages, output=None, dynamic_params={})
 
         # Verify the API was called
         guardrail.async_handler.post.assert_called_once()
@@ -375,9 +369,7 @@ class TestQualifireGuardrailAPICall:
 
         messages = [{"role": "user", "content": "Hello, world!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output="Test output", dynamic_params={}
-        )
+        await guardrail._run_qualifire_check(messages=messages, output="Test output", dynamic_params={})
 
         # Verify the API was called with correct payload
         guardrail.async_handler.post.assert_called_once()
@@ -415,9 +407,7 @@ class TestQualifireGuardrailAPICall:
 
         messages = [{"role": "user", "content": "Hello, world!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output="Test output", dynamic_params={}
-        )
+        await guardrail._run_qualifire_check(messages=messages, output="Test output", dynamic_params={})
 
         # Verify the invoke endpoint was called
         guardrail.async_handler.post.assert_called_once()
@@ -453,9 +443,7 @@ class TestQualifireGuardrailAPICall:
 
         messages = [{"role": "user", "content": "Hello!"}]
 
-        await guardrail._run_qualifire_check(
-            messages=messages, output=None, dynamic_params={}
-        )
+        await guardrail._run_qualifire_check(messages=messages, output=None, dynamic_params={})
 
         call_kwargs = guardrail.async_handler.post.call_args[1]
         headers = call_kwargs["headers"]
@@ -570,9 +558,7 @@ class TestQualifireGuardrailShouldRun:
             "metadata": {"guardrails": ["qualifire-guard"]},
         }
 
-        result = guardrail.should_run_guardrail(
-            data=data, event_type=GuardrailEventHooks.pre_call
-        )
+        result = guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
 
         assert result is True
 
@@ -593,9 +579,7 @@ class TestQualifireGuardrailShouldRun:
             "metadata": {"guardrails": ["other-guardrail"]},
         }
 
-        result = guardrail.should_run_guardrail(
-            data=data, event_type=GuardrailEventHooks.pre_call
-        )
+        result = guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
 
         assert result is False
 
@@ -616,9 +600,7 @@ class TestQualifireGuardrailShouldRun:
             "messages": [{"role": "user", "content": "test"}],
         }
 
-        result = guardrail.should_run_guardrail(
-            data=data, event_type=GuardrailEventHooks.pre_call
-        )
+        result = guardrail.should_run_guardrail(data=data, event_type=GuardrailEventHooks.pre_call)
 
         assert result is True
 

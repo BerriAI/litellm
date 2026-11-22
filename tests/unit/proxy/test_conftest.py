@@ -9,9 +9,7 @@ def fixture_planted_prisma_mock():
         yield
 
 
-def test_monkeypatch_over_fixture_patched_prisma_client(
-    fixture_planted_prisma_mock, monkeypatch
-):
+def test_monkeypatch_over_fixture_patched_prisma_client(fixture_planted_prisma_mock, monkeypatch):
     """
     Mirrors the flake in test_team_endpoints.py: an autouse fixture patches
     prisma_client, the test monkeypatches the same global, and monkeypatch

@@ -55,9 +55,7 @@ async def test_model_armor_pre_call_hook_sanitization():
                         "sdpFilterResult": {
                             "deidentifyResult": {
                                 "matchState": "MATCH_FOUND",
-                                "data": {
-                                    "text": "Hello, my phone number is [REDACTED]"
-                                },
+                                "data": {"text": "Hello, my phone number is [REDACTED]"},
                             }
                         }
                     }
@@ -67,19 +65,13 @@ async def test_model_armor_pre_call_hook_sanitization():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
-            "messages": [
-                {"role": "user", "content": "Hello, my phone number is +1 412 555 1212"}
-            ],
+            "messages": [{"role": "user", "content": "Hello, my phone number is +1 412 555 1212"}],
             "metadata": {"guardrails": ["model-armor-test"]},
         }
 
@@ -91,9 +83,7 @@ async def test_model_armor_pre_call_hook_sanitization():
         )
 
         # Assert the message was sanitized
-        assert (
-            result["messages"][0]["content"] == "Hello, my phone number is [REDACTED]"
-        )
+        assert result["messages"][0]["content"] == "Hello, my phone number is [REDACTED]"
 
         # Verify API was called correctly
         # Note: we need to use the captured mock from the patch if we want to assert on it
@@ -139,14 +129,10 @@ async def test_model_armor_pre_call_hook_blocked():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Some harmful content"}],
@@ -206,22 +192,14 @@ async def test_model_armor_post_call_hook_sanitization():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         # Create a mock response
         mock_llm_response = litellm.ModelResponse()
         mock_llm_response.choices = [
-            litellm.Choices(
-                message=litellm.Message(
-                    content="Here is the information: Credit card 1234-5678-9012-3456"
-                )
-            )
+            litellm.Choices(message=litellm.Message(content="Here is the information: Credit card 1234-5678-9012-3456"))
         ]
 
         request_data = {
@@ -237,10 +215,7 @@ async def test_model_armor_post_call_hook_sanitization():
         )
 
         # Assert the response was sanitized
-        assert (
-            mock_llm_response.choices[0].message.content
-            == "Here is the information: [REDACTED]"
-        )
+        assert mock_llm_response.choices[0].message.content == "Here is the information: [REDACTED]"
 
 
 @pytest.mark.asyncio
@@ -280,20 +255,14 @@ async def test_model_armor_post_call_hook_blocked():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         # Create a mock response
         mock_llm_response = litellm.ModelResponse()
         mock_llm_response.choices = [
-            litellm.Choices(
-                message=litellm.Message(content="Here is some harmful content...")
-            )
+            litellm.Choices(message=litellm.Message(content="Here is some harmful content..."))
         ]
 
         request_data = {
@@ -335,19 +304,13 @@ async def test_model_armor_with_list_content():
     # Mock the Model Armor API response
     mock_response = AsyncMock()
     mock_response.status_code = 200
-    mock_response.json = AsyncMock(
-        return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
-    )
+    mock_response.json = AsyncMock(return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}})
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
         request_data = {
             "model": "gpt-4",
             "messages": [
@@ -372,9 +335,7 @@ async def test_model_armor_with_list_content():
         # Verify the content was extracted correctly
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert (
-            call_args[1]["json"]["userPromptData"]["text"] == "Hello worldHow are you?"
-        )
+        assert call_args[1]["json"]["userPromptData"]["text"] == "Hello worldHow are you?"
 
 
 @pytest.mark.asyncio
@@ -397,14 +358,10 @@ async def test_model_armor_api_error_handling():
     mock_response.text = "Internal Server Error"
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello"}],
@@ -439,13 +396,9 @@ async def test_model_armor_credentials_handling():
     with patch("os.path.exists", return_value=True):
         with patch(
             "builtins.open",
-            mock_open(
-                read_data='{"type": "service_account", "project_id": "test-project"}'
-            ),
+            mock_open(read_data='{"type": "service_account", "project_id": "test-project"}'),
         ):
-            with patch.object(
-                ModelArmorGuardrail, "_credentials_from_service_account"
-            ) as mock_creds:
+            with patch.object(ModelArmorGuardrail, "_credentials_from_service_account") as mock_creds:
                 mock_creds_obj = Mock()
                 mock_creds_obj.token = "test-token"
                 mock_creds_obj.expired = False
@@ -459,9 +412,7 @@ async def test_model_armor_credentials_handling():
                 )
 
                 # Force credential loading
-                creds, project_id = guardrail.load_auth(
-                    credentials="/path/to/creds.json", project_id="test-project"
-                )
+                creds, project_id = guardrail.load_auth(credentials="/path/to/creds.json", project_id="test-project")
 
                 assert mock_creds.called
                 assert project_id == "test-project"
@@ -493,29 +444,21 @@ async def test_model_armor_streaming_response():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
         # Create mock streaming chunks
         async def mock_stream():
             chunks = [
                 litellm.ModelResponseStream(
                     choices=[
-                        litellm.types.utils.StreamingChoices(
-                            delta=litellm.types.utils.Delta(content="Sensitive ")
-                        )
+                        litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="Sensitive "))
                     ]
                 ),
                 litellm.ModelResponseStream(
                     choices=[
-                        litellm.types.utils.StreamingChoices(
-                            delta=litellm.types.utils.Delta(content="information")
-                        )
+                        litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="information"))
                     ]
                 ),
             ]
@@ -580,29 +523,19 @@ async def test_model_armor_streaming_block_yields_sse_error():
         }
     )
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
 
         async def mock_stream():
             chunks = [
                 litellm.ModelResponseStream(
                     choices=[
-                        litellm.types.utils.StreamingChoices(
-                            delta=litellm.types.utils.Delta(content="My password is ")
-                        )
+                        litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="My password is "))
                     ]
                 ),
                 litellm.ModelResponseStream(
-                    choices=[
-                        litellm.types.utils.StreamingChoices(
-                            delta=litellm.types.utils.Delta(content="hunter2")
-                        )
-                    ]
+                    choices=[litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="hunter2"))]
                 ),
             ]
             for chunk in chunks:
@@ -644,13 +577,9 @@ async def test_model_armor_api_failure_raises_sanitized_error():
     mock_response.status_code = 500
     mock_response.text = "Internal Server Error"
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         with pytest.raises(ModelArmorAPIError) as exc_info:
             await guardrail.make_model_armor_request(
                 content="test content",
@@ -671,16 +600,15 @@ async def test_model_armor_error_output_sanitization(sanitize: bool):
         guardrail_name="model-armor-test",
         sanitize_error_detail=sanitize,
     )
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     error_response = AsyncMock(status_code=500, text=marker)
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=error_response)
-    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
-        verbose_proxy_logger, "error"
-    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
+    with (
+        patch.object(guardrail.async_handler, "post", AsyncMock(return_value=error_response)),
+        patch.object(verbose_proxy_logger, "debug") as debug_log,
+        patch.object(verbose_proxy_logger, "error") as error_log,
+        pytest.raises(ModelArmorAPIError) as exc_info,
+    ):
         await guardrail.make_model_armor_request(content=marker)
 
     direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
@@ -705,9 +633,7 @@ async def test_model_armor_api_error_honors_fail_open(fail_on_error: bool):
         guardrail_name="model-armor-test",
         fail_on_error=fail_on_error,
     )
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     guardrail.should_run_guardrail = Mock(return_value=True)
 
     request = httpx.Request("POST", "https://modelarmor.example.test/v1")
@@ -763,9 +689,7 @@ async def test_model_armor_api_error_fail_open_moderation_and_post_call(fail_on_
         "metadata": {},
     }
     mock_llm_response = litellm.ModelResponse()
-    mock_llm_response.choices = [
-        litellm.Choices(message=litellm.Message(content="model output"))
-    ]
+    mock_llm_response.choices = [litellm.Choices(message=litellm.Message(content="model output"))]
 
     if fail_on_error:
         with pytest.raises(ModelArmorAPIError) as mod_exc:
@@ -816,11 +740,7 @@ async def test_model_armor_api_error_fail_open_streaming(fail_on_error: bool):
 
     async def mock_stream():
         yield litellm.ModelResponseStream(
-            choices=[
-                litellm.types.utils.StreamingChoices(
-                    delta=litellm.types.utils.Delta(content="streamed output")
-                )
-            ]
+            choices=[litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="streamed output"))]
         )
 
     chunks = []
@@ -955,20 +875,19 @@ async def test_model_armor_handler_raised_http_error_sanitized(sanitize: bool):
         guardrail_name="model-armor-test",
         sanitize_error_detail=sanitize,
     )
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     request = httpx.Request("POST", "https://modelarmor.example.test/v1")
     upstream = httpx.Response(403, content=marker.encode(), request=request)
     original = httpx.HTTPStatusError("Forbidden", request=request, response=upstream)
     masked = MaskedHTTPStatusError(original, message=marker, text=marker)
 
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(side_effect=masked)
-    ), patch.object(verbose_proxy_logger, "debug") as debug_log, patch.object(
-        verbose_proxy_logger, "error"
-    ) as error_log, pytest.raises(ModelArmorAPIError) as exc_info:
+    with (
+        patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=masked)),
+        patch.object(verbose_proxy_logger, "debug") as debug_log,
+        patch.object(verbose_proxy_logger, "error") as error_log,
+        pytest.raises(ModelArmorAPIError) as exc_info,
+    ):
         await guardrail.make_model_armor_request(content=marker)
 
     direct_log = f"{debug_log.call_args_list} {error_log.call_args_list}"
@@ -1010,9 +929,7 @@ async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: b
     guardrail.should_run_guardrail = Mock(return_value=True)
 
     mock_llm_response = litellm.ModelResponse()
-    mock_llm_response.choices = [
-        litellm.Choices(message=litellm.Message(content="model output"))
-    ]
+    mock_llm_response.choices = [litellm.Choices(message=litellm.Message(content="model output"))]
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "synthetic input"}],
@@ -1035,9 +952,9 @@ async def test_model_armor_post_call_logging_redacts_scanned_content(sanitize: b
     if sanitize:
         assert marker not in str(logged_armor_response)
         assert (
-            logged_armor_response["sanitizationResult"]["filterResults"]["sdp"][
-                "sdpFilterResult"
-            ]["deidentifyResult"]["matchState"]
+            logged_armor_response["sanitizationResult"]["filterResults"]["sdp"]["sdpFilterResult"]["deidentifyResult"][
+                "matchState"
+            ]
             == "MATCH_FOUND"
         )
     else:
@@ -1065,11 +982,7 @@ async def test_model_armor_streaming_logging_redacts_scanned_content(sanitize: b
 
     async def mock_stream():
         yield litellm.ModelResponseStream(
-            choices=[
-                litellm.types.utils.StreamingChoices(
-                    delta=litellm.types.utils.Delta(content="streamed output")
-                )
-            ]
+            choices=[litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content="streamed output"))]
         )
 
     request_data = {
@@ -1178,12 +1091,8 @@ def test_model_armor_sanitize_error_detail_config_wiring():
         "template_id": "test-template",
         "project_id": "test-project",
     }
-    opted_out = initialize_guardrail(
-        LitellmParams(**params, sanitize_error_detail=False), config
-    )
-    explicit_null = initialize_guardrail(
-        LitellmParams(**params, sanitize_error_detail=None), config
-    )
+    opted_out = initialize_guardrail(LitellmParams(**params, sanitize_error_detail=False), config)
+    explicit_null = initialize_guardrail(LitellmParams(**params, sanitize_error_detail=None), config)
     default = initialize_guardrail(LitellmParams(**params), config)
 
     assert opted_out.sanitize_error_detail is False
@@ -1197,9 +1106,7 @@ def test_model_armor_ui_friendly_name():
         ModelArmorGuardrailConfigModel,
     )
 
-    assert (
-        ModelArmorGuardrailConfigModel.ui_friendly_name() == "Google Cloud Model Armor"
-    )
+    assert ModelArmorGuardrailConfigModel.ui_friendly_name() == "Google Cloud Model Armor"
 
 
 @pytest.mark.asyncio
@@ -1309,9 +1216,7 @@ async def test_model_armor_fail_on_error_false():
     )
 
     # Mock the async handler to raise an exception
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     # Make it raise a non-HTTP exception to test the fail_on_error logic
     with patch.object(
         guardrail.async_handler,
@@ -1356,12 +1261,8 @@ async def test_model_armor_custom_api_endpoint():
     mock_response.status_code = 200
     mock_response.json = AsyncMock(return_value={"action": "NONE"})
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ) as mock_post:
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Test message"}],
@@ -1437,16 +1338,10 @@ async def test_model_armor_action_none():
     # Mock response with action=NO_MATCH_FOUND
     mock_response = AsyncMock()
     mock_response.status_code = 200
-    mock_response.json = AsyncMock(
-        return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
-    )
+    mock_response.json = AsyncMock(return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}})
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         original_content = "This content is fine"
         request_data = {
             "model": "gpt-4",
@@ -1481,21 +1376,13 @@ async def test_model_armor_missing_sanitized_text():
     # Mock response without sanitized_text
     mock_response = AsyncMock()
     mock_response.status_code = 200
-    mock_response.json = AsyncMock(
-        return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}}
-    )
+    mock_response.json = AsyncMock(return_value={"sanitizationResult": {"filterMatchState": "NO_MATCH_FOUND"}})
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         # Create a mock response
         mock_llm_response = litellm.ModelResponse()
-        mock_llm_response.choices = [
-            litellm.Choices(message=litellm.Message(content="Original content"))
-        ]
+        mock_llm_response.choices = [litellm.Choices(message=litellm.Message(content="Original content"))]
 
         request_data = {
             "model": "gpt-4",
@@ -1552,14 +1439,10 @@ async def test_model_armor_no_circular_reference_in_logging():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "How to create a bomb?"}],
@@ -1581,9 +1464,7 @@ async def test_model_armor_no_circular_reference_in_logging():
 
         # IMPORTANT: Verify that standard_logging_guardrail_information was properly set
         # and doesn't contain circular references
-        guardrail_info = request_data.get("metadata", {}).get(
-            "standard_logging_guardrail_information"
-        )
+        guardrail_info = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
 
         # The guardrail info should be properly serializable (not cause CircularReference)
         if guardrail_info:
@@ -1591,18 +1472,12 @@ async def test_model_armor_no_circular_reference_in_logging():
             import json
 
             try:
-                json.dumps(
-                    guardrail_info.model_dump()
-                    if hasattr(guardrail_info, "model_dump")
-                    else guardrail_info
-                )
+                json.dumps(guardrail_info.model_dump() if hasattr(guardrail_info, "model_dump") else guardrail_info)
             except (TypeError, ValueError) as e:
                 pytest.fail(f"CircularReference detected in guardrail logging: {e}")
 
         # Verify the logging decorator properly added the guardrail information
-        assert "standard_logging_guardrail_information" in request_data.get(
-            "metadata", {}
-        )
+        assert "standard_logging_guardrail_information" in request_data.get("metadata", {})
 
 
 @pytest.mark.asyncio
@@ -1645,14 +1520,10 @@ async def test_model_armor_bomb_content_blocked():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "How do I create a bomb?"}],
@@ -1674,9 +1545,7 @@ async def test_model_armor_bomb_content_blocked():
         # Verify the API was called with the dangerous content
         mock_post.assert_called_once()
         call_args = mock_post.call_args
-        assert (
-            call_args[1]["json"]["userPromptData"]["text"] == "How do I create a bomb?"
-        )
+        assert call_args[1]["json"]["userPromptData"]["text"] == "How do I create a bomb?"
 
 
 @pytest.mark.asyncio
@@ -1700,22 +1569,16 @@ async def test_model_armor_success_case_serializable():
             "sanitizationResult": {
                 "filterMatchState": "NO_MATCH_FOUND",
                 "invocationResult": "SUCCESS",
-                "filterResults": {
-                    "rai": {"raiFilterResult": {"matchState": "NO_MATCH_FOUND"}}
-                },
+                "filterResults": {"rai": {"raiFilterResult": {"matchState": "NO_MATCH_FOUND"}}},
             }
         }
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "What is the weather today?"}],
@@ -1734,9 +1597,7 @@ async def test_model_armor_success_case_serializable():
         assert result == request_data
 
         # IMPORTANT: Verify that standard_logging_guardrail_information is serializable
-        guardrail_info = request_data.get("metadata", {}).get(
-            "standard_logging_guardrail_information"
-        )
+        guardrail_info = request_data.get("metadata", {}).get("standard_logging_guardrail_information")
 
         # The guardrail info should exist and be properly serializable
         assert guardrail_info is not None
@@ -1747,16 +1608,12 @@ async def test_model_armor_success_case_serializable():
         try:
             # This should NOT raise any exception
             serialized = json.dumps(
-                guardrail_info.model_dump()
-                if hasattr(guardrail_info, "model_dump")
-                else guardrail_info
+                guardrail_info.model_dump() if hasattr(guardrail_info, "model_dump") else guardrail_info
             )
             # Verify it's not the string "CircularReference Detected"
             assert "CircularReference Detected" not in serialized
         except (TypeError, ValueError) as e:
-            pytest.fail(
-                f"CircularReference detected in guardrail logging for success case: {e}"
-            )
+            pytest.fail(f"CircularReference detected in guardrail logging for success case: {e}")
 
 
 @pytest.mark.asyncio
@@ -1816,9 +1673,7 @@ async def test_model_armor_token_refresh():
         return (f"token-{call_count}", "test-project")
 
     guardrail._ensure_access_token_async = AsyncMock(side_effect=mock_token_method)
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Test"}],
@@ -1857,9 +1712,7 @@ async def test_model_armor_non_model_response():
     tts_response = TTSResponse()
 
     # Mock the access token
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     guardrail.async_handler = AsyncMock()
 
     # Call post-call hook with non-ModelResponse
@@ -1911,12 +1764,8 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
         }
     )
 
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "bad content"}],
@@ -1945,9 +1794,7 @@ async def test_model_armor_guardrail_status_intervened_vs_failed():
         fail_on_error=True,
     )
 
-    guardrail2._ensure_access_token_async = AsyncMock(
-        side_effect=ConnectionError("timeout")
-    )
+    guardrail2._ensure_access_token_async = AsyncMock(side_effect=ConnectionError("timeout"))
     request_data2 = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "hello"}],
@@ -2021,19 +1868,13 @@ async def test_model_armor_with_default_credentials():
     # Mock the Model Armor API response
     mock_response = AsyncMock()
     mock_response.status_code = 200
-    mock_response.json = AsyncMock(
-        return_value={"sanitized_text": "Test content", "action": "SANITIZE"}
-    )
+    mock_response.json = AsyncMock(return_value={"sanitized_text": "Test content", "action": "SANITIZE"})
 
     # Mock the access token method to simulate successful auth
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "cloud-test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "cloud-test-project"))
 
     # Mock the async handler
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ) as mock_post:
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)) as mock_post:
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Test content"}],
@@ -2076,20 +1917,14 @@ async def test_async_moderation_hook_success_no_blocking():
         return_value={
             "sanitizationResult": {
                 "filterMatchState": "NO_MATCH_FOUND",
-                "filterResults": {
-                    "rai": {"raiFilterResult": {"matchState": "NO_MATCH_FOUND"}}
-                },
+                "filterResults": {"rai": {"raiFilterResult": {"matchState": "NO_MATCH_FOUND"}}},
             }
         }
     )
 
     # Mock the access token method and async handler
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
@@ -2128,20 +1963,14 @@ async def test_async_moderation_hook_content_blocked():
         return_value={
             "sanitizationResult": {
                 "filterMatchState": "MATCH_FOUND",
-                "filterResults": {
-                    "rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}
-                },
+                "filterResults": {"rai": {"raiFilterResult": {"matchState": "MATCH_FOUND"}}},
             }
         }
     )
 
     # Mock the access token method and async handler
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Some harmful content"}],
@@ -2193,9 +2022,7 @@ async def test_async_moderation_hook_with_sanitization():
                         "sdpFilterResult": {
                             "deidentifyResult": {
                                 "matchState": "MATCH_FOUND",
-                                "data": {
-                                    "text": "Hello, my phone number is [REDACTED]"
-                                },
+                                "data": {"text": "Hello, my phone number is [REDACTED]"},
                             }
                         }
                     }
@@ -2205,12 +2032,8 @@ async def test_async_moderation_hook_with_sanitization():
     )
 
     # Mock the access token method and async handler
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         original_content = "Hello, my phone number is 555-123-4567"
         request_data = {
             "model": "gpt-4",
@@ -2292,9 +2115,7 @@ async def test_async_moderation_hook_should_not_run():
     request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
-        "metadata": {
-            "guardrails": ["some-other-guardrail"]
-        },  # Different guardrail name
+        "metadata": {"guardrails": ["some-other-guardrail"]},  # Different guardrail name
     }
 
     result = await guardrail.async_moderation_hook(
@@ -2321,14 +2142,10 @@ async def test_async_moderation_hook_api_error_fail_on_error_true():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler to raise an exception
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(side_effect=Exception("API Error"))
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=Exception("API Error"))):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
@@ -2360,14 +2177,10 @@ async def test_async_moderation_hook_api_error_fail_on_error_false():
     )
 
     # Mock the access token method
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
 
     # Mock the async handler to raise an exception
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(side_effect=Exception("API Error"))
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=Exception("API Error"))):
         request_data = {
             "model": "gpt-4",
             "messages": [{"role": "user", "content": "Hello, how are you?"}],
@@ -2905,7 +2718,7 @@ async def test_skip_unscannable_still_fails_closed_on_api_error():
         "post",
         AsyncMock(side_effect=Exception("model armor upstream 500")),
     ):
-        with pytest.raises(Exception, match='model armor upstream') as exc_info:
+        with pytest.raises(Exception, match="model armor upstream") as exc_info:
             await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=MagicMock(spec=DualCache),
@@ -3847,9 +3660,7 @@ _MODEL_ARMOR_BLOCK = {
                 "sdpFilterResult": {
                     "inspectResult": {
                         "matchState": "MATCH_FOUND",
-                        "findings": [
-                            {"infoType": "CREDIT_CARD_NUMBER", "likelihood": "VERY_LIKELY"}
-                        ],
+                        "findings": [{"infoType": "CREDIT_CARD_NUMBER", "likelihood": "VERY_LIKELY"}],
                     }
                 }
             }
@@ -3914,9 +3725,7 @@ def _surface_guardrail(**kwargs):
         guardrail_name="model-armor-test",
         **kwargs,
     )
-    guardrail._ensure_access_token_async = AsyncMock(
-        return_value=("test-token", "test-project")
-    )
+    guardrail._ensure_access_token_async = AsyncMock(return_value=("test-token", "test-project"))
     return guardrail
 
 
@@ -4039,9 +3848,7 @@ async def test_streaming_block_emits_anthropic_error_frame():
     """
     guardrail = _surface_guardrail()
 
-    with patch.object(
-        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
-    ):
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)):
         delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
 
     body = b"".join(delivered)
@@ -4059,9 +3866,7 @@ async def test_streaming_block_emits_responses_api_error_event():
 
     guardrail = _surface_guardrail()
 
-    with patch.object(
-        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)
-    ):
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_BLOCK)):
         delivered = await _drain_surface_hook(guardrail, _responses_api_events())
 
     assert len(delivered) == 1
@@ -4077,9 +3882,7 @@ async def test_streaming_masking_re_emits_anthropic_sse_with_sanitized_text():
     """mask_response_content on /v1/messages must ship the sanitized text, not the original."""
     guardrail = _surface_guardrail(mask_response_content=True)
 
-    with patch.object(
-        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
-    ):
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)):
         delivered = await _drain_surface_hook(guardrail, _ANTHROPIC_SSE_CHUNKS)
 
     body = b"".join(delivered)
@@ -4095,9 +3898,7 @@ async def test_streaming_masking_blocks_responses_api_stream():
 
     guardrail = _surface_guardrail(mask_response_content=True)
 
-    with patch.object(
-        guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)
-    ):
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_SANITIZED)):
         delivered = await _drain_surface_hook(guardrail, _responses_api_events())
 
     assert len(delivered) == 1
@@ -4119,9 +3920,7 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
     mock_response.status_code = 500
     mock_response.text = "Internal Server Error"
 
-    with patch.object(
-        guardrail.async_handler, "post", AsyncMock(return_value=mock_response)
-    ):
+    with patch.object(guardrail.async_handler, "post", AsyncMock(return_value=mock_response)):
         delivered = await _drain_surface_hook(guardrail, chunks)
 
     assert len(delivered) >= 1
@@ -4137,8 +3936,10 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
     "chunks",
     [
         pytest.param(
-            (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
-             b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
+            (
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"text_delta","text":"hi"}}\n\n',
+            ),
             id="anthropic-sse-without-message-start",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
@@ -4498,9 +4299,7 @@ async def test_streaming_deidentify_match_masks_when_masking_is_enabled(chunks, 
     post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
 
     with patch.object(guardrail.async_handler, "post", post):
-        delivered = await _drain_surface_hook(
-            guardrail, _chat_completion_chunks() if chunks is None else chunks
-        )
+        delivered = await _drain_surface_hook(guardrail, _chat_completion_chunks() if chunks is None else chunks)
 
     body = _delivered_bytes(delivered)
     assert b"[REDACTED]" in body, case
@@ -4517,9 +4316,7 @@ async def test_streaming_deidentify_match_still_blocks_when_masking_is_disabled(
     post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)
 
     with patch.object(guardrail.async_handler, "post", post):
-        delivered = await _drain_surface_hook(
-            guardrail, _chat_completion_chunks() if chunks is None else chunks
-        )
+        delivered = await _drain_surface_hook(guardrail, _chat_completion_chunks() if chunks is None else chunks)
 
     body = _delivered_bytes(delivered)
     assert b"Streaming response blocked by Model Armor" in body, case
@@ -4548,9 +4345,7 @@ async def test_streaming_deidentify_match_logs_masked_run_as_success_not_blocked
 _MODEL_ARMOR_DEIDENTIFIED_NO_TEXT = {
     "sanitizationResult": {
         "filterMatchState": "MATCH_FOUND",
-        "filterResults": {
-            "sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}
-        },
+        "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
     }
 }
 
@@ -4565,9 +4360,7 @@ async def test_streaming_deidentify_match_without_a_rewrite_fails_closed(chunks,
     post = _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED_NO_TEXT)
 
     with patch.object(guardrail.async_handler, "post", post):
-        delivered = await _drain_surface_hook(
-            guardrail, _chat_completion_chunks() if chunks is None else chunks
-        )
+        delivered = await _drain_surface_hook(guardrail, _chat_completion_chunks() if chunks is None else chunks)
 
     body = _delivered_bytes(delivered)
     assert b"4111-1111-1111-1111" not in body, case
@@ -4587,9 +4380,7 @@ async def test_streaming_status_records_a_surface_that_cannot_carry_the_rewrite_
     }
 
     with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
-        delivered = await _drain_surface_hook(
-            guardrail, _responses_api_events(), request_data=request_data
-        )
+        delivered = await _drain_surface_hook(guardrail, _responses_api_events(), request_data=request_data)
 
     body = _delivered_bytes(delivered)
     assert b"4111-1111-1111-1111" not in body
@@ -5048,21 +4839,13 @@ def _logged_kwargs() -> dict[str, object]:
 
 def _chat_response(text: str) -> litellm.ModelResponse:
     return litellm.ModelResponse(
-        choices=[
-            litellm.types.utils.Choices(
-                message=litellm.types.utils.Message(role="assistant", content=text)
-            )
-        ]
+        choices=[litellm.types.utils.Choices(message=litellm.types.utils.Message(role="assistant", content=text))]
     )
 
 
 def _stream_chunk(text: str) -> litellm.ModelResponseStream:
     return litellm.ModelResponseStream(
-        choices=[
-            litellm.types.utils.StreamingChoices(
-                delta=litellm.types.utils.Delta(content=text)
-            )
-        ]
+        choices=[litellm.types.utils.StreamingChoices(delta=litellm.types.utils.Delta(content=text))]
     )
 
 
@@ -5092,9 +4875,7 @@ def test_logging_only_mode_is_accepted_and_keeps_native_hooks():
 async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
     """A logging_only guardrail must pass stream chunks straight through; the scan happens
     afterwards on the assembled response via async_logging_hook."""
-    guardrail = _logging_only_guardrail(
-        [_clean_armor_response(), _clean_armor_response()]
-    )
+    guardrail = _logging_only_guardrail([_clean_armor_response(), _clean_armor_response()])
     handler = cast(_FakeArmorHandler, guardrail.async_handler)
     handler.raise_on_call = AssertionError("logging_only must not scan the stream")
 
@@ -5122,9 +4903,7 @@ async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
 
     response = _chat_response("all clear")
     kwargs = _logged_kwargs()
-    out_kwargs, out_result = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, out_result = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
     assert out_result is response
     entries = _metadata_entries(out_kwargs)
     assert len(entries) >= 1
@@ -5136,15 +4915,11 @@ async def test_logging_only_stream_yields_chunks_without_waiting_for_scan():
 
 @pytest.mark.asyncio
 async def test_logging_only_records_flagged_verdict_without_altering_response():
-    guardrail = _logging_only_guardrail(
-        [_flagged_armor_response(), _flagged_armor_response()]
-    )
+    guardrail = _logging_only_guardrail([_flagged_armor_response(), _flagged_armor_response()])
     response = _chat_response("flagged output")
     kwargs = _logged_kwargs()
 
-    out_kwargs, out_result = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, out_result = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
 
     assert out_result is response
     entries = _metadata_entries(out_kwargs)
@@ -5163,9 +4938,7 @@ async def test_logging_only_records_model_armor_api_error():
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
 
-    out_kwargs, out_result = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, out_result = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
 
     assert out_result is response
     entries = _metadata_entries(out_kwargs)
@@ -5193,17 +4966,11 @@ async def test_logging_only_scans_assembled_responses_api_stream():
                 type="message",
                 role="assistant",
                 status="completed",
-                content=[
-                    ResponseOutputText(
-                        annotations=[], text="assembled output text", type="output_text"
-                    )
-                ],
+                content=[ResponseOutputText(annotations=[], text="assembled output text", type="output_text")],
             )
         ],
     )
-    event = ResponseCompletedEvent(
-        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=assembled
-    )
+    event = ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=assembled)
 
     guardrail = _logging_only_guardrail()
     kwargs = _logged_kwargs()
@@ -5211,9 +4978,7 @@ async def test_logging_only_scans_assembled_responses_api_stream():
     kwargs["input"] = "hello"
     kwargs["async_complete_streaming_response"] = assembled
 
-    out_kwargs, _ = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=event, call_type="aresponses"
-    )
+    out_kwargs, _ = await guardrail.async_logging_hook(kwargs=kwargs, result=event, call_type="aresponses")
 
     handler = cast(_FakeArmorHandler, guardrail.async_handler)
     response_scans = [call for call in handler.calls if "modelResponseData" in call]
@@ -5268,9 +5033,7 @@ async def test_native_post_call_mode_ignores_logging_hook():
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
 
-    out_kwargs, out_result = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, out_result = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
 
     assert out_kwargs is kwargs
     assert out_result is response
@@ -5300,9 +5063,7 @@ async def test_logging_only_records_transport_error():
     response = _chat_response("some output")
     kwargs = _logged_kwargs()
 
-    out_kwargs, out_result = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, out_result = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
 
     assert out_result is response
     entries = _metadata_entries(out_kwargs)
@@ -5314,15 +5075,11 @@ async def test_logging_only_records_transport_error():
 @pytest.mark.asyncio
 async def test_logging_only_flagged_prompt_still_scans_response():
     """A flagged input scan must not abort the output scan; both verdicts are recorded."""
-    guardrail = _logging_only_guardrail(
-        [_flagged_armor_response(), _flagged_armor_response()]
-    )
+    guardrail = _logging_only_guardrail([_flagged_armor_response(), _flagged_armor_response()])
     response = _chat_response("flagged output")
     kwargs = _logged_kwargs()
 
-    out_kwargs, _ = await guardrail.async_logging_hook(
-        kwargs=kwargs, result=response, call_type="acompletion"
-    )
+    out_kwargs, _ = await guardrail.async_logging_hook(kwargs=kwargs, result=response, call_type="acompletion")
 
     handler = cast(_FakeArmorHandler, guardrail.async_handler)
     sources = ["user_prompt" if "userPromptData" in call else "model_response" for call in handler.calls]

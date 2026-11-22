@@ -104,9 +104,7 @@ async def test_async_gemini_streaming_tool_call_arguments_are_valid(
     )
     response_chunks: Final = [chunk async for chunk in stream]
     tool_calls: Final = [
-        tool_call
-        for chunk in response_chunks
-        for tool_call in chunk.choices[0].delta.tool_calls or ()
+        tool_call for chunk in response_chunks for tool_call in chunk.choices[0].delta.tool_calls or ()
     ]
 
     assert route.call_count == 1
@@ -209,11 +207,14 @@ async def test_gemini_streaming_legacy_function_call_arguments_are_valid(
         for chunk in stream_chunks
         if chunk.choices and chunk.choices[0].delta.function_call is not None
     )
-    assert tuple(
-        function_call.name for function_call in function_calls if function_call.name is not None
-    ) == ("get_current_weather",)
+    assert tuple(function_call.name for function_call in function_calls if function_call.name is not None) == (
+        "get_current_weather",
+    )
     arguments: Final = "".join(function_call.arguments or "" for function_call in function_calls)
     assert json.loads(arguments) == {"location": "Boston", "unit": "fahrenheit"}
     rebuilt: Final = litellm.stream_chunk_builder(chunks=list(stream_chunks), messages=messages)
     assert rebuilt.choices[0].message.function_call.name == "get_current_weather"
-    assert json.loads(rebuilt.choices[0].message.function_call.arguments) == {"location": "Boston", "unit": "fahrenheit"}
+    assert json.loads(rebuilt.choices[0].message.function_call.arguments) == {
+        "location": "Boston",
+        "unit": "fahrenheit",
+    }

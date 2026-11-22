@@ -194,9 +194,7 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
             return team
 
         monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
-        monkeypatch.setattr(
-            key_management_endpoints, "_get_user_in_team", lambda **kwargs: None
-        )
+        monkeypatch.setattr(key_management_endpoints, "_get_user_in_team", lambda **kwargs: None)
 
         user_api_key_dict = MagicMock()
         user_api_key_dict.user_role = "internal_user"

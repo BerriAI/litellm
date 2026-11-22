@@ -8532,7 +8532,9 @@ async def test_resolve_active_litellm_key_rejects_blocked_key(proxy_globals, rus
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(proxy_globals, rust_auth_stores: RustAuthStores):
+async def test_resolve_active_litellm_key_fails_closed_on_malformed_expiry(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """A key whose stored expires string does not parse must fail closed to no-hash (the mint then
     returns invalid_request), not surface an unhandled 500. The active-state check runs outside the
     resolver's try, so it must be total over a bad expires rather than letting datetime.fromisoformat
@@ -8589,7 +8591,9 @@ async def test_resolve_active_litellm_key_db_outage_is_unavailable(proxy_globals
 
 
 @pytest.mark.asyncio
-async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(proxy_globals, rust_auth_stores: RustAuthStores):
+async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(
+    proxy_globals, rust_auth_stores: RustAuthStores
+):
     """A query engine that is missing or version-skewed cannot resolve any key until the deployment is
     repaired, so the resolver reports "faulted" (still statused 503 by the mint) rather than "unavailable",
     whose wording promises the outage is transient and asks the client to retry."""
@@ -8601,7 +8605,9 @@ async def test_resolve_active_litellm_key_permanent_engine_fault_is_faulted(prox
         _resolve_active_litellm_key,
     )
 
-    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError("query engine binary not found")
+    rust_auth_stores.key.rows[hash_token("sk-during-engine-fault")] = BinaryNotFoundError(
+        "query engine binary not found"
+    )
 
     proxy_globals.user_api_key_cache = UserApiKeyCache()
     proxy_globals.prisma_client = object()

@@ -726,9 +726,7 @@ async def test_a_wildcard_key_resolves_the_team_wildcard_deployment_serving_a_mo
 async def test_a_wildcard_key_never_resolves_a_team_wildcard_deployment_of_another_provider(
     key_provider_models: set[str], team_provider: str
 ):
-    assert (
-        await _team_wildcard_credentials(team_provider, _family_wildcard_of_a_model_in(key_provider_models)) is None
-    )
+    assert await _team_wildcard_credentials(team_provider, _family_wildcard_of_a_model_in(key_provider_models)) is None
 
 
 @pytest.fixture
@@ -736,7 +734,10 @@ def family_only_a_routing_rule_maps_to_anthropic() -> Iterator[str]:
     previous_rules: Final = get_fallback_generalization_rules()
     family: Final = "lit-unlisted-family"
     set_fallback_generalizations(
-        [*previous_rules, {"name": family, "pattern": rf"^{family}-\d+$", "model_info": {"litellm_provider": "anthropic"}}]
+        [
+            *previous_rules,
+            {"name": family, "pattern": rf"^{family}-\d+$", "model_info": {"litellm_provider": "anthropic"}},
+        ]
     )
     yield family
     set_fallback_generalizations(previous_rules)
@@ -746,7 +747,9 @@ def family_only_a_routing_rule_maps_to_anthropic() -> Iterator[str]:
 async def test_a_wildcard_key_resolves_the_team_wildcard_deployment_for_a_family_the_cost_map_does_not_list(
     family_only_a_routing_rule_maps_to_anthropic: str,
 ):
-    credentials: Final = await _team_wildcard_credentials("anthropic", f"{family_only_a_routing_rule_maps_to_anthropic}-9*")
+    credentials: Final = await _team_wildcard_credentials(
+        "anthropic", f"{family_only_a_routing_rule_maps_to_anthropic}-9*"
+    )
 
     assert credentials is not None
     assert credentials["api_key"] == "team-anthropic-key"
@@ -834,9 +837,7 @@ async def test_a_wildcard_key_gets_the_team_key_only_when_its_team_allows_the_mo
 
 
 def _a_family_with_several_models(known_models: set[str]) -> tuple[str, tuple[str, ...]]:
-    families: Final = sorted(
-        {model.partition("-")[0] for model in known_models if "-" in model and "/" not in model}
-    )
+    families: Final = sorted({model.partition("-")[0] for model in known_models if "-" in model and "/" not in model})
     family_models: Final = (
         (family, tuple(sorted(model for model in known_models if model.startswith(f"{family}-") and "/" not in model)))
         for family in families
@@ -879,7 +880,11 @@ async def test_a_wildcard_key_gets_the_team_key_through_the_one_model_its_projec
         await _apply_team_a_openai_credentials(
             data,
             UserAPIKeyAuth(
-                api_key="test-key", team_id="team-a", team_models=["openai/*"], models=[key_wildcard], project_id="proj-1"
+                api_key="test-key",
+                team_id="team-a",
+                team_models=["openai/*"],
+                models=[key_wildcard],
+                project_id="proj-1",
             ),
         )
 
@@ -1061,7 +1066,10 @@ async def test_a_team_keeps_its_first_config_file_openai_deployment_over_older_d
 
 @pytest.mark.parametrize(
     ("custom_llm_provider", "openrouter_key", "api_key"),
-    [("openai", "sk-or-files-openai", "openai-key"), ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter")],
+    [
+        ("openai", "sk-or-files-openai", "openai-key"),
+        ("openrouter", "sk-or-files-openrouter", "sk-or-files-openrouter"),
+    ],
 )
 @pytest.mark.asyncio
 async def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_live_catalog(
@@ -1104,8 +1112,18 @@ async def test_a_provider_credential_lookup_never_lists_an_openrouter_wildcards_
             "anthropic",
             "anthropic-narrow-key",
         ),
-        (["anthropic/claude-3*"], (("anthropic/*", "anthropic/*", "anthropic-wide-key"),), "anthropic", "anthropic-wide-key"),
-        (["openrouter/*"], (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),), "openrouter", "sk-or-narrow"),
+        (
+            ["anthropic/claude-3*"],
+            (("anthropic/*", "anthropic/*", "anthropic-wide-key"),),
+            "anthropic",
+            "anthropic-wide-key",
+        ),
+        (
+            ["openrouter/*"],
+            (("openrouter/openai/*", "openrouter/openai/*", "sk-or-narrow"),),
+            "openrouter",
+            "sk-or-narrow",
+        ),
         (
             ["team/*"],
             (("team/*", "openrouter/*", "sk-or-team"), ("team/openai/*", "openai/*", "openai-team-key")),

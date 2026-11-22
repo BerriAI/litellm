@@ -23,12 +23,7 @@ _ENABLED_BY_RUFF_DEFAULTS = frozenset({"F401"})
 
 
 def test_parse_changed_lines_maps_added_lines_per_file():
-    diff = (
-        "+++ b/litellm/a.py\n"
-        "@@ -10 +10,3 @@\n+x\n+y\n+z\n"
-        "+++ b/litellm/b.py\n"
-        "@@ -5,2 +7 @@\n+q\n"
-    )
+    diff = "+++ b/litellm/a.py\n@@ -10 +10,3 @@\n+x\n+y\n+z\n+++ b/litellm/b.py\n@@ -5,2 +7 @@\n+q\n"
     changed = gate.parse_changed_lines(diff)
     assert changed["litellm/a.py"] == {10, 11, 12}
     assert changed["litellm/b.py"] == {7}
@@ -39,9 +34,7 @@ def test_introduced_keeps_only_violations_on_changed_lines():
         Violation("litellm/a.py", 10, "ANN001"),
         Violation("litellm/a.py", 99, "C901"),
     ]
-    assert gate.introduced(violations, {"litellm/a.py": {10}}) == [
-        Violation("litellm/a.py", 10, "ANN001")
-    ]
+    assert gate.introduced(violations, {"litellm/a.py": {10}}) == [Violation("litellm/a.py", 10, "ANN001")]
 
 
 @pytest.mark.parametrize("hunk", ["@@ -1 +1 @@", "@@ -1,0 +1,2 @@"])
@@ -106,8 +99,7 @@ def test_every_strict_gate_rule_is_protected_from_base_ruf100():
     unprotected = frozenset(
         selector
         for selector in _strict_selected()
-        if not _prefix_covered(selector, _base_external())
-        and selector not in _selected_by_the_normal_config()
+        if not _prefix_covered(selector, _base_external()) and selector not in _selected_by_the_normal_config()
     )
     assert unprotected == frozenset(), (
         f"`ruff check` deletes any `# noqa` naming {sorted(unprotected)} as unused, so suppressing "
@@ -118,18 +110,12 @@ def test_every_strict_gate_rule_is_protected_from_base_ruf100():
 
 def test_every_selected_rule_keeps_stale_noqa_detection_somewhere():
     policed_by_strict = frozenset(
-        selector
-        for selector in _strict_selected()
-        if not _prefix_covered(selector, _strict_external())
+        selector for selector in _strict_selected() if not _prefix_covered(selector, _strict_external())
     )
     policed_by_base = frozenset(
-        selector
-        for selector in _selected_by_the_normal_config()
-        if not _prefix_covered(selector, _base_external())
+        selector for selector in _selected_by_the_normal_config() if not _prefix_covered(selector, _base_external())
     )
-    shadowed = (
-        _strict_selected() | _selected_by_the_normal_config()
-    ) - policed_by_strict - policed_by_base
+    shadowed = (_strict_selected() | _selected_by_the_normal_config()) - policed_by_strict - policed_by_base
     assert shadowed == frozenset(), (
         f"no config's RUF100 can ever report a stale `# noqa` for {sorted(shadowed)}: every config "
         "that selects each of them also shadows it with an external entry. Narrow the external "
@@ -149,22 +135,16 @@ def all_ruff_rule_codes() -> frozenset:
         text=True,
     )
     assert listing.returncode == 0, listing.stderr
-    return frozenset(
-        entry["code"] for entry in json.loads(listing.stdout) if "Removed" not in entry["status"]
-    )
+    return frozenset(entry["code"] for entry in json.loads(listing.stdout) if "Removed" not in entry["status"])
 
 
 @_needs_ruff
 def test_every_base_owned_rule_is_external_or_selected_in_the_strict_config(all_ruff_rule_codes):
     base_owned = frozenset(
-        code
-        for code in all_ruff_rule_codes
-        if _BASE_OWNED_FAMILY.fullmatch(code) or code in _BASE_OWNED_SINGLES
+        code for code in all_ruff_rule_codes if _BASE_OWNED_FAMILY.fullmatch(code) or code in _BASE_OWNED_SINGLES
     )
     stranded = frozenset(
-        code
-        for code in base_owned
-        if code not in _strict_selected() and not _prefix_covered(code, _strict_external())
+        code for code in base_owned if code not in _strict_selected() and not _prefix_covered(code, _strict_external())
     )
     assert stranded == frozenset(), (
         f"the strict gate's RUF100 reads a valid `# noqa` for {sorted(stranded)} as unused, the "
@@ -172,9 +152,7 @@ def test_every_base_owned_rule_is_external_or_selected_in_the_strict_config(all_
         "there."
     )
     double_booked = frozenset(
-        code
-        for code in base_owned
-        if code in _strict_selected() and _prefix_covered(code, _strict_external())
+        code for code in base_owned if code in _strict_selected() and _prefix_covered(code, _strict_external())
     )
     assert double_booked == frozenset(), (
         f"{sorted(double_booked)} are selected by the strict config yet shadowed by its external "

@@ -242,7 +242,6 @@ class TestInteractionByIdRequests:
         assert request_body == {}
 
 
-
 LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 IDENTITY: Final = MappingProxyType({"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"})
 PROXY_METADATA: Final = MappingProxyType({**IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
@@ -332,7 +331,10 @@ async def test_create_sends_caller_labels_as_is_while_the_setting_is_off(
 def test_create_drops_a_caller_labels_header_only_while_the_setting_is_on(
     config: VertexAIInteractionsConfig, litellm_params: GenericLiteLLMParams, monkeypatch: pytest.MonkeyPatch
 ):
-    caller_headers: Final = {"x-vertex-ai-labels": "eyJ1c2VyX2FwaV9rZXlfdGVhbV9hbGlhcyI6ICJmb3JnZWQifQ==", "x-trace-id": "t-1"}
+    caller_headers: Final = {
+        "x-vertex-ai-labels": "eyJ1c2VyX2FwaV9rZXlfdGVhbV9hbGlhcyI6ICJmb3JnZWQifQ==",
+        "x-trace-id": "t-1",
+    }
     monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
     setting_off: Final = config.validate_environment(caller_headers, "gemini-omni-flash-preview", litellm_params)
     monkeypatch.setattr(litellm, "vertex_request_label_fields", LABEL_FIELDS)

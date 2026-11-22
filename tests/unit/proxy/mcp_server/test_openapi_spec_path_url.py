@@ -62,9 +62,7 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(gen, "get_async_httpx_client", fake_get_async_httpx_client)
 
     # Bypass SSRF validation in test (example.local doesn't resolve)
-    monkeypatch.setattr(
-        gen, "async_safe_get", lambda client, url, **kw: client.get(url)
-    )
+    monkeypatch.setattr(gen, "async_safe_get", lambda client, url, **kw: client.get(url))
 
     # Fail loudly if someone reintroduces direct httpx.get()
     def boom(*args, **kwargs):
@@ -79,9 +77,7 @@ def test_load_openapi_spec_supports_http_url(monkeypatch: pytest.MonkeyPatch) ->
     assert handler_holder["handler"].calls == 1
 
 
-def test_load_openapi_spec_supports_local_file_path(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_load_openapi_spec_supports_local_file_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     expected: Dict[str, Any] = {
         "openapi": "3.0.0",
         "info": {"title": "Local API", "version": "1.0.0"},
@@ -96,9 +92,7 @@ def test_load_openapi_spec_supports_local_file_path(
 
     # For local files, shared client must NOT be used.
     def boom_client(*args, **kwargs):
-        raise AssertionError(
-            "get_async_httpx_client() must not be called for local file paths"
-        )
+        raise AssertionError("get_async_httpx_client() must not be called for local file paths")
 
     monkeypatch.setattr(gen, "get_async_httpx_client", boom_client)
 
@@ -111,19 +105,28 @@ def test_load_openapi_spec_supports_local_file_path(
 @pytest.mark.parametrize("document_format", ["json", "yaml"])
 @pytest.mark.parametrize("use_async", [False, True])
 def test_openapi_formats_preserve_document_across_sources(
-    tmp_path: Path, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch,
-    source: str, suffix: str, document_format: str, use_async: bool,
+    tmp_path: Path,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
+    suffix: str,
+    document_format: str,
+    use_async: bool,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     expected: Final = {
         "openapi": "3.0.0",
-        "paths": {"/ping": {"get": {
-            "operationId": "on",
-            "parameters": [
-                {"name": "on", "in": "query", "schema": {"type": "string"}},
-                {"name": "off", "in": "query", "schema": {"type": "string"}},
-            ],
-        }}},
+        "paths": {
+            "/ping": {
+                "get": {
+                    "operationId": "on",
+                    "parameters": [
+                        {"name": "on", "in": "query", "schema": {"type": "string"}},
+                        {"name": "off", "in": "query", "schema": {"type": "string"}},
+                    ],
+                }
+            }
+        },
         "x-values": [100.0, "on", "off", "yes", "no", "2026-01-01", "1:20", True, False, None, 12, 10, 10],
     }
     content: Final = (
@@ -156,44 +159,75 @@ def test_openapi_formats_preserve_document_across_sources(
 _LONG_YAML_INTEGER: Final = "1" * 1025
 
 
-@pytest.mark.parametrize("content,message", [
-    ("", "OpenAPI spec must be a JSON or YAML object"),
-    ("null", "OpenAPI spec must be a JSON or YAML object"),
-    ("[]", "OpenAPI spec must be a JSON or YAML object"),
-    ("- item", "OpenAPI spec must be a JSON or YAML object"),
-    ("plain text", "OpenAPI spec must be a JSON or YAML object"),
-    ("paths: [", "Invalid YAML OpenAPI spec"),
-    ("paths: {}\nx: \x01", "Invalid YAML OpenAPI spec"),
-    ("paths: " + "[" * 600 + "0" + "]" * 600, "Invalid YAML OpenAPI spec"),
-    ("x: !!python/object/apply:builtins.str [unsafe]", "Invalid YAML OpenAPI spec"),
-    ("x: &a []\ny: *a", "YAML aliases are not supported in OpenAPI specs"),
-    ("x: " + _LONG_YAML_INTEGER, "YAML integer is too long in OpenAPI spec"),
-    ("x: !!int " + _LONG_YAML_INTEGER, "YAML integer is too long in OpenAPI spec"),
-    ("x: !!int {=: '" + _LONG_YAML_INTEGER + "'}", "Invalid YAML OpenAPI spec"),
-    ("x: !!int [1]", "Invalid YAML OpenAPI spec"),
-    ("x: !!bool invalid", "Invalid YAML OpenAPI spec"),
-    ("x: !!bool []", "Invalid YAML OpenAPI spec"),
-    ("x: !!str []", "Invalid YAML OpenAPI spec"),
-    ("x: !!int ''", "Invalid YAML OpenAPI spec"),
-    ("x: !!float ''", "Invalid YAML OpenAPI spec"),
-    ("x: !!float {=: 1.2}", "Invalid YAML OpenAPI spec"),
-    ("x: !!timestamp invalid", "Invalid YAML OpenAPI spec"),
-    ("x: !!timestamp 2026-01-01", "Invalid YAML OpenAPI spec"),
-    ("x: !!set {a: null}", "Invalid YAML OpenAPI spec"),
-    ("x: !!binary YQ==", "Invalid YAML OpenAPI spec"),
-    ("x: {1: value}", "Invalid YAML OpenAPI spec"),
-    ("x: {[key]: value}", "Invalid YAML OpenAPI spec"),
-    ("x: .inf", "Invalid YAML OpenAPI spec"),
-    ("x: .nan", "Invalid YAML OpenAPI spec"),
-    ("x: 1e999", "Invalid YAML OpenAPI spec"),
-], ids=[
-    "empty", "null", "json-array", "yaml-sequence", "scalar", "syntax", "reader", "nesting",
-    "python-tag", "alias", "implicit-int", "explicit-int", "mapping-int", "sequence-int",
-    "invalid-bool", "sequence-bool", "sequence-str", "empty-int", "empty-float", "mapping-float", "invalid-timestamp",
-    "timestamp", "set", "binary", "non-string-key", "complex-key", "infinity", "nan", "float-overflow",
-])
+@pytest.mark.parametrize(
+    "content,message",
+    [
+        ("", "OpenAPI spec must be a JSON or YAML object"),
+        ("null", "OpenAPI spec must be a JSON or YAML object"),
+        ("[]", "OpenAPI spec must be a JSON or YAML object"),
+        ("- item", "OpenAPI spec must be a JSON or YAML object"),
+        ("plain text", "OpenAPI spec must be a JSON or YAML object"),
+        ("paths: [", "Invalid YAML OpenAPI spec"),
+        ("paths: {}\nx: \x01", "Invalid YAML OpenAPI spec"),
+        ("paths: " + "[" * 600 + "0" + "]" * 600, "Invalid YAML OpenAPI spec"),
+        ("x: !!python/object/apply:builtins.str [unsafe]", "Invalid YAML OpenAPI spec"),
+        ("x: &a []\ny: *a", "YAML aliases are not supported in OpenAPI specs"),
+        ("x: " + _LONG_YAML_INTEGER, "YAML integer is too long in OpenAPI spec"),
+        ("x: !!int " + _LONG_YAML_INTEGER, "YAML integer is too long in OpenAPI spec"),
+        ("x: !!int {=: '" + _LONG_YAML_INTEGER + "'}", "Invalid YAML OpenAPI spec"),
+        ("x: !!int [1]", "Invalid YAML OpenAPI spec"),
+        ("x: !!bool invalid", "Invalid YAML OpenAPI spec"),
+        ("x: !!bool []", "Invalid YAML OpenAPI spec"),
+        ("x: !!str []", "Invalid YAML OpenAPI spec"),
+        ("x: !!int ''", "Invalid YAML OpenAPI spec"),
+        ("x: !!float ''", "Invalid YAML OpenAPI spec"),
+        ("x: !!float {=: 1.2}", "Invalid YAML OpenAPI spec"),
+        ("x: !!timestamp invalid", "Invalid YAML OpenAPI spec"),
+        ("x: !!timestamp 2026-01-01", "Invalid YAML OpenAPI spec"),
+        ("x: !!set {a: null}", "Invalid YAML OpenAPI spec"),
+        ("x: !!binary YQ==", "Invalid YAML OpenAPI spec"),
+        ("x: {1: value}", "Invalid YAML OpenAPI spec"),
+        ("x: {[key]: value}", "Invalid YAML OpenAPI spec"),
+        ("x: .inf", "Invalid YAML OpenAPI spec"),
+        ("x: .nan", "Invalid YAML OpenAPI spec"),
+        ("x: 1e999", "Invalid YAML OpenAPI spec"),
+    ],
+    ids=[
+        "empty",
+        "null",
+        "json-array",
+        "yaml-sequence",
+        "scalar",
+        "syntax",
+        "reader",
+        "nesting",
+        "python-tag",
+        "alias",
+        "implicit-int",
+        "explicit-int",
+        "mapping-int",
+        "sequence-int",
+        "invalid-bool",
+        "sequence-bool",
+        "sequence-str",
+        "empty-int",
+        "empty-float",
+        "mapping-float",
+        "invalid-timestamp",
+        "timestamp",
+        "set",
+        "binary",
+        "non-string-key",
+        "complex-key",
+        "infinity",
+        "nan",
+        "float-overflow",
+    ],
+)
 def test_openapi_loader_rejects_invalid_or_unsafe_documents(
-    tmp_path: Path, content: str, message: str,
+    tmp_path: Path,
+    content: str,
+    message: str,
 ) -> None:
     path: Final = tmp_path / "spec.yaml"
     path.write_text(content, encoding="utf-8")
@@ -217,7 +251,9 @@ def test_openapi_json_integer_preserved_even_with_yaml_extension(tmp_path: Path)
     assert gen.load_openapi_spec(str(path)) == {"x-integer": int(_LONG_YAML_INTEGER)}
 
 
-@pytest.mark.parametrize("value", ["! " + _LONG_YAML_INTEGER, "! '" + _LONG_YAML_INTEGER + "'"], ids=["plain", "quoted"])
+@pytest.mark.parametrize(
+    "value", ["! " + _LONG_YAML_INTEGER, "! '" + _LONG_YAML_INTEGER + "'"], ids=["plain", "quoted"]
+)
 def test_openapi_nonspecific_tag_disables_scalar_resolution(tmp_path: Path, value: str) -> None:
     path: Final = tmp_path / "spec.yaml"
     path.write_text("x: " + value, encoding="utf-8")
@@ -228,7 +264,10 @@ def test_openapi_nonspecific_tag_disables_scalar_resolution(tmp_path: Path, valu
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", ["url", "file"])
 async def test_openapi_yaml_parses_off_the_event_loop(
-    tmp_path: Path, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, source: str,
+    tmp_path: Path,
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    source: str,
 ) -> None:
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     event_loop_thread: Final = threading.get_ident()

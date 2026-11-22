@@ -26,9 +26,12 @@ def test_session_ids(litellm_params: dict[str, object], expected: str, resolve: 
 
 def test_get_stable_session_id_does_not_use_trace_id():
     assert get_stable_session_id({"litellm_trace_id": "per-request-trace"}) is None
-    assert get_caller_session_id(
-        {"litellm_session_id": "trace", "proxy_server_request": {"headers": {"x-litellm-trace-id": "trace"}}}
-    ) is None
+    assert (
+        get_caller_session_id(
+            {"litellm_session_id": "trace", "proxy_server_request": {"headers": {"x-litellm-trace-id": "trace"}}}
+        )
+        is None
+    )
 
 
 @pytest.mark.parametrize("resolve", [get_stable_session_id, get_caller_session_id])
@@ -112,4 +115,3 @@ def test_add_provider_affinity_header_does_nothing_without_config_or_session():
         )
         == {}
     )
-

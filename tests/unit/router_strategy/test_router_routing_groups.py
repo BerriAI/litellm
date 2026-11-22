@@ -223,10 +223,7 @@ def test_two_routers_in_one_process_each_count_their_own_requests(monkeypatch):
             callback.log_pre_api_call(model="filtered-model", messages=[], kwargs=kwargs)
 
     assert second.cache.get_cache("filtered-model_request_count:deploy-1") == 1
-    assert (
-        second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"]
-        == "deploy-2"
-    )
+    assert second.get_available_deployment(model="filtered-model", messages=[])["model_info"]["id"] == "deploy-2"
 
     for callback in litellm.callbacks:
         if isinstance(callback, CustomLogger):
@@ -638,7 +635,9 @@ def test_group_rows_do_not_inherit_member_access_groups():
     )
     access_groups = router.get_model_access_groups()
     assert "gated-group" not in access_groups.get("restricted-team", [])
-    assert all("access_groups" not in (row.get("model_info") or {}) for row in router.get_model_list(model_name="gated-group"))
+    assert all(
+        "access_groups" not in (row.get("model_info") or {}) for row in router.get_model_list(model_name="gated-group")
+    )
     assert "access_groups" in router.get_model_list(model_name="gated-member")[0]["model_info"]
 
 
@@ -665,15 +664,15 @@ async def test_group_call_429_cools_down_member_across_retries():
     assert "deploy-3" in cooldown_ids
 
 
-def _priority_group(
-    name: str = "priority-group", primary: int = 1, backup: int = 2
-) -> RoutingGroup:
-    return RoutingGroup.model_validate({
-        "group_name": name,
-        "models": ["filtered-model", "other-model"],
-        "routing_strategy": "priority",
-        "model_priorities": {"filtered-model": primary, "other-model": backup},
-    })
+def _priority_group(name: str = "priority-group", primary: int = 1, backup: int = 2) -> RoutingGroup:
+    return RoutingGroup.model_validate(
+        {
+            "group_name": name,
+            "models": ["filtered-model", "other-model"],
+            "routing_strategy": "priority",
+            "model_priorities": {"filtered-model": primary, "other-model": backup},
+        }
+    )
 
 
 def _priority_deployments(
@@ -701,9 +700,7 @@ def _priority_deployments(
 @pytest.mark.parametrize("asynchronous", [False, True])
 @pytest.mark.parametrize("requested_model", ["priority-group", "priority-alias"])
 @pytest.mark.asyncio
-async def test_priority_group_always_uses_primary_when_healthy(
-    asynchronous: bool, requested_model: str
-) -> None:
+async def test_priority_group_always_uses_primary_when_healthy(asynchronous: bool, requested_model: str) -> None:
     router: Final = Router(
         model_list=_priority_deployments(),
         routing_groups=[_priority_group()],
@@ -711,9 +708,7 @@ async def test_priority_group_always_uses_primary_when_healthy(
         num_retries=0,
     )
     request: Final = {"model": requested_model, "messages": [{"role": "user", "content": "hi"}]}
-    response: Final = (
-        await router.acompletion(**request) if asynchronous else router.completion(**request)
-    )
+    response: Final = await router.acompletion(**request) if asynchronous else router.completion(**request)
     assert response.choices[0].message.content == "primary"
 
 
@@ -729,9 +724,7 @@ async def test_priority_group_fails_over_without_retries_and_leaves_direct_calls
         num_retries=0,
         disable_cooldowns=True,
     )
-    response: Final = await router.acompletion(
-        model=requested_model, messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model=requested_model, messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(model="filtered-model", messages=[{"role": "user", "content": "hi"}])
@@ -749,12 +742,8 @@ async def test_opposite_priority_groups_preserve_deployments_and_legacy_member_p
         ],
     )
     before: Final = router.get_model_list(model_name="filtered-model")
-    forward: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
-    reverse: Final = await router.acompletion(
-        model="reverse-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    forward: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
+    reverse: Final = await router.acompletion(model="reverse-group", messages=[{"role": "user", "content": "hi"}])
     assert (forward.choices[0].message.content, reverse.choices[0].message.content) == ("primary", "backup")
     assert router.get_model_list(model_name="filtered-model") == before
     assert all(deployment["litellm_params"]["order"] == 10 for deployment in before)
@@ -765,9 +754,7 @@ async def test_opposite_priority_groups_preserve_deployments_and_legacy_member_p
 async def test_priority_group_weights_select_only_within_the_first_eligible_level(
     backup_priority: int, expected: str
 ) -> None:
-    router: Final = Router(
-        model_list=_priority_deployments(), routing_groups=[_priority_group(backup=backup_priority)]
-    )
+    router: Final = Router(model_list=_priority_deployments(), routing_groups=[_priority_group(backup=backup_priority)])
     response: Final = await router.acompletion(
         model="priority-group",
         messages=[{"role": "user", "content": "hi"}],
@@ -778,16 +765,10 @@ async def test_priority_group_weights_select_only_within_the_first_eligible_leve
 
 @pytest.mark.asyncio
 async def test_priority_group_skips_paused_primary_and_returns_to_it_after_recovery() -> None:
-    router: Final = Router(
-        model_list=_priority_deployments(primary_blocked=True), routing_groups=[_priority_group()]
-    )
-    paused: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    router: Final = Router(model_list=_priority_deployments(primary_blocked=True), routing_groups=[_priority_group()])
+    paused: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     router.set_model_list(_priority_deployments())
-    recovered: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    recovered: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     assert (paused.choices[0].message.content, recovered.choices[0].message.content) == ("backup", "primary")
 
 
@@ -801,9 +782,7 @@ async def test_priority_group_respects_request_fallback_controls(controls: dict[
         disable_cooldowns=True,
     )
     with pytest.raises(litellm.RateLimitError):
-        await router.acompletion(
-            model="priority-group", messages=[{"role": "user", "content": "hi"}], **controls
-        )
+        await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}], **controls)
 
 
 @pytest.mark.parametrize(
@@ -812,48 +791,54 @@ async def test_priority_group_respects_request_fallback_controls(controls: dict[
 )
 def test_priority_group_requires_exact_member_priorities(priorities: object) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model", "other-model"],
-            "routing_strategy": "priority",
-            "model_priorities": priorities,
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model", "other-model"],
+                "routing_strategy": "priority",
+                "model_priorities": priorities,
+            }
+        )
 
 
 @pytest.mark.parametrize("priority", [True, 0, -1, 1.5, "1", 9007199254740992])
 def test_priority_group_rejects_invalid_priority_values(priority: object) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model"],
-            "routing_strategy": "priority",
-            "model_priorities": {"filtered-model": priority},
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model"],
+                "routing_strategy": "priority",
+                "model_priorities": {"filtered-model": priority},
+            }
+        )
 
 
 @pytest.mark.parametrize("models", [[], ["filtered-model", "filtered-model"]])
 def test_priority_group_requires_nonempty_unique_members(models: list[str]) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": models,
-            "routing_strategy": "priority",
-            "model_priorities": {model: 1 for model in models},
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": models,
+                "routing_strategy": "priority",
+                "model_priorities": {model: 1 for model in models},
+            }
+        )
 
 
-@pytest.mark.parametrize(
-    "changes", [{"routing_strategy": "simple-shuffle"}, {"routing_strategy_args": {"ttl": 60}}]
-)
+@pytest.mark.parametrize("changes", [{"routing_strategy": "simple-shuffle"}, {"routing_strategy_args": {"ttl": 60}}])
 def test_priority_group_rejects_conflicting_strategy_settings(changes: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
-        RoutingGroup.model_validate({
-            "group_name": "priority-group",
-            "models": ["filtered-model"],
-            "routing_strategy": "priority",
-            "model_priorities": {"filtered-model": 1},
-            **changes,
-        })
+        RoutingGroup.model_validate(
+            {
+                "group_name": "priority-group",
+                "models": ["filtered-model"],
+                "routing_strategy": "priority",
+                "model_priorities": {"filtered-model": 1},
+                **changes,
+            }
+        )
 
 
 @pytest.mark.parametrize("group_name", ["filtered-model", "priority-alias"])
@@ -878,9 +863,7 @@ async def test_priority_group_settings_roundtrip_replaces_the_order() -> None:
     router.update_settings(routing_groups=[replacement.model_dump()])
     stored: Final = router.get_settings()["routing_groups"]
     assert stored == [replacement.model_dump()]
-    response: Final = await router.acompletion(
-        model="priority-group", messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model="priority-group", messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
 
 
@@ -892,10 +875,7 @@ def _priority_auto_router_deployment() -> DeploymentTypedDict:
             "complexity_router_config": {
                 "classifier_type": "heuristic",
                 "adaptive": False,
-                "tiers": {
-                    tier: "priority-group"
-                    for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")
-                },
+                "tiers": {tier: "priority-group" for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
             },
             "complexity_router_default_model": "filtered-model",
         },
@@ -913,9 +893,7 @@ async def test_auto_router_selected_priority_group_fails_over_inside_the_group()
         num_retries=0,
         disable_cooldowns=True,
     )
-    response: Final = await router.acompletion(
-        model="smart-router", messages=[{"role": "user", "content": "hi"}]
-    )
+    response: Final = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
     assert response.choices[0].message.content == "backup"
 
 
@@ -928,10 +906,12 @@ async def test_priority_group_ignores_cached_backup_affinity() -> None:
         routing_groups=[_priority_group()],
         optional_pre_call_checks=["prompt_caching"],
     )
-    messages: Final = [{
-        "role": "user",
-        "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
-    }]
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "word " * 5000, "cache_control": {"type": "ephemeral"}}],
+        }
+    ]
     cache: Final = PromptCachingCache(cache=router.prompt_caching_pin_cache)
     await cache.async_add_model_id(model_id="deploy-3", messages=messages, tools=None)
     assert await cache.async_get_model_id(messages=messages, tools=None) == {"model_id": "deploy-3"}
@@ -986,9 +966,7 @@ async def test_auto_priority_advance_preserves_access_scope_and_checks_paid_grou
         ),
     )
     if budget_admits_group:
-        response: Final = await router.acompletion(
-            model="smart-router", messages=[{"role": "user", "content": "hi"}]
-        )
+        response: Final = await router.acompletion(model="smart-router", messages=[{"role": "user", "content": "hi"}])
         assert response.choices[0].message.content == "backup"
     else:
         with pytest.raises(litellm.RateLimitError):
@@ -1002,9 +980,7 @@ async def test_auto_priority_group_exhaustion_still_checks_external_fallback_acc
     access_checks: Final[list[str]] = []
     router: Final = Router(
         model_list=[
-            *_priority_deployments(
-                primary_response="litellm.RateLimitError", backup_response="litellm.RateLimitError"
-            ),
+            *_priority_deployments(primary_response="litellm.RateLimitError", backup_response="litellm.RateLimitError"),
             _priority_auto_router_deployment(),
             {
                 **_model_list()[2],
@@ -1028,7 +1004,8 @@ async def test_auto_priority_group_exhaustion_still_checks_external_fallback_acc
 @pytest.mark.parametrize("metadata_bucket", ["metadata", "litellm_metadata"])
 @pytest.mark.asyncio
 async def test_caller_cannot_spoof_a_priority_group_to_bypass_fallback_gates(
-    check_kind: Literal["access", "budget"], metadata_bucket: str,
+    check_kind: Literal["access", "budget"],
+    metadata_bucket: str,
 ) -> None:
     checked: Final[list[str]] = []
     check: Final = _recording_fallback_gate(frozenset({"filtered-model"}), checked)

@@ -28,9 +28,7 @@ def test_hands_the_alter_statement_to_the_prisma_cli():
         captured["sql"] = Path(cmd[cmd.index("--file") + 1]).read_text()
         return subprocess.CompletedProcess(cmd, 0)
 
-    with patch(
-        "litellm_proxy_extras.replica_identity.run_prisma", side_effect=capture
-    ):
+    with patch("litellm_proxy_extras.replica_identity.run_prisma", side_effect=capture):
         applied = apply_replica_identity_full(
             schema_path="/somewhere/schema.prisma",
             prisma_command="prisma",
@@ -59,9 +57,7 @@ def test_hands_the_alter_statement_to_the_prisma_cli():
     ids=["rejected", "timed-out", "cli-missing", "read-only-fs"],
 )
 def test_every_failure_is_reported_instead_of_raised(failure):
-    with patch(
-        "litellm_proxy_extras.replica_identity.run_prisma", side_effect=failure
-    ):
+    with patch("litellm_proxy_extras.replica_identity.run_prisma", side_effect=failure):
         assert (
             apply_replica_identity_full(
                 schema_path="/somewhere/schema.prisma",
@@ -72,9 +68,7 @@ def test_every_failure_is_reported_instead_of_raised(failure):
         )
 
 
-def test_an_unusable_migrations_dir_skips_the_step_instead_of_killing_the_run(
-    tmp_path, monkeypatch
-):
+def test_an_unusable_migrations_dir_skips_the_step_instead_of_killing_the_run(tmp_path, monkeypatch):
     """LITELLM_MIGRATION_DIR makes the step copy the migrations tree before it
     can run, and that copy is filesystem work that can fail on its own."""
     blocker = tmp_path / "blocker"
@@ -100,9 +94,7 @@ def test_reports_an_unrunnable_prisma_cli_without_raising(tmp_path):
 
 def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
     applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True)
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True))
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "apply_replica_identity_full_if_requested",
@@ -115,9 +107,7 @@ def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
 
 def test_setup_database_skips_replica_identity_when_migrations_fail(monkeypatch):
     applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False)
-    )
+    monkeypatch.setattr(ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False))
     monkeypatch.setattr(
         ProxyExtrasDBManager,
         "apply_replica_identity_full_if_requested",
@@ -126,5 +116,3 @@ def test_setup_database_skips_replica_identity_when_migrations_fail(monkeypatch)
 
     assert ProxyExtrasDBManager.setup_database(use_migrate=True) is False
     assert applied == []
-
-

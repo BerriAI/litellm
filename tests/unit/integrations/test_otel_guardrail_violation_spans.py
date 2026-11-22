@@ -76,9 +76,7 @@ def _bedrock_block_response():
                 },
                 "wordPolicy": {
                     "customWords": [{"match": "secret-codeword", "action": "BLOCKED"}],
-                    "managedWordLists": [
-                        {"match": "fuck", "type": "PROFANITY", "action": "BLOCKED"}
-                    ],
+                    "managedWordLists": [{"match": "fuck", "type": "PROFANITY", "action": "BLOCKED"}],
                 },
             }
         ],
@@ -308,9 +306,7 @@ class TestGuardrailSpanOnViolation(unittest.TestCase):
             )
         )
 
-        guardrail_spans = [
-            s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME
-        ]
+        guardrail_spans = [s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME]
         self.assertEqual(
             len(guardrail_spans),
             1,
@@ -352,9 +348,7 @@ class TestGuardrailSpanOnViolation(unittest.TestCase):
                 "call_type": "completion",
                 "metadata": shared_metadata,
                 "hidden_params": {},
-                "guardrail_information": shared_metadata[
-                    "standard_logging_guardrail_information"
-                ],
+                "guardrail_information": shared_metadata["standard_logging_guardrail_information"],
             },
             "exception": Exception("guardrail blocked"),
         }
@@ -380,9 +374,7 @@ class TestGuardrailSpanOnViolation(unittest.TestCase):
             )
         )
 
-        guardrail_spans = [
-            s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME
-        ]
+        guardrail_spans = [s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME]
         self.assertEqual(
             len(guardrail_spans),
             1,
@@ -401,9 +393,7 @@ class TestGuardrailSpanAttributesOnViolation(unittest.TestCase):
         kwargs = _kwargs_with_guardrail(entries=[entry])
         otel._create_guardrail_span(kwargs=kwargs, context=None)
 
-        guardrail_spans = [
-            s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME
-        ]
+        guardrail_spans = [s for s in exporter.get_finished_spans() if s.name == GUARDRAIL_SPAN_NAME]
         self.assertEqual(len(guardrail_spans), 1)
         return guardrail_spans[0]
 
@@ -448,8 +438,7 @@ class TestGuardrailSpanAttributesOnViolation(unittest.TestCase):
         categories = _attr(span, "guardrail_violation_categories")
         self.assertIsNotNone(
             categories,
-            "guardrail_violation_categories must be set when the entry "
-            "carries violation_categories",
+            "guardrail_violation_categories must be set when the entry carries violation_categories",
         )
         # Serialised as JSON to keep set_attribute typing simple.
         as_str = categories if isinstance(categories, str) else repr(list(categories))
@@ -567,10 +556,7 @@ class TestMultipleGuardrailsOneBlocks(unittest.TestCase):
             "that allowed the request through before the blocker fired",
         )
 
-        statuses = {
-            _attr(s, "guardrail_name"): _attr(s, "guardrail_status")
-            for s in guardrail_spans
-        }
+        statuses = {_attr(s, "guardrail_name"): _attr(s, "guardrail_status") for s in guardrail_spans}
         self.assertEqual(statuses["pii-mask"], "success")
         self.assertEqual(statuses["prompt-injection"], "success")
         self.assertEqual(statuses["bedrock-policy"], "guardrail_intervened")
@@ -612,9 +598,7 @@ class TestCustomGuardrailEndToEnd(unittest.TestCase):
                     end_time=start_ts + 0.01,
                     duration=0.01,
                     event_type=GuardrailEventHooks.pre_call,
-                    tracing_detail={
-                        "violation_categories": ["Fiduciary Advice", "VIOLENCE"]
-                    },
+                    tracing_detail={"violation_categories": ["Fiduciary Advice", "VIOLENCE"]},
                 )
                 raise BlockingViolation("violation")
 
@@ -638,9 +622,7 @@ class TestCustomGuardrailEndToEnd(unittest.TestCase):
                 )
             )
 
-        slg_info = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
-        )
+        slg_info = request_data["metadata"].get("standard_logging_guardrail_information")
         self.assertTrue(
             slg_info,
             "Guardrail must have recorded its information to request_data "

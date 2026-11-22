@@ -576,12 +576,16 @@ def test_transcription_sessions_requires_auth(proxy_app):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", [
-    {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
-    {"audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+        {"audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+    ],
+)
 async def test_transcription_sessions_rejects_disallowed_resolved_model(
-    proxy_app, body,
+    proxy_app,
+    body,
 ):
     proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
         user_id="test-user",
@@ -982,18 +986,25 @@ async def test_transcription_sessions_encrypts_client_secret(
         assert captured_route_type["route_type"] == "acreate_realtime_transcription_session"
         assert captured_route_type["session"]["input_audio_transcription"]["model"] == "gpt-realtime-whisper"
         assert captured_route_type["session"]["audio"]["input"]["transcription"] == {
-            "model": "gpt-realtime-whisper", "language": "en",
+            "model": "gpt-realtime-whisper",
+            "language": "en",
         }
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("body", [
-    {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"input_audio_transcription": {"model": "gpt-4o-realtime-preview"}, "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
-    {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
-])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"model": "gpt-4o-realtime-preview", "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}}},
+        {
+            "input_audio_transcription": {"model": "gpt-4o-realtime-preview"},
+            "audio": {"input": {"transcription": {"model": "gpt-realtime-whisper"}}},
+        },
+        {"model": "gpt-4o-realtime-preview", "input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+    ],
+)
 async def test_transcription_sessions_route_the_allowed_model_over_a_nested_model_the_key_cannot_call(
     proxy_app,
     mock_route_request_transcription_sessions,

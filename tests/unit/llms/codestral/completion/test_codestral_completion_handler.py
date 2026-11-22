@@ -12,10 +12,20 @@ _LINE_SEPARATED_TEXT: Final = "before\u2028between\u2029after"
 
 def _fim_stream_body(text: str) -> bytes:
     chunks: Final = (
-        {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "codestral-latest",
-         "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}]},
-        {"id": "c1", "object": "chat.completion.chunk", "created": 1, "model": "codestral-latest",
-         "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}]},
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "codestral-latest",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": None}],
+        },
+        {
+            "id": "c1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "codestral-latest",
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+        },
     )
     events: Final = "".join(f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks)
     return f"{events}data: [DONE]\n\n".encode()

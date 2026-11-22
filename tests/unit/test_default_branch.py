@@ -203,7 +203,9 @@ def test_each_gate_refuses_an_unverifiable_default(remote_and_clone: tuple[Path,
 def test_direct_make_target_fetches_default_once(remote_and_clone: tuple[Path, Path], target: str) -> None:
     _, repo = remote_and_clone
     trace: Final = repo.parent / "git-trace.jsonl"
-    shutil.copyfile(ROOT / "litellm/scripts" / "check_test_quality.py", repo / "litellm/scripts" / "check_test_quality.py")
+    shutil.copyfile(
+        ROOT / "litellm/scripts" / "check_test_quality.py", repo / "litellm/scripts" / "check_test_quality.py"
+    )
     (repo / "tests").mkdir()
     result: Final = subprocess.run(
         ["make", "-o", "install-dev", target, "LINT_DEP_INSTALL=", "UV_RUN=env"],

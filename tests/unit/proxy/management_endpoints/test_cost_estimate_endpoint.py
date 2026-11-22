@@ -26,9 +26,7 @@ class TestCostEstimateEndpoint:
             num_requests_per_month=3000,
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.cost_tracking_settings.completion_cost"
-        ) as mock_completion_cost:
+        with patch("litellm.proxy.management_endpoints.cost_tracking_settings.completion_cost") as mock_completion_cost:
             mock_completion_cost.return_value = 0.06
 
             with patch("litellm.get_model_info") as mock_get_model_info:
@@ -59,9 +57,7 @@ class TestCostEstimateEndpoint:
             output_tokens=500,
         )
 
-        with patch(
-            "litellm.proxy.management_endpoints.cost_tracking_settings.completion_cost"
-        ) as mock_completion_cost:
+        with patch("litellm.proxy.management_endpoints.cost_tracking_settings.completion_cost") as mock_completion_cost:
             mock_completion_cost.side_effect = Exception("Model not found in cost map")
 
             from fastapi import HTTPException

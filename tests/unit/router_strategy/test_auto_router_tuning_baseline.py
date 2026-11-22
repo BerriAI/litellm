@@ -190,7 +190,8 @@ class TestHeuristicV1Scope:
             "classifier_llm_config": {"model": "judge"},
             **(
                 {"heuristic_first_max_tier": "MEDIUM"}
-                if classifier == "heuristic_first" else {"hybrid_boundary_margin": 0.1}
+                if classifier == "heuristic_first"
+                else {"hybrid_boundary_margin": 0.1}
             ),
             "tiers": _TIERS,
             "code_keywords": ["internal-api"],

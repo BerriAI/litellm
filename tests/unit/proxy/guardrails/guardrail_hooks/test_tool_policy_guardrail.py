@@ -28,20 +28,11 @@ def guardrail():
 
 
 def _tool_request_inputs(tool_names: list) -> dict:
-    return {
-        "tools": [
-            {"type": "function", "function": {"name": name, "description": ""}}
-            for name in tool_names
-        ]
-    }
+    return {"tools": [{"type": "function", "function": {"name": name, "description": ""}} for name in tool_names]}
 
 
 def _tool_response_inputs(tool_names: list) -> dict:
-    return {
-        "tool_calls": [
-            {"type": "function", "function": {"name": name}} for name in tool_names
-        ]
-    }
+    return {"tool_calls": [{"type": "function", "function": {"name": name}} for name in tool_names]}
 
 
 # --- tests ---
@@ -56,18 +47,14 @@ def test_guardrail_supports_pre_and_post_call(guardrail):
 @pytest.mark.asyncio
 async def test_no_tools_in_request_passes_through(guardrail):
     inputs: Any = {"tools": []}
-    result = await guardrail.apply_guardrail(
-        inputs=inputs, request_data={}, input_type="request"
-    )
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert result is inputs
 
 
 @pytest.mark.asyncio
 async def test_no_tool_calls_in_response_passes_through(guardrail):
     inputs: Any = {"tool_calls": []}
-    result = await guardrail.apply_guardrail(
-        inputs=inputs, request_data={}, input_type="response"
-    )
+    result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
     assert result is inputs
 
 
@@ -87,9 +74,7 @@ async def test_untrusted_tools_pass_through(guardrail):
         return_value=_registry_mock(policy_map),
     ):
         inputs: Any = _tool_request_inputs(["search", "read_file"])
-        result = await guardrail.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
-        )
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert result is inputs
 
 
@@ -102,9 +87,7 @@ async def test_blocked_tool_in_request_raises_http_exception(guardrail):
     ):
         inputs: Any = _tool_request_inputs(["dangerous_tool"])
         with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="request"
-            )
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert exc_info.value.status_code == 400
     assert "dangerous_tool" in exc_info.value.detail["blocked_tools"]
 
@@ -118,9 +101,7 @@ async def test_blocked_tool_in_response_raises_http_exception(guardrail):
     ):
         inputs: Any = _tool_response_inputs(["exfil_tool"])
         with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="response"
-            )
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
     assert exc_info.value.status_code == 400
     assert "exfil_tool" in exc_info.value.detail["blocked_tools"]
 
@@ -134,9 +115,7 @@ async def test_mixed_blocked_and_allowed_raises_for_blocked(guardrail):
     ):
         inputs: Any = _tool_request_inputs(["safe_tool", "bad_tool"])
         with pytest.raises(HTTPException) as exc_info:
-            await guardrail.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="request"
-            )
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     blocked = exc_info.value.detail["blocked_tools"]
     assert "bad_tool" in blocked
     assert "safe_tool" not in blocked
@@ -150,9 +129,7 @@ async def test_tool_not_in_db_passes_through(guardrail):
         return_value=_registry_mock({}),
     ):
         inputs: Any = _tool_request_inputs(["unknown_tool"])
-        result = await guardrail.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
-        )
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert result is inputs
 
 
@@ -166,9 +143,7 @@ async def test_registry_not_initialized_passes_through(guardrail):
         return_value=reg,
     ):
         inputs: Any = _tool_request_inputs(["any_tool"])
-        result = await guardrail.apply_guardrail(
-            inputs=inputs, request_data={}, input_type="request"
-        )
+        result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
     assert result is inputs
     reg.get_effective_policies.assert_not_called()
 
@@ -187,9 +162,7 @@ async def test_response_tool_calls_as_objects(guardrail):
         tc.function = fn
         inputs: Any = {"tool_calls": [tc]}
         with pytest.raises(HTTPException):
-            await guardrail.apply_guardrail(
-                inputs=inputs, request_data={}, input_type="response"
-            )
+            await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
 
 
 @pytest.mark.asyncio

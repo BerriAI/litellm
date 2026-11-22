@@ -89,10 +89,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://localhost:9380/api/v1/chats_openai/my-chat-id/chat/completions"
-        )
+        assert url == "http://localhost:9380/api/v1/chats_openai/my-chat-id/chat/completions"
 
     def test_get_complete_url_agent(self):
         """Test URL construction for agent endpoint."""
@@ -110,10 +107,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://localhost:9380/api/v1/agents_openai/my-agent-id/chat/completions"
-        )
+        assert url == "http://localhost:9380/api/v1/agents_openai/my-agent-id/chat/completions"
 
     def test_get_complete_url_encodes_entity_id(self):
         """Test RAGFlow chat IDs are encoded as one upstream path segment."""
@@ -128,10 +122,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://localhost:9380/api/v1/chats_openai/..%252F..%252Fagents_openai%252Fother/chat/completions"
-        )
+        assert url == "http://localhost:9380/api/v1/chats_openai/..%252F..%252Fagents_openai%252Fother/chat/completions"
 
     def test_get_complete_url_strips_v1(self):
         """Test URL construction when api_base ends with /v1."""
@@ -149,10 +140,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://localhost:9380/api/v1/chats_openai/my-chat-id/chat/completions"
-        )
+        assert url == "http://localhost:9380/api/v1/chats_openai/my-chat-id/chat/completions"
 
     def test_get_complete_url_strips_api_v1(self):
         """Test URL construction when api_base ends with /api/v1."""
@@ -170,10 +158,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://localhost:9380/api/v1/agents_openai/my-agent-id/chat/completions"
-        )
+        assert url == "http://localhost:9380/api/v1/agents_openai/my-agent-id/chat/completions"
 
     def test_get_complete_url_from_litellm_params(self):
         """Test URL construction with api_base from litellm_params."""
@@ -197,10 +182,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://ragflow-server:9380/api/v1/chats_openai/my-chat-id/chat/completions"
-        )
+        assert url == "http://ragflow-server:9380/api/v1/chats_openai/my-chat-id/chat/completions"
 
     def test_get_complete_url_missing_api_base(self):
         """Test URL construction when api_base is missing."""
@@ -234,10 +216,7 @@ class TestRAGFlowChatTransformation:
             stream=False,
         )
 
-        assert (
-            url
-            == "http://env-ragflow:9380/api/v1/agents_openai/my-agent-id/chat/completions"
-        )
+        assert url == "http://env-ragflow:9380/api/v1/agents_openai/my-agent-id/chat/completions"
 
     def test_validate_environment_sets_headers(self):
         """Test that validate_environment sets proper headers."""

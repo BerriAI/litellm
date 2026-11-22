@@ -555,6 +555,22 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         (
             "gemini-4-neon",
             "gemini",
+            {
+                "optional_params": {
+                    "tools": [{"type": "file_search", "file_search_store_names": ["fileSearchStores/other-team"]}]
+                }
+            },
+            False,
+        ),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {"optional_params": {"tools": [{"type": "function", "function": {"name": "lookup"}}]}},
+            True,
+        ),
+        (
+            "gemini-4-neon",
+            "gemini",
             {"optional_params": {"extra_body": {"cachedContent": "cachedContents/abc"}}},
             False,
         ),

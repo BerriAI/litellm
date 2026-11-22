@@ -24,9 +24,7 @@ def test_nova_provider_detection():
     """Test that Nova provider is correctly detected."""
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
-    provider = BaseAWSLLM.get_bedrock_embedding_provider(
-        "amazon.nova-2-multimodal-embeddings-v1:0"
-    )
+    provider = BaseAWSLLM.get_bedrock_embedding_provider("amazon.nova-2-multimodal-embeddings-v1:0")
 
     # Should detect "amazon" as provider since "nova" is in the model name
     # but the provider detection looks at the first part before the dot
@@ -57,9 +55,7 @@ def test_audio_embedding_request():
     assert params["embeddingPurpose"] == "AUDIO_RETRIEVAL"
     assert params["embeddingDimension"] == 1024
     assert params["audio"]["format"] == "mp3"
-    assert (
-        params["audio"]["source"]["s3Location"]["uri"] == "s3://my-bucket/audio.mp3"
-    )
+    assert params["audio"]["source"]["s3Location"]["uri"] == "s3://my-bucket/audio.mp3"
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -139,10 +135,7 @@ def test_data_url_png_image_parsing():
     params = request["singleEmbeddingParams"]
     assert "image" in params
     assert params["image"]["format"] == "png"
-    assert (
-        params["image"]["source"]["bytes"]
-        == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
-    )
+    assert params["image"]["source"]["bytes"] == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ"
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -318,9 +311,7 @@ def test_video_embedding_request():
     assert params["embeddingDimension"] == 3072
     assert params["video"]["format"] == "mp4"
     assert params["video"]["embeddingMode"] == "AUDIO_VIDEO_COMBINED"
-    assert (
-        params["video"]["source"]["s3Location"]["uri"] == "s3://my-bucket/video.mp4"
-    )
+    assert params["video"]["source"]["s3Location"]["uri"] == "s3://my-bucket/video.mp4"
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")
@@ -338,10 +329,7 @@ def test_async_invoke_response():
     assert result.usage.total_tokens == 0
     assert hasattr(result, "_hidden_params")
     assert hasattr(result._hidden_params, "_invocation_arn")
-    assert (
-        result._hidden_params._invocation_arn
-        == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
-    )
+    assert result._hidden_params._invocation_arn == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"
 
 
 @pytest.mark.usefixtures("fake_provider_credentials")

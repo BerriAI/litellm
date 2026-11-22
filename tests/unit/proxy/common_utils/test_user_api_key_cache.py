@@ -579,7 +579,10 @@ _TEAM_KEY: Final = AuthObject.team("t1")
 
 def _auth_objects() -> tuple[tuple[AuthObject, BaseModel], ...]:
     return (
-        (AuthObject.virtual_key(HASHED_TOKEN), UserAPIKeyAuth(token=HASHED_TOKEN, spend=1.5, models=["gpt-4o"], metadata={"a": 1})),
+        (
+            AuthObject.virtual_key(HASHED_TOKEN),
+            UserAPIKeyAuth(token=HASHED_TOKEN, spend=1.5, models=["gpt-4o"], metadata={"a": 1}),
+        ),
         (_TEAM_KEY, LiteLLM_TeamTableCachedObj(team_id="t1", spend=2.0, models=["gpt-4o"], metadata={"a": 1})),
         (AuthObject.user("u1"), LiteLLM_UserTable(user_id="u1", spend=3.0, models=["gpt-4o"], teams=["t1"])),
     )

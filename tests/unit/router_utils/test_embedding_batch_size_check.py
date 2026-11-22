@@ -255,7 +255,9 @@ class TestDeploymentsAdmittingEmbeddingBatch:
     def test_keeps_no_deployment_while_only_a_cooling_one_admits_the_batch(self) -> None:
         capped: Final = _deployment(2, deployment_id="capped")
         cooling: Final = _deployment(None, deployment_id="cooling")
-        assert _admitted([capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})) == []
+        assert (
+            _admitted([capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})) == []
+        )
 
     def test_cooling_deployment_the_request_cannot_route_to_does_not_hold_the_batch(self) -> None:
         capped: Final = _deployment(2, deployment_id="capped")
@@ -272,9 +274,9 @@ class TestDeploymentsAdmittingEmbeddingBatch:
     def test_keeps_every_deployment_when_the_cooling_one_also_rejects_the_batch(self) -> None:
         capped: Final = _deployment(2, deployment_id="capped")
         cooling: Final = _deployment(1, deployment_id="cooling")
-        assert _admitted([capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})) == [
-            capped
-        ]
+        assert _admitted(
+            [capped], ["a", "b", "c"], cooling=(cooling,), routable_cooling_ids=frozenset({"cooling"})
+        ) == [capped]
 
 
 @pytest.mark.parametrize(

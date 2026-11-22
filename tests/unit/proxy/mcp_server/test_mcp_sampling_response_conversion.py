@@ -28,9 +28,7 @@ from litellm.proxy.mcp_server.sampling_handler import (
 
 
 def _tool_call(*, call_id: str, name: str, arguments):
-    return SimpleNamespace(
-        id=call_id, function=SimpleNamespace(name=name, arguments=arguments)
-    )
+    return SimpleNamespace(id=call_id, function=SimpleNamespace(name=name, arguments=arguments))
 
 
 def _response(*, content=None, tool_calls=None, finish_reason="stop", model="gpt-4o"):
@@ -47,25 +45,21 @@ class TestConvertOpenAIResponseToMcpResult:
         assert "no choices" in result.message.lower()
 
     def test_should_convert_plain_text_response(self):
-        result = _convert_openai_response_to_mcp_result(
-            _response(content="hello world"), "gpt-4o"
-        )
+        result = _convert_openai_response_to_mcp_result(_response(content="hello world"), "gpt-4o")
         assert isinstance(result, CreateMessageResult)
         assert isinstance(result.content, TextContent)
         assert result.content.text == "hello world"
         assert result.role == "assistant"
-        assert result.stop_reason== "endTurn"
+        assert result.stop_reason == "endTurn"
 
     def test_should_map_length_finish_reason_to_max_tokens(self):
         result = _convert_openai_response_to_mcp_result(
             _response(content="truncated", finish_reason="length"), "gpt-4o"
         )
-        assert result.stop_reason== "maxTokens"
+        assert result.stop_reason == "maxTokens"
 
     def test_should_prefer_actual_model_from_response(self):
-        result = _convert_openai_response_to_mcp_result(
-            _response(content="hi", model="gpt-4o-2024-08-06"), "gpt-4o"
-        )
+        result = _convert_openai_response_to_mcp_result(_response(content="hi", model="gpt-4o-2024-08-06"), "gpt-4o")
         assert result.model == "gpt-4o-2024-08-06"
 
     def test_should_convert_tool_calls_response(self):
@@ -79,7 +73,7 @@ class TestConvertOpenAIResponseToMcpResult:
             "gpt-4o",
         )
         assert isinstance(result, CreateMessageResultWithTools)
-        assert result.stop_reason== "toolUse"
+        assert result.stop_reason == "toolUse"
         tool_uses = [c for c in result.content if isinstance(c, ToolUseContent)]
         assert len(tool_uses) == 1
         assert tool_uses[0].name == "get_weather"
@@ -89,9 +83,7 @@ class TestConvertOpenAIResponseToMcpResult:
     def test_should_keep_text_alongside_tool_calls(self):
         tc = _tool_call(call_id="call_1", name="search", arguments="{}")
         result = _convert_openai_response_to_mcp_result(
-            _response(
-                content="let me check", tool_calls=[tc], finish_reason="tool_calls"
-            ),
+            _response(content="let me check", tool_calls=[tc], finish_reason="tool_calls"),
             "gpt-4o",
         )
         texts = [c for c in result.content if isinstance(c, TextContent)]
@@ -112,9 +104,7 @@ class TestConvertMcpToolsToOpenAI:
 
     def test_should_convert_tool_with_schema(self):
         schema = {"type": "object", "properties": {"q": {"type": "string"}}}
-        tool = SimpleNamespace(
-            name="search", description="search the web", input_schema=schema
-        )
+        tool = SimpleNamespace(name="search", description="search the web", input_schema=schema)
         result = _convert_mcp_tools_to_openai([tool])
         assert result == [
             {

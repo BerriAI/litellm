@@ -42,35 +42,46 @@ from litellm.types.mcp import MCPAuth, MCPAuthType, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 
-@pytest.mark.parametrize("auth_type,header,value", [
-    (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
-    (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
-    (MCPAuth.api_key, "Authorization", "token fixture-key"),
-    (MCPAuth.api_key, "Authorization", "Bearer token"),
-    (MCPAuth.api_key, "Authorization", "opaque-key"),
-    (MCPAuth.api_key, "Authorization", "Custom Custom"),
-    (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
-    (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
-    (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
-])
+@pytest.mark.parametrize(
+    "auth_type,header,value",
+    [
+        (MCPAuth.api_key, "Authorization", "Bearer fixture-key"),
+        (MCPAuth.api_key, "Authorization", "ApiKey fixture-key"),
+        (MCPAuth.api_key, "Authorization", "token fixture-key"),
+        (MCPAuth.api_key, "Authorization", "Bearer token"),
+        (MCPAuth.api_key, "Authorization", "opaque-key"),
+        (MCPAuth.api_key, "Authorization", "Custom Custom"),
+        (MCPAuth.api_key, "X-API-Key", "Bearer Bearer"),
+        (MCPAuth.api_key, "X-Custom", "ApiKey ApiKey"),
+        (MCPAuth.authorization, "Authorization", "opaque-secret-value"),
+    ],
+)
 def test_static_credential_preserves_supported_api_key_and_raw_headers(
-    auth_type: MCPAuthType, header: str, value: str,
+    auth_type: MCPAuthType,
+    header: str,
+    value: str,
 ) -> None:
     result: Final = validate_static_credential(auth_type, {header: value}, upstream_token_header=header)
     assert isinstance(result, Ok)
 
 
-@pytest.mark.parametrize("auth_type,headers,static_header_names,expected", [
-    (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
-    (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
-    (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
-    (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
-    (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
-    (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
-    (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
-])
+@pytest.mark.parametrize(
+    "auth_type,headers,static_header_names,expected",
+    [
+        (MCPAuth.api_key, {"apikey": "static-key"}, ("apikey",), Ok),
+        (MCPAuth.api_key, {"apikey": "static-key", "X-API-Key": ""}, ("apikey",), Ok),
+        (MCPAuth.api_key, {"apikey": ""}, ("apikey",), Error),
+        (MCPAuth.api_key, {"apikey": "static-key"}, (), Error),
+        (MCPAuth.api_key, {"apikey": "static-key"}, ("X-Tenant",), Error),
+        (MCPAuth.bearer_token, {"apikey": "static-key"}, ("apikey",), Error),
+        (MCPAuth.token, {"apikey": "static-key"}, ("apikey",), Error),
+    ],
+)
 def test_static_credential_counts_api_key_static_headers_only(
-    auth_type: MCPAuthType, headers: dict[str, str], static_header_names: tuple[str, ...], expected: type,
+    auth_type: MCPAuthType,
+    headers: dict[str, str],
+    static_header_names: tuple[str, ...],
+    expected: type,
 ) -> None:
     result: Final = validate_static_credential(auth_type, headers, static_header_names=static_header_names)
     assert isinstance(result, expected)
@@ -172,9 +183,10 @@ def test_shared_key_authorization_matches_v1(auth_type, authentication_token):
     client = MCPClient(server_url="https://x", auth_type=auth_type)
     client.update_auth_value(authentication_token)
 
-    assert spec.config.header(spec.config.key_source.value.get_secret_value())[1] == client._get_auth_headers()[
-        "Authorization"
-    ]
+    assert (
+        spec.config.header(spec.config.key_source.value.get_secret_value())[1]
+        == client._get_auth_headers()["Authorization"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -903,8 +915,11 @@ def test_a_blank_header_name_means_unset_rather_than_an_error(blank):
 @pytest.mark.parametrize("client_secret", [None, ""])
 @pytest.mark.parametrize("is_byok", [False, True])
 def test_incomplete_obo_keeps_exchange_ownership(client_secret: str | None, is_byok: bool) -> None:
-    spec = to_server_spec(_server(auth_type=MCPAuth.oauth2_token_exchange, client_id="client",
-                                  client_secret=client_secret, is_byok=is_byok))
+    spec = to_server_spec(
+        _server(
+            auth_type=MCPAuth.oauth2_token_exchange, client_id="client", client_secret=client_secret, is_byok=is_byok
+        )
+    )
     assert spec is not None
     assert isinstance(spec.config, TokenExchangeConfig)
     assert spec.config.client_id == "client"

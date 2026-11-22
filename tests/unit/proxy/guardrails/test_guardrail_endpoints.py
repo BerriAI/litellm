@@ -4216,9 +4216,7 @@ async def test_guardrail_success_delivers_sync_callback_once_with_overlapping_wo
 
 
 _GUARDRAIL_RECORDS: Final = "standard_logging_guardrail_information"
-_PNG_BASE64: Final = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-)
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 _PNG: Final = f"data:image/png;base64,{_PNG_BASE64}"
 _BEDROCK_TEXT_ALLOWED: Final = {"action": "NONE", "outputs": [], "assessments": []}
 _BEDROCK_IMAGE_ALLOWED: Final = {**_BEDROCK_TEXT_ALLOWED, "guardrailCoverage": {"images": {"guarded": 1, "total": 1}}}
@@ -4402,11 +4400,16 @@ async def test_apply_guardrail_never_logs_a_verdict_the_caller_supplied(mocker: 
             MappingProxyType({}),
             id="callback-sets-message-logging-false",
         ),
-        pytest.param(_CapturingLogger, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"),
+        pytest.param(
+            _CapturingLogger, MappingProxyType({"litellm-enable-message-redaction": "true"}), id="request-header"
+        ),
     ],
 )
 async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_callback_receives(
-    mocker: MockerFixture, bedrock_action: str, capture_logger: Callable[[], _CapturingLogger], headers: Mapping[str, str]
+    mocker: MockerFixture,
+    bedrock_action: str,
+    capture_logger: Callable[[], _CapturingLogger],
+    headers: Mapping[str, str],
 ) -> None:
     answer: Final = {
         "action": "GUARDRAIL_INTERVENED",
@@ -4431,7 +4434,9 @@ async def test_apply_guardrail_keeps_the_prompt_out_of_the_verdict_a_redacting_c
     )
 
     assert [name for name, _ in _logged_verdicts(call)] == ["bedrock-guard"]
-    redacted_fields: Final = str({field: call.logged[field] for field in ("messages", "response", "guardrail_information")})
+    redacted_fields: Final = str(
+        {field: call.logged[field] for field in ("messages", "response", "guardrail_information")}
+    )
     assert "please bill my card" not in redacted_fields
     assert "4111111111111111" not in redacted_fields
 
@@ -4446,7 +4451,9 @@ async def test_one_callback_opting_out_of_message_logging_leaves_the_guardrail_d
         "assessments": [
             {
                 "sensitiveInformationPolicy": {
-                    "piiEntities": [{"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}]
+                    "piiEntities": [
+                        {"type": "CREDIT_DEBIT_CARD_NUMBER", "match": "4111111111111111", "action": "ANONYMIZED"}
+                    ]
                 }
             }
         ],

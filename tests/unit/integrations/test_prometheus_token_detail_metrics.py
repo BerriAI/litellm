@@ -73,9 +73,7 @@ class TestTokenDetailMetricsRegistration:
 
     def test_metric_labels_defined(self):
         for name in TOKEN_DETAIL_METRICS:
-            assert hasattr(
-                PrometheusMetricLabels, name
-            ), f"{name} missing from PrometheusMetricLabels"
+            assert hasattr(PrometheusMetricLabels, name), f"{name} missing from PrometheusMetricLabels"
 
     def test_input_detail_metrics_share_input_label_set(self):
         # Detail metrics should reuse the parent input/output label set so
@@ -134,21 +132,11 @@ class TestIncrementTokenDetailMetrics:
             enum_values=sample_enum_values,
         )
 
-        logger.litellm_input_cached_tokens_metric.labels().inc.assert_called_once_with(
-            40.0
-        )
-        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(
-            25.0
-        )
-        logger.litellm_input_audio_tokens_metric.labels().inc.assert_called_once_with(
-            15.0
-        )
-        logger.litellm_output_reasoning_tokens_metric.labels().inc.assert_called_once_with(
-            60.0
-        )
-        logger.litellm_output_audio_tokens_metric.labels().inc.assert_called_once_with(
-            10.0
-        )
+        logger.litellm_input_cached_tokens_metric.labels().inc.assert_called_once_with(40.0)
+        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(25.0)
+        logger.litellm_input_audio_tokens_metric.labels().inc.assert_called_once_with(15.0)
+        logger.litellm_output_reasoning_tokens_metric.labels().inc.assert_called_once_with(60.0)
+        logger.litellm_output_audio_tokens_metric.labels().inc.assert_called_once_with(10.0)
 
     def test_cache_creation_falls_back_to_cache_write_tokens(self, sample_enum_values):
         logger = _make_mock_logger()
@@ -172,13 +160,9 @@ class TestIncrementTokenDetailMetrics:
             enum_values=sample_enum_values,
         )
 
-        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(
-            800.0
-        )
+        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(800.0)
 
-    def test_cache_write_tokens_takes_precedence_over_cache_creation_tokens(
-        self, sample_enum_values
-    ):
+    def test_cache_write_tokens_takes_precedence_over_cache_creation_tokens(self, sample_enum_values):
         logger = _make_mock_logger()
         payload = {
             "metadata": {
@@ -197,9 +181,7 @@ class TestIncrementTokenDetailMetrics:
             enum_values=sample_enum_values,
         )
 
-        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(
-            800.0
-        )
+        logger.litellm_input_cache_creation_tokens_metric.labels().inc.assert_called_once_with(800.0)
 
     def test_skips_metrics_when_value_is_zero(self, sample_enum_values):
         logger = _make_mock_logger()
@@ -251,9 +233,7 @@ class TestIncrementTokenDetailMetrics:
         # Only audio_tokens was non-zero — only that counter should fire.
         logger.litellm_input_cached_tokens_metric.labels.assert_not_called()
         logger.litellm_input_cache_creation_tokens_metric.labels.assert_not_called()
-        logger.litellm_input_audio_tokens_metric.labels().inc.assert_called_once_with(
-            12.0
-        )
+        logger.litellm_input_audio_tokens_metric.labels().inc.assert_called_once_with(12.0)
         logger.litellm_output_reasoning_tokens_metric.labels.assert_not_called()
         logger.litellm_output_audio_tokens_metric.labels.assert_not_called()
 

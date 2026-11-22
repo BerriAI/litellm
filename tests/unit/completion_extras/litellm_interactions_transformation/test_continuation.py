@@ -94,8 +94,8 @@ def test_unary_bridge_resends_with_the_continuation_token_until_the_answer_compl
     assert token is None
     assert [(body.get("continuation_token"), body.get("previous_interaction_id")) for body in bodies] == [
         (None, None),
-        ("tok-1", "v1_first"),
-        ("tok-2", "v1_second"),
+        ("tok-1", None),
+        ("tok-2", None),
     ]
     assert bodies[1]["input"] == bodies[0]["input"]
     usage: Final = response.usage  # pyright: ignore[reportAttributeAccessIssue]  # ModelResponse sets usage dynamically
@@ -196,7 +196,8 @@ def test_streaming_bridge_continues_into_the_next_hop_as_one_stream() -> None:
     assert finish_reasons == ["stop"]
     assert tokens == []
     assert usage == (20, 10)
-    assert (bodies[1]["continuation_token"], bodies[1]["previous_interaction_id"]) == ("tok-1", "v1_first")
+    assert (bodies[1]["continuation_token"], bodies[1].get("previous_interaction_id")) == ("tok-1", None)
+    assert bodies[1]["input"] == bodies[0]["input"]
 
 
 def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_fails() -> None:
@@ -250,7 +251,15 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_stream_repor
     assert tokens == ["tok-1"]
 
 
-def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_interaction_holds_it(
+@pytest.mark.parametrize(
+    ("store", "resends_input", "previous_interaction_id"),
+    ((True, False, "v1_first"), (None, True, None)),
+    ids=("stored", "unstored"),
+)
+def test_vertex_resume_sends_the_input_again_unless_a_stored_interaction_holds_it(
+    store: bool | None,
+    resends_input: bool,
+    previous_interaction_id: str | None,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -275,14 +284,18 @@ def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_inte
             messages=list(MESSAGES),
             vertex_project="unit-project",
             vertex_location="global",
+            store=store,
             client=HTTPHandler(client=raw_client),
         )
 
     choice, _ = _message_of(response)
     assert choice.message.content == "Once upon a time."
     assert "input" in bodies[0]
-    assert "input" not in bodies[1]
-    assert (bodies[1]["continuation_token"], bodies[1]["previous_interaction_id"]) == ("tok-1", "v1_first")
+    assert ("input" in bodies[1]) is resends_input
+    assert (bodies[1]["continuation_token"], bodies[1].get("previous_interaction_id")) == (
+        "tok-1",
+        previous_interaction_id,
+    )
 
 
 @pytest.mark.parametrize(

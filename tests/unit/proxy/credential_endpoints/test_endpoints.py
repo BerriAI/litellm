@@ -3539,7 +3539,9 @@ def test_update_github_app_validates_merged_values_before_storage(credential_sto
 
 
 @pytest.mark.parametrize("blank", ["", "   "])
-def test_create_github_app_never_stores_a_blank_app_field(credential_store: _InstallCredentialStore, blank: str) -> None:
+def test_create_github_app_never_stores_a_blank_app_field(
+    credential_store: _InstallCredentialStore, blank: str
+) -> None:
     credential_store(create=AsyncMock())
     response: Final = _create_credential(
         {

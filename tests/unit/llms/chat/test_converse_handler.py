@@ -104,12 +104,10 @@ class TestBedrockRegionInModelPath:
         if _region_from_model is not None and "aws_region_name" not in optional_params:
             optional_params["aws_region_name"] = _region_from_model
 
-        assert (
-            model_id == expected_model_id
-        ), f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
-        assert (
-            optional_params.get("aws_region_name") == expected_region
-        ), (
+        assert model_id == expected_model_id, (
+            f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
+        )
+        assert optional_params.get("aws_region_name") == expected_region, (
             f"region mismatch for {model!r}: "
             f"got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
         )
@@ -304,9 +302,7 @@ async def test_async_converse_streaming_forwards_bedrock_response_headers():
 
 
 def test_completion_plumbs_stream_chunk_size_through_converse() -> None:
-    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
-        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
-    )
+    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
 
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(

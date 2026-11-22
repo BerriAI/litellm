@@ -5,8 +5,6 @@ This test validates that the DockerModelRunnerChatConfig correctly transforms
 requests to the proper URL, headers, and body format.
 """
 
-
-
 import json
 from typing import cast
 
@@ -76,10 +74,7 @@ class TestDockerModelRunnerTransformation:
 
         assert "model-runner.docker.internal" in url
         assert "/engines/custom-engine/v1/chat/completions" in url
-        assert (
-            url
-            == "http://model-runner.docker.internal/engines/custom-engine/v1/chat/completions"
-        )
+        assert url == "http://model-runner.docker.internal/engines/custom-engine/v1/chat/completions"
 
     def test_get_complete_url_removes_trailing_slash(self):
         """
@@ -106,9 +101,7 @@ class TestDockerModelRunnerTransformation:
         """
         config = DockerModelRunnerChatConfig()
 
-        messages = cast(
-            list[AllMessageValues], [{"role": "user", "content": "Hello, how are you?"}]
-        )
+        messages = cast(list[AllMessageValues], [{"role": "user", "content": "Hello, how are you?"}])
         optional_params = {"temperature": 0.7, "max_tokens": 100}
 
         request_data = config.transform_request(
@@ -141,9 +134,7 @@ class TestDockerModelRunnerTransformation:
         headers = config.validate_environment(
             headers={},
             model="llama-3.1",
-            messages=cast(
-                list[AllMessageValues], [{"role": "user", "content": "Hello"}]
-            ),
+            messages=cast(list[AllMessageValues], [{"role": "user", "content": "Hello"}]),
             optional_params={},
             litellm_params={},
             api_key="test-key",

@@ -1258,7 +1258,11 @@ async def test_live_session_counts_a_router_success_only_when_it_ended_cleanly(
 ) -> None:
     router: Final = Router(
         model_list=[
-            {"model_name": "live-voice", "litellm_params": {"model": "openai/gpt-live-1"}, "model_info": {"id": "live-a"}}
+            {
+                "model_name": "live-voice",
+                "litellm_params": {"model": "openai/gpt-live-1"},
+                "model_info": {"id": "live-a"},
+            }
         ],
         num_retries=0,
     )

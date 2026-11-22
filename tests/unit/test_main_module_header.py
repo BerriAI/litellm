@@ -7,7 +7,4 @@ def test_main_py_starts_with_brief_file_description():
 
     first_two_lines = main_py.read_text(encoding="utf-8").splitlines()[:2]
 
-    assert any(
-        "LiteLLM main module" in line and "entrypoints" in line
-        for line in first_two_lines
-    )
+    assert any("LiteLLM main module" in line and "entrypoints" in line for line in first_two_lines)

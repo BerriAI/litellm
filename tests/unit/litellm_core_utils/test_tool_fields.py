@@ -29,7 +29,12 @@ _MALFORMED_TOOLS: Final = (
 def _deployment(name: str, **params: object) -> Mapping[str, object]:
     return {
         "model_name": name,
-        "litellm_params": {"model": "openai/gpt-5.2", "api_key": "sk-test", "mock_response": f"served by {name}", **params},
+        "litellm_params": {
+            "model": "openai/gpt-5.2",
+            "api_key": "sk-test",
+            "mock_response": f"served by {name}",
+            **params,
+        },
     }
 
 

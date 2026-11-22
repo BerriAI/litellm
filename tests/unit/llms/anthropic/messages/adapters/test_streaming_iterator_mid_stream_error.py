@@ -46,9 +46,7 @@ from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPaylo
 
 def _make_chunk(delta: Delta, finish_reason: Optional[str] = None) -> MagicMock:
     chunk = MagicMock()
-    chunk.choices = [
-        StreamingChoices(finish_reason=finish_reason, index=0, delta=delta, logprobs=None)
-    ]
+    chunk.choices = [StreamingChoices(finish_reason=finish_reason, index=0, delta=delta, logprobs=None)]
     chunk.usage = None
     chunk._hidden_params = {}
     return chunk

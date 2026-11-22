@@ -164,15 +164,9 @@ class TestComplexNestedPatterns:
         assert "input_examples" not in result["tools"][1]
 
         # Verify deeply nested field removed from all array elements
-        assert (
-            "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
-        )
-        assert (
-            "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
-        )
-        assert (
-            "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
-        )
+        assert "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
+        assert "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
+        assert "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
 
         # Verify other fields preserved
         assert result["tools"][0]["some_arr"][0]["some_struct"]["keep_this"] == "val2"
@@ -314,16 +308,10 @@ class TestComplexNestedPatterns:
 
         # Verify: tools[*].configs[1].remove_me removed from second config of all tools (that have one)
         assert "remove_me" in result["tools"][0]["configs"][0]  # First config untouched
-        assert (
-            "remove_me" not in result["tools"][0]["configs"][1]
-        )  # Second config removed
+        assert "remove_me" not in result["tools"][0]["configs"][1]  # Second config removed
         assert "remove_me" in result["tools"][1]["configs"][0]  # First config untouched
-        assert (
-            "remove_me" not in result["tools"][1]["configs"][1]
-        )  # Second config removed
-        assert (
-            "remove_me" in result["tools"][2]["configs"][0]
-        )  # Only has [0], unaffected
+        assert "remove_me" not in result["tools"][1]["configs"][1]  # Second config removed
+        assert "remove_me" in result["tools"][2]["configs"][0]  # Only has [0], unaffected
 
         # Verify: tools[1].metadata.drop_this removed only from second tool
         assert "drop_this" in result["tools"][0]["metadata"]

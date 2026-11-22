@@ -247,11 +247,16 @@ def test_config_update_accepts_a_config_owned_success_callback_the_file_spells_i
     assert persisted["success_callback"] == ["langfuse"]
 
 
-@pytest.mark.parametrize("payload,field", [
-    ({"router_settings": {"assistants_config": {"enabled": True}}}, "assistants_config"),
-    *[({"general_settings": {"required_customer_headers": value}}, "required_customer_headers")
-      for value in ([], ["X-Tenant-ID"])],
-])
+@pytest.mark.parametrize(
+    "payload,field",
+    [
+        ({"router_settings": {"assistants_config": {"enabled": True}}}, "assistants_config"),
+        *[
+            ({"general_settings": {"required_customer_headers": value}}, "required_customer_headers")
+            for value in ([], ["X-Tenant-ID"])
+        ],
+    ],
+)
 def test_config_update_rejects_assistants_config(client, auth_as, mock_prisma, monkeypatch, payload, field):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -420,10 +425,13 @@ def test_config_field_update_non_admin_rejected(client, auth_as, mock_prisma, mo
     assert "error" in response.json().get("detail", {})
 
 
-@pytest.mark.parametrize("field,value,message", [
-    ("not_a_real_field_xyz", 1, "Invalid field"),
-    ("required_customer_headers", ["X-Tenant-ID"], "can only be set in the YAML config file"),
-])
+@pytest.mark.parametrize(
+    "field,value,message",
+    [
+        ("not_a_real_field_xyz", 1, "Invalid field"),
+        ("required_customer_headers", ["X-Tenant-ID"], "can only be set in the YAML config file"),
+    ],
+)
 def test_config_field_update_invalid_field(client, auth_as, mock_prisma, monkeypatch, field, value, message):
     """Unknown field_name is rejected with 400 + 'Invalid field=' detail."""
     from litellm.proxy import proxy_server as ps

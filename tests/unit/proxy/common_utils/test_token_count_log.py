@@ -47,7 +47,9 @@ async def test_a_cancelled_count_writes_no_line(
     token_count_log_lines: Callable[[], tuple[dict[str, object], ...]],
 ) -> None:
     with pytest.raises(asyncio.CancelledError):
-        await logged_token_count(_count_ending_in(asyncio.CancelledError()), "count-log-cancelled", "count-log-gpt", None)
+        await logged_token_count(
+            _count_ending_in(asyncio.CancelledError()), "count-log-cancelled", "count-log-gpt", None
+        )
 
     assert token_count_log_lines() == ()
 
@@ -57,7 +59,9 @@ async def test_an_http_error_answers_its_status_and_detail_with_the_call_id_besi
     rejection: Final = HTTPException(status_code=429, detail={"error": "slow down"}, headers={"retry-after": "3"})
 
     with pytest.raises(HTTPException) as answered:
-        await answered_with_litellm_call_id(_count_ending_in(rejection), "count-echo-http", _count_request(), Response())
+        await answered_with_litellm_call_id(
+            _count_ending_in(rejection), "count-echo-http", _count_request(), Response()
+        )
 
     assert (answered.value.status_code, answered.value.detail, dict(answered.value.headers or {})) == (
         429,
@@ -75,7 +79,9 @@ async def test_an_http_error_reaches_its_handler_as_the_same_error_with_the_call
     too_large: Final = _CountTooLarge(status_code=413, detail="count body too large")
 
     with pytest.raises(_CountTooLarge) as answered:
-        await answered_with_litellm_call_id(_count_ending_in(too_large), "count-echo-same", _count_request(), Response())
+        await answered_with_litellm_call_id(
+            _count_ending_in(too_large), "count-echo-same", _count_request(), Response()
+        )
 
     assert answered.value is too_large
     assert dict(answered.value.headers or {}) == {LITELLM_CALL_ID_HEADER: "count-echo-same"}

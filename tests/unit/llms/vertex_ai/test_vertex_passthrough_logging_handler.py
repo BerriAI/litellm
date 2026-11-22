@@ -236,5 +236,3 @@ def test_audio_predict_response_supports_bytes_base64_encoded(
 
     assert result["kwargs"]["response_cost"] == pytest.approx(0.06)
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(0.06)
-
-

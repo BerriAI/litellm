@@ -2,7 +2,6 @@
 Validate Claude Opus 4.6 model configuration entries.
 """
 
-
 import litellm
 
 

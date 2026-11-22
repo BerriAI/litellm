@@ -1577,7 +1577,9 @@ def test_organization_routes_reach_their_handler_with_enterprise_license(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch, rust_auth_stores: RustAuthStores):
+async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(
+    monkeypatch, rust_auth_stores: RustAuthStores
+):
     """/organization/delete bulk-deletes the org's keys without going through /key/delete, so the
     key objects and the jwt_key_mapping entries (issuer-scoped ones included) pointing at them
     must be evicted here, or a deleted key keeps authenticating and a JWT identity keeps resolving
@@ -1604,7 +1606,7 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
             JWTMappingRow("hashed-org-key", "sub", "svc-account"),
             JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
             kept_row,
-        ]
+        ],
     )
     cache: Final = UserApiKeyCache()
     for cache_key in (*doomed_cache_keys, *kept_cache_keys):

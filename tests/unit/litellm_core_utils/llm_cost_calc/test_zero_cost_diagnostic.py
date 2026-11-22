@@ -70,9 +70,7 @@ def test_free_cached_usage_uses_the_selected_tier_cache_rate_or_its_input_rate(c
     rates: Final = {
         "input_cost_per_token": 0.01,
         "cache_read_input_token_cost": 0.02,
-        "tiered_pricing": [
-            {"range": [0, 20], "input_cost_per_token": 0.0, "cache_read_input_token_cost": cache_rate}
-        ],
+        "tiered_pricing": [{"range": [0, 20], "input_cost_per_token": 0.0, "cache_read_input_token_cost": cache_rate}],
     }
     usage: Final = Usage(prompt_tokens=10, completion_tokens=0, prompt_tokens_details={"cached_tokens": 10})
 

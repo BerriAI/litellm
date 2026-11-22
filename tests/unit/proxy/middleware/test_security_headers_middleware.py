@@ -48,9 +48,7 @@ def test_hsts_absent_by_default(monkeypatch):
 def test_hsts_present_when_enabled(monkeypatch):
     monkeypatch.setenv("LITELLM_ENABLE_HSTS", "true")
     resp = _make_client(_ok).get("/")
-    assert resp.headers["strict-transport-security"] == (
-        "max-age=31536000; includeSubDomains"
-    )
+    assert resp.headers["strict-transport-security"] == ("max-age=31536000; includeSubDomains")
 
 
 def test_hsts_not_enabled_by_arbitrary_value(monkeypatch):

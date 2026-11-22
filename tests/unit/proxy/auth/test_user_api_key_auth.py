@@ -973,7 +973,9 @@ async def test_virtual_key_max_budget_decides_a_queued_chat_call(monkeypatch, sp
     monkeypatch.setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", _NoMembershipRowPrisma())
 
-    headers: Final = [(b"authorization", b"Bearer sk-ant-oat-test"), (b"x-litellm-api-key", key.encode())] if oauth else []
+    headers: Final = (
+        [(b"authorization", b"Bearer sk-ant-oat-test"), (b"x-litellm-api-key", key.encode())] if oauth else []
+    )
     request: Final = Request(scope={"type": "http", "method": "POST", "path": route, "headers": headers})
     request._url = URL(url=route)
 

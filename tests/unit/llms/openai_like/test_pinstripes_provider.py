@@ -16,13 +16,11 @@ class TestPinstripeProviderConfig:
         assert LlmProviders.PINSTRIPES.value == "pinstripes"
         assert "pinstripes" in litellm.provider_list
 
-
     def test_pinstripes_in_openai_compatible_providers(self):
         """Test that pinstripes is in the openai_compatible_providers list"""
         from litellm.constants import openai_compatible_providers
 
         assert "pinstripes" in openai_compatible_providers
-
 
     def test_pinstripes_api_base_override(self):
         """Test that an explicit api_base / api_key overrides the default"""

@@ -255,17 +255,13 @@ async def test_azure_sentinel_flushes_standard_and_audit_logs_separately():
     await logger.flush_queue()
 
     ingestion_calls = [
-        call
-        for call in logger.async_httpx_client.post.call_args_list
-        if "dataCollectionRules" in call.kwargs["url"]
+        call for call in logger.async_httpx_client.post.call_args_list if "dataCollectionRules" in call.kwargs["url"]
     ]
     assert len(ingestion_calls) == 2
 
     standard_call, audit_call = ingestion_calls
     assert "Custom-LiteLLM-Standard" in standard_call.kwargs["url"]
-    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [
-        standard_payload
-    ]
+    assert json.loads(standard_call.kwargs["data"].decode("utf-8")) == [standard_payload]
     assert "Custom-LiteLLM-Audit" in audit_call.kwargs["url"]
     assert json.loads(audit_call.kwargs["data"].decode("utf-8")) == [audit_log]
 
@@ -776,7 +772,9 @@ async def test_azure_sentinel_retries_on_the_flush_timer_not_on_every_record_whi
     for record in records[8:]:
         await _log(logger, queue_attr, record)
 
-    assert [record_id for attempt in attempts[1:-1] for record_id in attempt] == [record["id"] for record in records[:8]]
+    assert [record_id for attempt in attempts[1:-1] for record_id in attempt] == [
+        record["id"] for record in records[:8]
+    ]
     assert all(len(attempt) <= 3 for attempt in attempts[1:-1])
     assert attempts[-1] == [record["id"] for record in records[8:]]
     assert getattr(logger, queue_attr) == []
@@ -908,9 +906,7 @@ async def test_azure_sentinel_batch_size_bounds_every_request_under_concurrent_e
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("queue_attr, send_method, build_payloads", QUEUE_CASES)
-async def test_azure_sentinel_requeues_a_cancelled_send(
-    queue_attr, send_method, build_payloads
-):
+async def test_azure_sentinel_requeues_a_cancelled_send(queue_attr, send_method, build_payloads):
     """Cancellation after detaching a batch must preserve the detached records for a later flush."""
     logger = _build_logger()
     records = build_payloads(2)

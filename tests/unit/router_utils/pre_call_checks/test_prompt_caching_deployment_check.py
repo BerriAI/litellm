@@ -805,9 +805,7 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
         [
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": uncounted_text(), "cache_control": {"type": "ephemeral"}}
-                ],
+                "content": [{"type": "text", "text": uncounted_text(), "cache_control": {"type": "ephemeral"}}],
             }
         ],
     )
@@ -2115,7 +2113,10 @@ async def test_responses_custom_tools_with_another_grammar_are_a_different_prefi
         "description": "Run a query",
         "format": {"type": "grammar", "syntax": "lark", "definition": "start: SELECT"},
     }
-    other_grammar: Final = {**custom_tool, "format": {"type": "grammar", "syntax": "lark", "definition": "start: UPDATE"}}
+    other_grammar: Final = {
+        **custom_tool,
+        "format": {"type": "grammar", "syntax": "lark", "definition": "start: UPDATE"},
+    }
 
     pinned = await _pinned_deployment_ids(
         {"input": _marked_responses_input(), "tools": [custom_tool]},

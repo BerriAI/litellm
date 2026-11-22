@@ -686,7 +686,10 @@ class TestAutoRouterSession:
         assert self._row({}).baseline_model is None
 
     def test_a_partial_comparison_across_baselines_has_no_baseline_label(self) -> None:
-        assert self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}, estimated_turns=2).baseline_model is None
+        assert (
+            self._row({"anthropic/claude-opus-5": 2, "anthropic/claude-sonnet-5": 1}, estimated_turns=2).baseline_model
+            is None
+        )
 
     def test_a_partial_comparison_against_one_baseline_keeps_its_label(self) -> None:
         assert self._row({"anthropic/claude-opus-5": 3}, estimated_turns=1).baseline_model == "anthropic/claude-opus-5"

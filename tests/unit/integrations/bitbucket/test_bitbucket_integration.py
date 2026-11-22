@@ -85,9 +85,7 @@ def test_bitbucket_prompt_manager_error_handling(mock_client_class):
 
     manager = BitBucketPromptManager(config, prompt_id="test_prompt")
 
-    with pytest.raises(
-        Exception, match="Failed to load prompt 'test_prompt' from BitBucket"
-    ):
+    with pytest.raises(Exception, match="Failed to load prompt 'test_prompt' from BitBucket"):
         _ = manager.prompt_manager
 
 
@@ -96,30 +94,22 @@ def test_bitbucket_prompt_manager_config_validation():
     # Test missing required fields - validation happens when prompt_manager is accessed
     manager = BitBucketPromptManager({})
 
-    with pytest.raises(
-        ValueError, match="workspace, repository, and access_token are required"
-    ):
+    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
         _ = manager.prompt_manager
 
     manager = BitBucketPromptManager({"workspace": "test"})
 
-    with pytest.raises(
-        ValueError, match="workspace, repository, and access_token are required"
-    ):
+    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
         _ = manager.prompt_manager
 
     manager = BitBucketPromptManager({"repository": "test"})
 
-    with pytest.raises(
-        ValueError, match="workspace, repository, and access_token are required"
-    ):
+    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
         _ = manager.prompt_manager
 
     manager = BitBucketPromptManager({"access_token": "test"})
 
-    with pytest.raises(
-        ValueError, match="workspace, repository, and access_token are required"
-    ):
+    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
         _ = manager.prompt_manager
 
 

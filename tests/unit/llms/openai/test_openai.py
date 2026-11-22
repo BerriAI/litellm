@@ -276,7 +276,6 @@ async def test_acompletion_never_sends_the_openai_admin_key_for_a_deployment_wit
     assert all(authorization is None for authorization in sent), sent
 
 
-
 class _SearchingChatGate(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -947,9 +946,7 @@ def test_mapped_error_keeps_the_upstream_body_without_the_provider_credentials(
         max_retries=0,
         http_client=httpx.Client(
             transport=httpx.MockTransport(
-                lambda _request: httpx.Response(
-                    status_code, content=body, headers={"content-type": "application/json"}
-                )
+                lambda _request: httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
             )
         ),
     )
@@ -2321,9 +2318,7 @@ async def test_openai_prediction_param_mock():
 
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="gpt-4o-mini",
@@ -2466,9 +2461,7 @@ async def test_openai_safety_identifier_parameter():
     litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="openai/gpt-4o",
@@ -2495,9 +2488,7 @@ def test_openai_safety_identifier_parameter_sync():
     litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -2525,9 +2516,7 @@ async def test_openai_service_tier_parameter():
     litellm.set_verbose = True
     client = AsyncOpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             await litellm.acompletion(
                 model="openai/gpt-4o",
@@ -2544,9 +2533,7 @@ async def test_openai_service_tier_parameter():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
+        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
 
 
 def test_openai_service_tier_parameter_sync():
@@ -2556,9 +2543,7 @@ def test_openai_service_tier_parameter_sync():
     litellm.set_verbose = True
     client = OpenAI(api_key="fake-api-key")
 
-    with patch.object(
-        client, "post"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             litellm.completion(
                 model="openai/gpt-4o",
@@ -2575,9 +2560,7 @@ def test_openai_service_tier_parameter_sync():
         # Verify the request contains the service_tier parameter
         assert "service_tier" in request_body, "service_tier should be in request body"
         # Verify service_tier is correctly sent to the API
-        assert (
-            request_body["service_tier"] == "priority"
-        ), "service_tier should be 'priority'"
+        assert request_body["service_tier"] == "priority", "service_tier should be 'priority'"
 
 
 def test_responses_gpt54_with_xhigh_reasoning():
@@ -2804,7 +2787,12 @@ def _developer_message_after_a_user_turn() -> list[dict[str, str]]:
     ("custom_llm_provider", "api_base", "declared", "expected_roles"),
     [
         ("openai", "https://api.openai.com/v1", False, ["system", "user", "assistant", "system", "user"]),
-        ("azure_ai", "https://example.services.ai.azure.com/models", None, ["system", "user", "assistant", "system", "user"]),
+        (
+            "azure_ai",
+            "https://example.services.ai.azure.com/models",
+            None,
+            ["system", "user", "assistant", "system", "user"],
+        ),
         ("azure_ai", "https://example.services.ai.azure.com/models", False, ["system", "user", "assistant", "user"]),
     ],
 )
@@ -2852,7 +2840,9 @@ class _ChatCompletionOnlyAgenticLoop(CustomLogger):
         kwargs: dict,
     ) -> ModelResponse:
         return ModelResponse(
-            choices=[{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}]
+            choices=[
+                {"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "order shipped"}}
+            ]
         )
 
 

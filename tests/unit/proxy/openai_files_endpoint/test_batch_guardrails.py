@@ -385,9 +385,12 @@ async def test_a_file_the_upload_validation_accepts_is_a_file_the_scan_can_read(
 
 @pytest.mark.asyncio
 async def test_a_bom_file_is_rewritten_without_losing_the_untouched_records():
-    source = io.BytesIO(b"\xef\xbb\xbf" + ("\n".join(
-        json.dumps(r) for r in (_record("keep"), _record("dirty", content="my secret is here"))
-    ) + "\n").encode())
+    source = io.BytesIO(
+        b"\xef\xbb\xbf"
+        + (
+            "\n".join(json.dumps(r) for r in (_record("keep"), _record("dirty", content="my secret is here"))) + "\n"
+        ).encode()
+    )
 
     result = await _scan_full(source, FakeProxyLogging(_redact_containing("secret")))
     rewritten = rewrite_batch_input_file(source, result).read().decode("utf-8-sig")
@@ -415,7 +418,9 @@ def test_load_balancing_finds_the_routing_record_in_any_file_the_upload_accepts(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("url", ["http://[", "http://[::1", "https://["], ids=["open_bracket", "unclosed_v6", "https_bracket"])
+@pytest.mark.parametrize(
+    "url", ["http://[", "http://[::1", "https://["], ids=["open_bracket", "unclosed_v6", "https_bracket"]
+)
 async def test_a_malformed_url_does_not_escape_the_scan(url):
     """Validation only checks the url key is present, and urlsplit rejects some authorities."""
     record = {**_record("m"), "url": url}
@@ -780,9 +785,7 @@ async def test_raising_a_native_block_exception_drops_whatever_status_it_carries
 
     def _hook(data):
         if "tripwire" in data["messages"][0]["content"]:
-            raise GuardrailRaisedException(
-                guardrail_name="g", message="refused", status_code=503, blocked_content=True
-            )
+            raise GuardrailRaisedException(guardrail_name="g", message="refused", status_code=503, blocked_content=True)
 
     result = await _scan_full(_jsonl(_record("b", content="tripwire")), FakeProxyLogging(_hook))
 
@@ -898,7 +901,7 @@ async def test_the_rewrite_closes_its_own_output_when_it_cannot_finish():
     original_read = bg._read_spooled
     bg._read_spooled = _boom
     try:
-        with pytest.raises(OSError, match='no space left on device'):
+        with pytest.raises(OSError, match="no space left on device"):
             rewrite_batch_input_file(source, result)
     finally:
         bg.tempfile.SpooledTemporaryFile = real

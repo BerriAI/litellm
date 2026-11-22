@@ -216,9 +216,7 @@ class TestContainerIntegration:
         mock_client.post = mock_post
         mock_async_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"
-        ) as mock_get_async_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_async_client:
             mock_get_async_client.return_value = mock_client
 
             # Execute
@@ -267,9 +265,7 @@ class TestContainerIntegration:
         mock_client.get = mock_get
         mock_async_http_handler.return_value = mock_client
 
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client"
-        ) as mock_get_async_client:
+        with patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client") as mock_get_async_client:
             mock_get_async_client.return_value = mock_client
 
             # Execute
@@ -316,12 +312,8 @@ class TestContainerIntegration:
 
         with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             # Setup different responses for different operations
-            mock_handler.container_create_handler.return_value = ContainerObject(
-                **create_response.json.return_value
-            )
-            mock_handler.container_list_handler.return_value = ContainerListResponse(
-                **list_response.json.return_value
-            )
+            mock_handler.container_create_handler.return_value = ContainerObject(**create_response.json.return_value)
+            mock_handler.container_list_handler.return_value = ContainerListResponse(**list_response.json.return_value)
             mock_handler.container_retrieve_handler.return_value = ContainerObject(
                 **retrieve_response.json.return_value
             )
@@ -331,9 +323,7 @@ class TestContainerIntegration:
 
             # Execute workflow
             # 1. Create container
-            created = create_container(
-                name="Workflow Test Container", custom_llm_provider="openai"
-            )
+            created = create_container(name="Workflow Test Container", custom_llm_provider="openai")
             assert created.id == container_id
 
             # 2. List containers (should include our created one)
@@ -342,16 +332,12 @@ class TestContainerIntegration:
             assert containers.data[0].id == container_id
 
             # 3. Retrieve specific container
-            retrieved = retrieve_container(
-                container_id=container_id, custom_llm_provider="openai"
-            )
+            retrieved = retrieve_container(container_id=container_id, custom_llm_provider="openai")
             assert retrieved.id == container_id
             assert retrieved.name == "Workflow Test Container"
 
             # 4. Delete container
-            deleted = delete_container(
-                container_id=container_id, custom_llm_provider="openai"
-            )
+            deleted = delete_container(container_id=container_id, custom_llm_provider="openai")
             assert deleted.id == container_id
             assert deleted.deleted == True
 
@@ -377,9 +363,7 @@ class TestContainerIntegration:
             )
 
             with pytest.raises(litellm.APIError):
-                create_container_fresh(
-                    name="Error Test Container", custom_llm_provider="openai"
-                )
+                create_container_fresh(name="Error Test Container", custom_llm_provider="openai")
 
     @pytest.mark.parametrize("provider", ["openai"])
     def test_provider_support(self, provider):
@@ -406,8 +390,6 @@ class TestContainerIntegration:
         with patch("litellm.containers.main.base_llm_http_handler") as mock_handler:
             mock_handler.container_create_handler.return_value = mock_response
 
-            response = create_container_fresh(
-                name="Provider Test Container", custom_llm_provider=provider
-            )
+            response = create_container_fresh(name="Provider Test Container", custom_llm_provider=provider)
 
             assert response.name == "Provider Test Container"

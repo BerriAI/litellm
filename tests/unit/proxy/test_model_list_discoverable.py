@@ -57,9 +57,7 @@ def flagged_team_router(monkeypatch) -> Router:
     return _install_router(
         monkeypatch,
         _deployment("gpt-4"),
-        _deployment(
-            "model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False
-        ),
+        _deployment("model_name_team1_abc", team_id="team1", team_public_model_name="team-gpt", discoverable=False),
         _deployment("model_name_team1_def", team_id="team1", team_public_model_name="team-chat"),
     )
 
@@ -179,9 +177,7 @@ async def test_v1_model_info_hides_flagged_rows_from_non_admin_only(flagged_rout
 async def test_v1_model_info_by_id_still_serves_the_hidden_row_to_non_admin(flagged_router):
     assert "internal-evaluator" not in await _v1_model_info_names(_non_admin())
 
-    assert await _v1_model_info_names(_non_admin(), litellm_model_id="internal-evaluator-id") == [
-        "internal-evaluator"
-    ]
+    assert await _v1_model_info_names(_non_admin(), litellm_model_id="internal-evaluator-id") == ["internal-evaluator"]
 
 
 @pytest.mark.asyncio

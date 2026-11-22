@@ -328,9 +328,7 @@ def test_hf_model_name_becomes_the_body_model(monkeypatch):
         ("sagemaker_nova/my-endpoint", {"messages": [{"role": "user", "content": "hi"}], "top_k": 5}),
     ],
 )
-def test_body_carries_no_aws_credentials(
-    monkeypatch: pytest.MonkeyPatch, model: str, expected_body: dict[str, object]
-):
+def test_body_carries_no_aws_credentials(monkeypatch: pytest.MonkeyPatch, model: str, expected_body: dict[str, object]):
     client = _invoke_sagemaker_chat(
         monkeypatch,
         model=model,

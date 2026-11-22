@@ -100,8 +100,10 @@ class TestBuildTransaction:
             metadata=_metadata(
                 routing_decision={**ROUTING_DECISION, "savings_baseline_model": "anthropic/claude-opus-5"},
                 usage_object={
-                    "prompt_tokens": 90, "completion_tokens": 10,
-                    "cache_read_input_tokens": 5, "cache_creation_input_tokens": 7,
+                    "prompt_tokens": 90,
+                    "completion_tokens": 10,
+                    "cache_read_input_tokens": 5,
+                    "cache_creation_input_tokens": 7,
                 },
             )
         )
@@ -231,7 +233,9 @@ class TestBuildTransaction:
     @pytest.mark.parametrize(
         "usage, recorded",
         [
-            (None, False), ({}, False), ({"prompt_tokens": 90}, False),
+            (None, False),
+            ({}, False),
+            ({"prompt_tokens": 90}, False),
             ({"prompt_tokens": 90, "completion_tokens": 10}, True),
             ({"prompt_tokens": 0, "completion_tokens": 0}, True),
             ({"prompt_tokens": -1, "completion_tokens": 10}, False),
@@ -492,19 +496,26 @@ class TestFlush:
 class TestEnqueueSeam:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("classifier_cost", [0.005, 0.0, None])
-    @pytest.mark.parametrize("estimate, covered, saved", [
-        ({"version": 1, "status": "estimated"}, 1, -0.003),
-        ({"version": 1, "status": "estimated"}, 1, 0.0),
-        ({"version": 2, "status": "estimated"}, 1, 0.0),
-        ({"version": 3, "status": "estimated"}, 1, -0.003),
-        ({"version": 1, "status": "unknown"}, 0, 0.0),
-        ({"version": 0, "status": "estimated"}, 0, 0.0),
-        ({"version": 4, "status": "estimated"}, 0, 0.0),
-        ({"version": True, "status": "estimated"}, 0, 0.0),
-        (None, 0, -0.003),
-    ])
+    @pytest.mark.parametrize(
+        "estimate, covered, saved",
+        [
+            ({"version": 1, "status": "estimated"}, 1, -0.003),
+            ({"version": 1, "status": "estimated"}, 1, 0.0),
+            ({"version": 2, "status": "estimated"}, 1, 0.0),
+            ({"version": 3, "status": "estimated"}, 1, -0.003),
+            ({"version": 1, "status": "unknown"}, 0, 0.0),
+            ({"version": 0, "status": "estimated"}, 0, 0.0),
+            ({"version": 4, "status": "estimated"}, 0, 0.0),
+            ({"version": True, "status": "estimated"}, 0, 0.0),
+            (None, 0, -0.003),
+        ],
+    )
     async def test_update_database_seam_enqueues_only_auto_routed_success(
-        self, classifier_cost: float | None, estimate: dict[str, object] | None, covered: int, saved: float,
+        self,
+        classifier_cost: float | None,
+        estimate: dict[str, object] | None,
+        covered: int,
+        saved: float,
     ) -> None:
         from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 
@@ -514,7 +525,8 @@ class TestEnqueueSeam:
         )
         metadata: Final = _metadata(
             routing_decision={**ROUTING_DECISION, "classifier_cost": classifier_cost},
-            autorouter_savings=saved if covered else -0.003, autorouter_savings_estimate=estimate,
+            autorouter_savings=saved if covered else -0.003,
+            autorouter_savings_estimate=estimate,
         )
         for payload in (
             _payload(metadata=json.dumps(metadata)),

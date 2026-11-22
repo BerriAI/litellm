@@ -291,12 +291,15 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest_asyncio.fixture(loop_scope="function")
 async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
     yield
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
 
+
 LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -335,6 +338,7 @@ def isolate_litellm_state():
         if attr in _DEFAULTS:
             setattr(litellm, attr, _DEFAULTS[attr])
 
+
 _LIST_ATTRS = (
     "callbacks",
     "success_callback",
@@ -362,6 +366,7 @@ _SCALAR_ATTRS = (
 
 _DEFAULTS: dict = {}
 
+
 @pytest.fixture(scope="module")
 def setup_and_teardown():
     """
@@ -384,6 +389,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_dynamic_key_extraction_from_metadata():
     """
@@ -404,6 +410,7 @@ def test_dynamic_key_extraction_from_metadata():
     assert params.get("langfuse_secret_key") == "sk-test"
     assert params.get("langfuse_host") == "https://test.langfuse.com"
 
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_dynamic_key_extraction_from_litellm_params_metadata():
     """
@@ -422,6 +429,7 @@ def test_dynamic_key_extraction_from_litellm_params_metadata():
 
     assert params.get("langfuse_public_key") == "pk-litellm"
     assert params.get("langfuse_secret_key") == "sk-litellm"
+
 
 if __name__ == "__main__":
     test_dynamic_key_extraction_from_metadata()

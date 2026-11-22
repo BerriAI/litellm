@@ -37,9 +37,7 @@ class TestVolcEngineConfig:
             drop_params=False,
         )
 
-        assert "thinking" in e2e_mapped_params["extra_body"] and e2e_mapped_params[
-            "extra_body"
-        ]["thinking"] == {
+        assert "thinking" in e2e_mapped_params["extra_body"] and e2e_mapped_params["extra_body"]["thinking"] == {
             "type": "enabled",
         }
 

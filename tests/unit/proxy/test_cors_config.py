@@ -24,18 +24,14 @@ def test_cors_empty_string_disables_credentials():
     for empty in ("", "   ", "\t"):
         origins, allow_credentials = _get_cors_config(cors_origins_env=empty)
         assert origins == ["*"], f"Expected wildcard for input {repr(empty)}"
-        assert (
-            allow_credentials is False
-        ), f"Expected no credentials for input {repr(empty)}"
+        assert allow_credentials is False, f"Expected no credentials for input {repr(empty)}"
 
 
 def test_cors_single_specific_origin_enables_credentials():
     """should enable credentials when a single explicit origin is configured."""
     from litellm.proxy.proxy_server import _get_cors_config
 
-    origins, allow_credentials = _get_cors_config(
-        cors_origins_env="https://admin.example.com"
-    )
+    origins, allow_credentials = _get_cors_config(cors_origins_env="https://admin.example.com")
     assert origins == ["https://admin.example.com"]
     assert allow_credentials is True
 
@@ -68,9 +64,7 @@ def test_cors_origins_strips_whitespace():
     """should strip surrounding whitespace from each origin entry."""
     from litellm.proxy.proxy_server import _get_cors_config
 
-    origins, _ = _get_cors_config(
-        cors_origins_env="  https://a.com  ,  https://b.com  "
-    )
+    origins, _ = _get_cors_config(cors_origins_env="  https://a.com  ,  https://b.com  ")
     assert origins == ["https://a.com", "https://b.com"]
 
 
@@ -78,9 +72,7 @@ def test_cors_origins_skips_blank_entries():
     """should skip blank entries caused by trailing/double commas."""
     from litellm.proxy.proxy_server import _get_cors_config
 
-    origins, allow_credentials = _get_cors_config(
-        cors_origins_env="https://a.com,,https://b.com,"
-    )
+    origins, allow_credentials = _get_cors_config(cors_origins_env="https://a.com,,https://b.com,")
     assert origins == ["https://a.com", "https://b.com"]
     assert allow_credentials is True
 
@@ -116,9 +108,7 @@ def test_cors_explicit_credentials_case_insensitive():
     from litellm.proxy.proxy_server import _get_cors_config
 
     _, allow_true = _get_cors_config(cors_origins_env="", cors_credentials_env="TRUE")
-    _, allow_false = _get_cors_config(
-        cors_origins_env="https://x.com", cors_credentials_env="FALSE"
-    )
+    _, allow_false = _get_cors_config(cors_origins_env="https://x.com", cors_credentials_env="FALSE")
     assert allow_true is True
     assert allow_false is False
 
@@ -132,9 +122,7 @@ def test_proxy_server_cors_invariant():
     import litellm.proxy.proxy_server as proxy_server
 
     if os.getenv("LITELLM_CORS_ALLOW_CREDENTIALS") is None:
-        assert proxy_server.allow_cors_credentials == (
-            "*" not in proxy_server.origins
-        ), (
+        assert proxy_server.allow_cors_credentials == ("*" not in proxy_server.origins), (
             f"Invariant broken: allow_cors_credentials={proxy_server.allow_cors_credentials} "
             f"but origins={proxy_server.origins}. "
             "When origins contains '*', allow_credentials must be False."

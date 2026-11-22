@@ -19,14 +19,10 @@ from litellm.vector_stores import (
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
-async def test_basic_search_vector_store(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode
-):
+async def test_basic_search_vector_store(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     query_vector = [0.5, -0.25, 0.125]
-    search_url = (
-        "https://azure-kb-search.search.windows.net/indexes/my-vector-index/docs/search?api-version=2024-07-01"
-    )
+    search_url = "https://azure-kb-search.search.windows.net/indexes/my-vector-index/docs/search?api-version=2024-07-01"
     embedding_route = respx_mock.post(url__regex=r"https://azure-embed\.example\.com/.*/embeddings.*").mock(
         return_value=httpx.Response(
             200,

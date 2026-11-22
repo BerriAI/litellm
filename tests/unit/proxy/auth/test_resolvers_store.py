@@ -30,7 +30,6 @@ def _cache_holding(key: UserAPIKeyAuth) -> UserApiKeyCache:
     return cache
 
 
-
 async def test_resolve_returns_a_principal_projected_from_the_looked_up_key():
     raw = "sk-live-abc"
     key = UserAPIKeyAuth(token=hash_token(raw), user_id="u-1", team_id="t-1")

@@ -121,9 +121,7 @@ class TestPromptVersionsEndpoint:
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions
 
         # Mock user with admin role
-        mock_user = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        mock_user = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN)
 
         # Create mock prompt registry with multiple versions
         mock_prompts = {
@@ -168,16 +166,12 @@ class TestPromptVersionsEndpoint:
         # Force the in-memory path so this test is isolated from any leaked prisma mocks.
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-            ) as mock_registry,
+            patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry,
         ):
             mock_registry.IN_MEMORY_PROMPTS = mock_prompts
 
             # Test with base prompt ID
-            response = await get_prompt_versions(
-                prompt_id="jack", user_api_key_dict=mock_user
-            )
+            response = await get_prompt_versions(prompt_id="jack", user_api_key_dict=mock_user)
 
             # Should return 3 versions of jack, sorted newest first
             assert len(response.prompts) == 3
@@ -189,9 +183,7 @@ class TestPromptVersionsEndpoint:
             assert response.prompts[2].version == 1
 
             # Test with versioned prompt ID (should strip version)
-            response = await get_prompt_versions(
-                prompt_id="jack.v1", user_api_key_dict=mock_user
-            )
+            response = await get_prompt_versions(prompt_id="jack.v1", user_api_key_dict=mock_user)
 
             assert len(response.prompts) == 3
             assert response.prompts[0].prompt_id == "jack"
@@ -209,22 +201,16 @@ class TestPromptVersionsEndpoint:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions
 
-        mock_user = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        mock_user = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN)
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-            ) as mock_registry,
+            patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry,
         ):
             mock_registry.IN_MEMORY_PROMPTS = {}
 
             with pytest.raises(HTTPException) as exc_info:
-                await get_prompt_versions(
-                    prompt_id="nonexistent", user_api_key_dict=mock_user
-                )
+                await get_prompt_versions(prompt_id="nonexistent", user_api_key_dict=mock_user)
 
             assert exc_info.value.status_code == 404
             assert "No versions found" in exc_info.value.detail
@@ -243,9 +229,7 @@ class TestAdminViewerReadAccess:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import list_prompts
 
-        viewer = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        )
+        viewer = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
         mock_prompts = {
             "jack.v1": PromptSpec(
@@ -277,9 +261,7 @@ class TestAdminViewerReadAccess:
             ),
         }
 
-        with patch(
-            "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-        ) as mock_registry:
+        with patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry:
             mock_registry.IN_MEMORY_PROMPTS = mock_prompts
 
             response = await list_prompts(user_api_key_dict=viewer)
@@ -296,9 +278,7 @@ class TestAdminViewerReadAccess:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_versions
 
-        viewer = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        )
+        viewer = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
         mock_prompts = {
             "jack.v1": PromptSpec(
@@ -323,15 +303,11 @@ class TestAdminViewerReadAccess:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-            ) as mock_registry,
+            patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry,
         ):
             mock_registry.IN_MEMORY_PROMPTS = mock_prompts
 
-            response = await get_prompt_versions(
-                prompt_id="jack", user_api_key_dict=viewer
-            )
+            response = await get_prompt_versions(prompt_id="jack", user_api_key_dict=viewer)
 
         assert [p.version for p in response.prompts] == [2, 1]
 
@@ -343,15 +319,11 @@ class TestAdminViewerReadAccess:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
 
-        viewer = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY
-        )
+        viewer = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY"
-            ) as mock_registry,
+            patch("litellm.proxy.prompts.prompt_registry.IN_MEMORY_PROMPT_REGISTRY") as mock_registry,
         ):
             mock_registry.resolve_prompt_spec.return_value = PromptSpec(
                 prompt_id="jack.v2",
@@ -405,9 +377,7 @@ class TestConfigPromptInfoWithEnvironment:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
 
-        admin = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        admin = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN)
 
         with (
             patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam
@@ -437,9 +407,7 @@ class TestConfigPromptInfoWithEnvironment:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.prompts.prompt_endpoints import get_prompt_info
 
-        admin = UserAPIKeyAuth(
-            api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN
-        )
+        admin = UserAPIKeyAuth(api_key="test_key", user_role=LitellmUserRoles.PROXY_ADMIN)
 
         with (
             patch(  # test-quality-ok: endpoint reads prisma_client and the registry from module globals at call time; no injection seam

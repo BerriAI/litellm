@@ -62,9 +62,7 @@ class TestAzureAIAnthropicCountTokensConfig:
         api_key = "test-key"
         litellm_params = {"api_key": "param-key", "custom_field": "value"}
 
-        headers = config.get_required_headers(
-            api_key=api_key, litellm_params=litellm_params
-        )
+        headers = config.get_required_headers(api_key=api_key, litellm_params=litellm_params)
 
         # x-api-key should use the direct api_key parameter
         assert headers["x-api-key"] == api_key
@@ -78,10 +76,7 @@ class TestAzureAIAnthropicCountTokensConfig:
         api_base = "https://my-resource.services.ai.azure.com"
         endpoint = config.get_count_tokens_endpoint(api_base)
 
-        assert (
-            endpoint
-            == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
-        )
+        assert endpoint == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
 
     def test_get_count_tokens_endpoint_with_anthropic_path(self):
         """Test endpoint generation when base URL already includes /anthropic."""
@@ -90,10 +85,7 @@ class TestAzureAIAnthropicCountTokensConfig:
         api_base = "https://my-resource.services.ai.azure.com/anthropic"
         endpoint = config.get_count_tokens_endpoint(api_base)
 
-        assert (
-            endpoint
-            == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
-        )
+        assert endpoint == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
 
     def test_get_count_tokens_endpoint_with_trailing_slash(self):
         """Test endpoint generation with trailing slash in base URL."""
@@ -102,10 +94,7 @@ class TestAzureAIAnthropicCountTokensConfig:
         api_base = "https://my-resource.services.ai.azure.com/"
         endpoint = config.get_count_tokens_endpoint(api_base)
 
-        assert (
-            endpoint
-            == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
-        )
+        assert endpoint == "https://my-resource.services.ai.azure.com/anthropic/v1/messages/count_tokens"
 
     def test_get_count_tokens_endpoint_for_a_resource_named_anthropic(self):
         config: Final = AzureAIAnthropicCountTokensConfig()

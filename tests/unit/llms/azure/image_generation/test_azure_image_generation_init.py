@@ -25,10 +25,7 @@ from litellm.utils import get_optional_params_image_gen
 
 def test_azure_deployment_image_generation_json_body():
     """Deployment-scoped Azure image URL must not send ``model`` in JSON."""
-    api = (
-        "https://example.openai.azure.com/openai/deployments/my-dep/"
-        "images/generations?api-version=2025-04-01-preview"
-    )
+    api = "https://example.openai.azure.com/openai/deployments/my-dep/images/generations?api-version=2025-04-01-preview"
     data = {"model": "my-dep", "prompt": "x", "n": 1}
     out = azure_deployment_image_generation_json_body(api, data)
     assert "model" not in out
@@ -53,10 +50,7 @@ def test_azure_image_generation_mai_base_model_uses_mai_url():
         model="image-deployment-alias",
         base_model="MAI-Image-2.5",
     )
-    assert (
-        url
-        == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
-    )
+    assert url == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
 
 
 def test_azure_image_generation_flattens_extra_body():
@@ -156,15 +150,11 @@ def test_azure_image_generation_drop_params_response_format():
     )
 
     # Verify response_format is NOT in optional_params
-    assert (
-        "response_format" not in optional_params
-    ), "response_format should be dropped from optional_params"
+    assert "response_format" not in optional_params, "response_format should be dropped from optional_params"
 
     # Verify response_format is NOT in extra_body either
     if "extra_body" in optional_params:
-        assert (
-            "response_format" not in optional_params["extra_body"]
-        ), "response_format should not be in extra_body"
+        assert "response_format" not in optional_params["extra_body"], "response_format should not be in extra_body"
 
     # Verify supported params ARE in optional_params
     assert "n" in optional_params
@@ -242,9 +232,7 @@ def test_azure_image_generation_base_model_vs_deployment_name():
         "data": [{"url": "https://example.com/image.png", "revised_prompt": prompt}],
     }
 
-    with patch.object(
-        HTTPHandler, "post", return_value=mock_http_response
-    ) as mock_post:
+    with patch.object(HTTPHandler, "post", return_value=mock_http_response) as mock_post:
         logging_obj = MagicMock()
         logging_obj.pre_call = MagicMock()
         logging_obj.post_call = MagicMock()
@@ -265,18 +253,16 @@ def test_azure_image_generation_base_model_vs_deployment_name():
         assert mock_post.called, "HTTPHandler.post should be invoked"
         post_kwargs = mock_post.call_args.kwargs
         url_used = post_kwargs.get("url", "")
-        assert (
-            model in url_used
-        ), f"URL should contain deployment name '{model}', but got: {url_used}"
+        assert model in url_used, f"URL should contain deployment name '{model}', but got: {url_used}"
         assert base_model not in url_used or base_model == model, (
             f"URL should NOT contain base_model '{base_model}' when it differs from deployment name, "
             f"but got: {url_used}"
         )
 
         wire_json = post_kwargs.get("json") or {}
-        assert (
-            "model" not in wire_json
-        ), f"Azure deployment image gen must not send 'model' in JSON body; got keys: {list(wire_json)}"
+        assert "model" not in wire_json, (
+            f"Azure deployment image gen must not send 'model' in JSON body; got keys: {list(wire_json)}"
+        )
         assert wire_json.get("prompt") == prompt
         assert wire_json.get("n") == 1
         assert wire_json.get("size") == "1024x1024"
@@ -316,9 +302,7 @@ async def test_azure_aimage_generation_base_model_vs_deployment_name():
     mock_client = MagicMock()
     mock_client.post = AsyncMock(return_value=mock_http_response)
 
-    with patch(
-        "litellm.llms.azure.azure.get_async_httpx_client", return_value=mock_client
-    ):
+    with patch("litellm.llms.azure.azure.get_async_httpx_client", return_value=mock_client):
         logging_obj = MagicMock()
         logging_obj.pre_call = MagicMock()
         logging_obj.post_call = MagicMock()
@@ -756,7 +740,9 @@ def test_get_azure_request_auth_headers_uses_token_provider_over_api_key():
 
 def test_get_azure_request_auth_headers_falls_back_to_api_key():
     azure_client_params = {"api_key": "sk-resolved", "azure_ad_token": None, "azure_ad_token_provider": None}
-    out = get_azure_request_auth_headers(headers={"Content-Type": "application/json"}, azure_client_params=azure_client_params)
+    out = get_azure_request_auth_headers(
+        headers={"Content-Type": "application/json"}, azure_client_params=azure_client_params
+    )
     assert dict(out) == {"Content-Type": "application/json", "api-key": "sk-resolved"}
 
 

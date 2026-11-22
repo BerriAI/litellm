@@ -67,9 +67,7 @@ class TestRecraftImageEditTransformation:
         # Check that files contains the image
         assert len(files) == 1
         assert files[0][0] == "image"  # field name
-        assert (
-            files[0][1][0] == "image.png"
-        )  # filename (default for non-BufferedReader)
+        assert files[0][1][0] == "image.png"  # filename (default for non-BufferedReader)
         assert files[0][1][1] == image  # file object
 
     def test_get_image_files_for_request_single_image(self):
@@ -162,7 +160,7 @@ class TestRecraftImageEditTransformation:
         mock_response.status_code = 500
         mock_response.headers = {}
 
-        with pytest.raises(Exception, match='Error transforming image edit response: Invalid JSON: line') as exc_info:
+        with pytest.raises(Exception, match="Error transforming image edit response: Invalid JSON: line") as exc_info:
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,

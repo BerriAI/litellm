@@ -69,7 +69,7 @@ async def test_should_accept_string_timestamps(monkeypatch: pytest.MonkeyPatch):
 async def test_should_reject_invalid_limit(monkeypatch: pytest.MonkeyPatch):
     db, query_mock = _setup_db(monkeypatch, [])
 
-    with pytest.raises(ValueError, match='limit must be an integer'):
+    with pytest.raises(ValueError, match="limit must be an integer"):
         await db.get_usage_data(limit="invalid")
 
     assert query_mock.await_count == 0
@@ -82,10 +82,7 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
     await db.get_usage_data()
 
     query_text, *_ = query_mock.await_args.args
-    assert (
-        "COALESCE(vt.organization_id, tt.organization_id) as organization_id"
-        in query_text
-    )
+    assert "COALESCE(vt.organization_id, tt.organization_id) as organization_id" in query_text
     assert "ot.organization_alias as organization_alias" in query_text
     assert 'LEFT JOIN "LiteLLM_OrganizationTable" ot' in query_text
 
@@ -93,7 +90,13 @@ async def test_should_join_organization_table(monkeypatch: pytest.MonkeyPatch):
 @pytest.mark.asyncio
 async def test_should_build_frame_from_rows_recovered_for_double_hashed_keys(monkeypatch: pytest.MonkeyPatch):
     double_hashed = hashlib.sha256(b"sk-hashed-token").hexdigest()
-    joined_row = {"api_key": "sk-joined", "api_key_alias": "joined", "team_id": "team-0", "user_email": None, "spend": 0.1}
+    joined_row = {
+        "api_key": "sk-joined",
+        "api_key_alias": "joined",
+        "team_id": "team-0",
+        "user_email": None,
+        "spend": 0.1,
+    }
     dirty_row = {"api_key": double_hashed, "api_key_alias": None, "team_id": None, "user_email": None, "spend": 0.5}
 
     async def query_raw(query: str, *params):

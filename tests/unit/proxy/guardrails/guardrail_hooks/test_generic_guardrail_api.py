@@ -976,7 +976,10 @@ class TestStructuredMessagesInResponse:
                         "role": "user",
                         "content": [
                             sent_image_row["content"][0],
-                            {"type": "image_url", "image_url": {"url": sent_image_row["content"][1]["image_url"]["url"]}},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": sent_image_row["content"][1]["image_url"]["url"]},
+                            },
                         ],
                     },
                     redacted_row,
@@ -997,7 +1000,9 @@ class TestStructuredMessagesInResponse:
                 input_type="request",
             )
         bedrock_messages = _bedrock_converse_messages_pt(
-            messages=guardrailed_inputs["structured_messages"], model="us.amazon.nova-2-lite-v1:0", llm_provider="bedrock"
+            messages=guardrailed_inputs["structured_messages"],
+            model="us.amazon.nova-2-lite-v1:0",
+            llm_provider="bedrock",
         )
 
         assert [block for block in bedrock_messages[0]["content"] if "image" in block] == [

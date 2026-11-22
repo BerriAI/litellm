@@ -33,9 +33,7 @@ from litellm.proxy.utils import (
 
 
 @pytest.fixture(autouse=True)
-def _swap_config_cache(
-    monkeypatch: pytest.MonkeyPatch, mock_dual_cache: Any
-) -> Any:
+def _swap_config_cache(monkeypatch: pytest.MonkeyPatch, mock_dual_cache: Any) -> Any:
     """Replace the module-level cache so tests see a clean store per run."""
     monkeypatch.setattr(utils_mod, "litellm_config_cache", mock_dual_cache)
     return mock_dual_cache
@@ -145,9 +143,7 @@ async def test_get_config_param_cache_hit_returns_unpacked_row(
     _swap_config_cache: Any,
 ) -> None:
     cache_key = _config_cache_key("p1")
-    await _swap_config_cache.async_set_cache(
-        cache_key, {"param_name": "p1", "param_value": {"x": 1}}
-    )
+    await _swap_config_cache.async_set_cache(cache_key, {"param_name": "p1", "param_value": {"x": 1}})
     prisma = MagicMock()
     prisma.get_generic_data = AsyncMock()
 
@@ -198,9 +194,7 @@ async def test_get_config_param_caches_negative_lookup_as_miss_sentinel(
     prisma.get_generic_data = AsyncMock(return_value=None)
     row = await get_config_param(prisma, "absent")
     assert row is None
-    assert _swap_config_cache._store[_config_cache_key("absent")] == (
-        utils_mod._CONFIG_CACHE_MISS
-    )
+    assert _swap_config_cache._store[_config_cache_key("absent")] == (utils_mod._CONFIG_CACHE_MISS)
 
 
 @pytest.mark.asyncio
@@ -234,9 +228,7 @@ async def test_invalidate_config_param_evicts_from_cache(
 async def test_invalidate_config_param_survives_a_cache_error(
     _swap_config_cache: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    _swap_config_cache.async_delete_cache = AsyncMock(
-        side_effect=ConnectionError("redis down")
-    )
+    _swap_config_cache.async_delete_cache = AsyncMock(side_effect=ConnectionError("redis down"))
     caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
     utils_mod.verbose_proxy_logger.addHandler(caplog.handler)
     try:
@@ -312,9 +304,7 @@ async def test_config_param_cache_calls_declare_the_config_params_key_family(
     _swap_config_cache.async_get_cache = AsyncMock(side_effect=_get)
     _swap_config_cache.async_set_cache = AsyncMock(side_effect=_set)
     prisma = MagicMock()
-    prisma.get_generic_data = AsyncMock(
-        return_value=SimpleNamespace(param_name="p1", param_value={"x": 1})
-    )
+    prisma.get_generic_data = AsyncMock(return_value=SimpleNamespace(param_name="p1", param_value={"x": 1}))
 
     await get_config_param(prisma, "p1")
 

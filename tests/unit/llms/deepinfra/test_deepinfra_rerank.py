@@ -285,9 +285,7 @@ def test_deepinfra_rerank_error_handling(mock_post):
     )
 
     # Verify that the response contains error information
-    assert (
-        response._hidden_params["status"] == "unknown"
-    )  # Default status when error occurs
+    assert response._hidden_params["status"] == "unknown"  # Default status when error occurs
 
 
 def test_deepinfra_rerank_models():

@@ -735,3 +735,22 @@ def test_params_the_chat_bridge_cannot_honor_are_rejected_even_with_drop_params(
             litellm_params={"drop_params": True},
             custom_llm_provider="gemini",
         )
+
+
+@pytest.mark.parametrize(
+    "tool",
+    (
+        {"type": "file_search", "file_search_store_names": ["fileSearchStores/other-team"]},
+        {"file_search": {"file_search_store_names": ["fileSearchStores/other-team"]}},
+    ),
+)
+def test_file_search_tool_is_rejected_so_chat_cannot_search_a_store_the_key_was_not_granted(
+    tool: dict[str, object],
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="file_search"):
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "What is in the store?"}],
+            model="gemini-4-neon",
+            optional_params={"tools": [tool]},
+            litellm_params={"drop_params": True},
+        )

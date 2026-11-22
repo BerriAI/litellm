@@ -28,16 +28,23 @@ KEY: Final = "sk-test-new-gateway-key"
 MODEL: Final = "gateway-codex-model"
 
 
-@pytest.mark.parametrize("path,existing,first_value,second_value", [
-    ("model", 'model = "original" # starting model\n', 'value = "first"\n', 'value = "second"\n'),
-    ("model_providers.litellm", '', '[value]\nname = "first"\n', '[value]\nname = "second"\n'),
-    ("model_providers.litellm", '[model_providers.litellm]\nname = "original" # provider\n',
-     '[value]\nname = "first"\n', '[value]\nname = "second"\n'),
-])
+@pytest.mark.parametrize(
+    "path,existing,first_value,second_value",
+    [
+        ("model", 'model = "original" # starting model\n', 'value = "first"\n', 'value = "second"\n'),
+        ("model_providers.litellm", "", '[value]\nname = "first"\n', '[value]\nname = "second"\n'),
+        (
+            "model_providers.litellm",
+            '[model_providers.litellm]\nname = "original" # provider\n',
+            '[value]\nname = "first"\n',
+            '[value]\nname = "second"\n',
+        ),
+    ],
+)
 def test_toml_transitions_leave_source_and_independent_results_unchanged(
     path: str, existing: str, first_value: str, second_value: str
 ) -> None:
-    source: Final = tomlkit.parse('# user settings\n' + existing + '[profiles.work]\nmodel = "keep" # profile\n')
+    source: Final = tomlkit.parse("# user settings\n" + existing + '[profiles.work]\nmodel = "keep" # profile\n')
     original_bytes: Final = source.as_string().encode()
     first: Final = _with(source, path, first_value)
     first_bytes: Final = first.as_string().encode()
@@ -54,8 +61,8 @@ def test_toml_transitions_leave_source_and_independent_results_unchanged(
     assert _snapshot(removed, path) is None
     for result in (first, second, removed):
         assert result["profiles"] == source["profiles"]
-        assert '# user settings' in result.as_string()
-        assert '# profile' in result.as_string()
+        assert "# user settings" in result.as_string()
+        assert "# profile" in result.as_string()
 
 
 def test_persistent_provider_is_complete_and_preserves_unrelated_toml(tmp_path: Path) -> None:
@@ -102,7 +109,7 @@ def test_persistent_provider_is_complete_and_preserves_unrelated_toml(tmp_path: 
     assert not codex_configure_state_path(path).exists()
 
 
-@pytest.mark.parametrize("original", [None, "", "# my preferences\n", '[model_providers]\n'])
+@pytest.mark.parametrize("original", [None, "", "# my preferences\n", "[model_providers]\n"])
 def test_undo_distinguishes_missing_empty_and_existing_tables(tmp_path: Path, original: str | None) -> None:
     path: Final = tmp_path / "config.toml"
     if original is not None:
@@ -140,8 +147,10 @@ def test_repeat_setup_restores_the_user_value_it_displaced(tmp_path: Path) -> No
 
 def test_undo_keeps_provider_credentials_and_endpoint_together(tmp_path: Path) -> None:
     path: Final = tmp_path / "config.toml"
-    path.write_text('[model_providers.litellm]\nbase_url = "https://old.example.com/v1"\n'
-                    'http_headers = { Authorization = "Bearer old-key" }\n')
+    path.write_text(
+        '[model_providers.litellm]\nbase_url = "https://old.example.com/v1"\n'
+        'http_headers = { Authorization = "Bearer old-key" }\n'
+    )
     configure_codex_settings(GATEWAY, KEY, MODEL, path)
     path.write_text(path.read_text().replace(GATEWAY, "https://user.example.com"))
     outcome: Final = unconfigure_codex_settings(path)
@@ -186,11 +195,14 @@ def test_code_home_and_symlink_aliases_share_receipt_and_write_target(tmp_path: 
     assert tomlkit.parse(alias.read_text()) == {"model": "old"}
 
 
-@pytest.mark.parametrize("invalid", [
-    'token = "sk-secret\n',
-    'model_providers = "sk-secret"\n',
-    '[model_providers]\nlitellm = "sk-secret"\n',
-])
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        'token = "sk-secret\n',
+        'model_providers = "sk-secret"\n',
+        '[model_providers]\nlitellm = "sk-secret"\n',
+    ],
+)
 def test_invalid_settings_are_unchanged_and_errors_hide_content(tmp_path: Path, invalid: str) -> None:
     path: Final = tmp_path / "config.toml"
     path.write_text(invalid)
@@ -272,18 +284,34 @@ def test_wrapper_and_persistent_provider_agree_except_credential_source(tmp_path
     assert overrides["model_providers.litellm.env_key"] == '"OPENAI_API_KEY"'
 
 
-@pytest.mark.parametrize("version", [
-    "codex-cli 0.129.0", "codex-cli 0.129.1", "codex-cli 0.130.0", "codex-cli 1.0.0",
-    " \ncodex-cli 0.129.0\n",
-])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "codex-cli 0.129.0",
+        "codex-cli 0.129.1",
+        "codex-cli 0.130.0",
+        "codex-cli 1.0.0",
+        " \ncodex-cli 0.129.0\n",
+    ],
+)
 def test_version_guard_accepts_the_fixed_release_and_newer_stable_versions(version: str) -> None:
     assert codex_settings_module.require_safe_codex(version=lambda: version) is None
 
 
-@pytest.mark.parametrize("version", [
-    None, "", "codex-cli 0.99.0", "codex-cli 0.128.99", "codex-cli 0.129.0-alpha.1",
-    "codex-cli 1.0.0-beta.1", "0.129.0", "codex-cli 0.129.0 extra", "unparseable-sk-version-secret",
-])
+@pytest.mark.parametrize(
+    "version",
+    [
+        None,
+        "",
+        "codex-cli 0.99.0",
+        "codex-cli 0.128.99",
+        "codex-cli 0.129.0-alpha.1",
+        "codex-cli 1.0.0-beta.1",
+        "0.129.0",
+        "codex-cli 0.129.0 extra",
+        "unparseable-sk-version-secret",
+    ],
+)
 def test_version_guard_refuses_missing_unsafe_or_unrecognized_versions(version: str | None) -> None:
     with pytest.raises(CodexSettingsError) as caught:
         codex_settings_module.require_safe_codex(version=lambda: version)
@@ -291,10 +319,13 @@ def test_version_guard_refuses_missing_unsafe_or_unrecognized_versions(version: 
     assert "sk-version-secret" not in str(caught.value)
 
 
-@pytest.mark.parametrize("output,returncode", [
-    (None, 0),
-    ("codex-cli 0.129.0\n", 7),
-])
+@pytest.mark.parametrize(
+    "output,returncode",
+    [
+        (None, 0),
+        ("codex-cli 0.129.0\n", 7),
+    ],
+)
 def test_version_probe_handles_missing_or_failed_executable(
     fake_codex_version: Callable[[str | None, int], Path], output: str | None, returncode: int
 ) -> None:
@@ -302,16 +333,21 @@ def test_version_probe_handles_missing_or_failed_executable(
     assert codex_settings_module._codex_version() is None
 
 
-@pytest.mark.parametrize("output,returncode", [
-    (None, 0),
-    ("codex-cli 0.128.0\n", 0),
-    ("codex-cli 0.129.0-alpha.1\n", 0),
-    ("unparseable-sk-version-secret\n", 0),
-    ("codex-cli 0.129.0\n", 7),
-])
+@pytest.mark.parametrize(
+    "output,returncode",
+    [
+        (None, 0),
+        ("codex-cli 0.128.0\n", 0),
+        ("codex-cli 0.129.0-alpha.1\n", 0),
+        ("unparseable-sk-version-secret\n", 0),
+        ("codex-cli 0.129.0\n", 7),
+    ],
+)
 def test_writer_checks_the_installed_codex_before_replacing_a_key_or_receipt(
-    tmp_path: Path, fake_codex_version: Callable[[str | None, int], Path],
-    output: str | None, returncode: int,
+    tmp_path: Path,
+    fake_codex_version: Callable[[str | None, int], Path],
+    output: str | None,
+    returncode: int,
 ) -> None:
     path: Final = tmp_path / "config.toml"
     path.write_text('model = "original"\n')

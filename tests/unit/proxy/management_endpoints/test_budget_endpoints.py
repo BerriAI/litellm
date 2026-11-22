@@ -114,27 +114,38 @@ def test_budget_windows_round_trip_with_existing_scalar_cap(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str
 ) -> None:
     client, _, _ = client_and_mocks
-    response: Final = client.post(path, json={
-        "budget_id": "combined", "max_budget": 25, "budget_duration": "30d",
-        "budget_limits": [
-            {"budget_duration": "1mo", "max_budget": 0, "reset_at": "2027-02-01T00:00:00Z"},
-            {"budget_duration": "12mo", "max_budget": 1000, "reset_at": "2028-01-01T00:00:00Z"},
-        ],
-    })
+    response: Final = client.post(
+        path,
+        json={
+            "budget_id": "combined",
+            "max_budget": 25,
+            "budget_duration": "30d",
+            "budget_limits": [
+                {"budget_duration": "1mo", "max_budget": 0, "reset_at": "2027-02-01T00:00:00Z"},
+                {"budget_duration": "12mo", "max_budget": 1000, "reset_at": "2028-01-01T00:00:00Z"},
+            ],
+        },
+    )
     assert response.status_code == 200, response.text
     result: Final = response.json()
     assert result["max_budget"] == 25
     assert result["budget_duration"] == "30d"
     assert {entry["budget_duration"]: entry["max_budget"] for entry in result["budget_limits"]} == {
-        "1mo": 0, "12mo": 1000,
+        "1mo": 0,
+        "12mo": 1000,
     }
     assert result["budget_limits"][0]["reset_at"] == "2027-02-01T00:00:00+00:00"
 
 
-@pytest.mark.parametrize("clear", (
-    None, [],
-    [{"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"}],
-), ids=["null", "empty", "replacement"])
+@pytest.mark.parametrize(
+    "clear",
+    (
+        None,
+        [],
+        [{"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"}],
+    ),
+    ids=["null", "empty", "replacement"],
+)
 def test_budget_update_can_remove_malformed_windows(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], clear: object
 ) -> None:
@@ -150,41 +161,67 @@ def test_budget_update_can_remove_malformed_windows(
     assert response.status_code == 200, response.text
     assert response.json()["budget_limits"] == clear
     query: Final = QueryBuilder(
-        method="update", model=prisma_models.LiteLLM_BudgetTable,
-        arguments=table.update.call_args.kwargs, root_selection=["budget_id"],
+        method="update",
+        model=prisma_models.LiteLLM_BudgetTable,
+        arguments=table.update.call_args.kwargs,
+        root_selection=["budget_id"],
     ).build_query()
     assert f"budget_limits: {json.dumps(json.dumps(clear))}" in query
 
 
-@pytest.mark.parametrize("sibling", [
-    None,
-    {"max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"},
-    {"budget_duration": "1mo", "max_budget": None, "reset_at": "2030-02-01T00:00:00+00:00"},
-    {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "invalid"},
-], ids=["no_sibling", "missing_duration", "invalid_cap", "invalid_reset"])
-@pytest.mark.parametrize("replica_day,current_cap,current_day,expected_day", [
-    (2, 10.0, 3, 3),
-    (2, 10.0, 2, 2),
-    (2, 30.0, 3, 3),
-    (2, None, 3, 4),
-    (1, 10.0, 2, 2),
-], ids=["reset", "no_conflict", "admin_edit", "malformed_current", "stale_replica"])
+@pytest.mark.parametrize(
+    "sibling",
+    [
+        None,
+        {"max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"},
+        {"budget_duration": "1mo", "max_budget": None, "reset_at": "2030-02-01T00:00:00+00:00"},
+        {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "invalid"},
+    ],
+    ids=["no_sibling", "missing_duration", "invalid_cap", "invalid_reset"],
+)
+@pytest.mark.parametrize(
+    "replica_day,current_cap,current_day,expected_day",
+    [
+        (2, 10.0, 3, 3),
+        (2, 10.0, 2, 2),
+        (2, 30.0, 3, 3),
+        (2, None, 3, 4),
+        (1, 10.0, 2, 2),
+    ],
+    ids=["reset", "no_conflict", "admin_edit", "malformed_current", "stale_replica"],
+)
 def test_budget_update_keeps_current_resets_and_requested_caps(
-    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], sibling: dict[str, object] | None,
-    replica_day: int, current_cap: float | None, current_day: int, expected_day: int,
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    sibling: dict[str, object] | None,
+    replica_day: int,
+    current_cap: float | None,
+    current_day: int,
+    expected_day: int,
 ) -> None:
     client, database, table = client_and_mocks
     original: Final = {"budget_duration": "1d", "max_budget": 10.0, "reset_at": "2030-01-02T00:00:00+00:00"}
     siblings: Final = (sibling,) if sibling is not None else ()
-    table.find_unique.return_value = types.SimpleNamespace(budget_limits=[
-        {**original, "reset_at": datetime(2030, 1, replica_day, tzinfo=timezone.utc).isoformat()}, *siblings,
-    ])
+    table.find_unique.return_value = types.SimpleNamespace(
+        budget_limits=[
+            {**original, "reset_at": datetime(2030, 1, replica_day, tzinfo=timezone.utc).isoformat()},
+            *siblings,
+        ]
+    )
     transaction: Final = database.tx.return_value.__aenter__.return_value
-    transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [
-        {**original, "max_budget": current_cap,
-         "reset_at": datetime(2030, 1, current_day, tzinfo=timezone.utc).isoformat()},
-        *siblings,
-    ]}])
+    transaction.query_raw = AsyncMock(
+        return_value=[
+            {
+                "budget_limits": [
+                    {
+                        **original,
+                        "max_budget": current_cap,
+                        "reset_at": datetime(2030, 1, current_day, tzinfo=timezone.utc).isoformat(),
+                    },
+                    *siblings,
+                ]
+            }
+        ]
+    )
     requested: Final = [
         {"budget_duration": "1d", "max_budget": 50.0, "reset_at": "2030-01-04T00:00:00+00:00"},
         {"budget_duration": "1mo", "max_budget": 200.0, "reset_at": "2030-02-01T00:00:00+00:00"},
@@ -202,19 +239,29 @@ def test_budget_update_keeps_current_resets_and_requested_caps(
 @pytest.mark.parametrize("path", ("/budget/new", "/budget/update"))
 @pytest.mark.parametrize("duration", ("2d", "14d", "30d", "1h"))
 def test_concurrent_and_scalar_budgets_accept_custom_durations(
-    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], path: str, duration: str,
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    path: str,
+    duration: str,
 ) -> None:
     client, _, _ = client_and_mocks
-    window: Final = client.post(path, json={
-        "budget_id": "duration-test",
-        "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
-    })
+    window: Final = client.post(
+        path,
+        json={
+            "budget_id": "duration-test",
+            "budget_limits": [{"budget_duration": duration, "max_budget": 10}],
+        },
+    )
     assert window.status_code == 200, window.text
     assert window.json()["budget_limits"][0]["max_budget"] == 10
 
-    accepted: Final = client.post(path, json={
-        "budget_id": "duration-test", "max_budget": 10, "budget_duration": duration,
-    })
+    accepted: Final = client.post(
+        path,
+        json={
+            "budget_id": "duration-test",
+            "max_budget": 10,
+            "budget_duration": duration,
+        },
+    )
     assert accepted.status_code == 200, accepted.text
     assert accepted.json()["budget_duration"] == duration
 
@@ -224,19 +271,28 @@ def test_budget_update_rejects_windows_on_an_existing_scalar_consumer(
 ) -> None:
     client, database, table = client_and_mocks
     database.db.query_raw.return_value = [{"referenced": True}]
-    response: Final = client.post("/budget/update", json={
-        "budget_id": "used-by-key", "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
-    })
+    response: Final = client.post(
+        "/budget/update",
+        json={
+            "budget_id": "used-by-key",
+            "budget_limits": [{"budget_duration": "12mo", "max_budget": 1000}],
+        },
+    )
     assert response.status_code == 400, response.text
     table.update.assert_not_awaited()
 
 
-@pytest.mark.parametrize("updates", [
-    {"max_budget": 3},
-    {"budget_limits": [{"budget_duration": "1d", "max_budget": 10}]},
-], ids=["scalar", "windows"])
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"max_budget": 3},
+        {"budget_limits": [{"budget_duration": "1d", "max_budget": 10}]},
+    ],
+    ids=["scalar", "windows"],
+)
 def test_budget_edit_evicts_members_and_organization_aliases(
-    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
     updates: dict[str, object],
 ) -> None:
     client, database, _ = client_and_mocks
@@ -246,7 +302,9 @@ def test_budget_edit_evicts_members_and_organization_aliases(
     cache.set_cache(member_key, {"stale": True}, local_only=True)
     cache.set_cache(alias_key, {"stale": True}, local_only=True)
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
-    database.db.litellm_customermembertable.find_many.return_value = [types.SimpleNamespace(customer_member_id="member")]
+    database.db.litellm_customermembertable.find_many.return_value = [
+        types.SimpleNamespace(customer_member_id="member")
+    ]
     database.db.litellm_customerorganizationtable.find_many.return_value = [types.SimpleNamespace(alias="organization")]
     response: Final = client.post("/budget/update", json={"budget_id": "shared", **updates})
     assert response.status_code == 200, response.text
@@ -255,7 +313,8 @@ def test_budget_edit_evicts_members_and_organization_aliases(
 
 
 def test_budget_edit_evicts_a_members_inherited_team_budget(
-    client_and_mocks: tuple[TestClient, MagicMock, MagicMock], monkeypatch: pytest.MonkeyPatch,
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, database, _ = client_and_mocks
     cache: Final = UserApiKeyCache()
@@ -266,7 +325,8 @@ def test_budget_edit_evicts_a_members_inherited_team_budget(
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
     database.db.litellm_customerteamtable.find_many.return_value = [types.SimpleNamespace(customer_team_id="team")]
     database.db.litellm_customermembertable.find_many.side_effect = [
-        [], [types.SimpleNamespace(customer_member_id="through-team")],
+        [],
+        [types.SimpleNamespace(customer_member_id="through-team")],
     ]
     response: Final = client.post("/budget/update", json={"budget_id": "team-budget", "max_budget": 3})
     assert response.status_code == 200, response.text
@@ -299,9 +359,7 @@ async def test_new_budget_success(client_and_mocks):
 
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
 @pytest.mark.asyncio
-async def test_new_budget_rejects_a_duration_that_never_advances(
-    client_and_mocks, bad_duration
-):
+async def test_new_budget_rejects_a_duration_that_never_advances(client_and_mocks, bad_duration):
     """A zero-length window resets to "now", so the row is due again the moment
     it is written and the reset job re-reads it on every tick forever."""
     client, _, mock_table = client_and_mocks
@@ -506,9 +564,7 @@ async def test_update_budget_allows_null_max_budget(client_and_mocks):
     assert resp.status_code == 200, resp.text
 
     # Verify that max_budget=None was included in the update data
-    assert (
-        "max_budget" in captured_data
-    ), "max_budget should be included when explicitly set to null"
+    assert "max_budget" in captured_data, "max_budget should be included when explicitly set to null"
     assert captured_data["max_budget"] is None, "max_budget should be None"
 
     mock_table.update.assert_awaited_once()
@@ -630,9 +686,12 @@ def test_shared_budget_cap_edit_keeps_the_saved_schedule(
     client_and_mocks: tuple[TestClient, MagicMock, MagicMock], duration: str, year: int
 ) -> None:
     client, _, table = client_and_mocks
-    table.find_unique = AsyncMock(return_value=types.SimpleNamespace(
-        budget_duration=duration, budget_reset_at=datetime(year, 7, 16, 4, tzinfo=timezone.utc),
-    ))
+    table.find_unique = AsyncMock(
+        return_value=types.SimpleNamespace(
+            budget_duration=duration,
+            budget_reset_at=datetime(year, 7, 16, 4, tzinfo=timezone.utc),
+        )
+    )
     written: Final = _capture_update_data(table)
 
     response: Final = client.post(
@@ -706,9 +765,7 @@ async def test_update_budget_recomputes_reset_at_when_duration_changes(
     )
     assert resp.status_code == 200, resp.text
 
-    assert (
-        "budget_reset_at" in captured
-    ), "duration change must recompute budget_reset_at"
+    assert "budget_reset_at" in captured, "duration change must recompute budget_reset_at"
     reset_at = captured["budget_reset_at"]
     assert isinstance(reset_at, datetime)
     assert reset_at > before, "recomputed reset must be in the future"
@@ -772,9 +829,7 @@ async def test_update_budget_duration_none_clears_obsolete_reset(client_and_mock
 
 
 @pytest.mark.asyncio
-async def test_update_budget_serializes_model_max_budget_for_prisma(
-    client_and_mocks, monkeypatch
-):
+async def test_update_budget_serializes_model_max_budget_for_prisma(client_and_mocks, monkeypatch):
     monkeypatch.setattr(ps, "premium_user", True)
 
     client, _, mock_table = client_and_mocks
@@ -793,9 +848,7 @@ async def test_update_budget_serializes_model_max_budget_for_prisma(
     assert resp.status_code == 200, resp.text
 
     stored: Final = captured["model_max_budget"]
-    assert isinstance(stored, str), (
-        f"model_max_budget must reach prisma as a JSON string, got {type(stored).__name__}"
-    )
+    assert isinstance(stored, str), f"model_max_budget must reach prisma as a JSON string, got {type(stored).__name__}"
     assert json.loads(stored) == {
         "gpt4o": {"max_budget": 5.0, "budget_duration": "1d"},
         "glm-5.2": {"max_budget": 7.5, "budget_duration": "30d"},
@@ -887,12 +940,17 @@ async def test_delete_missing_budget_preserves_prisma_missing_record_error() -> 
         await delete_unattached_customer_budget(table, "missing")
 
 
-def test_new_customer_window_start_is_set_by_the_server(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
+def test_new_customer_window_start_is_set_by_the_server(
+    client_and_mocks: tuple[TestClient, MagicMock, MagicMock],
+) -> None:
     client, _, _ = client_and_mocks
-    response: Final = client.post("/budget/new", json={
-        "budget_id": "windows",
-        "budget_limits": [{"budget_duration": "1mo", "max_budget": 10, "window_start": "2000-01-01T00:00:00Z"}],
-    })
+    response: Final = client.post(
+        "/budget/new",
+        json={
+            "budget_id": "windows",
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 10, "window_start": "2000-01-01T00:00:00Z"}],
+        },
+    )
     assert response.status_code == 200, response.text
     (window,) = response.json()["budget_limits"]
     expected: Final = get_budget_window_reset_fields("1mo")
@@ -902,16 +960,26 @@ def test_new_customer_window_start_is_set_by_the_server(client_and_mocks: tuple[
 
 def test_budget_update_keeps_the_stored_window_start(client_and_mocks: tuple[TestClient, MagicMock, MagicMock]) -> None:
     client, database, table = client_and_mocks
-    stored: Final = [{
-        "budget_duration": "1mo", "max_budget": 10.0,
-        "reset_at": "2030-02-01T00:00:00+00:00", "window_start": "2030-01-01T03:00:00+00:00",
-    }]
+    stored: Final = [
+        {
+            "budget_duration": "1mo",
+            "max_budget": 10.0,
+            "reset_at": "2030-02-01T00:00:00+00:00",
+            "window_start": "2030-01-01T03:00:00+00:00",
+        }
+    ]
     table.find_unique.return_value = types.SimpleNamespace(budget_limits=stored)
     transaction: Final = database.tx.return_value.__aenter__.return_value
     transaction.query_raw = AsyncMock(return_value=[{"budget_limits": stored}])
-    response: Final = client.post("/budget/update", json={"budget_id": "shared", "budget_limits": [
-        {"budget_duration": "1mo", "max_budget": 20.0, "window_start": "2000-01-01T00:00:00Z"},
-    ]})
+    response: Final = client.post(
+        "/budget/update",
+        json={
+            "budget_id": "shared",
+            "budget_limits": [
+                {"budget_duration": "1mo", "max_budget": 20.0, "window_start": "2000-01-01T00:00:00Z"},
+            ],
+        },
+    )
     assert response.status_code == 200, response.text
     assert response.json()["budget_limits"] == [{**stored[0], "max_budget": 20.0}]
 
@@ -922,7 +990,8 @@ def test_admin_set_customer_reset_keeps_a_derived_window_start(
     client, _, _ = client_and_mocks
     window: Final = {"budget_duration": "1mo", "max_budget": 10, "reset_at": "2030-02-01T00:00:00+00:00"}
     response: Final = client.post(
-        "/budget/new", json={"budget_id": "windows", "budget_limits": [{**window, "window_start": "2000-01-01T00:00:00Z"}]}
+        "/budget/new",
+        json={"budget_id": "windows", "budget_limits": [{**window, "window_start": "2000-01-01T00:00:00Z"}]},
     )
     assert response.status_code == 200, response.text
     assert response.json()["budget_limits"] == [window]

@@ -311,8 +311,8 @@ class TestInsert:
     def test_insert_values_with_a_scalar_subquery_per_row_passes(self, tmp_path):
         sql = (
             'INSERT INTO "Config" ("k", "v") VALUES\n'
-            "    ('a', (SELECT \"id\" FROM \"Bar\" WHERE \"n\" = 'a')),\n"
-            "    ('b', (SELECT \"id\" FROM \"Bar\" WHERE \"n\" = 'b'));"
+            '    (\'a\', (SELECT "id" FROM "Bar" WHERE "n" = \'a\')),\n'
+            '    (\'b\', (SELECT "id" FROM "Bar" WHERE "n" = \'b\'));'
         )
         assert _keywords(tmp_path, sql) == ()
 
@@ -369,10 +369,7 @@ class TestInsert:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_scalar_subquery_in_a_set_operated_values_list_stays_bounded(self, tmp_path):
-        sql = (
-            'INSERT INTO "Foo" ("id") VALUES ((SELECT max("id") FROM "Bar"))'
-            " UNION ALL VALUES (2);"
-        )
+        sql = 'INSERT INTO "Foo" ("id") VALUES ((SELECT max("id") FROM "Bar")) UNION ALL VALUES (2);'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_scalar_subquery_in_a_parenthesised_values_list_stays_bounded(self, tmp_path):
@@ -380,10 +377,7 @@ class TestInsert:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_scalar_subquery_in_set_operated_parenthesised_values_lists_stays_bounded(self, tmp_path):
-        sql = (
-            'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar")))'
-            " UNION ALL (VALUES (2));"
-        )
+        sql = 'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar"))) UNION ALL (VALUES (2));'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_set_operation_inside_a_values_list_does_not_split_the_terms(self, tmp_path):
@@ -394,10 +388,7 @@ class TestInsert:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_conflict_target_after_a_parenthesised_row_source_does_not_hide_it(self, tmp_path):
-        sql = (
-            'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar")'
-            ' ON CONFLICT ("id") DO NOTHING;'
-        )
+        sql = 'INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") ON CONFLICT ("id") DO NOTHING;'
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
 
     def test_a_returning_list_after_a_parenthesised_row_source_does_not_hide_it(self, tmp_path):
@@ -405,10 +396,7 @@ class TestInsert:
         assert _keywords(tmp_path, sql) == ("INSERT ... SELECT",)
 
     def test_a_conflict_target_beside_a_bounded_values_list_stays_bounded(self, tmp_path):
-        sql = (
-            'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar")))'
-            ' ON CONFLICT ("id") DO NOTHING;'
-        )
+        sql = 'INSERT INTO "Foo" ("id") (VALUES ((SELECT max("id") FROM "Bar"))) ON CONFLICT ("id") DO NOTHING;'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_query_term_written_before_a_values_term_is_still_the_row_source(self, tmp_path):
@@ -491,10 +479,7 @@ class TestCommonTableExpressions:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_writable_cte_copying_a_query_is_flagged(self, tmp_path):
-        sql = (
-            'WITH added AS (INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar" RETURNING "id")'
-            " SELECT * FROM added;"
-        )
+        sql = 'WITH added AS (INSERT INTO "Foo" ("id") SELECT "id" FROM "Bar" RETURNING "id") SELECT * FROM added;'
         assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
 
     def test_a_bounded_writable_cte_does_not_hide_a_copying_one_beside_it(self, tmp_path):
@@ -506,10 +491,7 @@ class TestCommonTableExpressions:
         assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
 
     def test_a_writable_cte_wrapping_its_row_source_is_flagged(self, tmp_path):
-        sql = (
-            'WITH added AS (INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") RETURNING "id")'
-            " SELECT * FROM added;"
-        )
+        sql = 'WITH added AS (INSERT INTO "Foo" ("id") (SELECT "id" FROM "Bar") RETURNING "id") SELECT * FROM added;'
         assert _keywords(tmp_path, sql) == ("WITH ... INSERT ... SELECT",)
 
 
@@ -598,13 +580,7 @@ class TestStoredRoutines:
         "END;\n"
         "$$ LANGUAGE plpgsql;\n"
     )
-    PROCEDURE = (
-        "CREATE OR REPLACE PROCEDURE sweep() AS $$\n"
-        "BEGIN\n"
-        '    DELETE FROM "Foo";\n'
-        "END;\n"
-        "$$ LANGUAGE plpgsql;\n"
-    )
+    PROCEDURE = 'CREATE OR REPLACE PROCEDURE sweep() AS $$\nBEGIN\n    DELETE FROM "Foo";\nEND;\n$$ LANGUAGE plpgsql;\n'
 
     def test_a_function_body_nothing_calls_passes(self, tmp_path):
         assert _keywords(tmp_path, self.DEFINITION) == ()
@@ -879,7 +855,7 @@ class TestLoopBodies:
             "DECLARE r record;\n"
             "BEGIN\n"
             '    FOR r IN SELECT a."id" FROM "A" a JOIN "B" b USING ("id") LOOP\n'
-            "        EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            '        EXECUTE \'UPDATE "Foo" SET "a" = 1\';\n'
             "    END LOOP;\n"
             "END $$;"
         )
@@ -891,7 +867,7 @@ class TestLoopBodies:
             "DECLARE r record;\n"
             "BEGIN\n"
             '    FOR r IN SELECT "id" FROM "Bar" LOOP\n'
-            "        EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            '        EXECUTE \'UPDATE "Foo" SET "a" = 1\';\n'
             "    END LOOP;\n"
             "END $$;"
         )
@@ -1068,11 +1044,7 @@ class TestEscapeHatch:
         assert _scan(tmp_path, sql)[0].line == 2
 
     def test_a_marker_trailing_a_multiline_statement_does_not_exempt_the_next_one(self, tmp_path):
-        sql = (
-            'UPDATE "Foo"\n'
-            '   SET "a" = 1; -- data-migration-ok: one row\n'
-            'UPDATE "Bar" SET "b" = 2;'
-        )
+        sql = 'UPDATE "Foo"\n   SET "a" = 1; -- data-migration-ok: one row\nUPDATE "Bar" SET "b" = 2;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 3
 
@@ -1102,7 +1074,7 @@ class TestEscapeHatch:
     def test_marker_above_a_do_block_does_not_exempt_a_rewrite_inside_it(self, tmp_path):
         sql = (
             "-- data-migration-ok: bounded, this belongs to the insert below\n"
-            "INSERT INTO \"Config\" (\"k\") VALUES ('x');\n"
+            'INSERT INTO "Config" ("k") VALUES (\'x\');\n'
             "\n"
             'DO $$ BEGIN UPDATE "Foo" SET "b" = 1; END $$;'
         )
@@ -1153,7 +1125,7 @@ class TestEscapeHatch:
 
 class TestDynamicSql:
     def test_execute_of_a_quoted_update_is_flagged(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 3
 
@@ -1178,7 +1150,7 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_doubled_quote_does_not_split_the_literal_it_sits_in(self, tmp_path):
-        sql = "INSERT INTO \"Foo\" (\"note\") VALUES ('a''UPDATE \"Bar\" SET \"a\" = 1''b');"
+        sql = 'INSERT INTO "Foo" ("note") VALUES (\'a\'\'UPDATE "Bar" SET "a" = 1\'\'b\');'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_rewrite_following_a_doubled_quote_in_the_same_payload_is_flagged(self, tmp_path):
@@ -1195,63 +1167,60 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
     def test_a_rewrite_genuinely_commented_out_inside_executed_sql_is_not_run(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1 -- UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'SELECT 1 -- UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_rewrite_below_escaped_quotes_in_a_multiline_payload_reports_its_own_line(self, tmp_path):
         sql = (
             "DO $$\nBEGIN\n    EXECUTE '\n"
             "SELECT ''a'', ''b'', ''c'', ''d'', ''e''\n"
-            "; UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+            '; UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 5
 
     def test_a_rewrite_in_a_later_command_before_bind_values_is_flagged(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    EXECUTE 'SELECT 1; DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'SELECT 1; DELETE FROM "Foo" WHERE "a" = $1\' USING 1;\nEND $$;'
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
     def test_a_bind_value_naming_a_rewrite_is_not_run(self, tmp_path):
         sql = (
-            "DO $$\nBEGIN\n    EXECUTE 'INSERT INTO \"Audit\" (\"note\") VALUES ($1)'"
+            'DO $$\nBEGIN\n    EXECUTE \'INSERT INTO "Audit" ("note") VALUES ($1)\''
             " USING 'DELETE FROM \"Foo\"';\nEND $$;"
         )
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_rewrite_executed_with_bind_values_is_still_flagged(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    EXECUTE 'DELETE FROM \"Foo\" WHERE \"a\" = $1' USING 1;\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'DELETE FROM "Foo" WHERE "a" = $1\' USING 1;\nEND $$;'
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
     def test_using_written_inside_the_command_does_not_end_it(self, tmp_path):
-        sql = (
-            "DO $$\nBEGIN\n    EXECUTE 'DELETE FROM \"Foo\" USING \"Bar\""
-            " WHERE \"Foo\".\"a\" = \"Bar\".\"a\"';\nEND $$;"
-        )
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'DELETE FROM "Foo" USING "Bar" WHERE "Foo"."a" = "Bar"."a"\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
     def test_a_join_using_in_a_subquery_building_the_command_does_not_end_it(self, tmp_path):
         sql = (
-            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
-            " USING (\"id\")) || 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+            'DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM "A" x JOIN "A" y'
+            ' USING ("id")) || \'UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
     def test_a_join_using_does_not_take_the_place_of_the_real_bind_values(self, tmp_path):
         sql = (
-            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
-            " USING (\"id\")) || 'UPDATE \"Foo\" SET \"a\" = $1' USING 2;\nEND $$;"
+            'DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM "A" x JOIN "A" y'
+            ' USING ("id")) || \'UPDATE "Foo" SET "a" = $1\' USING 2;\nEND $$;'
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
     def test_a_bind_value_naming_a_rewrite_after_a_subquery_join_is_not_run(self, tmp_path):
         sql = (
-            "DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM \"A\" x JOIN \"A\" y"
-            " USING (\"id\")) USING 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+            'DO $$\nDECLARE v text;\nBEGIN\n    EXECUTE (SELECT v FROM "A" x JOIN "A" y'
+            ' USING ("id")) USING \'UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         )
         assert _keywords(tmp_path, sql) == ()
 
     def test_execute_of_ddl_passes(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    EXECUTE 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'ALTER TABLE "Foo" ADD COLUMN "b" TEXT\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ()
 
     def test_execute_of_a_read_only_query_passes(self, tmp_path):
@@ -1259,22 +1228,15 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_marker_exempts_an_executed_rewrite(self, tmp_path):
-        sql = "DO $$\nBEGIN\n    -- data-migration-ok: one row\n    EXECUTE 'UPDATE \"Foo\" SET \"a\" = 1';\nEND $$;"
+        sql = 'DO $$\nBEGIN\n    -- data-migration-ok: one row\n    EXECUTE \'UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_literal_that_is_not_executed_is_still_inert(self, tmp_path):
-        sql = "INSERT INTO \"Foo\" (\"note\") VALUES ('UPDATE \"Bar\" SET \"a\" = 1');"
+        sql = 'INSERT INTO "Foo" ("note") VALUES (\'UPDATE "Bar" SET "a" = 1\');'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_rewrite_declared_into_a_variable_is_flagged(self, tmp_path):
-        sql = (
-            "DO $$\n"
-            "DECLARE\n"
-            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
-            "BEGIN\n"
-            "    EXECUTE stmt;\n"
-            "END $$;"
-        )
+        sql = 'DO $$\nDECLARE\n    stmt text := \'UPDATE "Foo" SET "a" = 1\';\nBEGIN\n    EXECUTE stmt;\nEND $$;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 3
 
@@ -1284,7 +1246,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    stmt := 'DELETE FROM \"Foo\" WHERE \"a\" = 1';\n"
+            '    stmt := \'DELETE FROM "Foo" WHERE "a" = 1\';\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1297,7 +1259,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    SELECT 'UPDATE \"Foo\" SET \"a\" = 1' INTO stmt;\n"
+            '    SELECT \'UPDATE "Foo" SET "a" = 1\' INTO stmt;\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1322,7 +1284,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    stmt = 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            '    stmt = \'UPDATE "Foo" SET "a" = 1\';\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1343,21 +1305,14 @@ class TestDynamicSql:
         assert _scan(tmp_path, sql)[0].line == 5
 
     def test_a_rewrite_declared_with_a_bare_equals_is_flagged(self, tmp_path):
-        sql = (
-            "DO $$\n"
-            "DECLARE\n"
-            "    stmt text = 'UPDATE \"Foo\" SET \"a\" = 1';\n"
-            "BEGIN\n"
-            "    EXECUTE stmt;\n"
-            "END $$;"
-        )
+        sql = 'DO $$\nDECLARE\n    stmt text = \'UPDATE "Foo" SET "a" = 1\';\nBEGIN\n    EXECUTE stmt;\nEND $$;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
     def test_an_insert_target_table_is_not_read_as_an_assignment(self, tmp_path):
         sql = (
             "DO $$\n"
             "DECLARE\n"
-            "    audit text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            '    audit text := \'ALTER TABLE "Foo" ADD COLUMN "b" TEXT\';\n'
             "BEGIN\n"
             "    INSERT INTO audit (note) VALUES ('DELETE FROM \"Foo\" is left to the app');\n"
             "    EXECUTE audit;\n"
@@ -1371,8 +1326,8 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    INSERT INTO \"Log\" (\"sql\") VALUES ('UPDATE \"Foo\" SET \"a\" = 1')\n"
-            "        RETURNING \"sql\" INTO stmt;\n"
+            '    INSERT INTO "Log" ("sql") VALUES (\'UPDATE "Foo" SET "a" = 1\')\n'
+            '        RETURNING "sql" INTO stmt;\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1399,7 +1354,7 @@ class TestDynamicSql:
             "    stmt text;\n"
             "    total int := 3;\n"
             "BEGIN\n"
-            "    WHILE total >= 1 LOOP stmt = 'UPDATE \"Foo\" SET \"a\" = 1'; END LOOP;\n"
+            '    WHILE total >= 1 LOOP stmt = \'UPDATE "Foo" SET "a" = 1\'; END LOOP;\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1411,7 +1366,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    SELECT 'UPDATE \"Foo\" SET \"a\" = 1'\n"
+            '    SELECT \'UPDATE "Foo" SET "a" = 1\'\n'
             "        INTO\n"
             "        stmt;\n"
             "    EXECUTE stmt;\n"
@@ -1434,13 +1389,7 @@ class TestDynamicSql:
 
     def test_a_rewrite_executed_by_a_name_a_line_down_is_flagged(self, tmp_path):
         sql = (
-            "DO $$\n"
-            "DECLARE\n"
-            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
-            "BEGIN\n"
-            "    EXECUTE\n"
-            "        stmt;\n"
-            "END $$;"
+            'DO $$\nDECLARE\n    stmt text := \'UPDATE "Foo" SET "a" = 1\';\nBEGIN\n    EXECUTE\n        stmt;\nEND $$;'
         )
         assert _keywords(tmp_path, sql) == ("UPDATE",)
 
@@ -1448,9 +1397,9 @@ class TestDynamicSql:
         sql = (
             "DO $$\n"
             "DECLARE\n"
-            "    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            '    stmt text := \'ALTER TABLE "Foo" ADD COLUMN "b" TEXT\';\n'
             "BEGIN\n"
-            "    IF stmt = 'UPDATE \"Foo\" SET \"a\" = 1' THEN\n"
+            '    IF stmt = \'UPDATE "Foo" SET "a" = 1\' THEN\n'
             "        RAISE NOTICE 'the application owns that one';\n"
             "    END IF;\n"
             "    EXECUTE stmt;\n"
@@ -1462,9 +1411,9 @@ class TestDynamicSql:
         sql = (
             "DO $$\n"
             "DECLARE\n"
-            "    stmt text := 'UPDATE \"Foo\" SET \"a\" = 1';\n"
+            '    stmt text := \'UPDATE "Foo" SET "a" = 1\';\n'
             "BEGIN\n"
-            "    EXECUTE 'INSERT INTO \"Log\" (\"sql\") VALUES ($1)' USING stmt;\n"
+            '    EXECUTE \'INSERT INTO "Log" ("sql") VALUES ($1)\' USING stmt;\n'
             "END $$;"
         )
         assert _keywords(tmp_path, sql) == ()
@@ -1477,7 +1426,7 @@ class TestDynamicSql:
             "    total int := 1;\n"
             "    ok boolean;\n"
             "BEGIN\n"
-            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            '    stmt := \'CREATE INDEX IF NOT EXISTS "ix_a" ON "Foo" ("a")\';\n'
             "    ok := total = 1 AND stmt = 'DELETE FROM \"Foo\"';\n"
             "    RAISE NOTICE 'purge script? %', ok;\n"
             "    EXECUTE stmt;\n"
@@ -1492,7 +1441,7 @@ class TestDynamicSql:
             "    stmt text;\n"
             "    ok boolean;\n"
             "BEGIN\n"
-            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            '    stmt := \'CREATE INDEX IF NOT EXISTS "ix_a" ON "Foo" ("a")\';\n'
             "    ok := probe_match(subject => stmt, wanted => 'DELETE FROM \"Foo\"');\n"
             "    EXECUTE stmt;\n"
             "END $$;"
@@ -1507,7 +1456,7 @@ class TestDynamicSql:
             "    total int := 1;\n"
             "    ok boolean;\n"
             "BEGIN\n"
-            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            '    stmt := \'CREATE INDEX IF NOT EXISTS "ix_a" ON "Foo" ("a")\';\n'
             "    ok := total >= 1 AND stmt = 'DELETE FROM \"Foo\"';\n"
             "    EXECUTE stmt;\n"
             "END $$;"
@@ -1534,12 +1483,12 @@ class TestDynamicSql:
             "    stmt text;\n"
             "    total int;\n"
             "BEGIN\n"
-            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
+            '    stmt := \'CREATE INDEX IF NOT EXISTS "ix_a" ON "Foo" ("a")\';\n'
             "    EXECUTE 'SELECT count(*) FROM \"Foo\"'\n"
             "        INTO total;\n"
             "    SELECT (CASE WHEN total > 0 THEN 1 ELSE 2 END) INTO total\n"
-            "        FROM \"Foo\"\n"
-            "       WHERE \"a\" = 'DELETE FROM \"Foo\"';\n"
+            '        FROM "Foo"\n'
+            '       WHERE "a" = \'DELETE FROM "Foo"\';\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1552,12 +1501,12 @@ class TestDynamicSql:
             "    stmt text;\n"
             "    total int;\n"
             "BEGIN\n"
-            "    stmt := 'CREATE INDEX IF NOT EXISTS \"ix_a\" ON \"Foo\" (\"a\")';\n"
-            "    EXECUTE 'SELECT count(*) FROM \"Foo\" WHERE \"a\" = $1'\n"
+            '    stmt := \'CREATE INDEX IF NOT EXISTS "ix_a" ON "Foo" ("a")\';\n'
+            '    EXECUTE \'SELECT count(*) FROM "Foo" WHERE "a" = $1\'\n'
             "        USING 'k1';\n"
             "    SELECT (CASE WHEN true THEN 1 ELSE 2 END) INTO total\n"
-            "        FROM \"Foo\" x JOIN \"Foo\" y USING (\"a\")\n"
-            "       WHERE x.\"a\" = 'DELETE FROM \"Foo\"';\n"
+            '        FROM "Foo" x JOIN "Foo" y USING ("a")\n'
+            '       WHERE x."a" = \'DELETE FROM "Foo"\';\n'
             "    EXECUTE stmt;\n"
             "END $$;"
         )
@@ -1583,7 +1532,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    stmt text;\n"
             "BEGIN\n"
-            "    FOREACH stmt IN ARRAY ARRAY['UPDATE \"Foo\" SET \"a\" = 1'] LOOP\n"
+            '    FOREACH stmt IN ARRAY ARRAY[\'UPDATE "Foo" SET "a" = 1\'] LOOP\n'
             "        EXECUTE stmt;\n"
             "    END LOOP;\n"
             "END $$;"
@@ -1596,7 +1545,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    rec record;\n"
             "BEGIN\n"
-            "    FOR rec IN SELECT \"a\" FROM \"Foo\" LOOP\n"
+            '    FOR rec IN SELECT "a" FROM "Foo" LOOP\n'
             "        RAISE NOTICE 'the DELETE FROM \"Foo\" path is the application''s: %', rec;\n"
             "    END LOOP;\n"
             "END $$;"
@@ -1619,7 +1568,7 @@ class TestDynamicSql:
         sql = (
             "DO $$\n"
             "DECLARE\n"
-            "    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\n"
+            '    stmt text := \'ALTER TABLE "Foo" ADD COLUMN "b" TEXT\';\n'
             "BEGIN\n"
             "    IF stmt = 'DELETE FROM \"Foo\"' THEN RAISE NOTICE 'never'; END IF;\n"
             "    EXECUTE stmt;\n"
@@ -1628,7 +1577,7 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ()
 
     def test_ddl_assigned_to_a_variable_passes(self, tmp_path):
-        sql = "DO $$\nDECLARE\n    stmt text := 'ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT';\nBEGIN\n    EXECUTE stmt;\nEND $$;"
+        sql = 'DO $$\nDECLARE\n    stmt text := \'ALTER TABLE "Foo" ADD COLUMN "b" TEXT\';\nBEGIN\n    EXECUTE stmt;\nEND $$;'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_marker_exempts_a_rewrite_held_in_a_variable(self, tmp_path):
@@ -1649,7 +1598,7 @@ class TestDynamicSql:
             "BEGIN\n"
             "    -- data-migration-ok: one config row, keyed by its primary key\n"
             "    EXECUTE '\n"
-            "        UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''';\n"
+            '        UPDATE "Config" SET "v" = 1 WHERE "k" = \'\'rev\'\'\';\n'
             "END $$;"
         )
         assert _keywords(tmp_path, sql) == ()
@@ -1660,7 +1609,7 @@ class TestDynamicSql:
             "DECLARE\n"
             "    -- data-migration-ok: one config row, keyed by its primary key\n"
             "    stmt text := '\n"
-            "        UPDATE \"Config\" SET \"v\" = 1 WHERE \"k\" = ''rev''';\n"
+            '        UPDATE "Config" SET "v" = 1 WHERE "k" = \'\'rev\'\'\';\n'
             "BEGIN\n"
             "    EXECUTE stmt;\n"
             "END $$;"
@@ -1668,13 +1617,7 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ()
 
     def test_an_unmarked_execute_whose_sql_starts_on_a_later_line_is_flagged(self, tmp_path):
-        sql = (
-            "DO $$\n"
-            "BEGIN\n"
-            "    EXECUTE '\n"
-            "        UPDATE \"Foo\" SET \"a\" = 1';\n"
-            "END $$;"
-        )
+        sql = 'DO $$\nBEGIN\n    EXECUTE \'\n        UPDATE "Foo" SET "a" = 1\';\nEND $$;'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 4
 
@@ -1701,7 +1644,7 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_do_body_in_single_quotes_is_scanned(self, tmp_path):
-        sql = "DO 'BEGIN UPDATE \"Foo\" SET \"a\" = 1; END';"
+        sql = 'DO \'BEGIN UPDATE "Foo" SET "a" = 1; END\';'
         assert _keywords(tmp_path, sql) == ("UPDATE",)
         assert _scan(tmp_path, sql)[0].line == 1
 
@@ -1710,7 +1653,7 @@ class TestDynamicSql:
         assert _keywords(tmp_path, sql) == ("DELETE",)
 
     def test_a_quoted_do_body_holding_only_ddl_passes(self, tmp_path):
-        sql = "DO 'BEGIN ALTER TABLE \"Foo\" ADD COLUMN \"b\" TEXT; END';"
+        sql = 'DO \'BEGIN ALTER TABLE "Foo" ADD COLUMN "b" TEXT; END\';'
         assert _keywords(tmp_path, sql) == ()
 
     def test_a_marker_exempts_a_quoted_do_body(self, tmp_path):
@@ -1734,7 +1677,7 @@ class TestDynamicSql:
             "DO $$\n"
             "DECLARE\n"
             "    msg text := 'UPDATE of legacy rows skipped';\n"
-            "    stmt text := 'DELETE FROM \"Foo\" WHERE \"a\" = 1';\n"
+            '    stmt text := \'DELETE FROM "Foo" WHERE "a" = 1\';\n'
             "BEGIN\n"
             "    RAISE NOTICE '%', msg;\n"
             "    EXECUTE stmt;\n"
@@ -1892,9 +1835,7 @@ class TestExitCode:
         monkeypatch.setattr(checker, "MIGRATIONS_DIR", tmp_path / "absent")
         assert checker.main() == 2
 
-    def test_the_failure_names_the_migration_the_line_and_the_keyword(
-        self, tmp_path, monkeypatch, capsys
-    ):
+    def test_the_failure_names_the_migration_the_line_and_the_keyword(self, tmp_path, monkeypatch, capsys):
         _tree(monkeypatch, tmp_path, DIRTY)
         checker.main()
         printed = capsys.readouterr().out

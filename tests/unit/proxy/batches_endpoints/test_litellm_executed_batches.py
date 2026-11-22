@@ -682,7 +682,9 @@ async def test_resolve_litellm_executed_provider_asks_the_router_for_the_team_sc
     assert (
         await resolve_litellm_executed_provider(router, BATCH_MODEL, "team-1", FakeFilesApiProbe(True, [])) == expected
     )
-    router.registry.return_value.credentials.assert_called_once_with(BATCH_MODEL, form="with_provider", team_id="team-1")
+    router.registry.return_value.credentials.assert_called_once_with(
+        BATCH_MODEL, form="with_provider", team_id="team-1"
+    )
 
 
 async def test_create_stores_a_validating_batch_and_completes_it_in_the_background() -> None:

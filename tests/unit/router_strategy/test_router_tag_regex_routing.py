@@ -6,7 +6,6 @@ patterns, verifying that regex-based header matching works correctly alongside
 existing tag-based routing.
 """
 
-
 import pytest
 
 from litellm import Router
@@ -201,9 +200,7 @@ async def test_empty_healthy_deployments_with_request_tags_returns_empty_list():
         model="gpt-5.2",
         healthy_deployments=[],
         request_deployments=[],
-        request_kwargs={
-            "metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}
-        },
+        request_kwargs={"metadata": {"tags": ["client_id:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]}},
     )
     assert result == []
 

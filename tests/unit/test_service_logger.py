@@ -35,9 +35,7 @@ async def test_async_log_success_event_should_not_raise_when_call_type_missing()
     end_time = datetime(2026, 2, 13, 22, 35, 1)
     kwargs_without_call_type = {"model": "gpt-4", "stream": False}
 
-    with patch.object(
-        service_logger, "async_service_success_hook", new_callable=AsyncMock
-    ) as mock_hook:
+    with patch.object(service_logger, "async_service_success_hook", new_callable=AsyncMock) as mock_hook:
         await service_logger.async_log_success_event(
             kwargs=kwargs_without_call_type,
             response_obj=None,
@@ -65,9 +63,7 @@ async def test_async_log_success_event_should_pass_call_type_when_present():
         "call_type": "aretrieve_batch",
     }
 
-    with patch.object(
-        service_logger, "async_service_success_hook", new_callable=AsyncMock
-    ) as mock_hook:
+    with patch.object(service_logger, "async_service_success_hook", new_callable=AsyncMock) as mock_hook:
         await service_logger.async_log_success_event(
             kwargs=kwargs_with_call_type,
             response_obj=None,
@@ -91,9 +87,7 @@ async def test_async_log_success_event_should_handle_float_duration():
     start_time = 1000.0
     end_time = 1001.5
 
-    with patch.object(
-        service_logger, "async_service_success_hook", new_callable=AsyncMock
-    ) as mock_hook:
+    with patch.object(service_logger, "async_service_success_hook", new_callable=AsyncMock) as mock_hook:
         await service_logger.async_log_success_event(
             kwargs={"call_type": "completion"},
             response_obj=None,
@@ -117,9 +111,7 @@ async def test_async_log_success_event_forwards_start_and_end_time():
     start_time = datetime(2026, 2, 13, 22, 35, 0)
     end_time = datetime(2026, 2, 13, 22, 35, 1)
 
-    with patch.object(
-        service_logger, "async_service_success_hook", new_callable=AsyncMock
-    ) as mock_hook:
+    with patch.object(service_logger, "async_service_success_hook", new_callable=AsyncMock) as mock_hook:
         await service_logger.async_log_success_event(
             kwargs={"call_type": "completion"},
             response_obj=None,
@@ -191,9 +183,7 @@ async def test_service_span_emitted_for_v2_logger_in_service_callback(monkeypatc
     from litellm.integrations.otel.model.spans import SpanRole
 
     v2_logger, exporter = _make_otel_v2_logger()
-    parent = v2_logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, "POST /chat/completions"
-    )
+    parent = v2_logger._emitter.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
 
     monkeypatch.setattr(litellm, "service_callback", [v2_logger])
     service_logger = ServiceLogging()
@@ -226,9 +216,7 @@ async def test_service_span_not_duplicated_for_string_and_instance(monkeypatch):
     from litellm.integrations.otel.model.spans import SpanRole
 
     v2_logger, exporter = _make_otel_v2_logger()
-    parent = v2_logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, "POST /chat/completions"
-    )
+    parent = v2_logger._emitter.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
 
     # The "otel" string resolves to the proxy's registered logger (the same
     # instance), so the list holds two references to one logger.
@@ -244,9 +232,7 @@ async def test_service_span_not_duplicated_for_string_and_instance(monkeypatch):
     )
     parent.end()
 
-    db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
-    ]
+    db_spans = [s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"]
     assert len(db_spans) == 1
 
 
@@ -263,9 +249,7 @@ async def test_service_failure_span_not_duplicated_for_string_and_instance(
     from litellm.integrations.otel.model.spans import SpanRole
 
     v2_logger, exporter = _make_otel_v2_logger()
-    parent = v2_logger._emitter.start_span(
-        SpanRole.PROXY_REQUEST, "POST /chat/completions"
-    )
+    parent = v2_logger._emitter.start_span(SpanRole.PROXY_REQUEST, "POST /chat/completions")
 
     monkeypatch.setattr(proxy_server, "open_telemetry_logger", v2_logger, raising=False)
     monkeypatch.setattr(litellm, "service_callback", ["otel", v2_logger])
@@ -280,9 +264,7 @@ async def test_service_failure_span_not_duplicated_for_string_and_instance(
     )
     parent.end()
 
-    db_spans = [
-        s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"
-    ]
+    db_spans = [s for s in exporter.get_finished_spans() if s.name == "postgres.select LiteLLM_UserTable"]
     assert len(db_spans) == 1
 
 
@@ -362,7 +344,9 @@ async def test_generic_otel_logger_receives_service_event_once_beside_langfuse_o
         generic_provider.shutdown()
 
     service_spans: Final = [
-        span for span in generic_exporter.get_finished_spans() if span.attributes.get("service") == ServiceTypes.DB.value
+        span
+        for span in generic_exporter.get_finished_spans()
+        if span.attributes.get("service") == ServiceTypes.DB.value
     ]
     assert len(service_spans) == 1
     assert service_spans[0].attributes.get("call_type") == "success"

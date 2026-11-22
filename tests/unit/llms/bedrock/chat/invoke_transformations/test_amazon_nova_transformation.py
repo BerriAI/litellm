@@ -151,7 +151,10 @@ GUARDED_CONVERSATION: Final = [
         ],
     },
     {"role": "user", "content": [{"type": "text", "text": "hello"}, {"type": "guarded_text", "text": "guarded user"}]},
-    {"role": "assistant", "content": [{"type": "text", "text": "hi"}, {"type": "guarded_text", "text": "guarded assistant"}]},
+    {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "hi"}, {"type": "guarded_text", "text": "guarded assistant"}],
+    },
     {"role": "user", "content": "again"},
 ]
 
@@ -177,8 +180,12 @@ def test_guarded_parts_go_as_text_under_drop_params_because_invoke_model_rejects
 
 def test_guarded_parts_reach_bedrock_without_drop_params(local_model_cost_map: None):
     request: Final = _transform_request(messages=GUARDED_CONVERSATION, optional_params={"max_tokens": 20})
-    sent_blocks: Final = chain(request["system"], chain.from_iterable(message["content"] for message in request["messages"]))
-    sent_guard_texts: Final = [block["guardContent"]["text"]["text"] for block in sent_blocks if "guardContent" in block]
+    sent_blocks: Final = chain(
+        request["system"], chain.from_iterable(message["content"] for message in request["messages"])
+    )
+    sent_guard_texts: Final = [
+        block["guardContent"]["text"]["text"] for block in sent_blocks if "guardContent" in block
+    ]
     assert sent_guard_texts == ["guarded system", "guarded user", "guarded assistant"]
 
 

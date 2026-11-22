@@ -288,9 +288,7 @@ class TestOpenRouterImageGenerationTransformation:
                         "role": "assistant",
                         "images": [
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,iVBORw0KGgoAAAANS"
-                                },
+                                "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANS"},
                                 "index": 0,
                                 "type": "image_url",
                             }
@@ -436,12 +434,7 @@ class TestOpenRouterImageGenerationTransformation:
         # Check cost
         assert hasattr(result, "_hidden_params")
         assert "additional_headers" in result._hidden_params
-        assert (
-            result._hidden_params["additional_headers"][
-                "llm_provider-x-litellm-response-cost"
-            ]
-            == 0.0387243
-        )
+        assert result._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] == 0.0387243
 
         # Check cost details
         assert "response_cost_details" in result._hidden_params
@@ -461,16 +454,12 @@ class TestOpenRouterImageGenerationTransformation:
                         "role": "assistant",
                         "images": [
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image1data"
-                                },
+                                "image_url": {"url": "data:image/png;base64,image1data"},
                                 "index": 0,
                                 "type": "image_url",
                             },
                             {
-                                "image_url": {
-                                    "url": "data:image/png;base64,image2data"
-                                },
+                                "image_url": {"url": "data:image/png;base64,image2data"},
                                 "index": 1,
                                 "type": "image_url",
                             },
@@ -565,9 +554,7 @@ class TestOpenRouterImageGenerationTransformation:
                 encoding=None,
             )
 
-        assert "Error transforming OpenRouter image generation response" in str(
-            exc_info.value
-        )
+        assert "Error transforming OpenRouter image generation response" in str(exc_info.value)
 
     def test_get_error_class(self):
         """Test that get_error_class returns OpenRouterException."""
@@ -627,12 +614,8 @@ def test_transform_image_generation_response_without_usable_image_url_has_no_ima
         ("https://example.com/a.png", (None, "https://example.com/a.png")),
     ],
 )
-def test_transform_image_generation_response_maps_one_image_url(
-    url: str, expected: tuple[str | None, str | None]
-):
-    response = _transform_generation_response(
-        {"choices": [{"message": {"images": [{"image_url": {"url": url}}]}}]}
-    )
+def test_transform_image_generation_response_maps_one_image_url(url: str, expected: tuple[str | None, str | None]):
+    response = _transform_generation_response({"choices": [{"message": {"images": [{"image_url": {"url": url}}]}}]})
 
     assert [(image.b64_json, image.url) for image in response.data] == [expected]
 
@@ -658,8 +641,6 @@ def test_transform_image_generation_response_wraps_malformed_payloads_without_ec
         _transform_generation_response(payload)
 
     message = str(exc_info.value)
-    assert message.startswith(
-        "Error transforming OpenRouter image generation response: "
-    )
+    assert message.startswith("Error transforming OpenRouter image generation response: ")
     assert "input_value" not in message
     assert exc_info.value.status_code == 500

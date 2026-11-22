@@ -161,11 +161,14 @@ def test_create_request_sends_and_signs_for_configured_control_plane_endpoint(co
 
 
 def test_create_request_builds_s3_input_output_and_arn(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-deadbeef",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-deadbeef",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({"Authorization": "signed"}, b'{"x": 1}')
         result = config.transform_create_batch_request(
             model="anthropic.claude-3-5-sonnet",
@@ -185,10 +188,7 @@ def test_create_request_builds_s3_input_output_and_arn(config):
     assert bedrock_request["modelId"] == "anthropic.claude-3-5-sonnet"
     assert bedrock_request["jobName"] == "litellm-batch-deadbeef"
     assert bedrock_request["roleArn"] == "arn:aws:iam::123:role/my-batch-role"
-    assert (
-        bedrock_request["inputDataConfig"]["s3InputDataConfig"]["s3Uri"]
-        == "s3://in-bucket/path/to/input.jsonl"
-    )
+    assert bedrock_request["inputDataConfig"]["s3InputDataConfig"]["s3Uri"] == "s3://in-bucket/path/to/input.jsonl"
     assert (
         bedrock_request["outputDataConfig"]["s3OutputDataConfig"]["s3Uri"]
         == "s3://out-bucket/litellm-batch-outputs/litellm-batch-deadbeef/"
@@ -203,18 +203,19 @@ def test_create_request_builds_s3_input_output_and_arn(config):
     )
     # the transform returns the pre-signed envelope
     assert result["method"] == "POST"
-    assert result["url"] == (
-        "https://bedrock.us-west-2.amazonaws.com/model-invocation-job"
-    )
+    assert result["url"] == ("https://bedrock.us-west-2.amazonaws.com/model-invocation-job")
     assert result["headers"] == {"Authorization": "signed"}
 
 
 def test_create_request_defaults_output_bucket_to_input_bucket(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-cafef00d",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-cafef00d",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -230,11 +231,14 @@ def test_create_request_defaults_output_bucket_to_input_bucket(config):
 
 
 def test_create_request_adds_kms_encryption_key_when_provided(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -245,20 +249,22 @@ def test_create_request_adds_kms_encryption_key_when_provided(config):
                 "s3_encryption_key_id": "kms-key-123",
             },
         )
-    s3out = mock_sign.call_args.kwargs["data"]["outputDataConfig"][
-        "s3OutputDataConfig"
-    ]
+    s3out = mock_sign.call_args.kwargs["data"]["outputDataConfig"]["s3OutputDataConfig"]
     assert s3out["s3EncryptionKeyId"] == "kms-key-123"
 
 
 def test_create_request_omits_kms_key_when_absent(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign, patch(
-        "litellm.llms.bedrock.common_utils.get_secret_str",
-        return_value=None,
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+        patch(
+            "litellm.llms.bedrock.common_utils.get_secret_str",
+            return_value=None,
+        ),
     ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
@@ -267,18 +273,19 @@ def test_create_request_omits_kms_key_when_absent(config):
             optional_params={},
             litellm_params={"aws_batch_role_arn": "arn:aws:iam::1:role/r"},
         )
-    s3out = mock_sign.call_args.kwargs["data"]["outputDataConfig"][
-        "s3OutputDataConfig"
-    ]
+    s3out = mock_sign.call_args.kwargs["data"]["outputDataConfig"]["s3OutputDataConfig"]
     assert "s3EncryptionKeyId" not in s3out
 
 
 def _signed_batch_request(config, litellm_params: dict, optional_params: dict) -> dict:
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -419,11 +426,14 @@ def test_create_request_missing_role_arn_raises(config, monkeypatch):
 
 def test_create_request_role_arn_from_env(config, monkeypatch):
     monkeypatch.setenv("AWS_BATCH_ROLE_ARN", "arn:aws:iam::9:role/env-role")
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -431,10 +441,7 @@ def test_create_request_role_arn_from_env(config, monkeypatch):
             optional_params={},
             litellm_params={},
         )
-    assert (
-        mock_sign.call_args.kwargs["data"]["roleArn"]
-        == "arn:aws:iam::9:role/env-role"
-    )
+    assert mock_sign.call_args.kwargs["data"]["roleArn"] == "arn:aws:iam::9:role/env-role"
 
 
 def test_create_request_missing_model_raises(config):
@@ -448,11 +455,14 @@ def test_create_request_missing_model_raises(config):
 
 
 def test_create_request_no_timeout_for_non_24h_window(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -471,11 +481,14 @@ def test_create_request_forwards_bedrock_tags_from_litellm_params(config):
         {"key": "application", "value": "genai-proxy"},
         {"key": "team", "value": "ml-platform"},
     ]
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -491,11 +504,14 @@ def test_create_request_forwards_bedrock_tags_from_litellm_params(config):
 
 def test_create_request_forwards_bedrock_tags_from_optional_params(config):
     tags = [{"key": "env", "value": "prod"}]
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -507,11 +523,14 @@ def test_create_request_forwards_bedrock_tags_from_optional_params(config):
 
 
 def test_create_request_empty_litellm_params_tags_do_not_fall_through(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -526,11 +545,14 @@ def test_create_request_empty_litellm_params_tags_do_not_fall_through(config):
 
 
 def test_create_request_omits_tags_when_bedrock_tags_absent(config):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         config.transform_create_batch_request(
             model="m",
@@ -553,11 +575,14 @@ def test_create_request_omits_tags_when_bedrock_tags_absent(config):
     ],
 )
 def test_create_request_rejects_malformed_bedrock_tags(config, bad_tags):
-    with patch.object(
-        config.common_utils,
-        "generate_unique_job_name",
-        return_value="litellm-batch-1",
-    ), patch.object(config.common_utils, "sign_aws_request") as mock_sign:
+    with (
+        patch.object(
+            config.common_utils,
+            "generate_unique_job_name",
+            return_value="litellm-batch-1",
+        ),
+        patch.object(config.common_utils, "sign_aws_request") as mock_sign,
+    ):
         mock_sign.return_value = ({}, b"{}")
         with pytest.raises(ValueError, match="Invalid 'bedrock_tags' value"):
             config.transform_create_batch_request(
@@ -681,16 +706,12 @@ def test_create_response_raises_on_unparseable_body(config):
 def test_retrieve_request_builds_encoded_arn_url(config):
     with patch.object(config.common_utils, "sign_aws_request") as mock_sign:
         mock_sign.return_value = ({"Authorization": "signed"}, b"")
-        result = config.transform_retrieve_batch_request(
-            batch_id=ARN, optional_params={}, litellm_params={}
-        )
+        result = config.transform_retrieve_batch_request(batch_id=ARN, optional_params={}, litellm_params={})
     # ARN is URL-encoded (colons and slashes escaped) into the path
     assert result["method"] == "GET"
     assert result["data"] is None
     assert result["headers"] == {"Authorization": "signed"}
-    assert result["url"].startswith(
-        "https://bedrock.us-west-2.amazonaws.com/model-invocation-job/"
-    )
+    assert result["url"].startswith("https://bedrock.us-west-2.amazonaws.com/model-invocation-job/")
     assert "%3A" in result["url"]  # colon encoded
     assert "%2F" in result["url"]  # slash encoded
     assert mock_sign.call_args.kwargs["method"] == "GET"
@@ -723,9 +744,7 @@ def test_retrieve_request_sends_and_signs_for_configured_control_plane_endpoint(
 
 def test_retrieve_request_rejects_non_arn(config):
     with pytest.raises(ValueError, match="Expected ARN"):
-        config.transform_retrieve_batch_request(
-            batch_id="abc1234567", optional_params={}, litellm_params={}
-        )
+        config.transform_retrieve_batch_request(batch_id="abc1234567", optional_params={}, litellm_params={})
 
 
 def test_retrieve_request_rejects_short_arn(config):
@@ -738,9 +757,7 @@ def test_retrieve_request_rejects_short_arn(config):
 def test_retrieve_request_rejects_bad_region(config):
     bad = "arn:aws:bedrock:US_WEST:123:model-invocation-job/x"
     with pytest.raises(ValueError, match="Invalid region in ARN"):
-        config.transform_retrieve_batch_request(
-            batch_id=bad, optional_params={}, litellm_params={}
-        )
+        config.transform_retrieve_batch_request(batch_id=bad, optional_params={}, litellm_params={})
 
 
 # --------------------------------------------------------------------------- #
@@ -802,15 +819,9 @@ def test_retrieve_response_parses_timestamps_for_completed(config):
     )
     import datetime
 
-    expect_created = int(
-        datetime.datetime.fromisoformat("2026-04-28T12:00:00+00:00").timestamp()
-    )
-    expect_completed = int(
-        datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp()
-    )
-    expect_expires = int(
-        datetime.datetime.fromisoformat("2026-05-28T12:00:00+00:00").timestamp()
-    )
+    expect_created = int(datetime.datetime.fromisoformat("2026-04-28T12:00:00+00:00").timestamp())
+    expect_completed = int(datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp())
+    expect_expires = int(datetime.datetime.fromisoformat("2026-05-28T12:00:00+00:00").timestamp())
     assert out.created_at == expect_created
     assert out.completed_at == expect_completed
     assert out.expires_at == expect_expires
@@ -834,9 +845,7 @@ def test_retrieve_response_failed_sets_failed_at_from_end_time(config):
     )
     import datetime
 
-    assert out.failed_at == int(
-        datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp()
-    )
+    assert out.failed_at == int(datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp())
     assert out.completed_at is None
     assert out.cancelled_at is None
 
@@ -851,9 +860,7 @@ def test_retrieve_response_stopped_sets_cancelled_at(config):
     )
     import datetime
 
-    assert out.cancelled_at == int(
-        datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp()
-    )
+    assert out.cancelled_at == int(datetime.datetime.fromisoformat("2026-04-28T12:30:00+00:00").timestamp())
     assert out.completed_at is None
     assert out.failed_at is None
 
@@ -872,9 +879,7 @@ def test_retrieve_response_in_progress_sets_in_progress_at_from_last_modified(co
     )
     import datetime
 
-    assert out.in_progress_at == int(
-        datetime.datetime.fromisoformat("2026-04-28T12:15:00+00:00").timestamp()
-    )
+    assert out.in_progress_at == int(datetime.datetime.fromisoformat("2026-04-28T12:15:00+00:00").timestamp())
 
 
 def test_retrieve_response_invalid_timestamp_becomes_none(config):
@@ -963,9 +968,7 @@ def test_retrieve_response_raises_on_unparseable_body(config):
 
 
 def test_get_error_class_returns_bedrock_error(config):
-    err = config.get_error_class(
-        error_message="throttled", status_code=429, headers={}
-    )
+    err = config.get_error_class(error_message="throttled", status_code=429, headers={})
     assert isinstance(err, Exception)
     assert err.status_code == 429
     assert "throttled" in str(err)
@@ -1050,7 +1053,5 @@ def test_get_complete_batch_url_cn_partition(config: BedrockBatchesConfig) -> No
 def test_retrieve_request_accepts_partition_arns(config: BedrockBatchesConfig, arn: str, expected_prefix: str) -> None:
     with patch.object(config.common_utils, "sign_aws_request") as mock_sign:
         mock_sign.return_value = ({"Authorization": "signed"}, b"")
-        result = config.transform_retrieve_batch_request(
-            batch_id=arn, optional_params={}, litellm_params={}
-        )
+        result = config.transform_retrieve_batch_request(batch_id=arn, optional_params={}, litellm_params={})
     assert result["url"].startswith(expected_prefix)

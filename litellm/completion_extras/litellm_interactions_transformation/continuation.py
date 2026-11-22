@@ -95,7 +95,7 @@ def next_hop_body(
             "continuation_token": token,
             **(
                 {"previous_interaction_id": interaction_id}
-                if isinstance(interaction_id, str) and interaction_id
+                if isinstance(interaction_id, str) and interaction_id and request_body.get("store") is not False
                 else {}
             ),
         },

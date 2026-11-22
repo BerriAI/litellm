@@ -65,9 +65,7 @@ class TestCloudZeroHourlyExport:
         )
 
         with (
-            patch.object(
-                LiteLLMDatabase, "_ensure_prisma_client"
-            ) as mock_prisma_client_getter,
+            patch.object(LiteLLMDatabase, "_ensure_prisma_client") as mock_prisma_client_getter,
             patch.object(CloudZeroStreamer, "send_batched") as send_batched_mock,
             patch("litellm.integrations.cloudzero.cloudzero.datetime") as mock_datetime,
         ):
@@ -82,16 +80,12 @@ class TestCloudZeroHourlyExport:
                 limit = params[2] if len(params) > 2 else None
 
                 spend_df = spend_mock_data.collect()
-                verification_df = verification_mock_data.collect().rename(
-                    {"key_alias": "api_key_alias"}
-                )
+                verification_df = verification_mock_data.collect().rename({"key_alias": "api_key_alias"})
                 team_df = team_mock_data.collect()
                 user_df = user_mock_data.collect()
 
                 joined = (
-                    spend_df.join(
-                        verification_df, left_on="api_key", right_on="token", how="left"
-                    )
+                    spend_df.join(verification_df, left_on="api_key", right_on="token", how="left")
                     .join(
                         team_df,
                         left_on="team_id",
@@ -172,7 +166,13 @@ class TestLiteLLMDatabaseUsageData:
     @pytest.mark.asyncio
     async def test_builds_frame_from_rows_recovered_for_double_hashed_keys(self, monkeypatch: pytest.MonkeyPatch):
         double_hashed = hashlib.sha256(b"sk-hashed-token").hexdigest()
-        joined_row = {"api_key": "sk-joined", "api_key_alias": "joined", "team_id": "team-0", "user_email": None, "spend": 0.1}
+        joined_row = {
+            "api_key": "sk-joined",
+            "api_key_alias": "joined",
+            "team_id": "team-0",
+            "user_email": None,
+            "spend": 0.1,
+        }
         dirty_row = {"api_key": double_hashed, "api_key_alias": None, "team_id": None, "user_email": None, "spend": 0.5}
 
         async def query_raw(query: str, *params):

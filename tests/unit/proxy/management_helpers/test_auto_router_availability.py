@@ -78,12 +78,11 @@ def test_v2_chain_checks_both_allowances_and_keeps_both_owned_slots(
         limit=1,
     )
     assert blocked.error is not None and expected_label in blocked.error
-    edited: Final = auto_router_availability(
-        others=(), existing=candidate, candidate=candidate, baselines={}, limit=1
-    )
+    edited: Final = auto_router_availability(others=(), existing=candidate, candidate=candidate, baselines={}, limit=1)
     assert edited.error is None
     assert tuple(slot.key for slot in edited.allowances if slot.used_by_this_router) == (
-        "heuristic_v2", "tier_or_classifier_prompt"
+        "heuristic_v2",
+        "tier_or_classifier_prompt",
     )
 
 

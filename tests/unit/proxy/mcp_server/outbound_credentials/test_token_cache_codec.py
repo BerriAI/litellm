@@ -19,9 +19,7 @@ def _wrapping_codec():
 
 def test_round_trips_the_access_token():
     codec = _wrapping_codec()
-    token = codec.decode(
-        codec.encode(OAuthToken(access_token="at-123", expires_at=1234.5))
-    )
+    token = codec.decode(codec.encode(OAuthToken(access_token="at-123", expires_at=1234.5)))
     assert token is not None
     assert token.access_token == "at-123"
 
@@ -30,9 +28,7 @@ def test_encode_encrypts_and_omits_the_refresh_token():
     codec = _wrapping_codec()
     blob = codec.encode(OAuthToken(access_token="at", refresh_token="super-secret-rt"))
     assert blob.startswith("enc:")  # encryption was applied
-    assert (
-        "super-secret-rt" not in blob
-    )  # the long-lived secret never reaches the cache
+    assert "super-secret-rt" not in blob  # the long-lived secret never reaches the cache
     decoded = codec.decode(blob)
     assert decoded is not None and decoded.refresh_token is None
 

@@ -153,9 +153,7 @@ def test_service_tier_with_other_config_blocks():
 def test_service_tier_in_supported_openai_params():
     """Test that service_tier is in the list of supported OpenAI params."""
     config = AmazonConverseConfig()
-    supported_params = config.get_supported_openai_params(
-        model="anthropic.claude-3-sonnet-20240229-v1:0"
-    )
+    supported_params = config.get_supported_openai_params(model="anthropic.claude-3-sonnet-20240229-v1:0")
     assert "service_tier" in supported_params
 
 
@@ -344,7 +342,9 @@ def test_map_openai_service_tier_unmapped_value_drops_under_global_drop_params(m
     assert "serviceTier" not in result
 
 
-@pytest.mark.parametrize("model", ["bedrock/converse/us.openai.gpt-6-luna", "bedrock/converse/us.amazon.nova-2-lite-v1:0"])
+@pytest.mark.parametrize(
+    "model", ["bedrock/converse/us.openai.gpt-6-luna", "bedrock/converse/us.amazon.nova-2-lite-v1:0"]
+)
 def test_completion_refuses_unmapped_service_tier_before_calling_bedrock(model: str, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "drop_params", False)
     client: Final = MagicMock(spec=HTTPHandler)

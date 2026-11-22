@@ -49,10 +49,12 @@ def _url_params(message: str = "please authorize") -> ElicitRequestURLParams:
 
 
 def _caps(*, url=True, form=True) -> ClientCapabilities:
-    return ClientCapabilities(elicitation=ElicitationCapability(
-        url=UrlElicitationCapability() if url else None,
-        form=FormElicitationCapability() if form else None,
-    ))
+    return ClientCapabilities(
+        elicitation=ElicitationCapability(
+            url=UrlElicitationCapability() if url else None,
+            form=FormElicitationCapability() if form else None,
+        )
+    )
 
 
 class TestHandleElicitationRequest:
@@ -87,7 +89,6 @@ class TestHandleElicitationRequest:
         )
         assert isinstance(result, ErrorData)
         assert "not available" in result.message
-
 
 
 class TestRelayElicitationToDownstream:
@@ -127,7 +128,9 @@ class TestRelayElicitationToDownstream:
     async def test_should_reject_invalid_elicitation_parameters(self):
         session = SimpleNamespace(elicit_form=AsyncMock())
         result = await _relay_elicitation_to_downstream(
-            params=SimpleNamespace(mode="form"), downstream_session=session, downstream_capabilities=_caps(),
+            params=SimpleNamespace(mode="form"),
+            downstream_session=session,
+            downstream_capabilities=_caps(),
         )
         assert isinstance(result, ErrorData)
         session.elicit_form.assert_not_awaited()
@@ -170,9 +173,7 @@ class TestRelayElicitationToDownstream:
         session.elicit_form.assert_not_awaited()
 
     async def test_should_error_when_downstream_relay_raises(self):
-        session = SimpleNamespace(
-            elicit_form=AsyncMock(side_effect=RuntimeError("transport closed"))
-        )
+        session = SimpleNamespace(elicit_form=AsyncMock(side_effect=RuntimeError("transport closed")))
 
         result = await handle_elicitation_request(
             context=None,
@@ -192,7 +193,10 @@ if __name__ == "__main__":
 async def test_relay_failure_is_not_user_decline():
     session = SimpleNamespace(elicit_form=AsyncMock(side_effect=RuntimeError("private upstream credential")))
     result = await handle_elicitation_request(
-        context=None, params=_form_params(), downstream_session=session, downstream_capabilities=_caps(),
+        context=None,
+        params=_form_params(),
+        downstream_session=session,
+        downstream_capabilities=_caps(),
     )
     assert isinstance(result, ErrorData), "A failed relay must not claim that the user declined"
     assert "private upstream credential" not in result.message
@@ -202,7 +206,10 @@ async def test_relay_failure_is_not_user_decline():
 async def test_unknown_client_capabilities_prevent_relay():
     session = SimpleNamespace(elicit_form=AsyncMock(return_value=ElicitResult(action="accept")))
     result = await handle_elicitation_request(
-        context=None, params=_form_params(), downstream_session=session, downstream_capabilities=None,
+        context=None,
+        params=_form_params(),
+        downstream_session=session,
+        downstream_capabilities=None,
     )
     assert isinstance(result, ErrorData), "Unknown capabilities must fail explicitly"
     session.elicit_form.assert_not_awaited()
@@ -217,8 +224,11 @@ async def test_relay_preserves_response_and_request_correlation(mode, action):
     session = SimpleNamespace(elicit_form=request, elicit_url=request)
     params = _form_params() if mode == "form" else _url_params()
     result = await handle_elicitation_request(
-        context=SimpleNamespace(request_id="upstream-id"), params=params,
-        downstream_session=session, downstream_capabilities=_caps(), related_request_id=0,
+        context=SimpleNamespace(request_id="upstream-id"),
+        params=params,
+        downstream_session=session,
+        downstream_capabilities=_caps(),
+        related_request_id=0,
     )
     assert result is response
     assert request.await_args.kwargs["related_request_id"] == 0
@@ -233,8 +243,11 @@ async def test_relay_preserves_response_and_request_correlation(mode, action):
 async def test_expired_relay_deadline_returns_explicit_timeout():
     request = AsyncMock()
     result = await handle_elicitation_request(
-        context=None, params=_form_params(), downstream_session=SimpleNamespace(elicit_form=request),
-        downstream_capabilities=_caps(), timeout=0,
+        context=None,
+        params=_form_params(),
+        downstream_session=SimpleNamespace(elicit_form=request),
+        downstream_capabilities=_caps(),
+        timeout=0,
     )
     assert isinstance(result, ErrorData)
     assert result.code == REQUEST_TIMEOUT
@@ -254,10 +267,15 @@ async def test_relay_cancellation_releases_downstream_waiter():
         finally:
             finished.set()
 
-    task = asyncio.create_task(handle_elicitation_request(
-        context=None, params=_form_params(), downstream_session=SimpleNamespace(elicit_form=wait_for_user),
-        downstream_capabilities=_caps(), related_request_id="tool-call",
-    ))
+    task = asyncio.create_task(
+        handle_elicitation_request(
+            context=None,
+            params=_form_params(),
+            downstream_session=SimpleNamespace(elicit_form=wait_for_user),
+            downstream_capabilities=_caps(),
+            related_request_id="tool-call",
+        )
+    )
     await started.wait()
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
@@ -270,7 +288,9 @@ async def test_legacy_empty_elicitation_capability_supports_form():
     accepted = ElicitResult(action="accept")
     session = SimpleNamespace(elicit_form=AsyncMock(return_value=accepted))
     result = await handle_elicitation_request(
-        context=None, params=_form_params(), downstream_session=session,
+        context=None,
+        params=_form_params(),
+        downstream_session=session,
         downstream_capabilities=ClientCapabilities(elicitation=ElicitationCapability()),
         related_request_id="legacy-call",
     )

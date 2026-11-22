@@ -9,9 +9,7 @@ import httpx
 import pytest
 from pydantic import TypeAdapter
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from datetime import datetime
 from unittest.mock import AsyncMock
@@ -77,9 +75,7 @@ def test_map_openai_params_with_preview_api_version():
     model = "azure/gpt-4-1"
     drop_params = False
     api_version = "preview"
-    assert config.map_openai_params(
-        non_default_params, optional_params, model, drop_params, api_version
-    )
+    assert config.map_openai_params(non_default_params, optional_params, model, drop_params, api_version)
 
 
 def _map_tool_choice_on_pre_tool_choice_api_version(tool_choice: dict[str, object]) -> dict[str, object]:
@@ -109,7 +105,12 @@ def test_map_openai_params_drop_params_drops_allowed_tools_on_old_api_version():
 def test_map_openai_params_allowed_tools_on_old_api_version_is_a_400_without_drop_params():
     with pytest.raises(litellm.UnsupportedParamsError, match="2023-12-01-preview") as exc:
         AzureOpenAIConfig().map_openai_params(
-            {"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]}}},
+            {
+                "tool_choice": {
+                    "type": "allowed_tools",
+                    "allowed_tools": {"mode": "auto", "tools": [{"type": "function"}]},
+                }
+            },
             {},
             "gpt-4o",
             drop_params=False,
@@ -560,6 +561,7 @@ def _vcr_outcome_gate(request, vcr):
     yield
     record_vcr_outcome(request, vcr)
 
+
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
     """
@@ -612,6 +614,7 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     publish(litellm.model_cost)
 
+
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -631,6 +634,7 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
+
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -654,6 +658,7 @@ def setup_and_teardown():
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
 
+
 @pytest.fixture
 def _pr4_azure_openai_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "pr4-test-azure-openai-key")
@@ -661,6 +666,7 @@ def _pr4_azure_openai_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AZURE_TENANT_ID", "pr4-test-tenant-id")
     monkeypatch.setenv("AZURE_CLIENT_ID", "pr4-test-client-id")
     monkeypatch.setenv("AZURE_CLIENT_SECRET", "pr4-test-client-secret")
+
 
 @pytest.mark.usefixtures(
     "_pr4_azure_openai_env",
@@ -886,9 +892,7 @@ def registered_azure_breakpoint_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def _azure_request_parts(
-    config: AzureOpenAIConfig, model: str, litellm_params: dict[str, object]
-) -> object:
+def _azure_request_parts(config: AzureOpenAIConfig, model: str, litellm_params: dict[str, object]) -> object:
     request: Final = config.transform_request(
         model=model,
         messages=[{"role": "user", "content": list(_MARKED_AZURE_PARTS)}],

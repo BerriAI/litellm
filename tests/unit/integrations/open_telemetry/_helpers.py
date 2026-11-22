@@ -41,30 +41,24 @@ def assert_server_span_attrs(
     """The four required attributes on the SERVER span must all be set."""
     span = get_server_span(exporter)
     assert span is not None, (
-        f"{where}: SERVER span never finished — exporter saw "
-        f"{[s.name for s in exporter.get_finished_spans()]}"
+        f"{where}: SERVER span never finished — exporter saw {[s.name for s in exporter.get_finished_spans()]}"
     )
 
     actual_status = span.attributes.get(HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE)
     assert actual_status == expected_status, (
-        f"{where}: {HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE} = "
-        f"{actual_status!r}, expected {expected_status}"
+        f"{where}: {HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE} = {actual_status!r}, expected {expected_status}"
     )
-    assert isinstance(
-        actual_status, int
-    ), f"{where}: status code must be int (semconv), got {type(actual_status)}"
+    assert isinstance(actual_status, int), f"{where}: status code must be int (semconv), got {type(actual_status)}"
 
     actual_url = span.attributes.get(URL_PATH_ATTRIBUTE)
     assert actual_url == expected_url_path, (
-        f"{where}: {URL_PATH_ATTRIBUTE} = {actual_url!r}, "
-        f"expected {expected_url_path!r}"
+        f"{where}: {URL_PATH_ATTRIBUTE} = {actual_url!r}, expected {expected_url_path!r}"
     )
 
     expected_route = expected_http_route or expected_url_path
     actual_route = span.attributes.get(HTTP_ROUTE_ATTRIBUTE)
     assert actual_route == expected_route, (
-        f"{where}: {HTTP_ROUTE_ATTRIBUTE} = {actual_route!r}, "
-        f"expected {expected_route!r}"
+        f"{where}: {HTTP_ROUTE_ATTRIBUTE} = {actual_route!r}, expected {expected_route!r}"
     )
 
     duration_ns = (span.end_time or 0) - (span.start_time or 0)
@@ -73,8 +67,7 @@ def assert_server_span_attrs(
     expected_span_status = StatusCode.ERROR if expected_status >= 400 else StatusCode.OK
     actual_span_status = span.status.status_code
     assert actual_span_status == expected_span_status, (
-        f"{where}: span.status = {actual_span_status!r}, "
-        f"expected {expected_span_status!r}"
+        f"{where}: span.status = {actual_span_status!r}, expected {expected_span_status!r}"
     )
 
 
@@ -95,12 +88,8 @@ def make_httpx_status_error(status_code: int, body: str = "upstream error"):
     import httpx
 
     request = httpx.Request("POST", "https://upstream.example/v1/x")
-    response = httpx.Response(
-        status_code=status_code, content=body.encode("utf-8"), request=request
-    )
-    return httpx.HTTPStatusError(
-        f"HTTP {status_code}", request=request, response=response
-    )
+    response = httpx.Response(status_code=status_code, content=body.encode("utf-8"), request=request)
+    return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
 
 
 def make_fastapi_http_exception(status_code: int, detail: Any = "boom"):

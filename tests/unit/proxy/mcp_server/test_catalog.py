@@ -121,7 +121,8 @@ async def test_catalog_refresh_keeps_selected_toolset_with_current_grants_and_co
             handler=tool_handler,
         )
     original: Final = UserAPIKeyAuth(
-        api_key="catalog-key-hash", object_permission=grants,
+        api_key="catalog-key-hash",
+        object_permission=grants,
         object_permission_id=grants.object_permission_id,
     )
     original.via_virtual_key = True
@@ -170,7 +171,9 @@ def rate_limit_catalog_setup(
     limiter: Final = AsyncMock(side_effect=enforce_rate_limit)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", SimpleNamespace(enforce_mcp_server_rate_limits=limiter))
     monkeypatch.setattr(proxy_server, "prisma_client", None)
-    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server for server in servers})
+    monkeypatch.setattr(
+        operations.global_mcp_server_manager, "registry", {server.server_id: server for server in servers}
+    )
     monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=list(servers)))
     context: Final = operations.prepare_context(
         user_api_key_auth=caller,
@@ -179,15 +182,11 @@ def rate_limit_catalog_setup(
     return servers, context, limiter
 
 
-def optional_catalog_page(
-    kind: CatalogKind, server_id: str, next_cursor: str | None = None
-) -> OptionalCatalogResult:
+def optional_catalog_page(kind: CatalogKind, server_id: str, next_cursor: str | None = None) -> OptionalCatalogResult:
     from mcp import types
 
     if kind == "prompts":
-        return types.ListPromptsResult(
-            prompts=[types.Prompt(name=f"{server_id}-item")], next_cursor=next_cursor
-        )
+        return types.ListPromptsResult(prompts=[types.Prompt(name=f"{server_id}-item")], next_cursor=next_cursor)
     if kind == "resources":
         return types.ListResourcesResult(
             resources=[types.Resource(name=f"{server_id}-item", uri=f"https://example.com/{server_id}")],
@@ -210,9 +209,7 @@ async def run_catalog_listing(
     from mcp import types
 
     if kind == "tools":
-        return await catalog.aggregate_gateway_tools(
-            context, PaginatedRequestParams(cursor=cursor), servers, {}
-        )
+        return await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(cursor=cursor), servers, {})
     request: Final = {
         "prompts": types.ListPromptsRequest,
         "resources": types.ListResourcesRequest,
@@ -528,10 +525,12 @@ async def test_gateway_tools_continuation_rejects_an_upstream_failure(monkeypatc
     monkeypatch.setattr(proxy_server, "prisma_client", None)
     server = MCPServer(server_id="pages", name="pages", transport=MCPTransport.http)
     monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {server.server_id: server})
-    fetch = AsyncMock(side_effect=[
-        (page("first", "next"), ServerListOk(tool_count=1)),
-        (ListToolsResult(tools=[]), classify_list_exception(TimeoutError("upstream secret"))),
-    ])
+    fetch = AsyncMock(
+        side_effect=[
+            (page("first", "next"), ServerListOk(tool_count=1)),
+            (ListToolsResult(tools=[]), classify_list_exception(TimeoutError("upstream secret"))),
+        ]
+    )
     monkeypatch.setattr(catalog, "get_filtered_server_tools", fetch)
     context = operations.prepare_context()
     first = await catalog.aggregate_gateway_tools(context, PaginatedRequestParams(), [server], {})
@@ -544,12 +543,17 @@ async def test_gateway_tools_continuation_rejects_an_upstream_failure(monkeypatc
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("request_name,result_name,field", [
-    ("ListPromptsRequest", "ListPromptsResult", "prompts"),
-    ("ListResourcesRequest", "ListResourcesResult", "resources"),
-    ("ListResourceTemplatesRequest", "ListResourceTemplatesResult", "resource_templates"),
-])
-async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_failed_continuation(monkeypatch, request_name, result_name, field):
+@pytest.mark.parametrize(
+    "request_name,result_name,field",
+    [
+        ("ListPromptsRequest", "ListPromptsResult", "prompts"),
+        ("ListResourcesRequest", "ListResourcesResult", "resources"),
+        ("ListResourceTemplatesRequest", "ListResourceTemplatesResult", "resource_templates"),
+    ],
+)
+async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_failed_continuation(
+    monkeypatch, request_name, result_name, field
+):
     from unittest.mock import AsyncMock
 
     from mcp import types
@@ -573,15 +577,19 @@ async def test_optional_gateway_catalog_reports_initial_failure_and_rejects_fail
     assert getattr(failed, field) == [] and failed.next_cursor is None
     assert next(iter(failed.meta[SERVER_OUTCOMES_META_KEY].values()))["status"] == "timeout"
     assert "upstream secret" not in failed.model_dump_json()
-    fetch.side_effect = [getattr(types, result_name)(**{field: [], "next_cursor": "next"}), TimeoutError("upstream secret")]
+    fetch.side_effect = [
+        getattr(types, result_name)(**{field: [], "next_cursor": "next"}),
+        TimeoutError("upstream secret"),
+    ]
     first = await catalog.list_gateway_catalog(context, request())
     assert first.next_cursor
     with pytest.raises(MCPError, match="Upstream continuation failed; start a fresh listing") as denied:
-        await catalog.list_gateway_catalog(context, request(params=types.PaginatedRequestParams(cursor=first.next_cursor)))
+        await catalog.list_gateway_catalog(
+            context, request(params=types.PaginatedRequestParams(cursor=first.next_cursor))
+        )
     assert "upstream secret" not in str(denied.value)
     assert fetch.await_count == 3
     assert fetch.await_args.args[-1] == "next"
-
 
 
 @pytest.mark.asyncio
@@ -698,6 +706,7 @@ async def test_continuation_rate_limit_raises_without_refetching_completed_serve
     charged_server_ids: Final = [call.args[1].server_id for call in limiter.await_args_list]
     assert charged_server_ids.count("catalog-a") == 2
     assert charged_server_ids.count("catalog-b") == 1
+
 
 @pytest.mark.parametrize("kind", ("prompts", "resources", "templates"))
 @pytest.mark.parametrize("ttls,expected", (((9000, 4000), 4000), ((9000, 0), 0)))
@@ -1054,7 +1063,9 @@ def test_the_challenge_names_the_metadata_route_under_a_server_root_path(
         pytest.param("/日本/mcp", "日本", "%E6%97%A5%E6%9C%AC/mcp", id="non-ascii-name-legacy-path"),
     ],
 )
-async def test_the_challenge_names_the_url_the_client_addressed(request_path: str, addressed: str, resource: str) -> None:
+async def test_the_challenge_names_the_url_the_client_addressed(
+    request_path: str, addressed: str, resource: str
+) -> None:
     send: Final = AsyncMock()
     gate: Final = OAuthScopeResponse(send, _GATEWAY, request_path, reauthorize_as=addressed)
     aliased: Final = _server(MCPAuth.oauth2, name="docs_internal", oauth2_flow="authorization_code", alias="docs")

@@ -830,9 +830,7 @@ async def test_giving_up_on_an_unrecognized_status_says_which_status_it_was(monk
     logging_obj = _logging_obj()
     fetch, _ = _fetch_sequence(_response("halted_for_review", with_usage=False))
 
-    await poll_and_log_background_interaction_cost(
-        _context(logging_obj, timeout_seconds=0.01), fetch_interaction=fetch
-    )
+    await poll_and_log_background_interaction_cost(_context(logging_obj, timeout_seconds=0.01), fetch_interaction=fetch)
 
     assert len(errors) == 1
     assert "halted_for_review" in errors[0]

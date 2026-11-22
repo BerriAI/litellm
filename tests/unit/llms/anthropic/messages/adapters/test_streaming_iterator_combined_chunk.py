@@ -360,9 +360,7 @@ def _anthropic_sdk_final_content(
         lambda request: httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
     )
     client: Final = anthropic.Anthropic(api_key="transport-only", http_client=httpx.Client(transport=transport))
-    with client.messages.stream(
-        model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]
-    ) as stream:
+    with client.messages.stream(model="claude", max_tokens=16, messages=[{"role": "user", "content": "hi"}]) as stream:
         return [block.model_dump(exclude_none=True) for block in stream.get_final_message().content]
 
 
@@ -391,7 +389,12 @@ def test_fake_stream_gives_each_thinking_block_its_own_content_block(thinking_bl
 
 
 def _native_thinking_chunk(thinking: str, index: int, signature: str | None = None) -> ModelResponseStream:
-    block: Final = {"type": "thinking", "thinking": thinking, "index": index, **({"signature": signature} if signature else {})}
+    block: Final = {
+        "type": "thinking",
+        "thinking": thinking,
+        "index": index,
+        **({"signature": signature} if signature else {}),
+    }
     return ModelResponseStream(
         choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=thinking or None, thinking_blocks=[block]))]
     )

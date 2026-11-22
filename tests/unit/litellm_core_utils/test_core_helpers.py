@@ -92,10 +92,7 @@ def test_claude_subscription_usage_reads_oauth_billing_signals(
         {
             "custom_llm_provider": "anthropic",
             "litellm_params": {"litellm_metadata": {"used_client_oauth_token": True}},
-            "response_headers": {
-                f"{prefix}anthropic-ratelimit-unified-{key}": value
-                for key, value in signals.items()
-            },
+            "response_headers": {f"{prefix}anthropic-ratelimit-unified-{key}": value for key, value in signals.items()},
         }
     )
     assert usage == {

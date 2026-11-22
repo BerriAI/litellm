@@ -59,9 +59,7 @@ def _make_httpx_response(body: dict) -> httpx.Response:
         status_code=200,
         headers={"content-type": "application/json"},
         content=json.dumps(body).encode("utf-8"),
-        request=httpx.Request(
-            "POST", "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"
-        ),
+        request=httpx.Request("POST", "https://gigachat.devices.sberbank.ru/api/v1/chat/completions"),
     )
 
 
@@ -71,25 +69,17 @@ class TestGigaChatPassthroughConfig:
     def test_is_streaming_request_true(self):
         """Test streaming is detected when stream=True."""
         config = GigaChatPassthroughConfig()
-        assert (
-            config.is_streaming_request("chat/completions", {"stream": True}) is True
-        )
+        assert config.is_streaming_request("chat/completions", {"stream": True}) is True
 
     def test_is_streaming_request_false(self):
         """Test streaming is not detected when stream=False."""
         config = GigaChatPassthroughConfig()
-        assert (
-            config.is_streaming_request("chat/completions", {"stream": False})
-            is False
-        )
+        assert config.is_streaming_request("chat/completions", {"stream": False}) is False
 
     def test_is_streaming_request_missing_stream_key(self):
         """Test streaming defaults to False when stream key is missing."""
         config = GigaChatPassthroughConfig()
-        assert (
-            config.is_streaming_request("chat/completions", {"model": "GigaChat"})
-            is False
-        )
+        assert config.is_streaming_request("chat/completions", {"model": "GigaChat"}) is False
 
     def test_get_complete_url_with_api_base(self):
         """Test URL construction with explicit api_base."""

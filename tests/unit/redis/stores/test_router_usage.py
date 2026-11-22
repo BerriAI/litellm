@@ -158,7 +158,9 @@ async def test_inside_a_request_deployment_increments_go_out_on_their_own_trip_l
     natives: Final = FakeNatives()
 
     await store.increment_deployment("dep", "model", "12-34", 7.5, 1)
-    with request_redis_batch_scope(post_call_deadline=60, native_factory=natives, native_send_factory=fake_send) as request:  # pyright: ignore[reportArgumentType]  # test double
+    with request_redis_batch_scope(
+        post_call_deadline=60, native_factory=natives, native_send_factory=fake_send
+    ) as request:  # pyright: ignore[reportArgumentType]  # test double
         await store.increment_deployment("dep", "model", "12-34", 2, 1)
         await request.flush_post_call()
 

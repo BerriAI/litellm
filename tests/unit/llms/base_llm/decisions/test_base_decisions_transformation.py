@@ -363,9 +363,7 @@ def test_a_box_answer_without_confidence_reaches_the_caller_unchanged() -> None:
     ],
 )
 @pytest.mark.parametrize("confidence", ({}, {"confidence": None}))
-@pytest.mark.parametrize(
-    ("provider", "optional"), (("nace", False), ("fireworks_ai", False), ("parallel_ai", True))
-)
+@pytest.mark.parametrize(("provider", "optional"), (("nace", False), ("fireworks_ai", False), ("parallel_ai", True)))
 def test_only_a_provider_without_confidence_may_omit_it(
     question: Mapping[str, object],
     answer: Mapping[str, object],

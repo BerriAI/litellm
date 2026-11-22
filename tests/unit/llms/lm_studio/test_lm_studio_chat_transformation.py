@@ -4,9 +4,7 @@ from unittest.mock import patch
 
 from pydantic import BaseModel
 
-sys.path.insert(
-    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
-)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
 from litellm.llms.lm_studio.chat.transformation import LMStudioChatConfig
 from litellm.utils import get_optional_params
@@ -47,9 +45,7 @@ class TestLMStudioChatConfigResponseFormat:
             custom_llm_provider="lm_studio",
         )
 
-        mapped = config.map_openai_params(
-            non_default_params, {}, "lm_studio/test-model", False
-        )
+        mapped = config.map_openai_params(non_default_params, {}, "lm_studio/test-model", False)
         mapped_schema = mapped["response_format"]["json_schema"]["schema"]
         assert mapped_schema["properties"] == schema["properties"]
         opt_schema = optional_params["response_format"]["json_schema"]["schema"]

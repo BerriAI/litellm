@@ -55,9 +55,7 @@ class TestSwaggerChatCompletions:
         assert "ProxyChatCompletionRequest" in openapi_schema["components"]["schemas"]
 
         # Get the ProxyChatCompletionRequest schema
-        chat_completion_schema = openapi_schema["components"]["schemas"][
-            "ProxyChatCompletionRequest"
-        ]
+        chat_completion_schema = openapi_schema["components"]["schemas"]["ProxyChatCompletionRequest"]
 
         # Verify it has the expected properties structure
         assert "properties" in chat_completion_schema
@@ -85,9 +83,7 @@ class TestSwaggerChatCompletions:
         ]
 
         for field in expected_core_fields:
-            assert (
-                field in properties
-            ), f"Expected field '{field}' not found in ProxyChatCompletionRequest schema"
+            assert field in properties, f"Expected field '{field}' not found in ProxyChatCompletionRequest schema"
 
         # Check for LiteLLM-specific fields added by ProxyChatCompletionRequest
         expected_litellm_fields = [
@@ -99,9 +95,9 @@ class TestSwaggerChatCompletions:
         ]
 
         for field in expected_litellm_fields:
-            assert (
-                field in properties
-            ), f"Expected LiteLLM field '{field}' not found in ProxyChatCompletionRequest schema"
+            assert field in properties, (
+                f"Expected LiteLLM field '{field}' not found in ProxyChatCompletionRequest schema"
+            )
 
         # Verify model and messages are required fields
         if "required" in chat_completion_schema:
@@ -128,19 +124,13 @@ class TestSwaggerChatCompletions:
 
         # Check main chat completion path
         path_to_check = "/chat/completions"
-        assert (
-            path_to_check in paths
-        ), f"Path {path_to_check} not found in OpenAPI schema"
-        assert (
-            "post" in paths[path_to_check]
-        ), f"POST method not found for path {path_to_check}"
+        assert path_to_check in paths, f"Path {path_to_check} not found in OpenAPI schema"
+        assert "post" in paths[path_to_check], f"POST method not found for path {path_to_check}"
 
         post_spec = paths[path_to_check]["post"]
 
         # Should have request body with expanded schema (not just $ref)
-        assert (
-            "requestBody" in post_spec
-        ), f"Path {path_to_check} should have requestBody"
+        assert "requestBody" in post_spec, f"Path {path_to_check} should have requestBody"
         request_body = post_spec["requestBody"]
 
         # Check request body structure
@@ -152,33 +142,23 @@ class TestSwaggerChatCompletions:
         schema_def = json_content["schema"]
 
         # Should be an expanded object schema, not a $ref
-        assert (
-            schema_def.get("type") == "object"
-        ), "Schema should be an expanded object type"
+        assert schema_def.get("type") == "object", "Schema should be an expanded object type"
         assert "properties" in schema_def, "Schema should have expanded properties"
-        assert (
-            "$ref" not in schema_def
-        ), "Schema should not be a reference (should be expanded inline)"
+        assert "$ref" not in schema_def, "Schema should not be a reference (should be expanded inline)"
 
         # Should have all Pydantic fields as individual properties
         properties = schema_def["properties"]
-        assert (
-            len(properties) >= 25
-        ), f"Expected at least 25 properties, got {len(properties)}"
+        assert len(properties) >= 25, f"Expected at least 25 properties, got {len(properties)}"
 
         # Should have core OpenAI fields
         core_fields = ["model", "messages", "temperature", "max_tokens", "stream"]
         for field in core_fields:
-            assert (
-                field in properties
-            ), f"Core field '{field}' should be in expanded properties"
+            assert field in properties, f"Core field '{field}' should be in expanded properties"
 
         # Should have LiteLLM-specific fields
         litellm_fields = ["guardrails", "caching", "fallbacks", "num_retries"]
         for field in litellm_fields:
-            assert (
-                field in properties
-            ), f"LiteLLM field '{field}' should be in expanded properties"
+            assert field in properties, f"LiteLLM field '{field}' should be in expanded properties"
 
         # Check required fields
         required_fields = schema_def.get("required", [])
@@ -189,16 +169,12 @@ class TestSwaggerChatCompletions:
         parameters = post_spec.get("parameters", [])
         # All parameters should be path parameters, no query parameters
         for param in parameters:
-            assert (
-                param.get("in") == "path"
-            ), f"Only path parameters expected, found {param.get('in')} parameter: {param.get('name')}"
+            assert param.get("in") == "path", (
+                f"Only path parameters expected, found {param.get('in')} parameter: {param.get('name')}"
+            )
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_chat_completion_request_schema"
-    )
-    def test_add_llm_api_request_schema_body_calls_chat_completion_method(
-        self, mock_add_chat
-    ):
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_chat_completion_request_schema")
+    def test_add_llm_api_request_schema_body_calls_chat_completion_method(self, mock_add_chat):
         """
         Test that add_llm_api_request_schema_body calls add_chat_completion_request_schema.
         """
@@ -234,9 +210,7 @@ class TestSwaggerChatCompletions:
         actual_paths = CustomOpenAPISpec.CHAT_COMPLETION_PATHS
 
         for expected_path in expected_paths:
-            assert (
-                expected_path in actual_paths
-            ), f"Expected path '{expected_path}' not found in CHAT_COMPLETION_PATHS"
+            assert expected_path in actual_paths, f"Expected path '{expected_path}' not found in CHAT_COMPLETION_PATHS"
 
     def test_proxy_chat_completion_request_pydantic_model_works(self):
         """
@@ -275,9 +249,7 @@ class TestSwaggerChatCompletions:
             "fallbacks",
         ]
         for field in litellm_fields:
-            assert (
-                field in properties
-            ), f"LiteLLM field '{field}' should be in ProxyChatCompletionRequest schema"
+            assert field in properties, f"LiteLLM field '{field}' should be in ProxyChatCompletionRequest schema"
 
     def test_messages_field_has_example(self, client):
         """
@@ -317,9 +289,7 @@ class TestSwaggerChatCompletions:
                 "assistant",
                 "system",
             ], f"Invalid role: {message['role']}"
-            assert isinstance(
-                message["content"], str
-            ), "Message content should be a string"
+            assert isinstance(message["content"], str), "Message content should be a string"
 
     def test_request_body_accepts_actual_chat_request(self, client):
         """
@@ -358,16 +328,12 @@ class TestSwaggerChatCompletions:
         # Verify our test request has fields that exist in the schema
         properties = schema_def["properties"]
         for field_name in test_request.keys():
-            assert (
-                field_name in properties
-            ), f"Field '{field_name}' should be in expanded schema properties"
+            assert field_name in properties, f"Field '{field_name}' should be in expanded schema properties"
 
         # Verify required fields are present in test request
         required_fields = schema_def.get("required", [])
         for required_field in required_fields:
-            assert (
-                required_field in test_request
-            ), f"Required field '{required_field}' should be in test request"
+            assert required_field in test_request, f"Required field '{required_field}' should be in test request"
 
     def test_openapi_schema_servers_url_with_root_path(self):
         """
@@ -396,24 +362,22 @@ class TestSwaggerChatCompletions:
                 schema = get_openapi_schema()
 
                 # Should have servers field with correct URL
-                assert (
-                    "servers" in schema
-                ), f"servers field should exist when server_root_path={root_path}"
-                assert (
-                    schema["servers"][0]["url"] == expected_url
-                ), f"Expected servers URL '{expected_url}', got '{schema['servers'][0]['url']}' for root_path '{root_path}'"
+                assert "servers" in schema, f"servers field should exist when server_root_path={root_path}"
+                assert schema["servers"][0]["url"] == expected_url, (
+                    f"Expected servers URL '{expected_url}', got '{schema['servers'][0]['url']}' for root_path '{root_path}'"
+                )
 
             # Test custom_openapi as well
             app.openapi_schema = None
             with patch("litellm.proxy.proxy_server.server_root_path", root_path):
                 schema = custom_openapi()
 
-                assert (
-                    "servers" in schema
-                ), f"servers field should exist in custom_openapi when server_root_path={root_path}"
-                assert (
-                    schema["servers"][0]["url"] == expected_url
-                ), f"Expected servers URL '{expected_url}' in custom_openapi, got '{schema['servers'][0]['url']}'"
+                assert "servers" in schema, (
+                    f"servers field should exist in custom_openapi when server_root_path={root_path}"
+                )
+                assert schema["servers"][0]["url"] == expected_url, (
+                    f"Expected servers URL '{expected_url}' in custom_openapi, got '{schema['servers'][0]['url']}'"
+                )
 
     def test_should_make_duplicate_operation_ids_unique_by_method(self):
         from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
@@ -421,15 +385,9 @@ class TestSwaggerChatCompletions:
         schema = {
             "paths": {
                 "/anthropic/{endpoint}": {
-                    "delete": {
-                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
-                    },
-                    "get": {
-                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
-                    },
-                    "post": {
-                        "operationId": "anthropic_proxy_route_anthropic__endpoint__delete"
-                    },
+                    "delete": {"operationId": "anthropic_proxy_route_anthropic__endpoint__delete"},
+                    "get": {"operationId": "anthropic_proxy_route_anthropic__endpoint__delete"},
+                    "post": {"operationId": "anthropic_proxy_route_anthropic__endpoint__delete"},
                 },
                 "/models": {
                     "get": {
@@ -454,9 +412,7 @@ class TestSwaggerChatCompletions:
             == "anthropic_proxy_route_anthropic__endpoint__post"
         )
         operation_ids = [
-            operation["operationId"]
-            for path_item in result["paths"].values()
-            for operation in path_item.values()
+            operation["operationId"] for path_item in result["paths"].values() for operation in path_item.values()
         ]
         assert len(operation_ids) == len(set(operation_ids))
 
@@ -476,38 +432,21 @@ class TestSwaggerChatCompletions:
             methods={"GET"},
         )
 
-        assert (
-            _generate_stable_operation_id(multi_method_route)
-            == "anthropic_proxy_route_anthropic__endpoint_"
-        )
-        assert (
-            _generate_stable_operation_id(single_method_route)
-            == "list_models_models_get"
-        )
+        assert _generate_stable_operation_id(multi_method_route) == "anthropic_proxy_route_anthropic__endpoint_"
+        assert _generate_stable_operation_id(single_method_route) == "list_models_models_get"
 
     def test_should_reserve_operation_ids_across_lazy_fragments(self):
         from litellm.proxy.proxy_server import ensure_unique_openapi_operation_ids
 
         used_operation_ids = set()
         first_schema = {
-            "paths": {
-                "/tools/list": {
-                    "get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}
-                }
-            }
+            "paths": {"/tools/list": {"get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}}}
         }
         second_schema = {
-            "paths": {
-                "/v1/tools/list": {
-                    "get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}
-                }
-            }
+            "paths": {"/v1/tools/list": {"get": {"operationId": "list_tool_rest_api_mcp_rest_tools_list_get"}}}
         }
 
         ensure_unique_openapi_operation_ids(first_schema, used_operation_ids)
         result = ensure_unique_openapi_operation_ids(second_schema, used_operation_ids)
 
-        assert (
-            result["paths"]["/v1/tools/list"]["get"]["operationId"]
-            == "list_tool_rest_api_mcp_rest_tools_list_get_2"
-        )
+        assert result["paths"]["/v1/tools/list"]["get"]["operationId"] == "list_tool_rest_api_mcp_rest_tools_list_get_2"

@@ -269,7 +269,6 @@ class TestMCPEndUserPermissionGuardrail:
             # Should keep all non-MCP tools even with MCP restrictions
             assert len(result.get("tools", [])) == 2
 
-
     @pytest.mark.asyncio
     async def test_apply_guardrail_with_mixed_tools(self):
         """Test guardrail with both MCP and non-MCP tools"""

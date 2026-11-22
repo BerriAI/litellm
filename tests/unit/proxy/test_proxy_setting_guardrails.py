@@ -57,10 +57,8 @@ def test_active_callbacks(client):
             if callback_name in callback:
                 found_match = True
                 break
-        assert (
-            found_match is True
-        ), f"{callback_name} not found in _active_callbacks={_active_callbacks}"
+        assert found_match is True, f"{callback_name} not found in _active_callbacks={_active_callbacks}"
 
-    assert not any(
-        "ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks
-    ), f"ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"
+    assert not any("ENTERPRISE_OpenAI_Moderation" in callback for callback in _active_callbacks), (
+        f"ENTERPRISE_OpenAI_Moderation should not be in _active_callbacks={_active_callbacks}"
+    )

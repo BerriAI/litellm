@@ -21,9 +21,7 @@ def _source(entries):
 def test_carries_entries_onto_request_without_metadata():
     request_data: dict = {}
     _carry_guardrail_logging_info(request_data, _source([_ENTRY]))
-    assert request_data["metadata"]["standard_logging_guardrail_information"] == [
-        _ENTRY
-    ]
+    assert request_data["metadata"]["standard_logging_guardrail_information"] == [_ENTRY]
 
 
 def test_carried_list_is_copied_not_shared():
@@ -40,18 +38,14 @@ def test_existing_metadata_without_guardrail_key_is_populated():
     request_data: dict = {"metadata": {"user_api_key": "sk-x"}}
     _carry_guardrail_logging_info(request_data, _source([_ENTRY]))
     assert request_data["metadata"]["user_api_key"] == "sk-x"
-    assert request_data["metadata"]["standard_logging_guardrail_information"] == [
-        _ENTRY
-    ]
+    assert request_data["metadata"]["standard_logging_guardrail_information"] == [_ENTRY]
 
 
 def test_existing_guardrail_entries_are_not_clobbered():
     existing = [{"guardrail_name": "already-logged"}]
     request_data = {"metadata": {"standard_logging_guardrail_information": existing}}
     _carry_guardrail_logging_info(request_data, _source([_ENTRY]))
-    assert (
-        request_data["metadata"]["standard_logging_guardrail_information"] is existing
-    )
+    assert request_data["metadata"]["standard_logging_guardrail_information"] is existing
 
 
 def test_noop_when_guardrail_data_is_none():

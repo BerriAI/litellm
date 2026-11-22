@@ -930,7 +930,9 @@ async def test_request_within_a_cooling_deployments_tpm_limit_stays_retryable(
 
     with pytest.raises(litellm.RateLimitError) as refused:
         await router.async_get_available_deployment(
-            model="limited", messages=_OVER_TPM_MESSAGES, request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}}
+            model="limited",
+            messages=_OVER_TPM_MESSAGES,
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-1"}},
         )
 
     assert not isinstance(refused.value, litellm.RequestOverDeploymentTpmError)
@@ -1028,7 +1030,10 @@ def _deployment_with_tpm_in_region(deployment_id: str, tpm: int, region: str) ->
 @pytest.mark.asyncio
 async def test_request_over_every_tpm_limit_in_its_region_is_refused_while_another_regions_deployment_cools():
     router: Final = Router(
-        model_list=[_deployment_with_tpm_in_region("small", 100, "eu"), _deployment_with_tpm_in_region("big", 200_000, "us")],
+        model_list=[
+            _deployment_with_tpm_in_region("small", 100, "eu"),
+            _deployment_with_tpm_in_region("big", 200_000, "us"),
+        ],
         routing_strategy="usage-based-routing-v2",
         enable_pre_call_checks=True,
     )

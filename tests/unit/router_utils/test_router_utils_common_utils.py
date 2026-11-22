@@ -63,7 +63,9 @@ class TestFilterTeamBasedModels:
             "metadata": {"user_api_key_auth": UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)},
         }
 
-        with pytest.raises(litellm.BadRequestError, match="'shared-gpt' matches deployments from multiple teams") as error:
+        with pytest.raises(
+            litellm.BadRequestError, match="'shared-gpt' matches deployments from multiple teams"
+        ) as error:
             filter_team_based_models(deployments, request_kwargs)
 
         assert error.value.model == "shared-gpt"

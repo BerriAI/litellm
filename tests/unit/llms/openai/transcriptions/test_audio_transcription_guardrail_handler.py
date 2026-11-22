@@ -19,9 +19,7 @@ from litellm.utils import TranscriptionResponse
 class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
-    async def apply_guardrail(
-        self, inputs: dict, request_data: dict, input_type: str, **kwargs
-    ) -> dict:
+    async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
         texts = inputs.get("texts", [])
         return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
@@ -140,9 +138,7 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
@@ -185,18 +181,14 @@ class TestPIIMaskingScenario:
         class PIIMaskingGuardrail(CustomGuardrail):
             """Mock PII masking guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     # Mask credit card numbers
-                    masked = re.sub(
-                        r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", text
-                    )
+                    masked = re.sub(r"\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}", "[CC_REDACTED]", text)
                     # Mask SSNs
                     masked = re.sub(r"\d{3}-\d{2}-\d{4}", "[SSN_REDACTED]", masked)
                     # Mask emails
@@ -239,9 +231,7 @@ class TestContentModerationScenario:
         class ProfanityFilterGuardrail(CustomGuardrail):
             """Mock profanity filter guardrail"""
 
-            async def apply_guardrail(
-                self, inputs: dict, request_data: dict, input_type: str, **kwargs
-            ) -> dict:
+            async def apply_guardrail(self, inputs: dict, request_data: dict, input_type: str, **kwargs) -> dict:
                 # Simple mock: replace common profanity
                 bad_words = ["badword1", "badword2", "inappropriate"]
                 texts = inputs.get("texts", [])
@@ -256,9 +246,7 @@ class TestContentModerationScenario:
         handler = OpenAIAudioTranscriptionHandler()
         guardrail = ProfanityFilterGuardrail(guardrail_name="content_filter")
 
-        response = TranscriptionResponse(
-            text="This contains badword1 and inappropriate content with badword2"
-        )
+        response = TranscriptionResponse(text="This contains badword1 and inappropriate content with badword2")
 
         result = await handler.process_output_response(response, guardrail)
 

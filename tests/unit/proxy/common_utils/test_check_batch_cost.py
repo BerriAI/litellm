@@ -3495,7 +3495,12 @@ class TestMultiPodBatchCostClaim:
     @pytest.mark.parametrize("failure_envelope", (None, 1, "invalid", [1]))
     @pytest.mark.parametrize("with_creator_context", (True, False))
     async def test_batch_accounting_preserves_models_and_mixed_results(
-        self, deployment_model: str, successes: int, failures: int, expected_model: str, failure_envelope: object,
+        self,
+        deployment_model: str,
+        successes: int,
+        failures: int,
+        expected_model: str,
+        failure_envelope: object,
         with_creator_context: bool,
     ) -> None:
         import base64
@@ -3557,16 +3562,20 @@ class TestMultiPodBatchCostClaim:
             "entity_id": "app-created:customer-created",
             "budget_limits": [{"budget_duration": "1mo", "max_budget": 20, "reset_at": "2026-01-01T00:00:00Z"}],
         }
-        row.creator_billing_context = {
-            "hierarchy": {
-                "app_id": "app-created",
-                "app_alias": "Created app",
-                "customer_org_id": "customer-created",
-                "customer_member_id": "member-created",
-                "scopes": [scope],
-            },
-            "started_at": admitted_at.isoformat(),
-        } if with_creator_context else None
+        row.creator_billing_context = (
+            {
+                "hierarchy": {
+                    "app_id": "app-created",
+                    "app_alias": "Created app",
+                    "customer_org_id": "customer-created",
+                    "customer_member_id": "member-created",
+                    "scopes": [scope],
+                },
+                "started_at": admitted_at.isoformat(),
+            }
+            if with_creator_context
+            else None
+        )
         row.unified_object_id = (
             base64.urlsafe_b64encode(
                 SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format("model-123", "batch-456").encode()

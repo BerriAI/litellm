@@ -1,4 +1,3 @@
-
 import pytest
 
 from unittest.mock import patch
@@ -25,10 +24,7 @@ class TestDatabricksResponsesAPIConfig:
             api_base="https://my-workspace.cloud.databricks.com/serving-endpoints",
             litellm_params={},
         )
-        assert (
-            url
-            == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
-        )
+        assert url == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
 
     def test_get_complete_url_strips_trailing_slash(self):
         config = DatabricksResponsesAPIConfig()
@@ -36,10 +32,7 @@ class TestDatabricksResponsesAPIConfig:
             api_base="https://my-workspace.cloud.databricks.com/serving-endpoints/",
             litellm_params={},
         )
-        assert (
-            url
-            == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
-        )
+        assert url == "https://my-workspace.cloud.databricks.com/serving-endpoints/responses"
 
     def test_transform_request_strips_provider_prefix(self):
         config = DatabricksResponsesAPIConfig()

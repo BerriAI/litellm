@@ -106,9 +106,7 @@ def test_create_sync_forwards_auth_to_client_seam(handler):
     client.batches.create.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        result = handler.create_batch(
-            _is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW
-        )
+        result = handler.create_batch(_is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW)
 
     # EXACT auth args forwarded to the client-construction seam.
     assert get_client.call_count == 1
@@ -168,9 +166,7 @@ def test_create_sync_explicit_client_forwarded_to_seam(handler):
 def test_create_raises_when_client_is_none(handler):
     with patch(GET_CLIENT, return_value=None):
         with pytest.raises(ValueError, match="client is not initialized"):
-            handler.create_batch(
-                _is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW
-            )
+            handler.create_batch(_is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW)
 
 
 # =========================================================================== #
@@ -184,9 +180,7 @@ async def test_create_async_returns_coroutine_and_awaits_async_client(handler):
     client.batches.create.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        coro = handler.create_batch(
-            _is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW
-        )
+        coro = handler.create_batch(_is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW)
         assert asyncio.iscoroutine(coro)
         result = await coro
 
@@ -203,9 +197,7 @@ async def test_create_async_rejects_sync_client(handler):
 
     with patch(GET_CLIENT, return_value=sync_client):
         with pytest.raises(ValueError, match="not an instance of AsyncOpenAI"):
-            handler.create_batch(
-                _is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW
-            )
+            handler.create_batch(_is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW)
 
     sync_client.batches.create.assert_not_called()
 
@@ -215,9 +207,7 @@ async def test_acreate_batch_parses_response(handler):
     client = _async_client()
     client.batches.create.return_value = _sdk_response(_batch_dict(status="validating"))
 
-    result = await handler.acreate_batch(
-        create_batch_data=CREATE_DATA, azure_client=client
-    )
+    result = await handler.acreate_batch(create_batch_data=CREATE_DATA, azure_client=client)
 
     client.batches.create.assert_awaited_once_with(**CREATE_DATA)
     assert isinstance(result, LiteLLMBatch)
@@ -234,9 +224,7 @@ def test_retrieve_sync_dispatch_payload_and_result(handler):
     client.batches.retrieve.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        result = handler.retrieve_batch(
-            _is_async=False, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW
-        )
+        result = handler.retrieve_batch(_is_async=False, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW)
 
     assert get_client.call_args.kwargs["_is_async"] is False
     client.batches.retrieve.assert_called_once_with(**RETRIEVE_DATA)
@@ -249,9 +237,7 @@ def test_retrieve_sync_dispatch_payload_and_result(handler):
 def test_retrieve_raises_when_client_is_none(handler):
     with patch(GET_CLIENT, return_value=None):
         with pytest.raises(ValueError, match="client is not initialized"):
-            handler.retrieve_batch(
-                _is_async=False, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW
-            )
+            handler.retrieve_batch(_is_async=False, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW)
 
 
 @pytest.mark.asyncio
@@ -260,9 +246,7 @@ async def test_retrieve_async_returns_coroutine_and_awaits(handler):
     client.batches.retrieve.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        coro = handler.retrieve_batch(
-            _is_async=True, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW
-        )
+        coro = handler.retrieve_batch(_is_async=True, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW)
         assert asyncio.iscoroutine(coro)
         result = await coro
 
@@ -276,9 +260,7 @@ async def test_retrieve_async_rejects_sync_client(handler):
     sync_client = _sync_client()
     with patch(GET_CLIENT, return_value=sync_client):
         with pytest.raises(ValueError, match="not an instance of AsyncOpenAI"):
-            handler.retrieve_batch(
-                _is_async=True, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW
-            )
+            handler.retrieve_batch(_is_async=True, retrieve_batch_data=RETRIEVE_DATA, **AUTH_KW)
     sync_client.batches.retrieve.assert_not_called()
 
 
@@ -287,9 +269,7 @@ async def test_aretrieve_batch_parses_response(handler):
     client = _async_client()
     client.batches.retrieve.return_value = _sdk_response(_batch_dict())
 
-    result = await handler.aretrieve_batch(
-        retrieve_batch_data=RETRIEVE_DATA, client=client
-    )
+    result = await handler.aretrieve_batch(retrieve_batch_data=RETRIEVE_DATA, client=client)
 
     client.batches.retrieve.assert_awaited_once_with(**RETRIEVE_DATA)
     assert isinstance(result, LiteLLMBatch)
@@ -305,9 +285,7 @@ def test_cancel_sync_dispatch_payload_and_result(handler):
     client.batches.cancel.return_value = _sdk_response(_batch_dict(status="cancelled"))
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        result = handler.cancel_batch(
-            _is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW
-        )
+        result = handler.cancel_batch(_is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW)
 
     assert get_client.call_args.kwargs["_is_async"] is False
     client.batches.cancel.assert_called_once_with(**CANCEL_DATA)
@@ -320,9 +298,7 @@ def test_cancel_sync_dispatch_payload_and_result(handler):
 def test_cancel_raises_when_client_is_none(handler):
     with patch(GET_CLIENT, return_value=None):
         with pytest.raises(ValueError, match="client is not initialized"):
-            handler.cancel_batch(
-                _is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW
-            )
+            handler.cancel_batch(_is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW)
 
 
 def test_cancel_sync_rejects_non_sync_client(handler):
@@ -333,9 +309,7 @@ def test_cancel_sync_rejects_non_sync_client(handler):
 
     with patch(GET_CLIENT, return_value=async_client):
         with pytest.raises(ValueError, match="sync client"):
-            handler.cancel_batch(
-                _is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW
-            )
+            handler.cancel_batch(_is_async=False, cancel_batch_data=CANCEL_DATA, **AUTH_KW)
 
     async_client.batches.cancel.assert_not_called()
 
@@ -346,9 +320,7 @@ async def test_cancel_async_returns_coroutine_and_awaits(handler):
     client.batches.cancel.return_value = _sdk_response(_batch_dict(status="cancelled"))
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        coro = handler.cancel_batch(
-            _is_async=True, cancel_batch_data=CANCEL_DATA, **AUTH_KW
-        )
+        coro = handler.cancel_batch(_is_async=True, cancel_batch_data=CANCEL_DATA, **AUTH_KW)
         assert asyncio.iscoroutine(coro)
         result = await coro
 
@@ -363,9 +335,7 @@ async def test_cancel_async_rejects_sync_client(handler):
     sync_client = _sync_client()
     with patch(GET_CLIENT, return_value=sync_client):
         with pytest.raises(ValueError, match="async client"):
-            handler.cancel_batch(
-                _is_async=True, cancel_batch_data=CANCEL_DATA, **AUTH_KW
-            )
+            handler.cancel_batch(_is_async=True, cancel_batch_data=CANCEL_DATA, **AUTH_KW)
     sync_client.batches.cancel.assert_not_called()
 
 
@@ -392,9 +362,7 @@ def test_list_sync_forwards_after_limit_and_returns_raw_response(handler):
     client.batches.list.return_value = raw
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        result = handler.list_batches(
-            _is_async=False, after="cur-1", limit=20, **AUTH_KW
-        )
+        result = handler.list_batches(_is_async=False, after="cur-1", limit=20, **AUTH_KW)
 
     assert get_client.call_args.kwargs["_is_async"] is False
     client.batches.list.assert_called_once_with(after="cur-1", limit=20)
@@ -425,9 +393,7 @@ async def test_list_async_returns_coroutine_and_awaits(handler):
     client.batches.list.return_value = raw
 
     with patch(GET_CLIENT, return_value=client) as get_client:
-        coro = handler.list_batches(
-            _is_async=True, after="cur-2", limit=7, **AUTH_KW
-        )
+        coro = handler.list_batches(_is_async=True, after="cur-2", limit=7, **AUTH_KW)
         assert asyncio.iscoroutine(coro)
         result = await coro
 
@@ -468,9 +434,7 @@ def test_create_sync_accepts_plain_openai_client(handler):
     client.batches.create.return_value = _sdk_response(_batch_dict())
 
     with patch(GET_CLIENT, return_value=client):
-        result = handler.create_batch(
-            _is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW
-        )
+        result = handler.create_batch(_is_async=False, create_batch_data=CREATE_DATA, **AUTH_KW)
 
     assert isinstance(result, LiteLLMBatch)
 
@@ -481,8 +445,6 @@ async def test_create_async_accepts_plain_async_openai_client(handler):
     client.batches.create = AsyncMock(return_value=_sdk_response(_batch_dict()))
 
     with patch(GET_CLIENT, return_value=client):
-        result = await handler.create_batch(
-            _is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW
-        )
+        result = await handler.create_batch(_is_async=True, create_batch_data=CREATE_DATA, **AUTH_KW)
 
     assert isinstance(result, LiteLLMBatch)

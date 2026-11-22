@@ -149,7 +149,9 @@ async def test_mint_reads_the_users_teams_from_the_database_not_a_stale_cached_r
         AuthObject.user("stale-cache-user"), _user(user_id="stale-cache-user", teams=[]), model_type=LiteLLM_UserTable
     )
     prisma = MagicMock()
-    rust_auth_stores.user.writer = {"stale-cache-user": _user(user_id="stale-cache-user", teams=["team-a"]).model_dump(mode="json")}
+    rust_auth_stores.user.writer = {
+        "stale-cache-user": _user(user_id="stale-cache-user", teams=["team-a"]).model_dump(mode="json")
+    }
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 
@@ -176,7 +178,11 @@ async def test_mint_refuses_a_user_scim_deactivated_after_the_cache_last_saw_the
         model_type=LiteLLM_UserTable,
     )
     prisma = MagicMock()
-    rust_auth_stores.user.writer = {"deactivated-user": _user(user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False}).model_dump(mode="json")}
+    rust_auth_stores.user.writer = {
+        "deactivated-user": _user(
+            user_id="deactivated-user", teams=["team-a"], metadata={"scim_active": False}
+        ).model_dump(mode="json")
+    }
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
 

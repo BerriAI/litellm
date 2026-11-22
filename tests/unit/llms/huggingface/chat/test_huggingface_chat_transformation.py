@@ -112,9 +112,7 @@ PROVIDER_MAPPING_RESPONSE = {
 
 @pytest.fixture
 def mock_provider_mapping() -> Iterator[MagicMock]:
-    with patch(
-        "litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping"
-    ) as mock:
+    with patch("litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
 
@@ -147,9 +145,7 @@ def test_build_chat_completion_url_function():
 
     for input_url, expected_url in test_cases:
         result = _build_chat_completion_url(input_url)
-        assert (
-            result == expected_url
-        ), f"Failed for input: {input_url}, expected: {expected_url}, got: {result}"
+        assert result == expected_url, f"Failed for input: {input_url}, expected: {expected_url}, got: {result}"
 
 
 @pytest.mark.parametrize(
