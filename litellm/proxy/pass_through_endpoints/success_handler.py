@@ -83,7 +83,7 @@ async def complete_despite_cancellation(work: Coroutine[object, object, None]) -
         raise
 
 
-_HandlerParams: Final = ParamSpec("_HandlerParams")
+_HandlerParams = ParamSpec("_HandlerParams")
 
 
 def _finishes_despite_cancellation_when_finalizing(
