@@ -227,7 +227,7 @@ from litellm.router_utils.cooldown_handlers import (
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_models
+from litellm.router_utils.deployment_pricing import deployment_pricing_models, unpriced_bedrock_arn
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -379,6 +379,7 @@ from litellm.utils import (
     ModelResponse,
     ProviderConfigManager,
     Rules,
+    cost_map_key_declared_prices,
     function_setup,
     get_llm_provider,
     get_non_default_completion_params,
@@ -9608,8 +9609,6 @@ class Router:
 
     @staticmethod
     def _cost_map_backend_model(deployment: Deployment) -> str:
-        from litellm.cost_calculator import cost_map_key_declared_prices
-
         model_info_base_model: Final = deployment.model_info.base_model
         if isinstance(model_info_base_model, str) and model_info_base_model:
             return model_info_base_model
@@ -10845,8 +10844,6 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        from litellm.cost_calculator import cost_map_key_declared_prices
-
         model_info: Final = dict(
             _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
         )
@@ -11749,7 +11746,7 @@ class Router:
         try:
             if custom_model_info is not None:
                 base_model: Final = custom_model_info.get("base_model", None)
-                if base_model is not None:
+                if isinstance(base_model, str) and not unpriced_bedrock_arn(base_model):
                     ## update litellm model info with base model info
                     base_model_info: Final = copy.deepcopy(litellm.get_model_info(model=base_model))
                     if base_model_info is not None:

@@ -271,6 +271,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Usage,
     is_litellm_owned_kwarg,
+    is_server_derived_pricing_key,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -3404,14 +3405,6 @@ def _without_overridden_price_variants(
     )
 
 
-@with_config(ConfigDict(extra="allow"))
-class _PricingModelInfo(ModelInfo):
-    pass
-
-
-_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
-
-
 def pricing_with_overrides(
     model_info: Mapping[str, object], registration: Mapping[str, object]
 ) -> Mapping[str, object]:
@@ -3423,8 +3416,11 @@ def pricing_with_overrides(
     return update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
 
 
-def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
-    return _PRICING_MODEL_INFO.validate_python(pricing_with_overrides(model_info, registration))
+def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
+    entry: Final = _builtin_cost_map().get(key) or {}
+    return MappingProxyType(
+        {name: value for name, value in entry.items() if value is not None and is_server_derived_pricing_key(name)}
+    )
 
 
 @dataclass(frozen=True, slots=True)

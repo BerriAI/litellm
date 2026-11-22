@@ -111,6 +111,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
@@ -140,6 +141,7 @@ from litellm.types.utils import (
     Usage,
     VectorStoreSearchResponse,
     is_server_derived_pricing_key,
+    without_server_derived_pricing,
 )
 from litellm.utils import (
     CallTypes,
@@ -152,7 +154,8 @@ from litellm.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     cached_get_model_info_helper,
-    model_info_with_pricing_overrides,
+    cost_map_key_declared_prices,
+    pricing_with_overrides,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -923,28 +926,18 @@ def _bedrock_pricing_info(
         return _cost_map_model_info(registration[0], None) if registration is not None else None
     if registration is None or registration[0] == profile["key"]:
         return profile
-    return model_info_with_pricing_overrides(profile, registration[1])
-
-
-def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
-    entry: Final = _raw_cost_map_entry(key) or {}
-    return MappingProxyType(
-        {field: value for field, value in entry.items() if value is not None and is_server_derived_pricing_key(field)}
+    return cast(  # cast-ok: a profile row may set any mode or none, which ModelInfo's mode literal rejects
+        ModelInfo,
+        {
+            **without_server_derived_pricing(profile),
+            **pricing_with_overrides(cost_map_key_declared_prices(profile["key"]), registration[1]),
+        },
     )
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:
     entry: Final = _raw_cost_map_entry(model_info["key"]) if model_info is not None else None
     return entry is not None and _cost_map_entry_prices_anything(entry)
-
-
-def _maps_to_row_without_prices(model: str, custom_llm_provider: str | None) -> bool:
-    model_info: Final = _cost_map_model_info(model, custom_llm_provider)
-    return (
-        model_info is not None
-        and _raw_cost_map_entry(model_info["key"]) is not None
-        and not cost_map_key_declared_prices(model_info["key"])
-    )
 
 
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
@@ -990,7 +983,7 @@ def select_model_name_for_cost_calc(
 ) -> str | None:
     """
     1. If custom pricing is true, return received model name
-    2. If base_model is set (e.g. for azure models), return that, unless its cost-map row sets no price
+    2. If base_model is set (e.g. for azure models), return that, unless it is a Bedrock ARN whose row sets no price
     3. If completion response has model set return that
     4. Check if model is passed in return that
     """
@@ -1020,11 +1013,7 @@ def select_model_name_for_cost_calc(
         if not explicit_pricing and priced_from_response
         else None
     )
-    priced_base_model: Final = (
-        base_model
-        if base_model is not None and not _maps_to_row_without_prices(base_model, custom_llm_provider)
-        else None
-    )
+    priced_base_model: Final = base_model if base_model is not None and not unpriced_bedrock_arn(base_model) else None
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
