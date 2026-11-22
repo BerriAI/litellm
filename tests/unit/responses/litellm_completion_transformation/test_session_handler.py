@@ -993,9 +993,11 @@ def _kept_in_cold_storage(stored_turn: Mapping[str, object]) -> dict[str, object
     }
 
 
-def _cold_storage_object(declared_name: str) -> dict[str, object]:
+def _cold_storage_object(
+    declared_name: str, earlier_input: tuple[Mapping[str, object], ...] = ()
+) -> dict[str, object]:
     return {
-        "messages": [{"role": "user", "content": "Fetch document N-42"}],
+        "messages": [*earlier_input, {"role": "user", "content": "Fetch document N-42"}],
         "model_parameters": {
             "tools": [{"type": "function", "function": {"name": declared_name, "parameters": {"type": "object"}}}]
         },
@@ -1018,6 +1020,28 @@ async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_
             response_id,
             _sent_as_tools,
         )
+
+
+async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, JOINED_MEMBER_CALL_REPLAY)
+        )
+        declared, called, answered = await _sent_tool_names(
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools)),
+            response_id,
+            _sent_as_tools,
+        )
+
+    assert declared == [sent_name]
+    assert called == answered == [sent_name, sent_name]
 
 
 LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4
