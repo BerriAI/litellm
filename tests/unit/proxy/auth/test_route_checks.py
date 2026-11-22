@@ -4431,6 +4431,23 @@ GOOGLE_MODEL_PATH_TEMPLATES: Final = tuple(
 )
 
 
+@pytest.mark.parametrize(
+    "route, unbilled",
+    [
+        ("/v1beta/models/gemini-text:countTokens", True),
+        ("/v1beta/models/gemini-text:v1:countTokens", True),
+        ("/models/a:generateContent:countTokens", True),
+        ("/v1beta/models/:countTokens", True),
+        ("/v1/messages/count_tokens", True),
+        ("/v1beta/models/gemini-text:v1:generateContent", False),
+        ("/v1beta/models/countTokens:generateContent", False),
+        ("/v1beta/models/a:countTokens:generateContent", False),
+    ],
+)
+def test_count_tokens_is_unbilled_whatever_colons_the_model_name_holds(route: str, unbilled: bool) -> None:
+    assert RouteChecks.is_unbilled_route(route) is unbilled
+
+
 @pytest.mark.parametrize("template", GOOGLE_MODEL_PATH_TEMPLATES)
 @pytest.mark.parametrize("model_name", ["", "gemini-text", "publishers/google/gemini-2.5-flash", "a:b"])
 def test_google_model_route_gate_agrees_with_the_router(template: str, model_name: str) -> None:

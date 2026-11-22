@@ -488,8 +488,12 @@ class RouteChecks:
 
     @staticmethod
     def is_unbilled_route(route: str) -> bool:
-        resource, _, action = route.rsplit("/", 1)[-1].partition(":")
-        return route in _UNBILLED_ROUTES or resource in _TOKEN_COUNTING_SEGMENTS or action == _TOKEN_COUNTING_ACTION
+        segment: Final = route.rsplit("/", 1)[-1]
+        return (
+            route in _UNBILLED_ROUTES
+            or segment.partition(":")[0] in _TOKEN_COUNTING_SEGMENTS
+            or segment.endswith(f":{_TOKEN_COUNTING_ACTION}")
+        )
 
     @staticmethod
     def runs_inference_checks(route: str) -> bool:
