@@ -770,17 +770,26 @@ def _enum_characters(node: JsonValue) -> int:
             return 0
 
 
-def _enum_characters_fit(schema: JsonValue) -> bool:
-    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,)))
-    return sum(map(_enum_characters, chain.from_iterable(levels))) <= GEMINI_MAX_ENUM_CHARACTERS
+def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
+    return chain.from_iterable(takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,))))
+
+
+def enums_fit(request_parts: JsonValue) -> bool:
+    return sum(map(_enum_characters, _json_nodes(request_parts))) <= GEMINI_MAX_ENUM_CHARACTERS
+
+
+def has_const(schema: JsonValue) -> bool:
+    return any(isinstance(node, dict) and "const" in node for node in _json_nodes(schema))
 
 
 _GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
 
 
-def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart]) -> _GeminiRequestPart:
+def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart], pin_consts: bool) -> _GeminiRequestPart:
+    if not pin_consts:
+        return build(False)
     pinned: Final = build(True)
-    if _enum_characters_fit(cast(JsonValue, pinned)):  # cast-ok: built tools and schemas are JSON request data
+    if enums_fit(cast(JsonValue, pinned)):  # cast-ok: built tools and schemas are JSON request data
         return pinned
     verbose_logger.debug(
         "Gemini consts sent unpinned: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS

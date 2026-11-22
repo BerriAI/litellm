@@ -97,6 +97,8 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    enums_fit,
+    has_const,
     supports_response_json_schema,
     with_pins_that_fit,
 )
@@ -206,6 +208,7 @@ def _served_model_name(model_version: object) -> str | None:
 
 
 _CALLER_HEADERS: Final = TypeAdapter(dict[str, str])
+_REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
 class VertexAIBaseConfig:
@@ -883,7 +886,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return with_pins_that_fit(partial(self._map_function, value, optional_params))
+        return with_pins_that_fit(
+            partial(self._map_function, value, optional_params),
+            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+        )
 
     def _map_response_schema(self, value: dict, pin_consts: bool = True) -> dict:
         old_schema = deepcopy(value)
@@ -896,7 +902,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             old_schema = build_vertex_schema(parameters=old_schema, add_property_ordering=True, pin_consts=pin_consts)
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict, model: str):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str, pin_consts: bool = True
+    ):
         new_value = deepcopy(value)
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = remove_strict_from_schema(new_value)
@@ -933,13 +941,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 # - Supports additionalProperties
                 # - No propertyOrdering needed
                 json_schema: Final[Mapping[str, object]] = schema
-                optional_params["response_json_schema"] = with_pins_that_fit(partial(build_json_schema, json_schema))
+                optional_params["response_json_schema"] = with_pins_that_fit(
+                    partial(build_json_schema, json_schema),
+                    pin_consts and has_const(cast(JsonValue, schema)),  # cast-ok: response schemas are JSON
+                )
             else:
                 # Use responseSchema (default, backwards compatible)
                 # - OpenAPI-style format (uppercase types)
                 # - No additionalProperties support
                 # - Requires propertyOrdering
-                optional_params["response_schema"] = with_pins_that_fit(partial(self._map_response_schema, schema))
+                optional_params["response_schema"] = with_pins_that_fit(
+                    partial(self._map_response_schema, schema),
+                    pin_consts and has_const(cast(JsonValue, schema)),  # cast-ok: response schemas are JSON
+                )
 
     @property
     def accepts_reasoning_summary_in_reasoning_effort(self) -> bool:
@@ -1242,7 +1256,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _apply_include_server_side_tool_invocations(
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
     ) -> None:
         """
@@ -1260,6 +1274,29 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    def _schema_pins_fit(self, request_params: Mapping[str, object], model: str) -> bool:
+        tool_params: Final = tuple(
+            param
+            for param in ("tools", "functions")
+            if isinstance(listed := request_params.get(param), list) and listed
+        )
+        response_format: Final = request_params.get("response_format")
+        schema_parts: Final = [request_params.get(param) for param in (*tool_params, "response_format")]
+        if not tool_params or not isinstance(response_format, dict):
+            return True
+        if not has_const(cast(JsonValue, schema_parts)):  # cast-ok: tools and response formats are JSON request data
+            return True
+        response_params: Final[dict[str, object]] = {}  # mutable-ok: the transformation writes the schema into it
+        self.apply_response_schema_transformation(response_format, response_params, model)
+        tools: Final = [
+            with_pins_that_fit(
+                partial(self._map_function, cast(list[dict], request_params[param]), {}),  # cast-ok: a tools list
+                has_const(cast(JsonValue, request_params[param])),  # cast-ok: tools are JSON request data
+            )
+            for param in tool_params
+        ]
+        return enums_fit(cast(JsonValue, [response_params, tools]))  # cast-ok: built tools and schemas are JSON
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1270,7 +1307,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
-        self._apply_include_server_side_tool_invocations(request_params, optional_params)
+        typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
+        self._apply_include_server_side_tool_invocations(typed_request_params, optional_params)
+        pins_fit: Final = self._schema_pins_fit(typed_request_params, model)
         gemini_sampling_params_warned: bool = False
         for param, value in request_params.items():
             if param == "temperature":
@@ -1319,7 +1358,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):
-                self.apply_response_schema_transformation(value=value, optional_params=optional_params, model=model)
+                self.apply_response_schema_transformation(
+                    value=value, optional_params=optional_params, model=model, pin_consts=pins_fit
+                )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):
                     optional_params["frequency_penalty"] = value
@@ -1332,7 +1373,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = with_pins_that_fit(partial(self._map_function, value, optional_params))
+                mapped_tools = with_pins_that_fit(
+                    partial(self._map_function, value, optional_params),
+                    pins_fit and has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+                )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):
                 _tool_choice_value = self.map_tool_choice_values(
