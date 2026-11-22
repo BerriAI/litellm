@@ -1,4 +1,5 @@
 import datetime
+import json
 import logging
 from collections.abc import Callable, Mapping
 from typing import Final
@@ -14,7 +15,8 @@ from litellm.litellm_core_utils.tool_fields import (
     tools_without_hosted_mcp,
     tools_without_mcp_servers,
 )
-from litellm.utils import async_pre_call_deployment_hook
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager, async_pre_call_deployment_hook, get_optional_params
 
 _GOOD_TOOL: Final = {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}
 _MALFORMED_TOOLS: Final = (
@@ -220,7 +222,9 @@ def test_dropping_a_hosted_mcp_tool_keeps_the_other_tool_params_and_leaves_the_c
         "parallel_tool_calls": False,
         "temperature": 0.2,
     }
-    params: Final = tool_params_without_hosted_mcp(sent, model="deepseek-v4-flash", route="deepseek", drop_params=True)
+    params: Final = tool_params_without_hosted_mcp(
+        sent, model="deepseek-v4-flash", route="deepseek", drop_params=True, handling="drops"
+    )
 
     assert params == {
         "tools": [_GOOD_TOOL],
@@ -237,6 +241,7 @@ def test_dropping_every_hosted_mcp_tool_clears_the_tool_selection_params() -> No
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params == {"temperature": 0.2}
@@ -268,6 +273,7 @@ def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert "tool_choice" not in params
@@ -279,13 +285,16 @@ def test_dropping_a_hosted_mcp_tool_clears_a_tool_choice_that_forces_it(
 
 
 @pytest.mark.parametrize(
-    "tool_choice",
-    [{"type": "mcp", "server_label": "unsent"}, {"type": "mcp"}],
+    ("tool_choice", "cause"),
+    [
+        ({"type": "mcp", "server_label": "unsent"}, "This request sends no hosted MCP tool with server_label `unsent`."),
+        ({"type": "mcp"}, "This tool_choice names no server_label, so no hosted MCP tool drops with it."),
+    ],
     ids=["mcp_choice_for_an_unsent_server", "unlabeled_mcp_choice"],
 )
 @_LEGACY_FUNCTION_CASES
 def test_an_mcp_tool_choice_naming_no_dropped_server_is_refused_like_a_real_time_call(
-    functions: object, tool_choice: Mapping[str, object]
+    functions: object, tool_choice: Mapping[str, object], cause: str
 ) -> None:
     sent_tools: Final = [_HOSTED_MCP_TOOL, _GOOD_TOOL] if functions is None else [_HOSTED_MCP_TOOL]
     legacy: Final = {} if functions is None else {"functions": functions}
@@ -296,9 +305,12 @@ def test_an_mcp_tool_choice_naming_no_dropped_server_is_refused_like_a_real_time
             model="deepseek-v4-flash",
             route="deepseek",
             drop_params=True,
+            handling="drops",
         )
 
     assert exc.value.status_code == 400
+    assert cause in exc.value.message
+    assert "drop_params does not drop it" not in exc.value.message
 
 
 @pytest.mark.parametrize(
@@ -318,6 +330,7 @@ def test_a_tool_choice_naming_a_kept_function_survives_a_dropped_mcp_tool_with_t
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params["tool_choice"] == _FORCED_DEEPWIKI
@@ -331,11 +344,16 @@ def test_a_hosted_mcp_error_takes_the_callers_remedy_in_place_of_the_gateway_one
 
     with pytest.raises(litellm.UnsupportedParamsError) as default_error:
         tool_params_without_hosted_mcp(
-            {"tools": [_HOSTED_MCP_TOOL]}, model="gemini-3.8-flash", route="gemini", drop_params=False
+            {"tools": [_HOSTED_MCP_TOOL]}, model="gemini-3.8-flash", route="gemini", drop_params=False, handling="drops"
         )
     with pytest.raises(litellm.UnsupportedParamsError) as remedied_error:
         tool_params_without_hosted_mcp(
-            {"tools": [_HOSTED_MCP_TOOL]}, model="gemini-3.8-flash", route="gemini", drop_params=False, remedy=remedy
+            {"tools": [_HOSTED_MCP_TOOL]},
+            model="gemini-3.8-flash",
+            route="gemini",
+            drop_params=False,
+            handling="drops",
+            remedy=remedy,
         )
 
     assert "litellm_proxy/mcp/<server name>" in default_error.value.message
@@ -343,6 +361,68 @@ def test_a_hosted_mcp_error_takes_the_callers_remedy_in_place_of_the_gateway_one
     assert remedied_error.value.message.endswith(remedy)
     assert "litellm_proxy/mcp" not in remedied_error.value.message
     assert remedied_error.value.message.removesuffix(remedy) in default_error.value.message
+
+
+_SWEPT_ROUTES: Final = (
+    *((provider, "compress" if provider is LlmProviders.SCALEDOWN else "some-model") for provider in LlmProviders),
+    (LlmProviders.VERTEX_AI, "claude-sonnet-5"),
+    (LlmProviders.VERTEX_AI, "gemini-3.8-flash"),
+    (LlmProviders.BEDROCK, "invoke/anthropic.claude-sonnet-5"),
+    (LlmProviders.BEDROCK, "claude_platform/claude-sonnet-5"),
+    (LlmProviders.AZURE_AI, "claude-sonnet-5"),
+    (LlmProviders.DATABRICKS, "databricks-claude-sonnet-5"),
+)
+_CONFIGURED_ROUTES: Final = tuple(
+    (provider, model, config)
+    for provider, model in _SWEPT_ROUTES
+    if (config := ProviderConfigManager.get_provider_chat_config(model=model, provider=provider)) is not None
+)
+_DROPPING_ROUTES: Final = tuple(
+    (provider, model) for provider, model, config in _CONFIGURED_ROUTES if config.hosted_mcp_tool_handling(model) == "drops"
+)
+
+
+def _sent_tool_params(provider: LlmProviders, model: str, **params: object) -> str:
+    return json.dumps(
+        get_optional_params(
+            model=model,
+            custom_llm_provider=provider.value,
+            tools=[_HOSTED_MCP_TOOL, _GOOD_TOOL],
+            drop_params=True,
+            messages=[{"role": "user", "content": "weather in Paris?"}],
+            **params,
+        ),
+        default=str,
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [(provider, model) for provider, model, _ in _CONFIGURED_ROUTES],
+    ids=[f"{provider.value}-{model}" for provider, model, _ in _CONFIGURED_ROUTES],
+)
+def test_a_route_reports_dropping_hosted_mcp_tools_exactly_when_its_transformation_drops_them(
+    provider: LlmProviders, model: str
+) -> None:
+    config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=provider)
+    assert config is not None
+    sent: Final = _sent_tool_params(provider, model)
+
+    assert ("deepwiki" not in sent and "get_weather" in sent) == (config.hosted_mcp_tool_handling(model) == "drops")
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    _DROPPING_ROUTES,
+    ids=[f"{provider.value}-{model}" for provider, model in _DROPPING_ROUTES],
+)
+def test_a_route_that_drops_hosted_mcp_tools_drops_a_forced_mcp_choice_with_its_tool(
+    provider: LlmProviders, model: str
+) -> None:
+    sent: Final = _sent_tool_params(provider, model, tool_choice={"type": "mcp", "server_label": "deepwiki"})
+
+    assert "deepwiki" not in sent
+    assert "get_weather" in sent
 
 
 class _Records(logging.Handler):
@@ -411,6 +491,7 @@ def test_dropping_a_hosted_mcp_tool_removes_it_from_an_allowed_tools_choice(layo
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params == {
@@ -434,6 +515,7 @@ def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_drops_the_choice_
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params == {"tools": [_GOOD_TOOL], "parallel_tool_calls": False, "temperature": 0.2}
@@ -453,6 +535,7 @@ def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_leaves_no_tool_pa
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params == {"temperature": 0.2}
@@ -466,6 +549,7 @@ def test_an_allowed_tools_choice_without_mcp_entries_survives_a_dropped_mcp_tool
         model="deepseek-v4-flash",
         route="deepseek",
         drop_params=True,
+        handling="drops",
     )
 
     assert params == {"tools": [_GOOD_TOOL], "tool_choice": tool_choice}

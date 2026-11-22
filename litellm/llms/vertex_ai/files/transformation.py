@@ -827,6 +827,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
         route="vertex_ai",
         drop_params=drop_params,
         remedy=hosted_mcp_batch_row_remedy(request_params.get("drop_params")),
+        handling="drops",
     )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
@@ -1537,6 +1538,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 route="vertex_ai",
                 drop_params=drop_params,
                 remedy=hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params")),
+                handling="drops",
             ),
             optional_params={},
             drop_params=drop_params,

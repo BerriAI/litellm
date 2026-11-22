@@ -888,39 +888,72 @@ def _capturing_transport(requests: queue.SimpleQueue[httpx.Request]) -> httpx.Mo
 
 
 @pytest.mark.parametrize(
-    ("tools", "expected_tool_fields"),
+    "tools",
     [
-        pytest.param(
-            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
-            {"tools": _TWO_TOOLS, "parallel_tool_calls": True},
-            id="function-tools-remain",
-        ),
-        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL], {}, id="no-tools-remain"),
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], id="beside-function-tools"),
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL], id="alone"),
     ],
 )
 @pytest.mark.parametrize(
-    "model", ["groq/openai/gpt-oss-120b", "xai/grok-4.20-reasoning-gv2", "mistral/mistral-medium-3.5"]
+    ("model", "route"),
+    [
+        ("openrouter/openai/gpt-6.2-sol", "openrouter"),
+        ("groq/openai/gpt-oss-120b", "groq"),
+        ("xai/grok-4.20-reasoning-gv2", "xai"),
+        ("mistral/mistral-medium-3.5", "mistral"),
+    ],
 )
-def test_drop_params_sends_neither_a_forced_hosted_mcp_server_nor_its_choice_to_a_provider_that_cannot_run_it(
-    model: str, tools: list[dict[str, object]], expected_tool_fields: dict[str, object]
+def test_drop_params_keeps_the_400_for_a_forced_hosted_mcp_server_on_a_route_that_forwards_hosted_mcp_tools(
+    model: str, route: str, tools: list[dict[str, object]]
 ):
     requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
 
-    response: Final = litellm.completion(
-        model=model,
-        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
-        tools=tools,
-        tool_choice=_FORCE_DEEPWIKI,
-        parallel_tool_calls=True,
-        drop_params=True,
-        api_key="fake_api_key",
-        client=HTTPHandler(client=httpx.Client(transport=_capturing_transport(requests))),
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            parallel_tool_calls=True,
+            drop_params=True,
+            api_key="fake_api_key",
+            client=HTTPHandler(client=httpx.Client(transport=_capturing_transport(requests))),
+        )
+
+    assert exc.value.status_code == 400
+    assert f"{route} forwards hosted MCP tools as sent" in exc.value.message
+    assert requests.empty()
+
+
+def test_drop_params_drops_a_forced_hosted_mcp_server_and_its_choice_on_bedrock_converse(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-5-5/converse"
+    ).respond(
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Sunny."}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11},
+            "metrics": {"latencyMs": 12},
+        }
     )
 
-    sent: Final = json.loads(requests.get_nowait().content)
-    assert {key: sent[key] for key in ("tools", "tool_choice", "parallel_tool_calls") if key in sent} == (
-        expected_tool_fields
+    response: Final = litellm.completion(
+        model="bedrock/converse/anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
     )
+
+    sent: Final = json.loads(converse.calls.last.request.content)
+    assert [tool["toolSpec"]["name"] for tool in sent["toolConfig"]["tools"]] == ["get_time", "get_weather"]
+    assert "toolChoice" not in sent["toolConfig"]
+    assert "deepwiki" not in json.dumps(sent)
     assert response.choices[0].message.content == "Sunny."
 
 
@@ -942,18 +975,35 @@ def test_drop_params_still_sends_a_forced_hosted_mcp_server_and_its_choice_to_op
 
 
 @pytest.mark.parametrize(
-    ("model", "tools", "drop_params"),
+    ("model", "tools", "drop_params", "cause"),
     [
-        pytest.param("gemini/gemini-3.8-flash", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], False, id="drop-params-off"),
-        pytest.param("gemini/gemini-3.8-flash", _TWO_TOOLS, True, id="server-not-sent"),
         pytest.param(
-            "groq/openai/gpt-oss-120b",
+            "gemini/gemini-3.8-flash",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`",
+            id="drop-params-off",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            _TWO_TOOLS,
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
+            id="server-not-sent",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
             [{**_DEEPWIKI_HOSTED_MCP_TOOL, "server_label": "docs"}, *_TWO_TOOLS],
             True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
             id="another-server-sent",
         ),
         pytest.param(
-            "anthropic/claude-haiku-5-5", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], True, id="provider-runs-the-server"
+            "anthropic/claude-haiku-5-5",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            True,
+            "anthropic runs hosted MCP tools itself",
+            id="provider-runs-the-server",
         ),
     ],
 )
@@ -963,6 +1013,7 @@ def test_an_mcp_tool_choice_stays_a_400_when_drop_params_does_not_drop_its_serve
     model: str,
     tools: list[dict[str, object]],
     drop_params: bool,
+    cause: str,
 ):
     monkeypatch.setattr(litellm, "drop_params", False)
 
@@ -977,6 +1028,7 @@ def test_an_mcp_tool_choice_stays_a_400_when_drop_params_does_not_drop_its_serve
         )
 
     assert exc.value.status_code == 400
+    assert cause in exc.value.message
     assert not respx_mock.calls
 
 

@@ -5144,7 +5144,7 @@ def _uploaded_row(
 
 
 def _uploaded_hosted_mcp_row(
-    model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+    model: str, row_drop_params: object, deployment_drop_params: bool | None
 ) -> Mapping[str, object]:
     body: Final = {
         "model": model,
@@ -5173,19 +5173,27 @@ def test_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params
     assert "drop_params" not in model_input
 
 
+_ROW_VALUE_KEEPS_DROPPING_OFF: Final = "this row sets `drop_params` to a value that does not turn dropping on"
+_SET_DROP_PARAMS_ANYWHERE: Final = (
+    "on the row, in `router_settings.default_litellm_params`, or on the deployment the upload names, to drop it."
+)
+
+
 @pytest.mark.parametrize("model", _BATCH_MODELS)
 @pytest.mark.parametrize(
     ("row_drop_params", "deployment_drop_params", "advice", "misleading_advice"),
     [
-        (None, None, "when the upload names a model, in `router_settings.default_litellm_params`", "this row sets"),
-        (False, True, "this row sets `drop_params: false`", "when the upload names a model"),
+        (None, None, _SET_DROP_PARAMS_ANYWHERE, "this row sets"),
+        (False, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "router_settings"),
+        ("no", True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
+        (0, True, _ROW_VALUE_KEEPS_DROPPING_OFF, "drop_params: false"),
     ],
-    ids=["unset", "row_false_wins"],
+    ids=["unset", "row_false_wins", "row_no_wins", "row_zero_wins"],
 )
 def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_that_matches_why_it_was_refused(
     monkeypatch: pytest.MonkeyPatch,
     model: str,
-    row_drop_params: bool | None,
+    row_drop_params: object,
     deployment_drop_params: bool | None,
     advice: str,
     misleading_advice: str,
@@ -5242,44 +5250,71 @@ _RESPONSES_ROW: Final = {"input": "hi", "max_output_tokens": 10}
 _REAL_TIME_MCP_CHOICE_REFUSAL: Final = (
     "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
 )
+_REAL_TIME_CALLS: Final = MappingProxyType(
+    {"/v1/chat/completions": litellm.completion, "/v1/responses": litellm.responses}
+)
 
 
 @pytest.mark.parametrize("model", _BATCH_MODELS)
 @pytest.mark.parametrize(
-    ("url", "body"),
+    ("url", "body", "drop_params", "cause"),
     [
         pytest.param(
             "/v1/chat/completions",
             {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
             id="chat-another-server",
         ),
         pytest.param(
             "/v1/chat/completions",
             {**_CHAT_ROW, "tools": [_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
             id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/chat/completions",
+            {**_CHAT_ROW, "tools": [_HOSTED_MCP_TOOL, _WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`, "
+            "or remove both.",
+            id="chat-drop-params-off",
         ),
         pytest.param(
             "/v1/responses",
             {**_RESPONSES_ROW, "tools": [_HOSTED_MCP_TOOL, _RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DOCS},
+            True,
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
             id="responses-another-server",
         ),
         pytest.param(
             "/v1/responses",
             {**_RESPONSES_ROW, "tools": [_RESPONSES_WEATHER_TOOL], "tool_choice": _FORCE_DEEPWIKI},
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`. "
+            "Send that tool or remove the tool_choice.",
             id="responses-no-mcp-tool",
         ),
     ],
 )
-def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
-    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object]
+def test_batch_row_is_refused_like_a_real_time_call_when_drop_params_cannot_drop_its_mcp_tool_choice(
+    monkeypatch: pytest.MonkeyPatch, model: str, url: str, body: Mapping[str, object], drop_params: bool, cause: str
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
 
-    with pytest.raises(BedrockError) as exc_info:
-        _uploaded_row(model, url, {"model": model, **body}, True)
+    with pytest.raises(BedrockError) as batch:
+        _uploaded_row(model, url, {"model": model, **body}, drop_params)
+    with pytest.raises(litellm.BadRequestError) as real_time:
+        _REAL_TIME_CALLS[url](
+            model=model, **body, drop_params=drop_params, api_key="test-bedrock-token", aws_region_name="us-west-2"
+        )
 
-    assert exc_info.value.status_code == 400
-    assert _REAL_TIME_MCP_CHOICE_REFUSAL in exc_info.value.message
+    assert batch.value.status_code == 400
+    assert _REAL_TIME_MCP_CHOICE_REFUSAL in batch.value.message
+    assert batch.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
+    assert real_time.value.message.endswith(f"custom_llm_provider=bedrock. {cause}")
 
 
 @pytest.mark.parametrize("model", _BATCH_MODELS)

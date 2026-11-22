@@ -49,6 +49,30 @@ def _violation_message(missing: tuple[str, ...], unverified: tuple[str, ...]) ->
     return "MCP Security: " + " ".join(filter(None, findings))
 
 
+def _blocking_error(missing: tuple[str, ...], unverified: tuple[str, ...], message: str) -> HTTPException:
+    if missing:
+        return HTTPException(
+            status_code=400,
+            detail={
+                "error": "Violated guardrail policy",
+                "guardrail": "mcp_security",
+                "unregistered_servers": list(missing),
+                "unverified_servers": list(unverified),
+                "detection_message": message,
+            },
+        )
+    return HTTPException(
+        status_code=503,
+        detail={
+            "error": "Could not check the request against the guardrail policy",
+            "guardrail": "mcp_security",
+            "unregistered_servers": [],
+            "unverified_servers": list(unverified),
+            "detection_message": f"{message} Try again.",
+        },
+    )
+
+
 class MCPSecurityGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -83,19 +107,10 @@ class MCPSecurityGuardrail(CustomGuardrail):
         message: Final = _violation_message(missing, unverified)
 
         if self.on_violation == "block":
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "Violated guardrail policy",
-                    "guardrail": "mcp_security",
-                    "unregistered_servers": list(missing),
-                    "unverified_servers": list(unverified),
-                    "detection_message": message,
-                },
-            ) from next((error for error in unregistered.values() if error is not None), None)
-        else:
-            verbose_proxy_logger.warning(message)
-
+            raise _blocking_error(missing, unverified, message) from next(
+                (error for error in unregistered.values() if error is not None), None
+            )
+        verbose_proxy_logger.warning(message)
         return data
 
     @staticmethod

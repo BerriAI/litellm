@@ -1,12 +1,13 @@
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from openai.types.chat.chat_completion_allowed_tool_choice_param import ChatCompletionAllowedToolChoiceParam
 from openai.types.chat.chat_completion_allowed_tools_param import ChatCompletionAllowedToolsParam
 from openai.types.responses.tool_choice_allowed_param import ToolChoiceAllowedParam
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 from litellm.exceptions import BadRequestError
 
@@ -124,44 +125,96 @@ def _forced_mcp_server(tool_choice: object) -> str | None:
             return None
 
 
-def _why_drop_params_keeps_the_choice(hosted: str) -> str:
-    if hosted != "mcp":
+HostedMcpToolHandling: TypeAlias = Literal["forwards", "runs", "drops"]
+
+
+@dataclass(frozen=True, slots=True)
+class HostedMcpCall:
+    handling: HostedMcpToolHandling
+    sent_servers: frozenset[str]
+    drops_unsupported_params: bool
+
+
+_REMOVE_THE_MCP_CHOICE: Final = "Remove the tool_choice or set it to 'auto'."
+_WHY_DROP_PARAMS_KEEPS_A_HOSTED_CHOICE: Final = (
+    "drop_params does not drop it, since that would let the model answer without the tool the request required."
+)
+
+
+def _why_a_dropping_route_keeps_the_mcp_choice(server: str | None, call: HostedMcpCall) -> str | None:
+    if server is None:
+        return "This tool_choice names no server_label, so no hosted MCP tool drops with it. Remove the tool_choice."
+    if server not in call.sent_servers:
         return (
-            "drop_params does not drop it, since that would let the model answer without the tool the request required."
+            f"This request sends no hosted MCP tool with server_label `{server}`. "
+            "Send that tool or remove the tool_choice."
         )
-    return (
-        "drop_params drops an mcp tool_choice only together with the hosted MCP tool it names, when this provider "
-        "cannot run that server. Here drop_params is off, no hosted MCP tool with that server_label was sent, the "
-        "server runs on the LiteLLM MCP gateway, or the provider runs it itself, so dropping only the choice would let "
-        "the model answer without the tool the request required."
-    )
+    if not call.drops_unsupported_params:
+        return (
+            f"Set drop_params to true to drop this tool_choice together with the hosted MCP tool `{server}`, "
+            "or remove both."
+        )
+    return None
+
+
+def _why_the_mcp_choice_stays(tool_choice: object, route: str, call: HostedMcpCall) -> str | None:
+    match call.handling:
+        case "runs":
+            return f"{route} runs hosted MCP tools itself, but LiteLLM cannot force one there. {_REMOVE_THE_MCP_CHOICE}"
+        case "forwards":
+            return (
+                f"{route} forwards hosted MCP tools as sent, but LiteLLM cannot force one there. "
+                f"{_REMOVE_THE_MCP_CHOICE}"
+            )
+        case "drops":
+            return _why_a_dropping_route_keeps_the_mcp_choice(_forced_mcp_server(tool_choice), call)
+        case _:
+            assert_never(call.handling)
 
 
 def raise_if_hosted_tool_choice_unsupported(
     tool_choice: object,
     custom_llm_provider: str,
     model: str,
-    mcp_servers_to_drop: frozenset[str] = frozenset(),
+    mcp: HostedMcpCall,
 ) -> None:
     """Anthropic drops a tool_choice dict it does not recognise and Bedrock sends a tool named "", so a forced hosted
-    tool stops here with a 400 on providers that cannot run it. The one exception is an ``mcp`` choice naming a server
-    in ``mcp_servers_to_drop``, the hosted MCP tools drop_params drops on this call, which the caller then drops
-    together with the choice."""
+    tool stops here with a 400 on providers that cannot run it. The one exception is an ``mcp`` choice on a route that
+    drops hosted MCP tools, naming a server the request sent, under drop_params: the caller drops it with that tool."""
     hosted: Final = hosted_tool_choice_type(tool_choice)
-    if (
-        hosted is None
-        or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
-        or _forced_mcp_server(tool_choice) in mcp_servers_to_drop
-    ):
+    if hosted is None or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS:
+        return
+    why: Final = (
+        _why_the_mcp_choice_stays(tool_choice, custom_llm_provider, mcp)
+        if hosted == "mcp"
+        else _WHY_DROP_PARAMS_KEEPS_A_HOSTED_CHOICE
+    )
+    if why is None:
         return
     raise BadRequestError(
         message=(
             f"tool_choice type '{hosted}' forces an OpenAI hosted tool and is only supported for "
             f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
-            f"{_why_drop_params_keeps_the_choice(hosted)}"
+            f"{why}"
         ),
         model=model,
         llm_provider=custom_llm_provider,
+    )
+
+
+def raise_if_mcp_tool_choice_forces_a_gateway_server(
+    tool_choice: object, gateway_tools: Iterable[Mapping[str, object]], model: str
+) -> None:
+    server: Final = _forced_mcp_server(tool_choice)
+    if server is None or server not in {tool.get("server_label") for tool in gateway_tools}:
+        return
+    raise BadRequestError(
+        message=(
+            f"tool_choice type 'mcp' cannot force `{server}`, which runs on the LiteLLM MCP gateway. The gateway sends "
+            "its tools to the model as functions, so force one by its function name or remove the tool_choice."
+        ),
+        model=model,
+        llm_provider="",
     )
 
 

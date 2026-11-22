@@ -819,16 +819,25 @@ def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str |
     return deployment.litellm_params.drop_params if deployment is not None else None
 
 
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or "drop_params" in request:
+        return MappingProxyType({})
+    return _as_drop_params(RoutingContext(llm_router).default_litellm_params().get("drop_params"))
+
+
 def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    if llm_router is None or request.get("drop_params") is not None:
-        return MappingProxyType({})
-    router_default: Final = RoutingContext(llm_router).default_litellm_params().get("drop_params")
-    drop_params: Final = (
-        router_default if isinstance(router_default, (bool, str)) else _deployment_drop_params(llm_router, model_id)
-    )
-    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
 
 
 def _key_model_allowlist(llm_router: "Router", user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:

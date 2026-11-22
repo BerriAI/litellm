@@ -1187,6 +1187,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         route="bedrock",
                         drop_params=drop_params,
                         remedy=hosted_mcp_remedy,
+                        handling="drops",
                     )
                 ),
             )
@@ -1223,6 +1224,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 route="bedrock",
                 drop_params=drop_params,
                 remedy=hosted_mcp_remedy,
+                handling="drops",
             )
             mapped_params = converse_config.map_openai_params(
                 non_default_params=converse_params,
@@ -1248,6 +1250,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 route="bedrock",
                 drop_params=drop_params,
                 remedy=hosted_mcp_remedy,
+                handling="drops",
             ),
             **_openai_format_batch_record_service_tier(requested_service_tier, model, drop_params),
         }
