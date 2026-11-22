@@ -754,3 +754,16 @@ def test_file_search_tool_is_rejected_so_chat_cannot_search_a_store_the_key_was_
             optional_params={"tools": [tool]},
             litellm_params={"drop_params": True},
         )
+
+
+def test_function_tool_carrying_a_builtin_key_stays_a_function_so_a_denied_builtin_is_not_enabled() -> None:
+    prepared: Final = transform_chat_to_interactions_request(
+        messages=[{"role": "user", "content": "Run it"}],
+        model="gemini-4-neon",
+        optional_params={
+            "tools": [{"type": "function", "function": {"name": "allowed_fn", "parameters": {}}, "code_execution": {}}]
+        },
+        litellm_params={},
+    )
+
+    assert [tool["type"] for tool in prepared.optional_params["tools"]] == ["function"]

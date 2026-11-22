@@ -696,6 +696,8 @@ def _convert_messages(
 
 
 def _matching_builtin_tool(tool: JsonMapping) -> JsonValue:
+    if len(tool) != 1:
+        return None
     matched: Final = next((mapped for raw_key, mapped in _BUILTIN_TOOL_TYPES.items() if raw_key in tool), None)
     return {"type": matched} if matched is not None else None
 
