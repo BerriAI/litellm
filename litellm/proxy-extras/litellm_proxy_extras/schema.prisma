@@ -666,6 +666,24 @@ model LiteLLM_MCPEventSubscription {
   @@index([status])
 }
 
+model LiteLLM_MCPEventDelivery {
+  delivery_id     String    @id
+  subscription_id String
+  body            String
+  webhook_id      String
+  attempt         Int       @default(0)
+  next_attempt_at DateTime  @default(now())
+  claimed_until   DateTime?
+  claim_id        String?
+  prepared        Boolean   @default(false)
+  delivered_at    DateTime?
+  created_at      DateTime  @default(now())
+
+  @@index([next_attempt_at])
+  @@index([subscription_id])
+  @@index([delivered_at])
+}
+
 // Named collection of {server_id, tool_name} pairs that can be granted to keys/teams
 model LiteLLM_MCPToolsetTable {
   toolset_id   String   @id @default(uuid())

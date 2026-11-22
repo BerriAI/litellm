@@ -124,6 +124,14 @@ class MCPServerRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPServer
     table_name = "litellm_mcpservertable"
 
 
+class MCPEventSubscriptionRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPEventSubscription"]):
+    table_name = "litellm_mcpeventsubscription"
+
+
+class MCPEventDeliveryRepository(PrismaTableRepository["prisma_models.LiteLLM_MCPEventDelivery"]):
+    table_name = "litellm_mcpeventdelivery"
+
+
 class ManagedObjectRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedObjectTable"]):
     table_name = "litellm_managedobjecttable"
 
