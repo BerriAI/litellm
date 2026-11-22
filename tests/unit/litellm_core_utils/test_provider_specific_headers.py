@@ -307,10 +307,17 @@ def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
     [
         ({"authorization": "Bearer sk-ant-oat01-caller"}, False),
         ({"Authorization": "Bearer sk-ant-oat01-deployment"}, True),
-        ({"authorization": "Bearer sk-ant-oat01-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}, True),
+        ({"authorization": "Bearer sk-ant-oat01-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}, False),
+        ({"Authorization": "Bearer sk-ant-oat01-deployment", "authorization": "Bearer sk-ant-oat01-caller"}, True),
         ({}, False),
     ],
-    ids=["caller_token_survives_the_merge", "configured_token_survives_the_merge", "both_tokens_survive", "no_token"],
+    ids=[
+        "caller_token_survives_the_merge",
+        "configured_token_survives_the_merge",
+        "caller_token_first_of_both",
+        "configured_token_first_of_both",
+        "no_token",
+    ],
 )
 def test_an_entry_waits_on_whether_a_configured_token_that_is_not_the_callers_own_is_sent(
     configured_headers: dict[str, str], configured_token_sent: bool, without_configured_credential: bool

@@ -1,6 +1,5 @@
-from bisect import bisect_left
 from collections.abc import Mapping, Sequence
-from itertools import chain, groupby, islice, takewhile
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -74,25 +73,21 @@ def _applies_to_call(
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
 
-def _sorted_text_values_by_name(headers: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
-    pairs: Final = sorted((name.lower(), value if isinstance(value, str) else "") for name, value in headers.items())
+def _first_text_value_by_name(headers: Mapping[str, object]) -> Mapping[str, str]:
     return MappingProxyType(
-        {name: tuple(value for _, value in group) for name, group in groupby(pairs, key=lambda pair: pair[0])}
+        dict(
+            reversed(tuple((name.lower(), value if isinstance(value, str) else "") for name, value in headers.items()))
+        )
     )
 
 
-def _carries(
-    values_by_name: Mapping[str, tuple[str, ...]], name: str, prefix: str, caller_credentials: frozenset[str]
-) -> bool:
-    values: Final = values_by_name.get(name, ())
-    matching: Final = takewhile(
-        lambda value: value.startswith(prefix), islice(values, bisect_left(values, prefix), None)
-    )
-    return any(value not in caller_credentials for value in matching)
+def _sends(first_values: Mapping[str, str], name: str, prefix: str, caller_credentials: frozenset[str]) -> bool:
+    value: Final = first_values.get(name)
+    return value is not None and value.startswith(prefix) and value not in caller_credentials
 
 
 def _configures_a_listed_credential(
-    scoped_header: ProviderSpecificHeader, configured_values: Mapping[str, tuple[str, ...]]
+    scoped_header: ProviderSpecificHeader, configured_values: Mapping[str, str]
 ) -> bool:
     credential_headers: Final = frozenset(
         name.lower() for name in scoped_header.get("configured_credential_headers", ())
@@ -101,9 +96,7 @@ def _configures_a_listed_credential(
         return True
     prefix: Final = scoped_header.get("configured_credential_prefix", "")
     caller_credentials: Final = frozenset(scoped_header.get("caller_credentials", ()))
-    configured: Final = any(
-        _carries(configured_values, name, prefix, caller_credentials) for name in credential_headers
-    )
+    configured: Final = any(_sends(configured_values, name, prefix, caller_credentials) for name in credential_headers)
     return configured != scoped_header.get("without_configured_credential", False)
 
 
@@ -157,9 +150,10 @@ class ProviderSpecificHeaderUtils:
         deployment's `base_model` takes the Anthropic user profile id, entries marked
         `non_user_profile_id_models_only` only when neither does, and entries marked `yields_to_configured` never
         replace a header already in `configured_headers`, and
-        entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
-        whose value starts with `configured_credential_prefix` when the entry sets one and is not one of the entry's
-        `caller_credentials`, under a name no other applicable entry replaces, and those also marked
+        entries listing `configured_credential_headers` contribute only when the first of `configured_headers` under one
+        of those names, in any letter case, is the one sent: under a name no other applicable entry replaces, starting
+        with `configured_credential_prefix` when the entry sets one, and not one of the entry's `caller_credentials`,
+        and those also marked
         `without_configured_credential` only when it does not.
 
         Returns:
@@ -189,7 +183,7 @@ class ProviderSpecificHeaderUtils:
                 if not scoped_header.get("configured_credential_headers")
             )
         )
-        kept_configured: Final = _sorted_text_values_by_name(
+        kept_configured: Final = _first_text_value_by_name(
             {name: value for name, value in configured.items() if name not in replaced_names}
         )
         return dict(

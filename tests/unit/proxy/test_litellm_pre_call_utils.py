@@ -10141,19 +10141,25 @@ def recording_anthropic() -> Iterator[tuple[str, list[Message]]]:
 @pytest.mark.parametrize("route", ["messages", "chat"])
 @pytest.mark.parametrize("pinned", [True, False], ids=["pinned_key", "unpinned_key"])
 @pytest.mark.parametrize(
-    "caller_channel,deployment_token,sent_credential",
+    "caller_channel,deployment_header,sent_credential",
     [
-        ("request_header", True, "deployment"),
-        ("body_headers", True, "deployment"),
-        ("body_extra_headers", True, "caller"),
-        ("request_header", False, "caller"),
-        ("body_headers", False, "caller"),
-        ("body_extra_headers", False, "caller"),
+        ("request_header", "Authorization", "deployment"),
+        ("body_headers", "Authorization", "deployment"),
+        ("body_extra_headers", "Authorization", "caller"),
+        ("request_header", "authorization", "caller"),
+        ("body_headers", "authorization", "caller"),
+        ("body_extra_headers", "authorization", "caller"),
+        ("request_header", None, "caller"),
+        ("body_headers", None, "caller"),
+        ("body_extra_headers", None, "caller"),
     ],
     ids=[
         "configured_token_wins_over_a_request_header",
         "configured_token_wins_over_body_headers",
         "body_extra_headers_win_over_the_configured_token",
+        "request_header_replaces_the_configured_token_of_the_same_name",
+        "body_headers_in_another_case_win_over_the_configured_token",
+        "body_extra_headers_win_over_the_configured_token_in_another_case",
         "request_header_token_replaces_the_deployment_key",
         "body_headers_token_replaces_the_deployment_key",
         "body_extra_headers_token_replaces_the_deployment_key",
@@ -10164,7 +10170,7 @@ async def test_a_caller_oauth_token_keeps_its_own_id_only_when_anthropic_receive
     route: str,
     pinned: bool,
     caller_channel: str,
-    deployment_token: bool,
+    deployment_header: str | None,
     sent_credential: str,
 ) -> None:
     from litellm import Router
@@ -10185,7 +10191,7 @@ async def test_a_caller_oauth_token_keeps_its_own_id_only_when_anthropic_receive
     )
     deployment_headers: Final = {
         USER_PROFILE_ID_HEADER: "uprof_deployment",
-        **({"Authorization": "Bearer sk-ant-oat01-deployment"} if deployment_token else {}),
+        **({deployment_header: "Bearer sk-ant-oat01-deployment"} if deployment_header else {}),
     }
     router: Final = Router(
         model_list=[
