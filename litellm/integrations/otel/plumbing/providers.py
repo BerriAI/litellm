@@ -1614,9 +1614,11 @@ def _spec_processor(
     strip_message_content: bool,
     strip_destination_langfuse_attributes: bool,
     langfuse_mapped: bool,
+    wrap_exporter: Callable[[SpanExporter], SpanExporter] | None = None,
 ) -> SpanProcessor:
+    exporter: Final = _exporter_from_spec(spec)
     batching: Final = _processor_for(
-        _exporter_from_spec(spec),
+        exporter if wrap_exporter is None else wrap_exporter(exporter),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
     exporting: Final = _ExporterResource(batching, spec.resource_attributes) if spec.resource_attributes else batching
@@ -1663,6 +1665,7 @@ def build_tracer_provider(
     strip_message_content: bool = False,
     console_default: bool = False,
     wrap_processor: Callable[[SpanProcessor], SpanProcessor] | None = None,
+    wrap_exporter: Callable[[SpanExporter], SpanExporter] | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1700,7 +1703,11 @@ def build_tracer_provider(
 
     wrapped: Final = wrap_processor or _unwrapped
     if exporter is not None:
-        provider.add_span_processor(wrapped(_processor_for(exporter, use_simple_processor)))
+        provider.add_span_processor(
+            wrapped(
+                _processor_for(exporter if wrap_exporter is None else wrap_exporter(exporter), use_simple_processor)
+            )
+        )
         return provider
 
     langfuse_mapped: Final = _maps_langfuse(config)
@@ -1718,6 +1725,7 @@ def build_tracer_provider(
                 strip_message_content,
                 strip_destination_langfuse_attributes=spec.owner is not ExporterOwner.LANGFUSE_OTEL,
                 langfuse_mapped=langfuse_mapped,
+                wrap_exporter=wrap_exporter,
             )
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None

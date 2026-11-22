@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
 from http.client import responses
+from io import BytesIO
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
@@ -27,6 +28,7 @@ from litellm.constants import (
     TRACE_READ_RETRY_AFTER_SECONDS,
 )
 from litellm.integrations.lens import TraceReceiver
+from litellm.integrations.lens.content import MAX_CONTENT_REQUEST_BYTES, ContentRequest, ReadFailure
 from litellm.integrations.lens.errors import TraceChanged
 from litellm.integrations.lens.generated.models import TraceQueryHelp
 from litellm.integrations.lens.generated.requests import (
@@ -366,3 +368,34 @@ async def get_agent_trace_span_error(
     if page is None:
         raise HTTPException(status_code=404, detail="Span diagnostic not found or no longer available")
     return page
+
+
+async def _bounded_body(request: Request, limit: int) -> bytes | None:
+    with BytesIO() as body:
+        async for chunk in request.stream():
+            if body.tell() + len(chunk) > limit:
+                return None
+            _ = body.write(chunk)
+        return body.getvalue()
+
+
+@router.post("/lens/content", include_in_schema=False)
+async def read_lens_content(
+    request: Request, tracing: Annotated[TraceReceiver | None, Depends(provide_receiver)]
+) -> Response:
+    reader: Final = tracing.content if tracing is not None else None
+    if reader is None:
+        raise HTTPException(status_code=404, detail="Lens content storage is not configured")
+    if not reader.authorized(request.headers.get("authorization", "")):
+        raise HTTPException(status_code=401, detail="Invalid Lens service token")
+    body: Final = await _bounded_body(request, MAX_CONTENT_REQUEST_BYTES)
+    if body is None:
+        raise HTTPException(status_code=413, detail="Lens content request is too large")
+    try:
+        parsed: Final = ContentRequest.model_validate_json(body)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail="Invalid Lens content request") from error
+    result: Final = await reader.read(parsed)
+    if isinstance(result, ReadFailure):
+        raise HTTPException(status_code=result.value, detail="Lens content is unavailable")
+    return Response(content=result, media_type="application/json")

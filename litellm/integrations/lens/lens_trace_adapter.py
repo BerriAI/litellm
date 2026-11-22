@@ -35,14 +35,18 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
-from litellm.integrations.lens.content import ContentLimits, ContentStore, content_signing_key
+from litellm.integrations.lens.content import ContentLimits, ContentStore, Unavailable, content_signing_key
 from litellm.integrations.lens.remote import LensConnection
-from litellm.integrations.lens.trace_content import ContentAttributes, TraceContentSpool
+from litellm.integrations.lens.trace_content import (
+    BoundedBatchExporter,
+    ContentAttributes,
+    TraceContentSpool,
+    serialized_messages,
+)
 from litellm.integrations.otel.emitter import SpanEmitter
 from litellm.integrations.otel.logger import OpenTelemetryV2
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.mappers.base import SpanData
-from litellm.integrations.otel.mappers.utils import output_messages, serialize_messages
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
 from litellm.integrations.otel.model.payloads import LLMCallSpanData
@@ -456,15 +460,21 @@ class _LensTraceConfig(OpenTelemetryV2Config):
         return (init_settings,)
 
 
-def _model_content(messages_in: tuple[Mapping[str, object], ...], outputs: tuple[object, ...]) -> ContentAttributes:
+def _model_content(
+    messages_in: tuple[Mapping[str, object], ...], outputs: tuple[object, ...], limit: int
+) -> ContentAttributes | Unavailable:
     serialized: Final = (
-        (GenAI.INPUT_MESSAGES, serialize_messages(messages_in)),
-        (GenAI.OUTPUT_MESSAGES, serialize_messages(outputs)),
+        (GenAI.INPUT_MESSAGES, serialized_messages(messages_in, limit)),
+        (GenAI.OUTPUT_MESSAGES, serialized_messages(outputs, limit)),
     )
-    return MappingProxyType({key: value for key, value in serialized if value is not None})
+    if any(value is Unavailable.TOO_LARGE for _, value in serialized):
+        return Unavailable.TOO_LARGE
+    return MappingProxyType({key: value for key, value in serialized if isinstance(value, str)})
 
 
-def _tool_content(arguments: str, result: str) -> ContentAttributes:
+def _tool_content(arguments: str, result: str, limit: int) -> ContentAttributes | Unavailable:
+    if len(arguments) + len(result) > limit:
+        return Unavailable.TOO_LARGE
     return MappingProxyType({_TOOL_ARGUMENTS: arguments, _TOOL_RESULT: result})
 
 
@@ -483,8 +493,8 @@ class _LensSpanEmitter(SpanEmitter):
             or not isinstance(span, RecordingSpan)
         ):
             return super().finish_span(role, span, data, end_time_ns=end_time_ns)
-        outputs: Final = tuple(output_messages(data))
-        admission: Final = self.spool.admission((data.messages_in, outputs))
+        outputs: Final = tuple(choice.get("message") for choice in data.choices_out if isinstance(choice, dict))
+        admission: Final = self.spool.model_admission(span, data.messages_in, outputs)
         if admission is None or not self.spool.capture(
             span, data.identity, admission, partial(_model_content, data.messages_in, outputs)
         ):
@@ -568,29 +578,46 @@ class _LensTraceLogger(OpenTelemetryV2):
         tracer: Final = self.tracer_provider.get_tracer(_TOOL_STEP_TRACER)
         captured: Final = self._capture_span_content()
         for exchange in made_by.tool_exchanges:
-            content: Final = _tool_content(exchange.arguments, exchange.result) if captured else MappingProxyType({})
-            admission: Final = (
-                self.spool.admission((exchange.arguments, exchange.result))
-                if self.spool is not None and content
-                else None
+            self._emit_tool_step(
+                tracer, exchange, made_by.attributes(session_id), identity, session_id, at_ns, captured
             )
-            step: Final = tracer.start_span(
-                f"execute_tool {exchange.name}",
-                start_time=at_ns,
-                attributes={
-                    "gen_ai.operation.name": "execute_tool",
-                    "gen_ai.tool.name": exchange.name,
-                    "gen_ai.tool.call.id": exchange.call_id,
-                    **({} if admission is not None else content),
-                    **made_by.attributes(session_id),
-                    _SESSION_ATTRIBUTE: session_id,
-                },
-            )
-            if admission is not None and self.spool is not None and isinstance(step, RecordingSpan):
-                _ = self.spool.capture(
-                    step, identity, admission, partial(_tool_content, exchange.arguments, exchange.result)
-                )
-            step.end(end_time=at_ns)
+
+    def _emit_tool_step(
+        self,
+        tracer: Tracer,
+        exchange: ToolExchange,
+        facts: Mapping[str, str],
+        identity: RequestIdentity,
+        session_id: str,
+        at_ns: int | None,
+        captured: bool,
+    ) -> None:
+        step: Final = tracer.start_span(
+            f"execute_tool {exchange.name}",
+            start_time=at_ns,
+            attributes={
+                "gen_ai.operation.name": "execute_tool",
+                "gen_ai.tool.name": exchange.name,
+                "gen_ai.tool.call.id": exchange.call_id,
+                **facts,
+                _SESSION_ATTRIBUTE: session_id,
+            },
+        )
+        texts: Final = (exchange.arguments, exchange.result)
+        admission: Final = (
+            self.spool.text_admission(step, texts)
+            if captured and self.spool is not None and isinstance(step, RecordingSpan)
+            else None
+        )
+        stored: Final = (
+            admission is not None
+            and self.spool is not None
+            and isinstance(step, RecordingSpan)
+            and self.spool.capture(step, identity, admission, partial(_tool_content, *texts))
+        )
+        if captured and not stored:
+            step.set_attributes({_TOOL_ARGUMENTS: exchange.arguments, _TOOL_RESULT: exchange.result})
+        step.end(end_time=at_ns)
 
 
 class _CallFactsProcessor(SpanProcessor):
@@ -623,7 +650,12 @@ async def export_traces(
     )
     trace_logger: Final = _LensTraceLogger(
         config,
-        build_tracer_provider(config, tenant_overrides=True, wrap_processor=None if spool is None else spool.processor),
+        build_tracer_provider(
+            config,
+            tenant_overrides=True,
+            wrap_processor=None if spool is None else spool.processor,
+            wrap_exporter=BoundedBatchExporter,
+        ),
         spool,
     )
     trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
