@@ -16,7 +16,7 @@ import json
 from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
-from itertools import chain, filterfalse, repeat
+from itertools import chain, filterfalse, groupby, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeVar, cast, overload, runtime_checkable
 
@@ -831,11 +831,13 @@ class AnthropicMessagesHandler(BaseTranslation):
         return (line.strip() for line in joined.decode("utf-8", errors="replace").split("\n"))
 
     @classmethod
-    def _has_undecodable_object_line(cls, responses_so_far: Sequence[object]) -> bool:
-        return any(
-            is_undecodable_json_object(line[len("data:") :])
-            for line in cls._stripped_sse_lines(responses_so_far)
-            if line.startswith("data:")
+    def _has_unreadable_event(cls, responses_so_far: Sequence[object]) -> bool:
+        lines: Final = tuple(cls._stripped_sse_lines(responses_so_far))
+        data_payloads: Final = tuple(line[len("data:") :] for line in lines if line.startswith("data:"))
+        return any(is_undecodable_json_object(payload) for payload in data_payloads) or any(
+            sum(line.startswith("data:") for line in event_lines) > 1
+            for has_lines, event_lines in groupby(lines, key=bool)
+            if has_lines
         )
 
     @staticmethod
@@ -1641,7 +1643,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
-        if self._has_undecodable_object_line(responses_so_far):
+        if self._has_unreadable_event(responses_so_far):
             raise GuardrailRaisedException(
                 guardrail_name=guardrail_to_apply.guardrail_name,
                 message="The guardrail could not read an event in the upstream stream, so it cannot check the response",
@@ -2166,6 +2168,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         return line if rewritten is event else "data: " + json.dumps(rewritten)
 
     def get_streaming_scan_key(self, responses_so_far: Sequence[object]) -> StreamingScanKey | None:
+        if self._has_unreadable_event(responses_so_far):
+            return None
         stream_ended: Final = self._check_streaming_has_ended(responses_so_far)
         tool_use_fingerprints: Final = self._streamed_tool_use_fingerprints(responses_so_far)
         streamed_text: Final = self.get_streaming_string_so_far(responses_so_far)
