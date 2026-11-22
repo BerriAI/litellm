@@ -102,8 +102,10 @@ def _rewritten_message_delta_fields(
 ) -> Mapping[str, object]:
     stop_details: Final = source_fields.get("stop_details")
     safeguard_results: Final = source_fields.get("safeguard_results")
+    container: Final = source_fields.get("container")
     return MappingProxyType(
         {
+            **({"container": container} if container is not None else {}),
             **(
                 {"stop_details": redacted_stop_details(stop_details, keep_explanations)}
                 if stop_details is not None
@@ -249,6 +251,11 @@ def _block_content(event: Mapping[str, object]) -> Mapping[str, object] | None:
     return as_str_mapping(event.get(_BLOCK_CONTENT_KEYS[str(event.get("type"))]))
 
 
+def _index_of(event: Mapping[str, object]) -> int:
+    index: Final = event.get("index")
+    return index if isinstance(index, int) else -1
+
+
 def _holds_only_strings(content: Mapping[str, object] | None) -> bool:
     return content is not None and all(isinstance(content.get(key) or "", str) for key in ("text", "partial_json"))
 
@@ -275,7 +282,7 @@ def anthropic_sse_blocks(source_chunks: Sequence[object]) -> tuple[AnthropicSseB
     frames: Final = tuple(frame for frame in anthropic_sse_frames(source_chunks) if _is_block_content(frame.event))
     if not all(_holds_only_strings(_block_content(frame.event)) for frame in frames):
         return None
-    by_index: Final = groupby((frame.event for frame in frames), key=lambda event: event.get("index"))
+    by_index: Final = groupby(sorted((frame.event for frame in frames), key=_index_of), key=_index_of)
     contents: Final = (tuple(_block_content(event) or {} for event in events) for _, events in by_index)
     return tuple(_sse_block(index, block_contents) for index, block_contents in enumerate(contents))
 

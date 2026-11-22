@@ -36,7 +36,8 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
 )
-from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+from litellm.types.guardrails import LitellmParams, Mode, PiiAction, PiiEntityType
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import (
@@ -2910,6 +2911,22 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         ),
         *_PHONE_IN_A_TOOL_INPUT[3:],
     ),
+    "text-back-in-an-earlier-block": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Call 212-"),
+        *_text_block_sse(1, "Sure."),
+        _text_block_sse(0, "555-0147")[1],
+        _block_stop_sse(0),
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    ),
+    "text-after-its-block-stopped": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure."),
+        _block_stop_sse(0),
+        _text_block_sse(0, f"Call {_PHONE}")[1],
+        *_MESSAGE_END_SSE,
+    ),
     "block-that-is-not-an-object": (
         _message_start_sse(),
         _anthropic_sse(
@@ -3305,6 +3322,36 @@ async def test_apply_to_output_streaming_anthropic_sse_masks_pii_split_over_two_
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masks_blocks_that_overlap_where_the_upstream_sent_them():
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, "Call ", _PHONE),
+        _tool_use_start_sse(1),
+        _tool_use_start_sse(2),
+        _input_json_delta_sse(2, '{"number": "212-'),
+        _input_json_delta_sse(1, '{"city": "Paris"}'),
+        _input_json_delta_sse(2, '555-0147"}'),
+        _block_stop_sse(2),
+        _block_stop_sse(1),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+
+    assert await _masked_phone_stream(upstream) == [
+        _message_start_sse(),
+        *_text_block_sse(0, "Call <PHONE_NUMBER>"),
+        _tool_use_start_sse(1),
+        _tool_use_start_sse(2),
+        _input_json_delta_sse(2, '{"number": "<PHONE_NUMBER>"}'),
+        _input_json_delta_sse(1, '{"city": "Paris"}'),
+        _block_stop_sse(2),
+        _block_stop_sse(1),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_drops_every_citation_once_a_text_is_masked():
     citation: Final = {"type": "char_location", "cited_text": f"The office is on {_PHONE}"}
     upstream: Final = (
@@ -3671,6 +3718,18 @@ _FULL_NAME_PATTERN: Final = re.compile(r"Jane.*Doe")
             {"first": "Ms <PERSON>", "age": "<PERSON>", "last": "<PERSON> II"},
         ),
         (
+            PiiEntityType.PERSON,
+            _FULL_NAME_PATTERN,
+            {"to": 1, "Ms Jane Doe II": "Doe", "city": "Paris"},
+            {"to": 1, "Ms <PERSON> II": "<PERSON>", "city": "Paris"},
+        ),
+        (
+            PiiEntityType.PERSON,
+            _FULL_NAME_PATTERN,
+            {"Jane": {"Jane Doe": "Doe"}, "last": {"Jane Doe": "Jane", "Doe": "ok"}},
+            {"Jane": {"<PERSON>": "<PERSON>"}, "last": {"<PERSON>": "<PERSON>", "Doe": "ok"}},
+        ),
+        (
             PiiEntityType.PHONE_NUMBER,
             _PHONE_PATTERN,
             {"icon": "\ue000\ue001", "note": f"\ue002 {_PHONE}", "end": ""},
@@ -3683,6 +3742,8 @@ _FULL_NAME_PATTERN: Final = re.compile(r"Jane.*Doe")
         "email-keys",
         "email-key-beside-its-mask",
         "name-split-over-values",
+        "name-in-a-key-and-its-value",
+        "names-in-keys-and-over-several-keys",
         "private-use-characters",
     ],
 )
@@ -3705,6 +3766,193 @@ async def test_pii_after_a_line_break_in_a_tool_call_is_blocked(endpoint: str):
     ) as guardrail:
         with pytest.raises(BlockedPiiEntityError):
             await _TOOL_INPUTS[endpoint](guardrail, {"content": f"Contact\n{_PHONE}"})
+
+
+_TOOL_INPUTS_STRICT_JSON_READERS_REFUSE: Final = {
+    "unpaired-surrogate": f'{{"icon": "\\ud83d", "note": "Contact\\n{_PHONE}"}}',
+    "deep-nesting": f'{"[" * 300}"Contact\\n{_PHONE}"{"]" * 300}',
+    "long-number": f'{{"n": {"1" * 5000}, "note": "Contact\\n{_PHONE}"}}',
+    "not-a-number": f'{{"n": [NaN, -Infinity], "note": "Contact\\n{_PHONE}"}}',
+    "byte-order-mark": f'\ufeff{{"note": "Contact\\n{_PHONE}"}}',
+    "cut-literal": f'{{"note": "Contact\\n{_PHONE}", "vip": tr',
+    "cut-number": f'{{"note": "Contact\\n{_PHONE}", "n": -1.5e',
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "partial_json",
+    _TOOL_INPUTS_STRICT_JSON_READERS_REFUSE.values(),
+    ids=_TOOL_INPUTS_STRICT_JSON_READERS_REFUSE.keys(),
+)
+async def test_pii_after_a_line_break_is_masked_in_a_tool_input_a_strict_json_reader_refuses(partial_json: str):
+    upstream: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, partial_json),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _WHOLE_WORD_PHONE_PATTERN, PiiAction.MASK
+    ) as guardrail:
+        sent: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    assert sent == _masked_phone(upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_input",
+    [f"call {_PHONE}", f"[call {_PHONE}]", f'{{"to": "{_PHONE}"}} now', f'"to" "{_PHONE}"', f"-- {_PHONE}"],
+)
+async def test_tool_arguments_that_are_not_json_are_masked_as_text(tool_input: str):
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "run", "arguments": tool_input}}
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [call]}, request_data={}, input_type="response"
+        )
+
+    masked: Final = {"name": "run", "arguments": tool_input.replace(_PHONE, "<PHONE_NUMBER>")}
+    assert result["tool_calls"] == [{**call, "function": masked}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("entity_type", "pattern", "arguments", "sent_arguments"),
+    [
+        (PiiEntityType.CREDIT_CARD, _CARD_PATTERN, "4111 1111 1111 1111", "<CREDIT_CARD>"),
+        (PiiEntityType.PHONE_NUMBER, _PHONE_DIGITS_PATTERN, "2125550147", '"<PHONE_NUMBER>"'),
+        (
+            PiiEntityType.PHONE_NUMBER,
+            _WHOLE_WORD_PHONE_PATTERN,
+            f'"Contact\\n{_PHONE}"',
+            '"Contact\\n<PHONE_NUMBER>"',
+        ),
+    ],
+    ids=["numbers-that-are-not-json", "a-json-number", "a-json-string"],
+)
+async def test_tool_arguments_that_are_not_a_json_object_are_masked(
+    entity_type: PiiEntityType, pattern: re.Pattern[str], arguments: str, sent_arguments: str
+):
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "run", "arguments": arguments}}
+
+    async with _guardrail_over_regex_presidio(entity_type, pattern, PiiAction.MASK) as guardrail:
+        result: Final = await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [call]}, request_data={}, input_type="response"
+        )
+
+    assert result["tool_calls"] == [{**call, "function": {"name": "run", "arguments": sent_arguments}}]
+
+
+_PHONE_NUMBERS_MASKED: Final = {"PHONE_NUMBER": "MASK"}
+
+
+@asynccontextmanager
+async def _initialized_output_guardrail(
+    mode: str | list[str] | Mode,
+    scope: Literal["input", "output", "both"] | None,
+    entities: dict[str, str] | None,
+) -> AsyncIterator[OPTIONAL_PresidioPIIMasking]:
+    async with TestServer(_regex_presidio_app(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN)) as server:
+        params: Final = LitellmParams(
+            guardrail="presidio",
+            mode=mode,
+            presidio_filter_scope=scope,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config=entities,
+        )
+        callback: Final = initialize_presidio(params, {"guardrail_name": "scoped"})[-1]
+        assert isinstance(callback, OPTIONAL_PresidioPIIMasking)
+        try:
+            yield callback
+        finally:
+            await callback._close_http_session()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TOOL_INPUTS)
+@pytest.mark.parametrize(
+    ("mode", "scope"),
+    [
+        ("post_call", None),
+        (["pre_call", "post_call"], None),
+        (Mode(tags={"team": "post_call"}, default="pre_call"), None),
+        ("pre_call", "both"),
+        ("pre_call", "output"),
+    ],
+    ids=["post_call", "list-with-post_call", "tag-with-post_call", "scope-both", "scope-output"],
+)
+async def test_tool_calls_are_masked_where_the_config_asks_to_scan_the_output(
+    endpoint: str, mode: str | list[str] | Mode, scope: Literal["input", "output", "both"] | None
+):
+    async with _initialized_output_guardrail(mode, scope, _PHONE_NUMBERS_MASKED) as guardrail:
+        assert await _TOOL_INPUTS[endpoint](guardrail, {"number": _PHONE}) == {"number": "<PHONE_NUMBER>"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["pre_call", "during_call", ["pre_call", "logging_only"]], ids=str)
+@pytest.mark.parametrize("endpoint", [*_NON_STREAMED_TOOL_INPUTS, "messages_streamed"])
+async def test_tool_calls_without_text_pii_are_sent_as_is_where_the_config_does_not_ask_to_scan_the_output(
+    endpoint: str, mode: str | list[str]
+):
+    async with _initialized_output_guardrail(mode, None, _PHONE_NUMBERS_MASKED) as guardrail:
+        assert await _TOOL_INPUTS[endpoint](guardrail, {"number": _PHONE}) == {"number": _PHONE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("entities", [None, {}], ids=["unset", "empty"])
+@pytest.mark.parametrize(("mode", "scope"), [("post_call", None), ("pre_call", "both")], ids=["post_call", "scope-both"])
+@pytest.mark.parametrize("endpoint", [*_NON_STREAMED_TOOL_INPUTS, "messages_streamed"])
+async def test_tool_calls_without_text_pii_are_sent_as_is_where_the_config_lists_no_entities(
+    endpoint: str,
+    mode: str,
+    scope: Literal["input", "output", "both"] | None,
+    entities: dict[str, str] | None,
+):
+    async with _initialized_output_guardrail(mode, scope, entities) as guardrail:
+        assert await _TOOL_INPUTS[endpoint](guardrail, {"number": _PHONE}) == {"number": _PHONE}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "entities"),
+    [("pre_call", _PHONE_NUMBERS_MASKED), ("post_call", None)],
+    ids=["output-scan-not-asked-for", "no-entities"],
+)
+async def test_a_streamed_messages_tool_call_beside_masked_text_is_masked_whatever_the_config_asks_for(
+    mode: str, entities: dict[str, str] | None
+):
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, f"Call {_PHONE}"),
+        _block_stop_sse(0),
+        _tool_use_start_sse(1),
+        _input_json_delta_sse(1, json.dumps({"number": _PHONE})),
+        _block_stop_sse(1),
+        *_TOOL_USE_END_SSE,
+    )
+
+    async with _initialized_output_guardrail(mode, None, entities) as guardrail:
+        sent: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    assert sent == _masked_phone(upstream)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "entities"),
+    [("pre_call", _PHONE_NUMBERS_MASKED), ("post_call", None)],
+    ids=["output-scan-not-asked-for", "no-entities"],
+)
+async def test_a_streamed_chat_tool_call_is_masked_whatever_the_config_asks_for(
+    mode: str, entities: dict[str, str] | None
+):
+    async with _initialized_output_guardrail(mode, None, entities) as guardrail:
+        assert await _streamed_chat_tool_input(guardrail, {"number": _PHONE}) == {"number": "<PHONE_NUMBER>"}
 
 
 @pytest.mark.asyncio

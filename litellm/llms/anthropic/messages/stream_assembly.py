@@ -1,9 +1,9 @@
 import codecs
 import json
+from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -582,7 +582,7 @@ def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[
 
 
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
-    """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
+    """The ``stop_details``, ``safeguard_results`` and ``container`` of the stream's ``message_delta``.
 
     The assembled OpenAI shape has no slot for them, and a client that asked to stream reads them
     from that event and nowhere else (a Claude Code auto-mode session takes its classifier verdict
@@ -754,7 +754,7 @@ def _unfinished_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, M
 
 
 def anthropic_sse_unfinished_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
-    """The blocks the stream opened and never stopped, which only a failed upstream leaves."""
+    """The blocks the stream opened and never stopped."""
     return _unfinished_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
 
 
@@ -809,10 +809,44 @@ def _streamed_input_indexes(events: Sequence[Mapping[str, object]]) -> frozenset
     return frozenset(index for event in events if (index := _streamed_input_index(event)) is not None)
 
 
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _positions_by_block(events: Sequence[Mapping[str, object]], event_type: str) -> Mapping[int, tuple[int, ...]]:
+    indexed: Final = sorted(
+        (index, position)
+        for position, event in enumerate(events)
+        if event.get("type") == event_type and (index := _block_index(event)) is not None
+    )
+    return MappingProxyType(
+        {
+            index: tuple(position for _, position in positions)
+            for index, positions in groupby(indexed, key=lambda indexed_position: indexed_position[0])
+        }
+    )
+
+
+def _block_by_block(events: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+    """The events with those of each block together where it started, since assembly reads one block at a time.
+
+    An event is of the block that last started at its index.
+    """
+    starts: Final = _positions_by_block(events, "content_block_start")
+
+    def place(position: int) -> int:
+        event: Final = events[position]
+        index: Final = _block_index(event) if event.get("type") in _BLOCK_EVENT_TYPES else None
+        earlier_starts: Final = starts.get(index, ()) if index is not None else ()
+        start_count: Final = bisect_right(earlier_starts, position)
+        return earlier_starts[start_count - 1] if start_count else position
+
+    return tuple(events[position] for position in sorted(range(len(events)), key=place))
+
+
 def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
     streamed_input_indexes: Final = _streamed_input_indexes(events)
     canonical_events: Final = chain.from_iterable(
-        _with_tool_input_as_delta(event, streamed_input_indexes) for event in events
+        _with_tool_input_as_delta(event, streamed_input_indexes) for event in _block_by_block(events)
     )
     return tuple(f"event: {event.get('type')}\ndata: {json.dumps(event)}\n\n" for event in canonical_events)
 
@@ -870,9 +904,15 @@ def _replaces_its_start_input(event: Mapping[str, object], streamed_input_indexe
 
 
 def anthropic_sse_assembles_every_tool_input(all_chunks: Sequence[object]) -> bool:
+    """Whether assembly reads the input of every client and server tool call, as it does in a stream that ends well.
+
+    It leaves out a start's input that deltas replace, and reads a server tool call only once it stops.
+    """
     events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
     streamed_input_indexes: Final = _streamed_input_indexes(events)
-    return not any(_replaces_its_start_input(event, streamed_input_indexes) for event in events)
+    return not any(_replaces_its_start_input(event, streamed_input_indexes) for event in events) and not any(
+        block.get("type") == "server_tool_use" for block in _unfinished_blocks(events).values()
+    )
 
 
 def _names_its_own_type(name: str, data: Mapping[str, object] | None) -> bool:
@@ -880,24 +920,34 @@ def _names_its_own_type(name: str, data: Mapping[str, object] | None) -> bool:
     return name in (data_type, "error") or not (_is_applied_by_name(name) or _is_applied_by_name(data_type))
 
 
-def _is_block_index(value: object, expected: int) -> bool:
-    return type(value) is int and value == expected
+def _carries_text(event: Mapping[str, object]) -> bool:
+    content: Final = as_str_mapping(event.get("content_block") or event.get("delta"))
+    return content is not None and bool(content.get("text"))
 
 
-def _after_block_event(blocks: tuple[int, bool] | None, event: Mapping[str, object]) -> tuple[int, bool] | None:
-    if blocks is None:
-        return None
-    started, is_open = blocks
-    index: Final = event.get("index")
-    match event.get("type"):
-        case "content_block_start":
-            return (started + 1, True) if not is_open and _is_block_index(index, started) else None
-        case "content_block_delta":
-            return blocks if is_open and _is_block_index(index, started - 1) else None
-        case "content_block_stop":
-            return (started, False) if is_open and _is_block_index(index, started - 1) else None
-        case _:
-            return blocks
+def _is_read_by_block(events: Sequence[Mapping[str, object]]) -> bool:
+    """Whether the blocks start at 0, 1, 2 and so on, take their deltas while open, and send their text in that order.
+
+    Blocks may overlap, as when an upstream streams several tool calls at once.
+    """
+    block_events: Final = tuple(event for event in events if event.get("type") in _BLOCK_EVENT_TYPES)
+    indexes: Final = tuple(index for event in block_events if type(index := event.get("index")) is int)
+    if len(indexes) != len(block_events):
+        return False
+    started: Final = tuple(event.get("index") for event in block_events if event.get("type") == "content_block_start")
+    if started != tuple(range(len(started))):
+        return False
+    starts: Final = _positions_by_block(block_events, "content_block_start")
+    stops: Final = _positions_by_block(block_events, "content_block_stop")
+    never: Final = (len(block_events),)
+    text_indexes: Final = tuple(
+        index for index, event in zip(indexes, block_events, strict=True) if _carries_text(event)
+    )
+    return text_indexes == tuple(sorted(text_indexes)) and all(
+        starts.get(index, never)[0] < position <= stops.get(index, never)[0]
+        for position, (index, event) in enumerate(zip(indexes, block_events, strict=True))
+        if event.get("type") != "content_block_start"
+    )
 
 
 def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool:
@@ -941,14 +991,14 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a
     client puts a block delta on the block at that list position or index. Assembly reads every one of
     these the same way only when the names and types agree, ``message_start`` comes first with no content,
-    and each block starts at the next index and takes its deltas before it stops. A frame named ``error``
-    may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order
-    mark stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever
-    it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream with
-    one reads differently too. A client reading lines with httpx also breaks them at a form feed or U+2028,
-    so a stream reads differently when that reveals a JSON frame the others skip, as data behind a comment.
-    The SDKs read a block delta's field by its delta type, so a delta also carrying a field assembly reads
-    first, as text on an ``input_json_delta``, reads differently.
+    each block starts at the next index and takes its deltas before it stops, and the text of the blocks comes
+    in their order. A frame named ``error`` may carry any data, since the SDKs raise on it and other clients
+    read its type. A leading byte order mark stays part of the first field name, as the Python SDK reads it,
+    so these rules refuse it wherever it changes what that SDK reads. No client dispatches a frame the stream
+    never ended, so a stream with one reads differently too. A client reading lines with httpx also breaks
+    them at a form feed or U+2028, so a stream reads differently when that reveals a JSON frame the others
+    skip, as data behind a comment. The SDKs read a block delta's field by its delta type, so a delta also
+    carrying a field assembly reads first, as text on an ``input_json_delta``, reads differently.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
@@ -962,7 +1012,7 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     events: Final = tuple(event for event in _client_events(named_data) if event.get("type") != "ping")
     return (
         _opens_with_an_empty_message(events)
-        and reduce(_after_block_event, events, (0, False)) is not None
+        and _is_read_by_block(events)
         and all(_assembly_reads_the_field_the_delta_type_names(event) for event in events)
     )
 

@@ -4082,6 +4082,56 @@ async def test_streaming_hook_scans_an_anthropic_sse_tool_call_cut_by_the_output
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cards", [("none", "none"), ("4111", "none"), ("none", "4111")])
+async def test_streaming_hook_scans_every_tool_call_of_an_anthropic_sse_stream_whose_calls_overlap(
+    cards: tuple[str, str],
+):
+    starts: Final = tuple(
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":%d,"content_block":'
+        b'{"type":"tool_use","id":"toolu_%d","name":"pay","input":{}}}\n\n' % (index, index)
+        for index in (1, 2)
+    )
+    inputs: Final = tuple(
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":%d,"delta":'
+        b'{"type":"input_json_delta","partial_json":"{\\"card\\":\\"%s\\"}"}}\n\n' % (index, card.encode())
+        for index, card in enumerate(cards, start=1)
+    )
+    stops: Final = tuple(
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":%d}\n\n' % index for index in (1, 2)
+    )
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *starts,
+        *inputs,
+        *stops,
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if "4111" in cards:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+    else:
+        assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_scans_responses_api_events_instead_of_crashing():
     """A /v1/responses stream arrives as typed Responses events, which stream_chunk_builder
     cannot subscript. The final response.completed event carries the text to scan."""
@@ -4239,6 +4289,17 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
                 *_ANTHROPIC_SSE_CHUNKS[3:],
             ),
             id="anthropic-sse-with-a-tool-start-input-its-streamed-input-replaces",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"4111-1111-1111-1111"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-with-an-unfinished-server-tool-input",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
         pytest.param("created", id="responses-stream-cut-off-after-response-created"),

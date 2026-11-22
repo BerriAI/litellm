@@ -475,3 +475,145 @@ def test_block_delta_carrying_a_field_assembly_reads_before_its_own_reads_differ
     block: dict[str, object], delta: dict[str, object]
 ):
     assert not anthropic_sse_reads_alike(_one_block_stream(block, delta))
+
+
+def _block_start(index: object, block: dict[str, object]) -> bytes:
+    return _frame("content_block_start", {"type": "content_block_start", "index": index, "content_block": block})
+
+
+def _tool_start(index: int) -> bytes:
+    return _block_start(index, {"type": "tool_use", "id": f"toolu_{index}", "name": f"call_{index}", "input": {}})
+
+
+def _delta(index: object, delta: dict[str, object]) -> bytes:
+    return _frame("content_block_delta", {"type": "content_block_delta", "index": index, "delta": delta})
+
+
+def _text(index: int, text: str) -> bytes:
+    return _delta(index, {"type": "text_delta", "text": text})
+
+
+def _tool_input(index: int, partial_json: str) -> bytes:
+    return _delta(index, {"type": "input_json_delta", "partial_json": partial_json})
+
+
+def _stop(index: int) -> bytes:
+    return _frame("content_block_stop", {"type": "content_block_stop", "index": index})
+
+
+def _message(*block_frames: bytes) -> tuple[bytes, ...]:
+    return (
+        ANTHROPIC_STREAM[0],
+        *block_frames,
+        _frame("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}}),
+        _frame("message_stop", {"type": "message_stop"}),
+    )
+
+
+_OVERLAPPED_BLOCKS: Final = {
+    "every-call-started-before-any-input": _message(
+        _block_start(0, _TEXT_BLOCK),
+        _text(0, "Hello"),
+        _tool_start(1),
+        _tool_start(2),
+        _tool_input(1, '{"n": 1}'),
+        _stop(1),
+        _tool_input(2, '{"n": 2}'),
+        _stop(2),
+    ),
+    "text-stopped-after-the-calls": _message(
+        _block_start(0, _TEXT_BLOCK),
+        _text(0, "Hello"),
+        _tool_start(1),
+        _tool_start(2),
+        _tool_input(2, '{"n": 2}'),
+        _tool_input(1, '{"n": 1}'),
+        _stop(2),
+        _stop(1),
+        _stop(0),
+    ),
+    "inputs-split-and-interleaved": _message(
+        _block_start(0, _TEXT_BLOCK),
+        _tool_start(1),
+        _text(0, "Hello"),
+        _tool_start(2),
+        _tool_input(1, '{"n"'),
+        _tool_input(2, '{"n": '),
+        _tool_input(1, ": 1}"),
+        _stop(0),
+        _tool_input(2, "2}"),
+        _stop(1),
+        _stop(2),
+    ),
+}
+
+
+@pytest.mark.parametrize("chunks", _OVERLAPPED_BLOCKS.values(), ids=_OVERLAPPED_BLOCKS)
+def test_overlapped_blocks_read_alike_and_assemble_by_index(chunks: tuple[bytes, ...]):
+    assert anthropic_sse_reads_alike(chunks)
+    assembled: Final = assemble_anthropic_sse_stream(chunks)
+    assert assembled is not None and isinstance(assembled.choices[0], Choices)
+    message: Final = assembled.choices[0].message
+    assert message.content == "Hello"
+    assert [(call.id, call.function.name, call.function.arguments) for call in message.tool_calls or ()] == [
+        ("toolu_1", "call_1", '{"n": 1}'),
+        ("toolu_2", "call_2", '{"n": 2}'),
+    ]
+
+
+def test_a_block_reusing_an_earlier_index_assembles_where_it_started():
+    assembled: Final = assemble_anthropic_sse_stream(
+        _message(
+            _block_start(0, _TEXT_BLOCK),
+            _text(0, "Call "),
+            _stop(0),
+            _block_start(1, _TEXT_BLOCK),
+            _text(1, "the office at "),
+            _stop(1),
+            _block_start(0, _TEXT_BLOCK),
+            _text(0, "noon"),
+            _stop(0),
+        )
+    )
+    assert assembled is not None and isinstance(assembled.choices[0], Choices)
+    assert assembled.choices[0].message.content == "Call the office at noon"
+
+
+_BLOCKS_CLIENTS_READ_DIFFERENTLY: Final = {
+    "delta-after-its-block-stopped": _message(
+        _tool_start(0), _tool_start(1), _stop(0), _tool_input(0, "{}"), _stop(1)
+    ),
+    "delta-before-its-block-starts": _message(_tool_start(0), _tool_input(1, "{}"), _tool_start(1), _stop(0), _stop(1)),
+    "delta-of-a-block-that-never-starts": _message(_tool_start(0), _tool_input(1, "{}"), _stop(0)),
+    "stop-before-its-block-starts": _message(_tool_start(0), _stop(1), _tool_start(1), _stop(0)),
+    "block-stopped-twice": _message(_tool_start(0), _stop(0), _stop(0)),
+    "block-started-twice": _message(_tool_start(0), _tool_start(0), _stop(0)),
+    "blocks-started-out-of-order": _message(_tool_start(1), _tool_start(0), _stop(0), _stop(1)),
+    "block-index-skipped": _message(_tool_start(0), _stop(0), _tool_start(2), _stop(2)),
+    "index-that-is-a-bool": _message(_block_start(False, _TEXT_BLOCK), _stop(0)),
+    "index-that-is-a-string": _message(_block_start("0", _TEXT_BLOCK), _stop(0)),
+    "delta-without-an-index": _message(_block_start(0, _TEXT_BLOCK), _delta(None, {"type": "text_delta"}), _stop(0)),
+    "text-back-in-an-earlier-block": _message(
+        _block_start(0, _TEXT_BLOCK),
+        _block_start(1, _TEXT_BLOCK),
+        _text(0, "Call "),
+        _text(1, "the office"),
+        _text(0, "212-555"),
+        _stop(0),
+        _stop(1),
+    ),
+    "text-start-after-later-text": _message(
+        _block_start(0, _TEXT_BLOCK),
+        _block_start(1, {"type": "text", "text": "the office"}),
+        _text(0, "Call "),
+        _stop(0),
+        _stop(1),
+    ),
+}
+
+
+@pytest.mark.parametrize(
+    "chunks", _BLOCKS_CLIENTS_READ_DIFFERENTLY.values(), ids=_BLOCKS_CLIENTS_READ_DIFFERENTLY
+)
+def test_blocks_out_of_the_order_clients_read_them_in_do_not_read_alike(chunks: tuple[bytes, ...]):
+    assert not anthropic_sse_reads_alike(chunks)

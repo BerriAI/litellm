@@ -3996,7 +3996,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
-    async def test_client_gets_the_input_the_check_read_when_deltas_interleave_before_an_upstream_error(self):
+    async def test_denied_tool_input_whose_deltas_interleave_before_an_upstream_error_is_blocked(self):
         guardrail: Final = ToolPermissionGuardrail(
             guardrail_name="anthropic-param-block",
             rules=[
@@ -4032,10 +4032,8 @@ class TestToolPermissionGuardrailAnthropicMessages:
         )
         frames: Final = [f"event: {e['type']}\ndata: {json.dumps(e)}\n\n".encode() for e in events]
 
-        out: Final = await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
-
-        assert b"rm -rf" not in b"".join(out)
-        assert self._events(out)[-1] == self.UPSTREAM_ERROR
+        with pytest.raises(GuardrailRaisedException, match="rm -rf"):
+            await self._drain(guardrail, self._ended_by_upstream_error([self._sse_chunks("Bash")[0], *frames]))
 
     @pytest.mark.asyncio
     async def test_denied_tool_use_named_only_by_its_event_lines_beside_an_upstream_error_is_blocked(self):
@@ -4289,6 +4287,24 @@ _DENIED_CALL_SHAPES: Final = {
         _sse_frame(_input_delta(1, ', "command": "ls"}')).removesuffix(b"\n\n"),
     ),
 }
+
+
+def _overlapped_calls(first_command: dict[str, str], second_command: dict[str, str]) -> tuple[bytes, ...]:
+    return _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Bash"),
+                _tool_start(2, "Bash"),
+                _input_delta(1, json.dumps(first_command)),
+                _block_stop(1),
+                _input_delta(2, json.dumps(second_command)),
+                _block_stop(2),
+            )
+        )
+    )
+
+
 _LS_STREAM: Final = _stream(*_bash_call(_LS))
 _ALLOWED_CALL_SHAPES: Final = {
     "crlf": tuple(frame.replace(b"\n", b"\r\n") for frame in _LS_STREAM),
@@ -4356,6 +4372,22 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
 
         tool_inputs: Final = [block.input for block in _sdk_message(out).content if block.type == "tool_use"]
         assert _RM_RF not in tool_inputs
+
+    @pytest.mark.asyncio
+    async def test_allowed_calls_that_overlap_are_forwarded_as_the_upstream_sent_them(self):
+        chunks: Final = _overlapped_calls(_LS, _LS)
+
+        assert await self._drain(self._bash_ls_only("block"), chunks) == list(chunks)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("first", "second", "kept_id"), [(_LS, _RM_RF, "tu_1"), (_RM_RF, _LS, "tu_2")])
+    async def test_of_two_calls_that_overlap_only_the_allowed_one_reaches_the_client_with_its_own_input(
+        self, first: dict[str, str], second: dict[str, str], kept_id: str
+    ):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), _overlapped_calls(first, second))
+
+        calls: Final = [block for block in _sdk_message(out).content if block.type == "tool_use"]
+        assert [(call.id, call.input) for call in calls] == [(kept_id, _LS)]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("chunks", _ALLOWED_CALL_SHAPES.values(), ids=_ALLOWED_CALL_SHAPES)
