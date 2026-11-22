@@ -921,7 +921,7 @@ def test_drop_params_keeps_the_400_for_a_forced_hosted_mcp_server_on_a_route_tha
         )
 
     assert exc.value.status_code == 400
-    assert f"{route} forwards hosted MCP tools as sent" in exc.value.message
+    assert f"LiteLLM cannot force a hosted MCP tool on {route}." in exc.value.message
     assert requests.empty()
 
 

@@ -228,6 +228,14 @@ def _tool_identifiers(tool: Mapping[str, object]) -> tuple[object, ...]:
     return (tool.get("type"), tool.get("name"), nested.get("name"))
 
 
+def _sends_only_non_function_tools(params: Mapping[str, object]) -> bool:
+    try:
+        tools: Final = _TOOLS_ADAPTER.validate_python(params.get("tools"))
+    except ValidationError:
+        return False
+    return bool(tools) and all(tool.get("type") != "function" for tool in tools)
+
+
 def _without_non_function_tools(params: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
     if params.get("tools") is None:
         return params
@@ -434,7 +442,9 @@ class OCIChatConfig(BaseConfig):
 
         sent_params: Final = dict[str, object]({**non_default_params, **optional_params})
         request_params: Final = _without_non_function_tools(
-            tool_params_without_hosted_mcp(
+            sent_params
+            if _sends_only_non_function_tools(sent_params)
+            else tool_params_without_hosted_mcp(
                 sent_params,
                 model=model,
                 route="oci",

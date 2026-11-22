@@ -674,8 +674,7 @@ _FORCED_DOCS: Final = {"type": "mcp", "server_label": "docs"}
             _FORCED_DOCS,
             "openrouter",
             HostedMcpCall(handling="forwards", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
-            "openrouter forwards hosted MCP tools as sent, but LiteLLM cannot force one there. "
-            "Remove the tool_choice or set it to 'auto'.",
+            "LiteLLM cannot force a hosted MCP tool on openrouter. Remove the tool_choice or set it to 'auto'.",
         ),
     ],
     ids=["drop_params_off", "server_not_sent", "no_server_label", "provider_runs_mcp", "route_forwards_mcp"],
