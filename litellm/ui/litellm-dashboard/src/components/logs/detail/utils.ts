@@ -1,5 +1,10 @@
 import type { TFunction } from "i18next";
 
+export const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
+  const value = metadata?.[key];
+  return typeof value === "string" && value !== "" ? value : undefined;
+};
+
 /**
  * Utility functions for LogDetailsDrawer component.
  * These functions handle data formatting, validation, and guardrail calculations.

@@ -72,6 +72,27 @@ def test_bigmodel_fields_require_private_key_and_share_default_base_with_adapter
     assert provider.default_model_placeholder.startswith("bigmodel/")
 
 
+def test_sarvam_fields_require_a_key_and_suggest_the_default_base() -> None:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    sarvam: Final = JSONProviderRegistry.get("sarvam")
+    assert sarvam is not None
+    app: Final = FastAPI()
+    app.include_router(router)
+    response: Final = TestClient(app).get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    provider: Final = next(item for item in providers if item.litellm_provider == "sarvam")
+    fields: Final = {field.key: field for field in provider.credential_fields}
+    assert set(fields) == {"api_base", "api_key"}
+    assert fields["api_key"].required is True
+    assert fields["api_key"].field_type == "password"
+    assert fields["api_base"].required is False
+    assert fields["api_base"].placeholder == sarvam.base_url
+    assert provider.default_model_placeholder is not None
+    assert provider.default_model_placeholder.startswith("sarvam/")
+
+
 def test_fuse_presets_route_serves_the_shared_catalog_without_authentication() -> None:
     app: Final = FastAPI()
     app.include_router(router)

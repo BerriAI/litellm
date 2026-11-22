@@ -6,6 +6,7 @@ routing follows the tokens and requests each deployment served. The host here is
 """
 
 import asyncio
+import datetime
 import re
 from typing import Final
 
@@ -19,6 +20,19 @@ from tests.unit.test_router.core.selection_helpers import MESSAGES, MakeCore, Tr
 @pytest.fixture
 def host() -> TrafficHost:
     return TrafficHost()
+
+
+@pytest.fixture
+def fixed_minute(monkeypatch: pytest.MonkeyPatch) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm.datetime", _FrozenDatetime)
+
+
+class _FrozenDatetime(datetime.datetime):
+    @classmethod
+    def now(cls, tz: datetime.tzinfo | None = None) -> "_FrozenDatetime":
+        return cls(2026, 1, 1, 12, tzinfo=tz)
 
 
 async def _until_called(host: TrafficHost, count: int) -> None:
@@ -97,6 +111,7 @@ async def test_latency_based_routing_moves_to_the_faster_deployment(make_core: M
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 @pytest.mark.parametrize("routing_strategy", ["usage-based-routing", "usage-based-routing-v2"])
 async def test_usage_based_routing_alternates_between_deployments_by_tokens_served(
     make_core: MakeCore, host: TrafficHost, routing_strategy: str
@@ -110,6 +125,7 @@ async def test_usage_based_routing_alternates_between_deployments_by_tokens_serv
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_usage_based_v2_stops_picking_a_deployment_once_its_tpm_is_used(
     make_core: MakeCore, host: TrafficHost
 ) -> None:
@@ -125,6 +141,7 @@ async def test_usage_based_v2_stops_picking_a_deployment_once_its_tpm_is_used(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("fixed_minute")
 async def test_usage_based_v2_rate_limits_once_every_deployment_used_its_rpm(
     make_core: MakeCore, host: TrafficHost
 ) -> None:

@@ -21,7 +21,6 @@ from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
-    AsyncCache,
     DualCacheTokenCacheBackend,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
@@ -132,7 +131,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         decrypt_value_helper,
         encrypt_value_helper,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
     coordinator: Final = runtime_refresh_coordinator()
     if coordinator is None:
@@ -141,10 +140,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
-    # untyped-boundary cast.
-    cache: Final[AsyncCache] = user_api_key_cache  # pyright: ignore
-    backend: Final = DualCacheTokenCacheBackend(cache, codec)
+    backend: Final = DualCacheTokenCacheBackend(mcp_state_cache, codec)
     return backend, coordinator, True
 
 

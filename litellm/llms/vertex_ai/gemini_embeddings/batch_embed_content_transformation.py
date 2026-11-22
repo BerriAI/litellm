@@ -11,6 +11,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, subscript
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX, gemini_video_metadata_from_openai
@@ -26,7 +27,6 @@ from litellm.types.llms.vertex_ai import (
     PromptTokensDetails,
     UsageMetadata,
     VertexAIBatchEmbeddingsRequestBody,
-    VertexAIBatchEmbeddingsResponseObject,
     VideoMetadataType,
 )
 from litellm.types.utils import (
@@ -35,7 +35,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import get_formatted_prompt, token_counter
+from litellm.utils import token_counter
 
 SUPPORTED_EMBEDDING_MIME_TYPES: Final = {
     "image/png",
@@ -162,6 +162,13 @@ class _EmbeddingFile(LiteLLMBaseModel):
     video_metadata: _EmbeddingVideoMetadata | None = None
 
 
+class _EmbeddingTextBlock(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+    type: Literal["text"]
+    text: str
+
+
 class _EmbeddingFileBlock(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -170,10 +177,12 @@ class _EmbeddingFileBlock(LiteLLMBaseModel):
 
 
 _file_block_adapter: Final = TypeAdapter(_EmbeddingFileBlock)
+_text_block_adapter: Final = TypeAdapter(_EmbeddingTextBlock)
 _video_metadata_adapter: Final = TypeAdapter(VideoMetadataType)
 _input_shape_adapter: Final[TypeAdapter[str | list[object]]] = TypeAdapter(str | list[object])
 _mapping_adapter: Final = TypeAdapter(dict[str, object])
 _BLOCK_FIELDS: Final = frozenset(_EmbeddingFileBlock.model_fields)
+_TEXT_BLOCK_FIELDS: Final = frozenset(_EmbeddingTextBlock.model_fields)
 _FILE_FIELDS: Final = frozenset(_EmbeddingFile.model_fields)
 _VIDEO_METADATA_FIELDS: Final = frozenset(_EmbeddingVideoMetadata.model_fields)
 _FILE_SOURCE_FORMS: Final = "a data: URI, a gs:// URL, a files/ reference, or a Gemini Files API URI"
@@ -212,6 +221,26 @@ def _dropping_unsupported_keys(block: Mapping[str, object]) -> dict[str, object]
         **kept_block,
         "file": {**kept_file, "video_metadata": _only_fields(video_metadata, _VIDEO_METADATA_FIELDS)},
     }
+
+
+def _is_text_block(element: object) -> bool:
+    mapping: Final = _as_mapping(element)
+    return mapping is not None and mapping.get("type") == "text"
+
+
+def _parse_text_block(element: object, drop_params: bool) -> _EmbeddingTextBlock | None:
+    """`element` as a validated text content block, or None when its type is not `text`."""
+    mapping: Final = _as_mapping(element)
+    if mapping is None or mapping.get("type") != "text":
+        return None
+    try:
+        return _text_block_adapter.validate_python(
+            _only_fields(mapping, _TEXT_BLOCK_FIELDS) if drop_params else mapping
+        )
+    except ValidationError as error:
+        raise _invalid_input(
+            f"Invalid text content block in embedding input: {_validation_error_summary(error)}"
+        ) from error
 
 
 def _parse_file_block(element: object, drop_params: bool) -> _EmbeddingFileBlock:
@@ -276,6 +305,17 @@ def _media_part(
     mime_type_override: str | None,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> PartType:
+    try:
+        return _parsed_media_part(source, mime_type_override, resolved_files)
+    except ValueError as error:
+        raise _invalid_input(str(error)) from error
+
+
+def _parsed_media_part(
+    source: str,
+    mime_type_override: str | None,
+    resolved_files: Mapping[str, Mapping[str, str]],
+) -> PartType:
     if _is_data_url(source):
         mime_type, base64_data = _parse_data_url(source, mime_type_override)
         return PartType(inline_data=BlobType(mime_type=mime_type, data=base64_data))
@@ -315,15 +355,29 @@ def _elements(input: GeminiEmbeddingInput) -> Iterator[GeminiEmbeddingElement]:
             yield element
 
 
-def _element_source(element: GeminiEmbeddingElement) -> str:
+def _element_source(element: GeminiEmbeddingElement) -> str | None:
     if isinstance(element, str):
         return element
+    if _parse_text_block(element, drop_params=True) is not None:
+        return None
     return _file_block_source(_parse_file_block(element, drop_params=True))
 
 
 def flatten_media_sources(input: GeminiEmbeddingInput) -> tuple[str, ...]:
-    """Every string element plus every file content block's source, in input order."""
-    return tuple(_element_source(element) for element in _elements(input))
+    """Every string element plus every file content block's source, in input order. Text blocks are never media."""
+    return tuple(source for element in _elements(input) if (source := _element_source(element)) is not None)
+
+
+def _element_text(element: GeminiEmbeddingElement) -> str | None:
+    if isinstance(element, str):
+        return None if _is_multimodal_element(element) else element
+    text_block: Final = _parse_text_block(element, drop_params=True)
+    return None if text_block is None else text_block.text
+
+
+def _element_texts(input: GeminiEmbeddingInput) -> tuple[str, ...]:
+    """The text of every plain-text string and text content block, in input order."""
+    return tuple(text for element in _elements(input) if (text := _element_text(element)) is not None)
 
 
 def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
@@ -343,7 +397,7 @@ def _is_multimodal_input(input: GeminiEmbeddingInput) -> bool:
 def _is_multimodal_element(element: GeminiEmbeddingElement) -> bool:
     """Check if a single element is multimodal."""
     if not isinstance(element, str):
-        return True
+        return not _is_text_block(element)
     if _is_data_url(element):
         return True
     if is_file_reference(element):
@@ -368,6 +422,9 @@ def _build_part_for_input(
     if isinstance(element, str):
         return _media_part(element, None, files) if _is_multimodal_element(element) else PartType(text=element)
 
+    text_block: Final = _parse_text_block(element, drop_params)
+    if text_block is not None:
+        return PartType(text=text_block.text)
     block: Final = _parse_file_block(element, drop_params)
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
@@ -595,6 +652,8 @@ def _element_mime_type(
 ) -> str | None:
     if isinstance(element, str):
         return _source_mime_type(element, None, resolved_files)
+    if _is_text_block(element):
+        return None
     block: Final = _parse_file_block(element, drop_params=True)
     return _source_mime_type(_file_block_source(block), block.file.format, resolved_files)
 
@@ -621,8 +680,7 @@ def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) 
 def _fallback_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
     if _is_multimodal_input(input):
         return Usage(prompt_tokens=0, total_tokens=0)
-    input_text: Final = get_formatted_prompt(data={"input": input}, call_type="embedding")
-    prompt_tokens: Final = token_counter(model=model, text=input_text)
+    prompt_tokens: Final = token_counter(model=model, text="".join(_element_texts(input)))
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
@@ -678,7 +736,7 @@ def process_embed_content_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
-    response_json: dict,
+    response_json: object,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
 ) -> EmbeddingResponse:
     """
@@ -694,15 +752,17 @@ def process_embed_content_response(
     Returns:
         EmbeddingResponse with single embedding
     """
-    if "embedding" not in response_json:
+    if not json_contains(response_json, "embedding"):
         raise ValueError(f"embedContent response missing 'embedding' field: {response_json}")
 
-    embedding_data: Final = response_json["embedding"]
+    embedding_data: Final = subscript(response_json, "embedding")
 
-    openai_embedding: Final = Embedding(
-        embedding=embedding_data["values"],
-        index=0,
-        object="embedding",
+    openai_embedding: Final = Embedding.model_validate(
+        {
+            "embedding": subscript(embedding_data, "values"),
+            "index": 0,
+            "object": "embedding",
+        }
     )
 
     model_response.data = [openai_embedding]
@@ -710,7 +770,7 @@ def process_embed_content_response(
     model_response.usage = _usage_from_embed_content_response(
         input=input,
         model=model,
-        raw_usage_metadata=response_json.get("usageMetadata"),
+        raw_usage_metadata=require_get(response_json).get("usageMetadata"),
         resolved_files=resolved_files or {},
     )
 
@@ -718,17 +778,8 @@ def process_embed_content_response(
 
 
 def _locally_counted_usage(input: GeminiEmbeddingInput, model: str) -> Usage:
-    has_nested: Final = isinstance(input, list) and any(isinstance(element, list) for element in input)
-    counted_input: Final = (
-        [element for element in _elements(input) if isinstance(element, str) and not _is_multimodal_element(element)]
-        if has_nested or _is_multimodal_input(input)
-        else input
-    )
-    if not counted_input:
-        return Usage(prompt_tokens=0, total_tokens=0)
-    prompt_tokens: Final = token_counter(
-        model=model, text=get_formatted_prompt(data={"input": counted_input}, call_type="embedding")
-    )
+    texts: Final = _element_texts(input)
+    prompt_tokens: Final = token_counter(model=model, text="".join(texts)) if texts else 0
     return Usage(prompt_tokens=prompt_tokens, total_tokens=prompt_tokens)
 
 
@@ -793,12 +844,12 @@ def _even_weights(item_modalities: Sequence[frozenset[_Modality]], modality: _Mo
     return _indicator(_holders(item_modalities, modality), len(item_modalities))
 
 
+def _item_texts(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> tuple[str, ...]:
+    return tuple(text for part in _parts(item) if (text := _element_text(part)) is not None)
+
+
 def _text_length(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement]) -> int:
-    return sum(
-        len(part.encode(errors="surrogatepass"))
-        for part in _parts(item)
-        if isinstance(part, str) and not _is_multimodal_element(part)
-    )
+    return sum(len(text.encode(errors="surrogatepass")) for text in _item_texts(item))
 
 
 def _text_weights(
@@ -810,7 +861,7 @@ def _text_weights(
 
 
 def _local_text_tokens(item: GeminiEmbeddingElement | Sequence[GeminiEmbeddingElement], model: str) -> int:
-    texts: Final = tuple(part for part in _parts(item) if isinstance(part, str) and not _is_multimodal_element(part))
+    texts: Final = _item_texts(item)
     return token_counter(model=model, text=" ".join(texts)) if texts else 0
 
 
@@ -917,16 +968,18 @@ def process_response(
     input: GeminiEmbeddingInput,
     model_response: EmbeddingResponse,
     model: str,
-    _predictions: VertexAIBatchEmbeddingsResponseObject,
+    _predictions: object,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
     audio_track_extraction: bool = False,
 ) -> EmbeddingResponse:
-    usage: Final = _batch_embed_usage(input, model, _predictions.get("usageMetadata"), resolved_files or {})
+    usage: Final = _batch_embed_usage(
+        input, model, require_get(_predictions).get("usageMetadata"), resolved_files or {}
+    )
     return EmbeddingResponse(
         model=model,
         data=[
-            Embedding(embedding=embedding["values"], index=idx, object="embedding")
-            for idx, embedding in enumerate(_predictions["embeddings"])
+            Embedding.model_validate({"embedding": subscript(embedding, "values"), "index": idx, "object": "embedding"})
+            for idx, embedding in enumerate(iter_items(subscript(_predictions, "embeddings")))
         ],
         usage=usage,
         hidden_params={**(get_hidden_params(model_response) or {})},

@@ -751,7 +751,7 @@ async def test_health_check_routing_uses_every_deployment_when_all_are_unhealthy
     core: Final = make_core(model_list=group("a", "b"), enable_health_check_routing=True)
     core.health().health_checks.set_deployment_health_states(unhealthy("a", "b"))  # pyright: ignore[reportArgumentType]  # health states
 
-    for _ in range(12):
+    for _ in range(40):
         await attempt(core)
 
     assert set(host.deployments_called("acompletion")) == {"a", "b"}
@@ -781,7 +781,7 @@ async def test_health_check_state_is_ignored(
     core: Final = make_core(model_list=group("a", "b"), **arguments)
     core.health().health_checks.set_deployment_health_states(unhealthy("a", age=age))  # pyright: ignore[reportArgumentType]  # health states
 
-    for _ in range(12):
+    for _ in range(40):
         await attempt(core)
 
     assert set(host.deployments_called("acompletion")) == {"a", "b"}

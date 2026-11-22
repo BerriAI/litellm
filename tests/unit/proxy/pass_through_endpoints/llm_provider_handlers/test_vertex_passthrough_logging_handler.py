@@ -146,6 +146,7 @@ def _cost_the_logger_records_for(
     model_info: dict[str, object] | None = None,
     route_provider: str | None = None,
     base_model: object = None,
+    raw_stream: list[bytes] | None = None,
 ) -> float:
     logging_obj: Final = Logging(
         model="unknown",
@@ -172,7 +173,11 @@ def _cost_the_logger_records_for(
                 request_body={},
                 endpoint_type=EndpointType.VERTEX_AI,
                 start_time=datetime(2026, 1, 1),
-                raw_bytes=[f"data: {json.dumps(event)}\n\n".encode() for event in stream_events],
+                raw_bytes=(
+                    raw_stream
+                    if raw_stream is not None
+                    else [f"data: {json.dumps(event)}\n\n".encode() for event in stream_events]
+                ),
                 end_time=datetime(2026, 1, 1),
             )
         )
@@ -451,6 +456,28 @@ def test_a_claude_stream_through_a_configured_vertex_gateway_with_a_short_path_b
         stream=True,
         reply=_claude_message(),
         stream_events=_claude_stream_events(),
+    )
+
+    assert recorded == pytest.approx(7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE)
+
+
+@pytest.mark.parametrize(
+    "undecodable_line",
+    [b"data: 5\n\n", b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n"],
+    ids=["number", "deep-object"],
+)
+def test_claude_stream_spend_is_recorded_when_a_data_line_is_not_an_object(
+    claude_regional_uplift_rate_card: None, undecodable_line: bytes
+) -> None:
+    first_event, *other_events = (f"data: {json.dumps(event)}\n\n".encode() for event in _claude_stream_events())
+
+    recorded: Final = _cost_the_logger_records_for(
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global"
+        f"/publishers/anthropic/models/{_CLAUDE_UPLIFT_MODEL}:streamRawPredict",
+        stream=True,
+        reply=_claude_message(),
+        stream_events=_claude_stream_events(),
+        raw_stream=[first_event, undecodable_line, *other_events],
     )
 
     assert recorded == pytest.approx(7 * _CLAUDE_INPUT_RATE + 1 * _CLAUDE_OUTPUT_RATE)

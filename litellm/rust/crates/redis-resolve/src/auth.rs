@@ -1,7 +1,9 @@
+use litellm_python_compat::flags::lower_is_true;
 use litellm_redis_types::{Auth, AwsIamAuth, AzureAdAuth, ProviderHandle, StaticAuth};
 
 use crate::{
     Error,
+    keys::Kwarg,
     options::{self, AwsOptions, Options, flag, secret, text},
 };
 
@@ -16,8 +18,8 @@ pub(super) fn redis_auth(
         (None, None) => {}
     }
     let gcp = text(options.gcp.service_account.as_ref());
-    let azure = text(options.azure.ad_token.as_ref())
-        .is_some_and(|enabled| enabled.eq_ignore_ascii_case("true"));
+    let azure =
+        text(options.azure.ad_token.as_ref()).is_some_and(|enabled| lower_is_true(&enabled));
     let aws = flag(options.aws.auth.as_ref())?;
     match (gcp, azure, aws) {
         (Some(service_account), azure, aws) => {
@@ -83,9 +85,9 @@ fn aws_iam(aws: &AwsOptions, uses_tls: bool) -> Result<AwsIamAuth, Error> {
         }),
         (user_name, cache_name, region) => Err(Error::AwsIamIncomplete {
             missing: [
-                ("aws_iam_user_name", user_name.is_none()),
-                ("aws_iam_cache_name", cache_name.is_none()),
-                ("aws_iam_region", region.is_none()),
+                (Kwarg::AwsIamUserName.name(), user_name.is_none()),
+                (Kwarg::AwsIamCacheName.name(), cache_name.is_none()),
+                (Kwarg::AwsIamRegion.name(), region.is_none()),
             ]
             .into_iter()
             .filter_map(|(name, missing)| missing.then_some(name))

@@ -1,11 +1,10 @@
 "use client";
 
-import { Inbox, Plus } from "lucide-react";
+import { Inbox } from "lucide-react";
 import React, { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 
 import { DataTable } from "@/components/shared/DataTable";
-import { Button } from "@/components/ui/button";
 
 import {
   AvailableCallbacks,
@@ -22,7 +21,6 @@ type LoggingCallbacksProps = {
   onTest?: (callback: AlertingObject) => void | Promise<void>;
   onEdit?: (callback: AlertingObject) => void;
   onDelete?: (callback: AlertingObject) => void;
-  onAdd?: () => void;
 };
 
 function EmptyState() {
@@ -49,7 +47,6 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   onTest = () => {},
   onEdit = () => {},
   onDelete = () => {},
-  onAdd = () => {},
 }) => {
   const { t } = useTranslation();
   const columns = useMemo(() => {
@@ -58,25 +55,14 @@ export const LoggingCallbacksTable: React.FC<LoggingCallbacksProps> = ({
   }, [availableCallbacks, onTest, onEdit, onDelete, t]);
 
   return (
-    <div className="mt-4 flex w-full flex-col gap-4">
-      <h3 className="text-lg font-semibold tracking-tight text-foreground">
-        {t("loggingAndAlerts.loggingCallbacks.table.title")}
-      </h3>
-      <div>
-        <Button onClick={onAdd}>
-          <Plus />
-          {t("loggingAndAlerts.loggingCallbacks.table.add")}
-        </Button>
-      </div>
-      <DataTable
-        data={callbacks as CallbackRow[]}
-        columns={columns}
-        getRowId={(callback, index) => `${callback.name || index}-${callbackRowMode(callback)}`}
-        isLoading={isLoading}
-        loadingMessage={t("loggingAndAlerts.loggingCallbacks.table.loading")}
-        noDataMessage={<EmptyState />}
-        size="compact"
-      />
-    </div>
+    <DataTable
+      data={callbacks as CallbackRow[]}
+      columns={columns}
+      getRowId={(callback, index) => `${callback.name || index}-${callbackRowMode(callback)}`}
+      isLoading={isLoading}
+      loadingMessage={t("loggingAndAlerts.loggingCallbacks.table.loading")}
+      noDataMessage={<EmptyState />}
+      size="compact"
+    />
   );
 };
