@@ -134,9 +134,19 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
     @staticmethod
     def _get_end_user_id_from_request_data(request_data: dict) -> str | None:
-        return request_data.get("user_api_key_end_user_id") or request_data.get("litellm_metadata", {}).get(
-            "user_api_key_end_user_id"
-        )
+        """The authenticated end user: top level, then the request's metadata bucket.
+
+        The unified guardrail keeps the key fields in ``metadata`` on chat completions and
+        in ``litellm_metadata`` on the other routes; both are set by the proxy from the
+        authenticated key, never taken from the client.
+        """
+        if request_data.get("user_api_key_end_user_id"):
+            return request_data["user_api_key_end_user_id"]
+        for bucket in ("litellm_metadata", "metadata"):
+            metadata = request_data.get(bucket)
+            if isinstance(metadata, dict) and metadata.get("user_api_key_end_user_id"):
+                return metadata["user_api_key_end_user_id"]
+        return None
 
     @staticmethod
     async def _fetch_end_user_object(end_user_id: str):
