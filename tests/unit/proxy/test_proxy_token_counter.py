@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -3409,20 +3410,22 @@ async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(monke
 
 @pytest.mark.asyncio
 async def test_an_openai_deployment_of_azure_grok_answers_the_provider_400_unless_its_row_changes_the_count(
-    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     def foundry_openai(name: str, base_model: str) -> dict[str, object]:
         return {
             "model_name": name,
-            "litellm_params": {"model": f"openai/{name}", "api_key": "unused", "api_base": "https://unused.invalid"},
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_key": "unused",
+                "api_base": "https://foundry.invalid/openai/v1",
+            },
             "model_info": {"base_model": base_model},
         }
 
-    counter: Final = _ScriptedCounter(
-        {
-            "grok-4.3": _provider_reply("grok-4.3", status_code=400),
-            "grok-4-1-fast-non-reasoning": _provider_reply("grok-4-1-fast-non-reasoning", status_code=400),
-        }
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route: Final = respx_mock.post("https://foundry.invalid/openai/v1/responses/input_tokens").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "input_tokens is not supported for this model"}})
     )
     monkeypatch.setattr(
         litellm.proxy.proxy_server,
@@ -3434,9 +3437,6 @@ async def test_an_openai_deployment_of_azure_grok_answers_the_provider_400_unles
             ]
         ),
     )
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "openai")
-    )
     messages: Final = [{"role": "user", "content": "What is the weather in Paris?"}]
 
     with pytest.raises(ProxyException) as raised:
@@ -3445,8 +3445,10 @@ async def test_an_openai_deployment_of_azure_grok_answers_the_provider_400_unles
         request=TokenCountRequest(model="grok-4-1-fast-non-reasoning", messages=messages), call_endpoint=True
     )
 
-    assert (raised.value.code, raised.value.message) == ("400", "scripted 400 for grok-4.3")
+    assert raised.value.code == "400"
+    assert "input_tokens is not supported for this model" in raised.value.message
     assert framed.count_source == "local_estimate"
+    assert count_route.call_count == 2
 
 
 async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: str) -> TokenCountResponse:
