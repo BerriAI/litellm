@@ -262,17 +262,17 @@ impl Deployment {
         self.is_azure() && self.is_batch_capable()
     }
 
-    /// Whether `peer` could stand in for this deployment on every call it serves: a deployment
-    /// serving only batches takes none of the calls outside the batch and file APIs, so it stands
-    /// in only for another deployment serving only batches.
-    pub(crate) fn shares_calls_with(&self, peer: &Deployment) -> bool {
-        self.serves_only_batches() || !peer.serves_only_batches()
+    /// Whether `peer` could take this deployment's place: on a batch or file call (`batch_call`)
+    /// any peer can, while on every other call a deployment serving only batches stands in only
+    /// for another deployment serving only batches.
+    pub(crate) fn shares_calls_with(&self, peer: &Deployment, batch_call: bool) -> bool {
+        batch_call || self.serves_only_batches() || !peer.serves_only_batches()
     }
 
-    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>]) -> usize {
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>], batch_call: bool) -> usize {
         group
             .iter()
-            .filter(|peer| self.shares_calls_with(peer))
+            .filter(|peer| self.shares_calls_with(peer, batch_call))
             .count()
     }
 

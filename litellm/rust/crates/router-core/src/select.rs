@@ -460,7 +460,9 @@ impl<H: RouterHost> Call<'_, H> {
             Vec::new()
         } else {
             let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
-            self.health().active_cooldowns(&ids).await?
+            self.health()
+                .cooling(&ids, !skips_batch_only(request, &all))
+                .await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.

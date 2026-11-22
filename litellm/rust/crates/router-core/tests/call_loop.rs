@@ -2963,11 +2963,12 @@ async fn a_reported_rate_limit_cools_a_chat_deployment_only_beside_another_that_
 }
 
 #[rstest]
-#[case::a_chat_call(false)]
-#[case::a_batch_or_file_call(true)]
+#[case::a_chat_call(false, ("c1", "c1"))]
+#[case::a_batch_or_file_call(true, ("c1", "b2"))]
 #[tokio::test]
-async fn a_rate_limit_on_any_call_leaves_a_chat_deployment_beside_a_batch_only_one_up(
+async fn a_rate_limit_keeps_chat_on_its_only_deployment_and_moves_only_batch_calls_off_it(
     #[case] batch_api: bool,
+    #[case] expected: (&str, &str),
 ) {
     let host = Arc::new(ScriptedHost::default());
     *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
@@ -2976,19 +2977,114 @@ async fn a_rate_limit_on_any_call_leaves_a_chat_deployment_beside_a_batch_only_o
         json!({"num_retries": 0}),
         host.clone(),
     );
-    let request = RouterRequest {
+    let rate_limited = RouterRequest {
         batch_api,
         ..request()
     };
-    let _ = router.call(Op::from("acompletion"), request).await;
-    let cooldowns = router
-        .health()
-        .active_cooldowns(&["c1".to_owned()])
+    let _ = router.call(Op::from("acompletion"), rate_limited).await;
+    let after_failure = host.selected().len();
+    router
+        .call(Op::from("acompletion"), request())
         .await
         .unwrap();
+    let file_call = RouterRequest {
+        batch_api: true,
+        ..request()
+    };
+    router
+        .call(Op::from("afile_delete"), file_call)
+        .await
+        .unwrap();
+    let picked = host.selected()[after_failure..].to_vec();
     assert_eq!(
-        (host.selected().first().cloned(), cooldowns.len()),
-        (Some("c1".to_owned()), 0)
+        (picked[0].as_str(), picked[1].as_str()),
+        expected
+    );
+}
+
+fn openai_batch_then_azure_batch_only() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/gpt", "order": 1}, "model_info": {"id": "o1", "mode": "batch"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch", "order": 2}, "model_info": {"id": "b2", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_rate_limited_batch_create_moves_batch_creates_to_the_azure_batch_only_peer_and_keeps_chat()
+{
+    let host = Arc::new(ScriptedHost::default());
+    *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
+    let router = router(
+        openai_batch_then_azure_batch_only(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let create = RouterRequest {
+        batch_create: true,
+        ..request()
+    };
+    let _ = router.call(Op::from("acreate_batch"), create.clone()).await;
+    let after_failure = host.selected().len();
+    router
+        .call(Op::from("acreate_batch"), create)
+        .await
+        .unwrap();
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(host.selected()[after_failure..], ["b2", "o1"]);
+}
+
+#[rstest]
+#[case::a_chat_call(false, false)]
+#[case::a_batch_or_file_call(true, true)]
+#[tokio::test]
+async fn a_reported_rate_limit_moves_only_batch_calls_off_a_chat_deployment_beside_a_batch_only_one(
+    #[case] batch_api: bool,
+    #[case] batch_calls_move: bool,
+) {
+    let router = router(
+        azure_chat_beside_batch(),
+        json!({}),
+        Arc::new(ScriptedHost::default()),
+    );
+    router
+        .report_failure(
+            "c1",
+            &failure(FailureKind::RateLimit, 429),
+            FailureReport {
+                batch_api,
+                ..FailureReport::default()
+            },
+        )
+        .await
+        .unwrap();
+    let picks = |batch_api: bool| {
+        let router = &router;
+        async move {
+            let request = RouterRequest {
+                batch_api,
+                ..request()
+            };
+            router
+                .healthy(&Op::from("acompletion"), &request)
+                .await
+                .map(|c| c.healthy.iter().map(|d| d.id.to_string()).collect::<Vec<_>>())
+                .unwrap_or_default()
+        }
+    };
+    let batch_picks = if batch_calls_move {
+        vec!["b2".to_owned()]
+    } else {
+        vec!["c1".to_owned(), "b2".to_owned()]
+    };
+    assert_eq!(
+        (picks(false).await, picks(true).await),
+        (vec!["c1".to_owned()], batch_picks)
     );
 }
 

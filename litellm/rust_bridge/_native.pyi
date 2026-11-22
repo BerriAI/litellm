@@ -3101,6 +3101,7 @@ class RouterCoreHandle:
         counts_request: bool = False,
         usage_model: str | None = None,
         callbacks: Mapping[str, bool] | None = None,
+        batch_api: bool = False,
     ) -> RouterCall[_FailureReportSteps]: ...
     # A success a logging callback saw, driven like `report_failure`; `done` carries `key`.
     def report_success(

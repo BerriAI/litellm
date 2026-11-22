@@ -715,14 +715,14 @@ impl<H: RouterHost> Call<'_, H> {
             excluded.push(failed_id.to_owned());
         }
         let listing_team = request.listing_team_id.as_deref();
-        let ids: Vec<String> = group_members(snapshot, &target.group, listing_team)
-            .iter()
+        let members: Vec<_> = group_members(snapshot, &target.group, listing_team)
+            .into_iter()
             .filter(|d| d.listed_for_team(listing_team))
-            .map(|d| d.id.clone())
             .collect();
+        let ids: Vec<String> = members.iter().map(|d| d.id.clone()).collect();
         let cooling = self
             .health()
-            .active_cooldowns(&ids)
+            .cooling(&ids, !skips_batch_only(request, &members))
             .await
             .unwrap_or_default();
         let remaining = ids
@@ -1509,27 +1509,28 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
-        let shape = GroupShape {
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[candidates.model_group.as_str()])
+            .is_some();
+        let batch_call = !skips_batch_only(request, &candidates.all);
+        let shape = GroupShape::of_failure(batch_call, has_fallback_group, |batch_call| {
             // The deployment's own group decides, also when the call named the deployment by id.
-            single_deployment: snapshot
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(deployment.peers_in(&candidates.all) == 1, |group| {
-                    deployment.peers_in(&group) == 1
+                .map_or(deployment.peers_in(&candidates.all, batch_call) == 1, |group| {
+                    deployment.peers_in(&group, batch_call) == 1
                 })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
                 && !(candidates.kind == ResolveKind::RoutingGroup
-                    && deployment.peers_in(&candidates.all) > 1)
+                    && deployment.peers_in(&candidates.all, batch_call) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[candidates.model_group.as_str()])
-                .is_some(),
-        };
+                && !team_model_has_alternatives(&snapshot.registry, deployment, batch_call)
+        });
         self.count_failed_request(deployment, failure).await;
         match self
             .health()
