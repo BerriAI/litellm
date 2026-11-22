@@ -1,5 +1,6 @@
 import copy
 import time
+import tracemalloc
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import reduce
@@ -2544,6 +2545,20 @@ def test_const_and_enum_walks_end_on_a_schema_that_contains_itself() -> None:
 
     assert has_const(node) is False
     assert enums_fit(node) is False
+
+
+def test_const_and_enum_walks_keep_memory_flat_on_a_deep_schema_with_many_branches() -> None:
+    wide: Final[JsonValue] = {"anyOf": [{"not": {}} for _ in range(20_000)]}
+    schema: Final = reduce(lambda inner, _: {"not": inner}, range(64), wide)
+    tracemalloc.start()
+    try:
+        answers: Final = (has_const(schema), enums_fit(schema))
+        peak: Final = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert answers == (False, True)
+    assert peak < 8 * 1024 * 1024
 
 
 @pytest.mark.timeout(10)
