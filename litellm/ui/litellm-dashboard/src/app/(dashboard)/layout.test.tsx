@@ -217,6 +217,24 @@ describe("(dashboard) Layout", () => {
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
   });
 
+  it("draws the page frame around a mapped route and leaves an unmapped route unframed", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Route content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    vi.mocked(usePathname).mockReturnValue("/ui/caching");
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    expect((await screen.findByText("Route content")).parentElement).toHaveClass("p-4", "sm:p-6");
+
+    vi.mocked(usePathname).mockReturnValue("/ui/lens");
+    rerender(dashboard());
+    expect(screen.getByText("Route content").parentElement).not.toHaveClass("p-4");
+  });
+
   it("does not mount route content until getUiConfig has resolved", async () => {
     render(
       <AuthProvider>
