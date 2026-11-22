@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import is_allowed_tools_tool_choice
-from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names
+from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_object_list
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
@@ -413,8 +413,9 @@ def _needs_generate_content(*param_sources: Mapping[str, object] | None) -> bool
 
 
 def _names_a_file_search_store(tools: object) -> bool:
-    return isinstance(tools, list) and any(
-        isinstance(tool, Mapping) and (tool.get("type") == "file_search" or "file_search" in tool) for tool in tools
+    return any(
+        tool.get("type") == "file_search" or "file_search" in tool
+        for tool in (str_keyed_mapping(entry) or {} for entry in as_object_list(tools) or ())
     )
 
 
