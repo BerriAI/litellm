@@ -679,6 +679,60 @@ class TestManagedWebSocketHandlerIntegration:
         second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
         assert [item.get("type") for item in second_turn_input] == ["message", "message"]
 
+    @pytest.mark.parametrize(
+        ("terminal", "next_input", "expected_types"),
+        [
+            ("response.incomplete", "never mind", ["message", "message"]),
+            (
+                "response.incomplete",
+                [{"type": "custom_tool_call_output", "call_id": "call_cut", "output": "1"}],
+                ["message", "custom_tool_call", "custom_tool_call_output"],
+            ),
+            ("response.completed", "never mind", ["message", "custom_tool_call", "message"]),
+        ],
+        ids=["cut_off_and_skipped", "cut_off_and_answered", "completed_and_skipped"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_sends_a_call_cut_off_by_an_incomplete_turn_only_when_it_answers_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        terminal: str,
+        next_input: object,
+        expected_types: list[str],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        call: Final = {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": "call_cut",
+            "name": "exec",
+            "input": "printf 1",
+            "status": "incomplete" if terminal == "response.incomplete" else "completed",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((call,), terminal), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": next_input}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == expected_types
+
     @pytest.mark.asyncio
     async def test_turn_after_an_approved_mcp_call_sends_the_call_that_used_the_approval(
         self,
@@ -2158,12 +2212,14 @@ def _provider_turn_stream(_request: httpx.Request) -> httpx.Response:
     return _provider_turn_answering(())
 
 
-def _provider_turn_answering(output: tuple[dict[str, object], ...]) -> httpx.Response:
+def _provider_turn_answering(
+    output: tuple[dict[str, object], ...], terminal: str = "response.completed"
+) -> httpx.Response:
     completed: Final = {
         "id": "resp_turn",
         "object": "response",
         "created_at": 1767271505,
-        "status": "completed",
+        "status": "incomplete" if terminal == "response.incomplete" else "completed",
         "model": "gpt-5-mini",
         "output": list(output),
         "parallel_tool_calls": True,
@@ -2176,7 +2232,7 @@ def _provider_turn_answering(output: tuple[dict[str, object], ...]) -> httpx.Res
         headers={"content-type": "text/event-stream"},
         text="".join(
             f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': completed})}\n\n"
-            for kind in ("response.created", "response.completed")
+            for kind in ("response.created", terminal)
         ),
     )
 
