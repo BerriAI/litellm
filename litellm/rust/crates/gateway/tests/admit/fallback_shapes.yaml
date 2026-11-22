@@ -1,0 +1,37 @@
+# The router reads every shape a fallback list takes and says where a request for each group can
+# be served, so no shape sends every request to Python. A bare name is a chain for every group. A
+# fallback written as a dict overrides request params through a host step the native host does not
+# answer, so only the group whose chain holds one goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: careful
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: backup
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - backup
+      - careful: [{model: backup, temperature: 0}]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: a group that falls back by the bare name
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a group whose fallback is written as a dict
+    headers: {authorization: Bearer gateway-key}
+    body: {model: careful, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings.fallbacks

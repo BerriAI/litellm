@@ -43,6 +43,7 @@ class DailyActivityScope:
     include_current_utc_day: bool = False
     team_ids: tuple[str, ...] | None = None
     app_id: str | None = None
+    app_group_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.app_id is not None and self.table is not DailyActivityTable.CUSTOMER_MEMBER:
@@ -132,6 +133,8 @@ class ExportRow:
     failed_requests: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    key_metadata: Mapping[str, object]
+    user_metadata: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)

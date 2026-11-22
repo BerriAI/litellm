@@ -1,7 +1,11 @@
 //! Sums of `LiteLLM_SpendLogs.spend` for one key, team or user since a window start
+//!
+//! The spend log ledger's statements on `LiteLLM_SpendLogs` and `LiteLLM_SpendLogDelivery` sit here too,
+//! mirroring the Python ledger writer (`SpendLogsRepository._insert_ledger`).
 
 use chrono::NaiveDateTime;
-use sqlx::PgExecutor;
+use serde_json::{Value, value::RawValue};
+use sqlx::{PgExecutor, types::Json};
 
 use litellm_db::Error;
 
@@ -34,6 +38,61 @@ pub(super) async fn window_spend(
     )]
     let query = sqlx::query_scalar::<_, f64>(sql);
     Ok(query.bind(owner_id).bind(since).fetch_one(executor).await?)
+}
+
+/// Inserts the request logs in `records` (a JSON array of `LiteLLM_SpendLogs` rows), skipping
+/// any `request_id` already stored, and returns the ids it inserted.
+pub(super) async fn insert_spend_log_rows(
+    executor: impl PgExecutor<'_>,
+    records: Json<Box<RawValue>>,
+) -> Result<Vec<String>, Error> {
+    Ok(sqlx::query_file_scalar!(
+        "src/spend_log/queries/insert_spend_log_rows.sql",
+        records as _
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
+/// Inserts the deliveries in `payloads` (a JSON array of delivery rows), skipping any
+/// `delivery_id` already stored, and returns the ids it accepted.
+pub(super) async fn insert_spend_log_deliveries(
+    executor: impl PgExecutor<'_>,
+    payloads: Value,
+) -> Result<Vec<String>, Error> {
+    Ok(sqlx::query_file_scalar!(
+        "src/spend_log/queries/insert_spend_log_deliveries.sql",
+        payloads
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
+/// Which of the settle-once `request_ids` a pre-ledger cost row already charged.
+pub(super) async fn spend_log_jobs_charged_by_legacy(
+    executor: impl PgExecutor<'_>,
+    request_ids: &[String],
+) -> Result<Vec<String>, Error> {
+    Ok(sqlx::query_file_scalar!(
+        "src/spend_log/queries/select_spend_log_jobs_charged_by_legacy.sql",
+        request_ids
+    )
+    .fetch_all(executor)
+    .await?)
+}
+
+/// Removes the deliveries in `delivery_ids`.
+pub(super) async fn delete_spend_log_deliveries(
+    executor: impl PgExecutor<'_>,
+    delivery_ids: &[String],
+) -> Result<(), Error> {
+    sqlx::query_file!(
+        "src/spend_log/queries/delete_spend_log_deliveries.sql",
+        delivery_ids
+    )
+    .execute(executor)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]

@@ -95,7 +95,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-audit_log_callbacks: List[CALLBACK_TYPES] = []
+audit_log_callbacks: list[object] = []
 batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -512,9 +512,13 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
     from .harness.evaluation import (
+        AgentInput as AgentInput,
+        AgentOutput as AgentOutput,
         CheckResult as CheckResult,
         CommandCheck as CommandCheck,
+        EvalAgent as EvalAgent,
         EvalCheck as EvalCheck,
+        EvalOutput as EvalOutput,
         EvalRun as EvalRun,
         EvalScorecard as EvalScorecard,
         EvalStatus as EvalStatus,
@@ -524,10 +528,12 @@ if TYPE_CHECKING:
         JudgeCheck as JudgeCheck,
         PredicateCheck as PredicateCheck,
         aagent_eval as aagent_eval,
+        aagent_eval_attempt as aagent_eval_attempt,
         agent_eval as agent_eval,
     )
 
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
+    global_prompt_directory: str | None = None
 
 
 ######## Networking Settings ########
@@ -553,7 +559,7 @@ allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[Any] = (
+secret_manager_client: object | None = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
@@ -694,6 +700,7 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
@@ -704,6 +711,7 @@ openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 apistore_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
@@ -980,6 +988,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "gradium":
+            gradium_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -1004,6 +1014,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             apistore_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
@@ -1180,6 +1192,7 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | gradium_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
@@ -1190,6 +1203,7 @@ model_list = list(
     | kyma_models
     | apistore_models
     | streamlake_models
+    | resetdata_models
     | wally_models
     | zerogpu_models
     | v0_models
@@ -1312,6 +1326,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "gradium": gradium_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,
@@ -1324,6 +1339,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "kyma": kyma_models,
         "apistore": apistore_models,
         "streamlake": streamlake_models,
+        "resetdata": resetdata_models,
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
