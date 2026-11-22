@@ -1,19 +1,21 @@
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final, TypeAlias
 
+import anyio
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
-from litellm.proxy.mcp_server.events.admission import caller_key, screen_all, still_authorized
+from litellm.proxy.mcp_server.events.admission import admit, binding_for, caller_key, screen_all, still_authorized
 from litellm.proxy.mcp_server.events.catalog import PreparedEvent
 from litellm.proxy.mcp_server.events.config import EventsSettings, events_settings
-from litellm.proxy.mcp_server.events.cursors import CursorBinding, seal_cursor
-from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden
-from litellm.proxy.mcp_server.events.frames import StreamFrame
+from litellm.proxy.mcp_server.events.cursors import CursorBinding, ensure_sealable, open_cursor, seal_cursor
+from litellm.proxy.mcp_server.events.errors import EventsFailure, forbidden, unsupported
+from litellm.proxy.mcp_server.events.frames import Overflow, StreamFrame
 from litellm.proxy.mcp_server.events.observability import EventActivity, EventOutcome
-from litellm.proxy.mcp_server.events.runtime import EventsRuntime
-from litellm.proxy.mcp_server.outbound_credentials.result import Ok
+from litellm.proxy.mcp_server.events.runtime import EventsRuntime, Frames
+from litellm.proxy.mcp_server.events.upstream import routing_headers
+from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.types.mcp_server.events import (
     SUBSCRIPTION_ID_META_KEY,
     ActiveNotification,
@@ -21,6 +23,7 @@ from litellm.types.mcp_server.events import (
     EventsError,
     HeartbeatNotification,
     JsonObject,
+    StreamEventsParams,
 )
 
 DEFAULT_HEARTBEAT_MS: Final = 30_000
@@ -31,6 +34,13 @@ _JSON_OBJECT: Final = TypeAdapter[dict[str, JsonValue]](dict[str, JsonValue])
 
 SendNotification: TypeAlias = Callable[[str, JsonObject], Awaitable[None]]
 Authorize: TypeAlias = Callable[[], Awaitable[OperationContext]]
+
+
+class _Idle:
+    pass
+
+
+_IDLE: Final = _Idle()
 
 
 def granted_heartbeat(requested: int | None) -> int:
@@ -67,8 +77,10 @@ class PushRelay:
         self._active = False
         self._ended = False
         self._next_check = runtime.clock() + RECHECK_SECONDS
+        self._next_heartbeat = runtime.clock() + heartbeat_ms / 1000
 
     async def _emit(self, method: str, params: JsonObject) -> None:
+        self._next_heartbeat = self._runtime.clock() + self._heartbeat_ms / 1000
         await self._send(method, {**params, "_meta": {SUBSCRIPTION_ID_META_KEY: self._subscription_id}})
 
     def _seal(self, upstream: JsonValue | None) -> str | None:
@@ -165,3 +177,86 @@ class PushRelay:
             "notifications/events/event", _JSON_OBJECT.validate_python(delivered.model_dump(by_alias=True, mode="json"))
         )
         await self._record("delivered", (occurrence.event_id,))
+
+    async def _receive(self, frames: Frames) -> StreamFrame | Overflow | _Idle | None:
+        deadline: Final = min(self._next_check, self._next_heartbeat) if self._active else self._next_check
+        with anyio.move_on_after(max(0, deadline - self._runtime.clock())):
+            try:
+                return await frames.receive()
+            except anyio.EndOfStream:
+                return None
+        return _IDLE
+
+    async def consume(self, frames: Frames) -> None:
+        while not self._ended and await self._step(frames):
+            pass
+
+    async def _step(self, frames: Frames) -> bool:
+        """Handle one frame or idle tick; False once the upstream stream has ended."""
+        item: Final = await self._receive(frames)
+        if item is None:
+            return False
+        if self._runtime.clock() >= self._next_check:
+            self._next_check = self._runtime.clock() + RECHECK_SECONDS
+            if not self._enabled():
+                await self._terminate(unsupported("push"))
+                return False
+            if await self._authorized() is None:
+                await self._terminate(forbidden("Access revoked"))
+                return False
+        if isinstance(item, Overflow):
+            await self._announce(item.cursor, True)
+        elif isinstance(item, StreamFrame):
+            await self.relay(item)
+        elif self._active and self._runtime.clock() >= self._next_heartbeat:
+            await self._heartbeat(None)
+        return True
+
+
+async def push(
+    send: SendNotification,
+    subscription_id: str | int,
+    context: OperationContext,
+    params: StreamEventsParams,
+    headers: Mapping[str, str] | None,
+    settings: EventsSettings,
+    authorize: Authorize,
+    runtime: EventsRuntime,
+) -> None:
+    prepared: Final = await admit(context, params.name, params.arguments, "push", headers, settings, runtime)
+    if isinstance(prepared, Error):
+        raise prepared.error.to_mcp()
+    binding: Final = binding_for(context, prepared.ok, params.arguments)
+    unsealable: Final = ensure_sealable(binding, runtime.now())
+    if unsealable is not None:
+        raise unsealable.to_mcp()
+    opened: Final = open_cursor(params.cursor, binding, runtime.now())
+    if isinstance(opened, Error):
+        raise opened.error.to_mcp()
+    heartbeat_ms: Final = granted_heartbeat(params.heartbeat_ms)
+    relay: Final = PushRelay(
+        send,
+        subscription_id,
+        prepared.ok,
+        binding,
+        settings,
+        authorize,
+        heartbeat_ms,
+        opened.ok.expired,
+        runtime,
+        context.user_api_key_auth,
+    )
+    upstream_params: Final = StreamEventsParams(
+        name=prepared.ok.resolved.upstream_name,
+        arguments=params.arguments,
+        cursor=opened.ok.upstream,
+        max_age_ms=params.max_age_ms,
+        heartbeat_ms=heartbeat_ms,
+    )
+    async with runtime.slots.hold(caller_key(context), settings):
+        await runtime.stream(
+            prepared.ok.upstream,
+            _JSON_OBJECT.validate_python(upstream_params.model_dump(by_alias=True, mode="json", exclude_none=True)),
+            routing_headers(prepared.ok.resolved.upstream_name, params.arguments, prepared.ok.descriptor),
+            relay.consume,
+        )
