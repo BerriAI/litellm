@@ -414,7 +414,9 @@ def cost_map_backend_model(deployment: Deployment) -> str:
     invoked_model: Final = params.get("model_id")
     if isinstance(invoked_model, str) and invoked_model and _bedrock_profile(params, model):
         profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
-        profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
+        profile_info: Final = lookup_model_info_for_registration(
+            model=invoked_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+        )
         if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
             return profile_model
     return model
@@ -452,7 +454,9 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
-    profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+    profile_info: Final = lookup_model_info_for_registration(
+        model=backend_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+    )
     if isinstance(profile_info, ModelInfoLookupMiss):
         return {}
     return bedrock_profile_pricing(profile_info["key"], _MODEL_INFO_ADAPTER.validate_python(priced))

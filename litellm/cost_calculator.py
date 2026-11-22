@@ -24,7 +24,7 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
-from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -1025,7 +1025,7 @@ def bedrock_profile_pricing(profile_key: str, overrides: Mapping[str, object]) -
 
 
 def unpriced_bedrock_arn(model: str) -> bool:
-    key: Final = cached_cost_map_key(model, "bedrock") if is_bedrock_arn(model.removeprefix("bedrock/")) else None
+    key: Final = cached_cost_map_key(model, "bedrock") if contains_bedrock_arn(model) else None
     return key is not None and not cost_map_key_declared_prices(key)
 
 
