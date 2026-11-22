@@ -7,10 +7,10 @@ from typing import Final, TypeAlias
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import EventGrant, event_grant
+from litellm.proxy.mcp_server.events.frames import Frames
 from litellm.proxy.mcp_server.events.guardrails import ScreenOutcome, screen_event
 from litellm.proxy.mcp_server.events.limits import EventBudget, StreamSlots
 from litellm.proxy.mcp_server.events.observability import EventActivity, record
-from litellm.proxy.mcp_server.events.frames import Frames
 from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
 from litellm.types.mcp_server.events import EventOccurrence, EventType, JsonObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
