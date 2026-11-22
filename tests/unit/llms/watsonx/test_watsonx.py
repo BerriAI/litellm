@@ -12,6 +12,7 @@ import litellm
 from litellm import completion, embedding
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
+from litellm.types.utils import ModelResponseStream
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -613,7 +614,7 @@ async def test_watsonx_async_stream_reads_with_the_deployment_stream_timeout(mon
         stream_timeout=8,
         client=AsyncHTTPHandler(transport=httpx.MockTransport(handle_request)),
     )
-    chunks: Final = [streamed async for streamed in response]
+    chunks: Final[list[ModelResponseStream]] = [streamed async for streamed in response]
 
     assert read_timeouts == [8]
     assert "".join(streamed.choices[0].delta.content or "" for streamed in chunks) == "hi"

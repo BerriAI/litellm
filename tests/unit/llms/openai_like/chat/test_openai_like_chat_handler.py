@@ -14,7 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler, make_call, make_sync_call
 from litellm.llms.openai_like.common_utils import OpenAILikeError
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ModelResponse, ModelResponseStream
 
 _FAKE_STREAMED_REPLY: Final = {
     "id": "chatcmpl-fake-stream",
@@ -161,7 +161,7 @@ async def test_async_stream_sends_the_resolved_timeout_to_the_upstream_request()
     stream: Final = await _complete(
         AsyncHTTPHandler(transport=httpx.MockTransport(respond)), acompletion=True, stream=True, timeout=8.0
     )
-    chunks: Final = [chunk async for chunk in stream]
+    chunks: Final[list[ModelResponseStream]] = [chunk async for chunk in stream]
 
     assert read_timeouts == [8.0]
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == _LINE_SEPARATED_TEXT
