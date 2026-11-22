@@ -30,3 +30,10 @@ def test_scrubbing_an_error_against_many_near_miss_texts() -> None:
     error: Final = "x" * 60 + "a" * 2_300 + "y" * 77
 
     assert scrub_request_text(error, NEAR_MISS_TEXTS) == error
+
+
+@pytest.mark.benchmark
+def test_scrubbing_an_error_that_quotes_a_long_repetitive_text_over_and_over() -> None:
+    error: Final = "Invalid message " + "a" * 500_000 + " end"
+
+    assert scrub_request_text(error, request_texts("a" * 250_000, "a" * 500_000)) == "redacted-by-litellm"

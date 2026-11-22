@@ -15,7 +15,7 @@ import sys
 import threading
 import traceback
 import tracemalloc
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional, Union
@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.redact_messages import (
     _padded,
     _redact_responses_api_output,
     _redacted_responses_api_response,
+    _through_quote_budget,
     perform_redaction,
     quoted_request_texts,
     redacted_model_call_details_for_custom_logger,
@@ -2882,6 +2883,28 @@ def test_scrub_request_text_replaces_the_whole_text_when_the_prompt_repeats_past
     echoes: int, scrubbed: str
 ) -> None:
     assert scrub_request_text("bad: secret " * echoes, request_texts("secret")) == scrubbed
+
+
+@pytest.mark.parametrize(
+    ("repeats", "scrubbed"),
+    [
+        (6_999, "bad: redacted-by-litellmredacted-by-litellm" + "a" * 999 + "redacted-by-litellm end"),
+        (7_000, "redacted-by-litellm"),
+    ],
+    ids=["at_the_limit", "past_the_limit"],
+)
+def test_scrub_request_text_replaces_the_whole_text_when_overlapping_quotes_of_the_prompt_add_up_past_the_limit(
+    repeats: int, scrubbed: str
+) -> None:
+    assert scrub_request_text("bad: " + "a" * repeats + " end", request_texts("a" * 2_000)) == scrubbed
+
+
+def test_the_echo_search_stops_at_the_quote_that_takes_it_past_the_limit() -> None:
+    def spans() -> Iterator[tuple[int, int, bool]]:
+        yield (0, 10_000_001, False)
+        raise AssertionError("searched for another quote past the limit")
+
+    assert tuple(_through_quote_budget(spans())) == ((0, 10_000_001, False),)
 
 
 @pytest.mark.parametrize(

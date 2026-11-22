@@ -694,17 +694,17 @@ def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
     """
     ``text`` with each quote of ``echoes`` replaced by ``REDACTED_BY_LITELLM`` in one left-to-right pass, the
     longest where several start at one place. An echo that is a single word only counts where it stands as its own
-    word, so a prompt such as ``Error`` leaves ``RateLimitError`` alone. ``None`` when ``echoes`` turn up more often
-    than a failure path should look through.
+    word, so a prompt such as ``Error`` leaves ``RateLimitError`` alone. ``None`` when ``echoes`` turn up more often,
+    or quote more characters in all, than a failure path should look through.
     """
     padded: Final = _padded(text)
     found: Final = tuple(
         itertools.islice(
-            itertools.chain.from_iterable(_quote_spans(text, padded, form) for form in echoes),
+            _through_quote_budget(itertools.chain.from_iterable(_quote_spans(text, padded, form) for form in echoes)),
             _MAX_ECHO_OCCURRENCES + 1,
         )
     )
-    if len(found) > _MAX_ECHO_OCCURRENCES:
+    if len(found) > _MAX_ECHO_OCCURRENCES or sum(end - start for start, end, _ in found) > _MAX_SCRUB_COMPARISONS:
         return None
     echo_starts: Final = frozenset(start for start, _, _ in found)
     echo_ends: Final = frozenset(end for _, end, _ in found)
@@ -725,6 +725,17 @@ def _with_echoes_replaced(text: str, echoes: Collection[str]) -> str | None:
         (text[resume:start], REDACTED_BY_LITELLM) for resume, start in zip(resumes, chosen)
     )
     return "".join((*kept_and_replaced, text[resumes[-1] :]))
+
+
+def _through_quote_budget(spans: Iterable[tuple[int, int, bool]]) -> Iterator[tuple[int, int, bool]]:
+    """``spans`` up to the first that takes the characters they quote past ``_MAX_SCRUB_COMPARISONS`` in all.
+    Finding each quote compares every character of it, and overlapping quotes of a long, repetitive request text
+    can add up to far more characters than the error holds."""
+    measured, kept = itertools.tee(spans)
+    for span, quoted in zip(kept, itertools.accumulate(end - start for start, end, _ in measured)):
+        yield span
+        if quoted > _MAX_SCRUB_COMPARISONS:
+            return
 
 
 def _frontier_after(ends: Mapping[int, int], frontier: int, start: int) -> int:
