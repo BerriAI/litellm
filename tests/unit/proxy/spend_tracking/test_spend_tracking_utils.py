@@ -1964,6 +1964,58 @@ def test_spend_row_still_bounds_an_object_under_a_signature_key(
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in json.dumps(stored["thought_signatures"])
 
 
+@pytest.mark.parametrize("ledger", [True, False])
+@pytest.mark.parametrize(
+    "response, cut_paths",
+    [
+        pytest.param(
+            _gemini_thought_row(),
+            (
+                ("choices", 0, "message", "tool_calls", 0, "id"),
+                ("choices", 0, "message", "tool_calls", 0, "provider_specific_fields", "thought_signature"),
+                ("choices", 0, "message", "provider_specific_fields", "thought_signatures", 0),
+                (*_GEMINI_SEARCH_PATH, "thought_signature"),
+                (*_GEMINI_SEARCH_PATH, "response_thought_signature"),
+            ),
+            id="gemini-thought-signatures",
+        ),
+        pytest.param(
+            _responses_reasoning_row(),
+            (("output", 0, "encrypted_content"), ("output", 2, "id"), ("output", 2, "call_id")),
+            id="responses-reasoning-item-and-signed-call",
+        ),
+    ],
+)
+def test_spend_row_still_bounds_signed_reasoning_when_message_logging_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+    response: dict[str, object],
+    cut_paths: tuple[tuple[str | int, ...], ...],
+    ledger: bool,
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "use_spend_logs_ledger": ledger}
+    )
+    now: Final = datetime.datetime.now(datetime.timezone.utc)
+    row: Final = get_logging_payload(
+        kwargs={
+            "model": "gemini-3.8-flash",
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {"response": response, "metadata": {}, "model_map_information": None},
+            "standard_callback_dynamic_params": {"turn_off_message_logging": True},
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-signed", choices=[]),
+        start_time=now,
+        end_time=now,
+    )
+
+    stored: Final = json.loads(row["response"])
+
+    assert [path for path in cut_paths if LITELLM_TRUNCATED_PAYLOAD_FIELD not in str(_at(stored, path))] == []
+
+
 def test_stored_request_still_bounds_signed_reasoning_a_client_sends_back(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     request_body: Final = {

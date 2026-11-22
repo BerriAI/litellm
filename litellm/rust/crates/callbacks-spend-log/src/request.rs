@@ -261,12 +261,13 @@ impl SpendLogRowBuilder {
             }
             other => other.clone(),
         };
-        let response = if should_redact(&self.config, input) {
+        let redacted = should_redact(&self.config, input);
+        let response = if redacted {
             redacted_response(&response)
         } else {
             response
         };
-        let wrapper = self.sanitize_body(&[(text("response"), response)], true, true);
+        let wrapper = self.sanitize_body(&[(text("response"), response)], true, !redacted);
         match get_or_none(&wrapper, "response") {
             Value::None => Ok("{}".to_owned()),
             Value::Str(content) => Ok(content.replace('\0', "")),
