@@ -460,6 +460,17 @@ async def test_async_lpop_namespaces_key(namespace, expected, monkeypatch, redis
     mock_redis_instance.lpop.assert_awaited_once_with(expected, None)
 
 
+@pytest.mark.parametrize("popped", [b"\xff\xfe", [b"ok", b"\xff\xfe"]])
+@pytest.mark.asyncio
+async def test_async_lpop_returns_values_that_are_not_utf8_as_raw_bytes(popped, monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+    mock_redis_instance = AsyncMock()
+    mock_redis_instance.lpop = AsyncMock(return_value=popped)
+    with patch.object(redis_cache, "init_async_client", return_value=mock_redis_instance):
+        assert await redis_cache.async_lpop(key="k", count=2 if isinstance(popped, list) else None) == popped
+
+
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
 @pytest.mark.asyncio
 async def test_async_rpush_namespaces_key(namespace, expected, monkeypatch, redis_no_ping):

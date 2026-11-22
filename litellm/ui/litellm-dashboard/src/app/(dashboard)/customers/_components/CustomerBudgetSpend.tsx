@@ -46,23 +46,31 @@ export default function CustomerBudgetSpend({
   label,
   compact = false,
   stacked = false,
+  showLimit = true,
+  limitKnown = true,
+  noLimitLabel,
 }: {
   spend: number | null;
   limit: number | null;
   label: string;
   compact?: boolean;
   stacked?: boolean;
+  showLimit?: boolean;
+  limitKnown?: boolean;
+  noLimitLabel?: string;
 }) {
   const { t } = useTranslation();
   const spendValue = spend === null ? t("customerPortal.analytics.unknownSpend") : formatUsd(spend);
+  const unlimitedLabel = limitKnown
+    ? noLimitLabel ?? t("customerPortal.analytics.noLimit")
+    : t("customerPortal.analytics.unknownSpend");
+  if (limit === null && !showLimit) return <span className="tabular-nums">{spendValue}</span>;
   if (limit === null || stacked) {
     return (
       <div className="space-y-0.5 whitespace-nowrap tabular-nums">
         <div>{spendValue}</div>
         <div className="text-xs text-muted-foreground">
-          {limit === null
-            ? t("customerPortal.analytics.noLimit")
-            : t("customerPortal.analytics.limitAmount", { amount: formatUsd(limit) })}
+          {limit === null ? unlimitedLabel : t("customerPortal.analytics.limitAmount", { amount: formatUsd(limit) })}
         </div>
       </div>
     );

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -25,7 +25,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -46,7 +46,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -147,6 +147,9 @@ class BaseAnthropicMessagesConfig(ABC):
 
     def supports_message_threads(self) -> bool:
         return False
+
+    def supports_diagnostics(self) -> bool:
+        return True
 
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True

@@ -9012,7 +9012,10 @@ class TestPinMCPServerTools:
                 sys.modules,
                 {
                     "litellm.proxy.proxy_server": types.SimpleNamespace(
-                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()), general_settings={}, llm_router=None
+                        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+                        general_settings={},
+                        current_general_settings=dict,
+                        llm_router=None,
                     )
                 },
             ),

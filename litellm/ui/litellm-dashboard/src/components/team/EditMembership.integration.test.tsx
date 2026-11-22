@@ -149,7 +149,7 @@ describe("EditMembership submit payload", () => {
     };
     renderEdit(modelBudgetConfig, member);
 
-    const cap = await screen.findByPlaceholderText("Max spend ($)");
+    const cap = await screen.findByPlaceholderText("Max Budget");
     expect(cap).toHaveValue(5);
     fireEvent.change(cap, { target: { value: "9" } });
     save();
