@@ -2,6 +2,7 @@
 import itertools
 import json
 import logging
+import traceback
 import uuid
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -814,6 +815,50 @@ def test_an_oversized_linked_video_stops_downloading_at_the_size_limit(role: str
             )
 
     assert 0 < host.sent_bytes <= MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * _MIB + _MIB
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_a_message_video_that_fails_to_download_is_a_bad_request_without_its_link_or_dropped_under_drop_params(
+    custom_llm_provider: str,
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}?X-Goog-Signature={signature}"
+    turns: Final = _turns_with_a_linked_video("user", video_url)
+
+    with respx.mock as router:
+        router.get(video_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            transformation.gemini_convert_messages_with_history(
+                turns, model="gemini-3.8-flash", custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = transformation.gemini_convert_messages_with_history(
+            turns,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={"drop_params": True},
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+    assert dropped[0]["parts"] == [{"text": "Describe the clip"}]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_a_message_image_that_fails_to_download_still_raises_its_fetch_error(custom_llm_provider: str) -> None:
+    image_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+    turns: Final = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Describe it"}, {"type": "image_url", "image_url": {"url": image_url}}],
+        }
+    ]
+
+    with respx.mock as router:
+        router.get(image_url).respond(404)
+        with pytest.raises(litellm.ImageFetchError):
+            transformation.gemini_convert_messages_with_history(
+                turns, model="gemini-3.8-flash", custom_llm_provider=custom_llm_provider
+            )
 
 
 @pytest.mark.parametrize("role", ["system", "assistant", "tool"])

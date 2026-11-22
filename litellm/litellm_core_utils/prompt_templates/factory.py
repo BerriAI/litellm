@@ -1755,29 +1755,37 @@ def _gemini_tool_media_part(
             drop_params=drop_params,
         )
     except litellm.ImageFetchError:
-        _skip_unfetched_tool_media(
-            content, model=model, custom_llm_provider=custom_llm_provider or "gemini", drop_params=drop_params
+        skip_unfetched_media(
+            content,
+            location="a tool result",
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
         )
         return None
     except litellm.BadRequestError:
         raise
     except Exception:
-        _skip_unfetched_tool_media(
-            content, model=model, custom_llm_provider=custom_llm_provider or "gemini", drop_params=drop_params
+        skip_unfetched_media(
+            content,
+            location="a tool result",
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
         )
         return None
 
 
-def _skip_unfetched_tool_media(
-    content: Mapping[str, object], *, model: str | None, custom_llm_provider: str, drop_params: bool
+def skip_unfetched_media(
+    content: Mapping[str, object], *, location: str, model: str | None, custom_llm_provider: str, drop_params: bool
 ) -> None:
     if content.get("type") == "video_url" and not drop_params:
         raise litellm.BadRequestError(
-            message="Could not download the video in a tool result. Fix the link or set drop_params=True.",
+            message=f"Could not download the video in {location}. Fix the link or set drop_params=True.",
             model=model or "",
             llm_provider=custom_llm_provider,
         ) from None
-    verbose_logger.warning("Dropped media from a tool result because it could not be downloaded")
+    verbose_logger.warning("Dropped media from %s because it could not be downloaded", location)
 
 
 def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:

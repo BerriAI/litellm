@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     gemini_tool_media_needs_download,
     get_thought_signature_from_tool,
     response_schema_prompt,
+    skip_unfetched_media,
 )
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_image_mime_type_from_url,
@@ -784,6 +785,13 @@ def _gemini_history_media_part(
         return None
     try:
         part: Final = encode_gemini_media_source(source, model, vertex_project, vertex_credentials)
+    except litellm.ImageFetchError:
+        if content.get("type") != "video_url":
+            raise
+        skip_unfetched_media(
+            content, location="a message", model=model, custom_llm_provider=provider, drop_params=drop_params
+        )
+        return None
     except litellm.BadRequestError:
         raise
     except Exception as exc:
