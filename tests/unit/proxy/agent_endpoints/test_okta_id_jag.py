@@ -364,9 +364,12 @@ async def test_a_stamped_session_whose_agent_cannot_be_read_is_retryable(gateway
 
     assert outcome[:2] == ("refused", "503")
 
+
 @pytest.mark.asyncio
 async def test_redemption_checks_the_current_app_binding(gateway: Gateway) -> None:
-    _delegated(gateway, client="replacement-client")
+    _delegated(gateway)
+    # The app lookup saw the old revision before the agent row was rebound.
+    gateway.bind(okta_agent(mode="delegated", client="replacement-client"))
 
     result = await _redeem()
 
