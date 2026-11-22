@@ -3,6 +3,7 @@ import base64
 import importlib
 import os
 import shutil
+import sys
 import tempfile
 from collections.abc import AsyncIterator, Callable, Container, Coroutine, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -322,11 +323,18 @@ def _reset_aws_auth_caches() -> None:
     boto3.DEFAULT_SESSION = None
 
 
+def _reset_vertex_auth_caches() -> None:
+    vertex_module: Final = sys.modules.get("litellm.llms.vertex_ai.vertex_llm_base")
+    if vertex_module is not None:
+        vertex_module.VertexBase.clear_credentials_cache()
+
+
 def _flush_client_caches() -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     image_handling_module.pdf_probe_verdicts.flush_cache()
     _reset_aws_auth_caches()
+    _reset_vertex_auth_caches()
 
 
 _MACOS_LONGEST_SOCKET_PATH: Final = 103

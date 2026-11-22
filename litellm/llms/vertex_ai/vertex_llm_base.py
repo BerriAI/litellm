@@ -132,39 +132,99 @@ def _is_other_version_of_key_file(
     )
 
 
+@dataclass(slots=True)
+class _AsyncRefreshLoopState:
+    # Per-credential-key asyncio.Lock for single-flight async refresh.
+    # Uses a regular dict (not WeakValueDictionary) with explicit refcounts so
+    # lock identity stays stable across concurrent callers while remaining bounded.
+    locks: dict[_VertexCredentialCacheKey, asyncio.Lock]  # mutable-ok: per-loop lock registry shared across VertexBase
+    refcounts: dict[_VertexCredentialCacheKey, int]  # mutable-ok: refcounts for per-loop lock pruning
+    background_tasks: dict[_VertexCredentialCacheKey, asyncio.Task[None]]  # mutable-ok: tracks active background tasks
+
+
+class _SharedVertexCredentialCache:
+    """Process-wide Vertex credential cache, sync flights, and per-loop async state."""
+
+    def __init__(self) -> None:
+        self.credentials_project_mapping: OrderedDict[
+            _VertexCredentialCacheKey,
+            tuple[_VertexCredentialsObject, str | None],
+        ] = OrderedDict()
+        self.credentials_cache_lock: Final = threading.RLock()
+        self.sync_token_flights: weakref.WeakValueDictionary[_VertexCredentialCacheKey, Future[tuple[str, str]]] = (
+            weakref.WeakValueDictionary()
+        )
+        self.credential_refresh_locks: weakref.WeakKeyDictionary[_VertexCredentialsObject, threading.RLock] = (
+            weakref.WeakKeyDictionary()
+        )
+        self.unkeyable_credentials_refresh_lock: Final = threading.RLock()
+        # Async primitives (asyncio.Lock / Task) must remain scoped to the running loop.
+        self.async_loop_states: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _AsyncRefreshLoopState] = (
+            weakref.WeakKeyDictionary()
+        )
+        self.default_async_state = _AsyncRefreshLoopState({}, {}, {})
+
+    def get_async_loop_state(self) -> _AsyncRefreshLoopState:
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return self.default_async_state
+        with self.credentials_cache_lock:
+            existing: Final = self.async_loop_states.get(loop)
+            if existing is not None:
+                return existing
+            created: Final = _AsyncRefreshLoopState({}, {}, {})
+            self.async_loop_states[loop] = created
+            return created
+
+    def clear(self) -> None:
+        with self.credentials_cache_lock:
+            self.credentials_project_mapping.clear()
+            self.sync_token_flights.clear()
+            self.credential_refresh_locks.clear()
+            self.async_loop_states.clear()
+            self.default_async_state = _AsyncRefreshLoopState({}, {}, {})
+
+
+_SHARED_VERTEX_CREDENTIAL_CACHE: Final = _SharedVertexCredentialCache()
+
+
 class VertexBase:
     def __init__(self) -> None:
         super().__init__()
         self.access_token: str | None = None
         self.refresh_token: str | None = None
         self._credentials: GoogleCredentialsObject | None = None
-        self._credentials_project_mapping: OrderedDict[
-            _VertexCredentialCacheKey,
-            tuple[_VertexCredentialsObject, str | None],
-        ] = OrderedDict()
-        self._credentials_cache_lock = threading.RLock()
+        self._credentials_project_mapping = _SHARED_VERTEX_CREDENTIAL_CACHE.credentials_project_mapping
+        self._credentials_cache_lock = _SHARED_VERTEX_CREDENTIAL_CACHE.credentials_cache_lock
         self.project_id: str | None = None
         self.async_handler: AsyncHTTPHandler | None = None
-        # Per-credential-key asyncio.Lock for single-flight async refresh.
-        # Prevents thundering herd when token expires under high concurrency.
-        # Uses a regular dict (not WeakValueDictionary) so the lock identity is
-        # stable across concurrent callers — a weak reference can be GC'd
-        # between two coroutines arriving at the lock, breaking single-flight.
-        # An explicit refcount tracks the number of coroutines currently using
-        # each lock; the entry is pruned when the count reaches zero, so the
-        # dict stays bounded even in long-running high-cardinality deployments
-        # without depending on any private asyncio internals.
-        self._async_refresh_locks: dict[_VertexCredentialCacheKey, asyncio.Lock] = {}
-        self._async_refresh_lock_refcounts: dict[_VertexCredentialCacheKey, int] = {}
-        # Tracks in-flight background refresh tasks to avoid duplicate refreshes.
-        self._background_refresh_tasks: dict[_VertexCredentialCacheKey, asyncio.Task[None]] = {}
         self._sync_token_flights: weakref.WeakValueDictionary[_VertexCredentialCacheKey, Future[tuple[str, str]]] = (
-            weakref.WeakValueDictionary()
+            _SHARED_VERTEX_CREDENTIAL_CACHE.sync_token_flights
         )
         self._credential_refresh_locks: weakref.WeakKeyDictionary[_VertexCredentialsObject, threading.RLock] = (
-            weakref.WeakKeyDictionary()
+            _SHARED_VERTEX_CREDENTIAL_CACHE.credential_refresh_locks
         )
-        self._unkeyable_credentials_refresh_lock: Final = threading.RLock()
+        self._unkeyable_credentials_refresh_lock: Final = (
+            _SHARED_VERTEX_CREDENTIAL_CACHE.unkeyable_credentials_refresh_lock
+        )
+
+    @classmethod
+    def clear_credentials_cache(cls) -> None:
+        """Clear the process-wide Vertex credential cache and coordination state."""
+        _SHARED_VERTEX_CREDENTIAL_CACHE.clear()
+
+    @property
+    def _async_refresh_locks(self) -> dict[_VertexCredentialCacheKey, asyncio.Lock]:
+        return _SHARED_VERTEX_CREDENTIAL_CACHE.get_async_loop_state().locks
+
+    @property
+    def _async_refresh_lock_refcounts(self) -> dict[_VertexCredentialCacheKey, int]:
+        return _SHARED_VERTEX_CREDENTIAL_CACHE.get_async_loop_state().refcounts
+
+    @property
+    def _background_refresh_tasks(self) -> dict[_VertexCredentialCacheKey, asyncio.Task[None]]:
+        return _SHARED_VERTEX_CREDENTIAL_CACHE.get_async_loop_state().background_tasks
 
     @staticmethod
     def get_vertex_region(vertex_region: str | None, model: str) -> str:
@@ -506,10 +566,9 @@ class VertexBase:
         caller is done with the lock so the entry can be pruned when no other
         coroutine is holding or waiting on it.
         """
-        lock: Final = self._async_refresh_locks.setdefault(credential_cache_key, asyncio.Lock())
-        self._async_refresh_lock_refcounts[credential_cache_key] = (
-            self._async_refresh_lock_refcounts.get(credential_cache_key, 0) + 1
-        )
+        loop_state: Final = _SHARED_VERTEX_CREDENTIAL_CACHE.get_async_loop_state()
+        lock: Final = loop_state.locks.setdefault(credential_cache_key, asyncio.Lock())
+        loop_state.refcounts[credential_cache_key] = loop_state.refcounts.get(credential_cache_key, 0) + 1
         return lock
 
     def _release_async_refresh_lock(self, credential_cache_key: _VertexCredentialCacheKey, lock: asyncio.Lock) -> None:
@@ -520,13 +579,14 @@ class VertexBase:
         the decrement-then-pop sequence below runs atomically with respect to
         other coroutines.
         """
-        remaining: Final = self._async_refresh_lock_refcounts.get(credential_cache_key, 0) - 1
+        loop_state: Final = _SHARED_VERTEX_CREDENTIAL_CACHE.get_async_loop_state()
+        remaining: Final = loop_state.refcounts.get(credential_cache_key, 0) - 1
         if remaining > 0:
-            self._async_refresh_lock_refcounts[credential_cache_key] = remaining
+            loop_state.refcounts[credential_cache_key] = remaining
             return
-        self._async_refresh_lock_refcounts.pop(credential_cache_key, None)
-        if self._async_refresh_locks.get(credential_cache_key) is lock:
-            self._async_refresh_locks.pop(credential_cache_key, None)
+        loop_state.refcounts.pop(credential_cache_key, None)
+        if loop_state.locks.get(credential_cache_key) is lock:
+            loop_state.locks.pop(credential_cache_key, None)
 
     def _try_get_cached_token(
         self,
@@ -738,18 +798,19 @@ class VertexBase:
         guards against removing a newer task that has replaced this one in the
         tracking dict (done_callbacks are scheduled via ``call_soon``).
         """
-        existing: Final = self._background_refresh_tasks.get(credential_cache_key)
+        background_tasks: Final = self._background_refresh_tasks
+        existing: Final = background_tasks.get(credential_cache_key)
         if existing is not None and not existing.done():
             return
-        self._background_refresh_tasks.pop(credential_cache_key, None)
+        background_tasks.pop(credential_cache_key, None)
         task: Final = asyncio.create_task(self._background_refresh_credentials(credentials))
 
         def _drop_background_refresh_task(_fut: asyncio.Future[None]) -> None:
-            if self._background_refresh_tasks.get(credential_cache_key) is _fut:
-                self._background_refresh_tasks.pop(credential_cache_key, None)
+            if background_tasks.get(credential_cache_key) is _fut:
+                background_tasks.pop(credential_cache_key, None)
 
         task.add_done_callback(_drop_background_refresh_task)
-        self._background_refresh_tasks[credential_cache_key] = task
+        background_tasks[credential_cache_key] = task
 
     def _ensure_access_token(
         self,
