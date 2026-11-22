@@ -36,7 +36,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     forget_customer_organization_aliases,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_settings,
     get_budget_reset_time,
@@ -141,6 +141,15 @@ async def _write_budget_update(
         return await tx.litellm_budgettable.update(
             where={"budget_id": budget_id}, data={**data, **window_data, **reset_data}
         )
+
+
+class _FieldWithDefault(Protocol):
+    @property
+    def default(self) -> object: ...
+
+
+def _field_default(field: _FieldWithDefault) -> object:
+    return field.default
 
 
 async def new_budget(
@@ -474,7 +483,7 @@ async def budget_settings(
                 field_description=field_info.description or "",
                 field_value=db_budget_row_dict.get(field_name, None),
                 stored_in_db=_stored_in_db,
-                field_default_value=field_info.default,
+                field_default_value=_field_default(field_info),
             )
             return_val.append(_response_obj)
 

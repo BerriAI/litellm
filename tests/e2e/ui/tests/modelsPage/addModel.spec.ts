@@ -117,9 +117,9 @@ test.describe("Add Model", () => {
     const createdModelId = (await createResponse.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
-    // Navigate to Models + Endpoints
+    // Navigate to Model Management
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
 
     // The Model ID cell is the drill-in control; the row itself is not clickable.
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
