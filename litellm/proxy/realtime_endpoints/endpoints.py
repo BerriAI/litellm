@@ -435,7 +435,7 @@ async def _serving_deployment_id(llm_router: "Router | None", model: str, data: 
 
 
 async def _start_realtime_billing_sideband(
-    call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None
+    call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None, is_translation: bool = False
 ) -> bool:
     """Meter a WebRTC call from the proxy's own sideband, since its audio and usage bypass the proxy.
     False when the sideband could not join the call."""
@@ -443,8 +443,9 @@ async def _start_realtime_billing_sideband(
         _route_realtime_websocket_session,  # pyright: ignore[reportPrivateUsage]  # the WebSocket session route owns realtime metering
     )
 
+    path: Final = "/v1/realtime/translations" if is_translation else "/v1/realtime"
     return await join_sideband(
-        "/v1/realtime",
+        path,
         lambda client, _metered_seconds: _route_realtime_websocket_session(
             client,  # pyright: ignore[reportArgumentType]  # only the socket surface the session route reads
             caller_auth.model_copy(),
@@ -452,7 +453,8 @@ async def _start_realtime_billing_sideband(
             model=None,
             intent=None,
             guardrails=None,
-            request_path="/v1/realtime",
+            request_path=path,
+            is_translation=is_translation,
             sideband_call_id=call_id,
             pinned_deployment_id=deployment_id,
         ),
@@ -559,14 +561,10 @@ async def create_realtime_client_secret(
             call_type=call_type,
         )
 
-        deployment_id: Final = (
-            None
-            if is_translation_request
-            else await _serving_deployment_id(
-                llm_router,
-                model,
-                data,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dict
-            )
+        deployment_id: Final = await _serving_deployment_id(
+            llm_router,
+            model,
+            data,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dict
         )
         if deployment_id is not None:
             data[PINNED_DEPLOYMENT_KEY] = deployment_id
@@ -842,12 +840,16 @@ async def proxy_realtime_calls(
 
     upstream_resp: Final = require_attributes(upstream_reply, _UpstreamResponse, "content")
     location: Final = upstream_resp.headers.get("location")
-    answered: Final = 200 <= upstream_resp.status_code < 300 and not is_translation_request
+    answered: Final = 200 <= upstream_resp.status_code < 300
     call_id: Final = realtime_call_id(location) if answered else None
     calls_are_metered: Final = webrtc_calls_are_metered(general_settings)  # pyright: ignore[reportUnknownArgumentType]  # untyped proxy settings dict
     if call_id is not None and token_caller_auth.token and calls_are_metered:
         metered: Final = await _start_realtime_billing_sideband(
-            call_id=call_id, model=model, caller_auth=token_caller_auth, deployment_id=token_deployment_id
+            call_id=call_id,
+            model=model,
+            caller_auth=token_caller_auth,
+            deployment_id=token_deployment_id,
+            is_translation=is_translation_request,
         )
         if not metered:
             return Response(

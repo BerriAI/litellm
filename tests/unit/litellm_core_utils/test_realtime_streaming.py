@@ -4162,6 +4162,56 @@ async def test_translation_disconnect_bills_sent_input_audio(
     ]
 
 
+@pytest.mark.parametrize(
+    ("closed_event_at", "billed_seconds"),
+    [(None, 30.0), (12.0, 12.0)],
+    ids=["until-the-sideband-ends", "until-the-provider-closes-the-session"],
+)
+def test_translation_call_the_proxy_listens_to_bills_the_time_it_ran(
+    closed_event_at: float | None, billed_seconds: float
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+    if closed_event_at is not None:
+        clock.now = 1000.0 + closed_event_at
+        streaming._capture_translation_output_audio({"type": "session.closed"})
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+    clock.now = 1090.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": billed_seconds, "output_seconds": 0.0},
+        }
+    ]
+
+
+def test_translation_session_the_proxy_relays_is_not_billed_by_the_clock() -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        clock=clock,
+    )
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == []
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rate", (24000, 1, 0, -1, float("nan"), float("inf")))
 async def test_translation_client_format_updates_do_not_change_billed_duration(rate: int | float) -> None:
@@ -5062,6 +5112,52 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
 
     assert session.logging.logged_failures == (upstream_close,)
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_close", "billed"),
+    [
+        (ConnectionClosed(None, None), True),
+        (ConnectionClosed(Close(1000, "observer_writer_exit"), None), True),
+        (ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None), False),
+    ],
+    ids=["dropped", "closed-normally", "refused"],
+)
+async def test_translation_call_nobody_spoke_on_is_billed_for_the_time_the_proxy_listened(
+    upstream_close: ConnectionClosed, billed: bool
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    logging: Final = _RecordingLogging()
+    worker: Final = _InlineLoggingWorker()
+
+    async def recv(**_kwargs: object) -> str:
+        clock.now = 1040.0
+        raise upstream_close
+
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = recv
+    streaming: Final = RealTimeStreaming(
+        _client_ws_that_never_sends(),
+        backend_ws,
+        logging,
+        model="gpt-realtime-translate",
+        logging_worker=worker,
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+
+    await streaming.backend_to_client_send_messages()
+    await worker.drain()
+
+    expected_sessions: Final = (
+        (({"type": "session.closed", "usage": {"type": "duration", "input_seconds": 40.0, "output_seconds": 0.0}},),)
+        if billed
+        else ()
+    )
+    assert logging.logged_sessions == expected_sessions
+    assert logging.logged_failures == (() if billed else (upstream_close,))
 
 
 class _RefusingRealtimeConfig(_PassthroughRealtimeConfig):
