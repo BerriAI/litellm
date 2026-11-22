@@ -809,7 +809,7 @@ def _integer_enums_fit(schema: JsonValue) -> bool:
     return enums_fit(schema) or not any(map(_is_integer_enum, _json_nodes(schema)))
 
 
-_GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")
+_GeminiRequestPart = TypeVar("_GeminiRequestPart")
 
 
 def with_integer_enums_that_fit(

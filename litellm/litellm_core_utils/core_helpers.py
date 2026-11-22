@@ -222,7 +222,7 @@ def _http_error_status(value: object) -> int | None:
             return None
 
 
-_Shape: Final = TypeVar("_Shape")
+_Shape = TypeVar("_Shape")
 
 
 @dataclass(frozen=True, slots=True)
