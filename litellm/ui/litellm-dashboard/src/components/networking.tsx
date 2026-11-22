@@ -1168,6 +1168,9 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  rollover_max_budget?: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
   models: string[];
@@ -1932,6 +1935,7 @@ interface UiSpendLogsParams {
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
+  model_group?: string;
   /** Filter by model ID (litellm model deployment id) */
   model_id?: string;
   key_alias?: string;

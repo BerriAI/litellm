@@ -13,6 +13,7 @@ from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
     json_contains,
+    loads_json_object,
     native_messages_reported_cost,
     override_stamped_response_cost,
     response_cost_in_hidden_params,
@@ -379,11 +380,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in split_sse_lines(text):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
-                    continue
-                if not isinstance(data, dict):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 if data.get("type") == "message_start":
                     value = _JSON_OBJECT.validate_python(data.get("message") or {}).get(field)
@@ -419,9 +417,8 @@ class AnthropicPassthroughLoggingHandler:
             for line in reversed(split_sse_lines(text)):
                 if not line.startswith("data:"):
                     continue
-                try:
-                    data = _JSON_OBJECT.validate_python(json.loads(line[len("data:") :].strip()))
-                except (json.JSONDecodeError, ValueError):
+                data = loads_json_object(line[len("data:") :])
+                if data is None:
                     continue
                 etype = data.get("type")
                 if etype == "message_delta":

@@ -29,7 +29,12 @@ from pydantic import TypeAdapter, ValidationError
 from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, require_attributes
-from litellm.models.budget import BudgetLimit, carry_budget_limit_resets, initialize_budget_limits
+from litellm.models.budget import (
+    BudgetLimit,
+    active_rollover_credit,
+    carry_budget_limit_resets,
+    initialize_budget_limits,
+)
 from litellm.proxy._types import *
 from litellm.proxy.auth.customer_hierarchy_auth import (
     forget_customer_hierarchies,
@@ -43,9 +48,11 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
     validate_budget_duration,
+    validate_rollover_budget_patch,
 )
 from litellm.proxy.management_helpers.customer_hierarchy import (
     BudgetGroupScope,
@@ -88,23 +95,60 @@ def _stored_budget_limit(window: Mapping[str, object]) -> BudgetLimit | None:
         return None
 
 
+def _validate_member_rollover(budget: TeamMemberBudgetWrite) -> None:
+    if (
+        budget.rollover_max_budget is not None
+        and active_rollover_credit(budget.max_budget, budget.rollover_max_budget, budget.budget_duration, None) is None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Member rollover requires a reset period and a positive member budget below the rollover cap.",
+        )
+
+
 async def _write_budget_update(
     prisma_client: PrismaClient,
     budget_id: str,
     data: Mapping[str, object],
     limits: tuple[BudgetLimit, ...] | None,
 ) -> "prisma_models.LiteLLM_BudgetTable | None":
-    if "budget_limits" not in data and "budget_duration" not in data:
+    changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
+    if not changes_rollover and "budget_limits" not in data:
         return await BudgetRepository(prisma_client).table.update(where={"budget_id": budget_id}, data=data)
+    if data.keys() & ROLLOVER_BUDGET_FIELDS == {"max_budget"} and "budget_limits" not in data:
+        uncapped: Final = await BudgetRepository(prisma_client).table.update(
+            where={"budget_id": budget_id, "rollover_max_budget": None}, data=data
+        )
+        if uncapped is not None:
+            return uncapped
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_BudgetUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        if "rollover_max_budget" in data and data["rollover_max_budget"] is None:
+            # Match the reset cascade's membership-first lock order.
+            await tx.query_raw(
+                'SELECT 1 AS locked FROM "LiteLLM_TeamMembership" WHERE budget_id = $1::text '
+                'ORDER BY team_id COLLATE "C", user_id COLLATE "C" FOR UPDATE',
+                budget_id,
+            )
+            await tx.execute_raw(
+                'UPDATE "LiteLLM_TeamMembership" SET rollover_credit = NULL'
+                " WHERE budget_id = $1 AND rollover_credit IS NOT NULL",
+                budget_id,
+            )
         current: Final = await lock_budget_limits(tx, "LiteLLM_BudgetTable", budget_id)
         duration: Final = data.get("budget_duration")
         stored: Final = (
-            await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id})
-            if isinstance(duration, str) and "budget_reset_at" not in data
-            else None
+            await tx.litellm_budgettable.find_unique(where={"budget_id": budget_id}) if changes_rollover else None
         )
+        if stored is not None and changes_rollover:
+            validate_rollover_budget_patch(
+                data,
+                {
+                    "max_budget": stored.max_budget,
+                    "rollover_max_budget": stored.rollover_max_budget,
+                    "budget_duration": stored.budget_duration,
+                },
+            )
         reset_data: Final = (
             {"budget_reset_at": get_budget_reset_time(budget_duration=duration)}
             if isinstance(duration, str)
@@ -197,6 +241,8 @@ async def new_budget(
         )
 
     validate_budget_duration(budget_obj.budget_duration)
+    if isinstance(budget_obj, TeamMemberBudgetWrite):
+        _validate_member_rollover(budget_obj)
 
     # Validate model_max_budget if present
     if budget_obj.model_max_budget is not None and len(budget_obj.model_max_budget) > 0:
@@ -363,6 +409,13 @@ async def update_budget(
     return response
 
 
+def _budget_response(row: "prisma_models.LiteLLM_BudgetTable | None") -> Mapping[str, object] | None:
+    if row is None:
+        return None
+    excluded: Final = {"rollover_max_budget"} if row.rollover_max_budget is None else None
+    return row.model_dump(mode="json", exclude=excluded)
+
+
 @router.post(
     "/budget/new",
     tags=["budget management"],
@@ -373,7 +426,7 @@ async def new_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await new_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await new_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -386,7 +439,7 @@ async def update_budget_endpoint(
     budget_obj: BudgetWriteRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> object:
-    return await update_budget(budget_obj, user_api_key_dict)
+    return _budget_response(await update_budget(budget_obj, user_api_key_dict))
 
 
 @router.post(
@@ -415,7 +468,7 @@ async def info_budget(data: BudgetRequest):
         where={"budget_id": {"in": data.budgets}},
     )
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.get(
@@ -515,7 +568,7 @@ async def list_budget(
 
     response: Final = await BudgetRepository(prisma_client).table.find_many()
 
-    return response
+    return tuple(_budget_response(row) for row in response)
 
 
 @router.post(
@@ -574,4 +627,4 @@ async def delete_budget(
             detail={"error": "Budget is attached to a customer or app. Remove it through the owning entity."},
         )
 
-    return response
+    return _budget_response(response)

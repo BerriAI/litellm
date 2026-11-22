@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
 )
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
+from litellm.litellm_core_utils.clientside_credential_handler import UPSTREAM_BOUND_PARAMS
 from litellm.litellm_core_utils.core_helpers import (
     independent_snapshot,  # pyright: ignore[reportUnknownVariableType]  # the shared helper uses untyped dicts
     without,
@@ -59,6 +60,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
 )
 from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, bound_request_queue
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
+from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.vector_stores.search_query import store_search_params
 
 if TYPE_CHECKING:
@@ -208,6 +210,15 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset(
+    {
+        "_arealtime",
+        "acreate_realtime_client_secret",
+        "arealtime_calls",
+        "acreate_realtime_translation_client_secret",
+        "arealtime_translation_calls",
+    }
+)
 _GENERIC_MIRROR_STATE_KEY: Final = "_silent_experiment_state"
 
 # Request keys the router reads to route the call; the deployment call never receives them.
@@ -1058,9 +1069,13 @@ def _generic_attempt(
     handler: Final = invoked_handler_name(core, plan)
     from litellm._internal_context import in_mirrored_call
 
-    if plan.host_op in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES and in_mirrored_call() and _has_mcp_config(data):
+    mirrored: Final = plan.host_op in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES and in_mirrored_call()
+    if mirrored and (_has_mcp_config(data) or _has_mcp_config(as_dict(data.get("extra_body")))):
         raise ValueError("silent model deployment cannot run MCP tools")
     _start_generic_silent_experiments(core, plan, data, kwargs, mirror_state)
+    shadow_extras: Final[Mapping[str, object]] = (
+        _generic_shadow_extras(kwargs, data, core.shaping.default_litellm_params) if mirrored else {}
+    )
     socket: Final = handler == "_aresponses_websocket"
     update_kwargs_with_deployment(
         core.shaping,
@@ -1092,6 +1107,7 @@ def _generic_attempt(
         **_deployment_call_params(plan.endpoint, data, kwargs),
         "caching": core.shaping.cache_responses,
         **kwargs,
+        **shadow_extras,
         "model": model_name,
         **_session_with_model(kwargs.get("session"), model_name),
         **(
@@ -1311,6 +1327,44 @@ def stamp_error(
 
 
 _SILENT_TOOL_LIST_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+_GENERIC_MIRROR_EXTRA_BODY: Final[TypeAdapter[Mapping[str, JsonValue] | None]] = TypeAdapter(
+    Mapping[str, JsonValue] | None
+)
+_GENERIC_MIRROR_UPSTREAM_OVERRIDES: Final = UPSTREAM_BOUND_PARAMS.difference(("extra_headers", "extra_body")).union(
+    (
+        "access_token",
+        "authorization",
+        "client",
+        "credentials",
+        "custom_llm_provider",
+        "endpoint",
+        "litellm_credential_name",
+        "token",
+    )
+)
+_GENERIC_MIRROR_PRIMARY_ONLY: Final = frozenset(
+    (
+        "extra_headers",
+        "extra_query",
+        "headers",
+        "provider_specific_header",
+        "proxy_server_request",
+    )
+)
+_GENERIC_MIRROR_BODY_OVERRIDES: Final = _GENERIC_MIRROR_UPSTREAM_OVERRIDES.union(
+    _GENERIC_MIRROR_PRIMARY_ONLY,
+    (
+        "background",
+        "cookie",
+        "extra_body",
+        "model",
+        "password",
+        "proxy_authorization",
+    ),
+)
+_GENERIC_MIRROR_SAFE_HEADERS: Final = frozenset(ANTHROPIC_API_HEADERS).union(
+    ("traceparent", "tracestate", "x-request-id")
+)
 
 
 def _has_mcp_config(params: Mapping[str, object]) -> bool:
@@ -1323,8 +1377,53 @@ def _has_mcp_config(params: Mapping[str, object]) -> bool:
     return any(as_dict(tool).get("type") == "mcp" for tool in validated)
 
 
-def _generic_silent_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, object]:
-    copied: Final = as_dict(independent_snapshot(dict(kwargs)))  # pyright: ignore[reportUnknownArgumentType]  # as_dict validates the helper's untyped return
+def _has_shadow_body_override(value: JsonValue | Mapping[str, JsonValue]) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            key.lower().replace("-", "_") in _GENERIC_MIRROR_BODY_OVERRIDES or _has_shadow_body_override(nested)
+            for key, nested in value.items()
+        )
+    return isinstance(value, list) and any(_has_shadow_body_override(nested) for nested in value)
+
+
+def _generic_shadow_extras(
+    kwargs: Mapping[str, object], deployment: Mapping[str, object], defaults: Mapping[str, object]
+) -> Mapping[str, object]:
+    headers: Final = as_dict(kwargs.get("extra_headers"))
+    configured: Final = {
+        key: as_dict(defaults[key] if defaults.get(key) is not None else deployment.get(key))
+        for key in ("extra_headers", "extra_body")
+    }
+    body: Final = {**as_dict(kwargs.get("extra_body")), **configured["extra_body"]}
+    return {
+        **(
+            {
+                "extra_headers": {
+                    name.lower(): value for name, value in {**headers, **configured["extra_headers"]}.items()
+                }
+            }
+            if headers
+            else {}
+        ),
+        **({"extra_body": without(body, "stream")} if body else {}),
+    }
+
+
+def _generic_silent_snapshot(
+    kwargs: Mapping[str, object], extra_body: Mapping[str, JsonValue] | None
+) -> Mapping[str, object]:
+    # Custom header names can carry credentials for the primary provider.
+    supplied_headers: Final = {**as_dict(kwargs.get("headers")), **as_dict(kwargs.get("extra_headers"))}
+    safe_headers: Final = {
+        name.lower(): value
+        for name, value in supplied_headers.items()
+        if name.lower() in _GENERIC_MIRROR_SAFE_HEADERS and isinstance(value, str)
+    }
+    request: Final = without(kwargs, *_GENERIC_MIRROR_PRIMARY_ONLY, *_GENERIC_MIRROR_UPSTREAM_OVERRIDES, "extra_body")
+    body: Final = without(extra_body, "stream") if extra_body else {}
+    copied: Final = as_dict(
+        independent_snapshot({**request, **({"extra_body": body} if body else {})})  # pyright: ignore[reportUnknownArgumentType]  # as_dict validates the helper's untyped return
+    )
     metadata: Final = as_dict(copied.get("litellm_metadata"))
     metadata.pop("litellm_parent_otel_span", None)
     metadata["is_silent_experiment"] = True
@@ -1337,6 +1436,7 @@ def _generic_silent_snapshot(kwargs: Mapping[str, object]) -> Mapping[str, objec
             "attempt_function",
             "silent_model",
         ),
+        **({"extra_headers": safe_headers} if safe_headers else {}),
         "litellm_metadata": metadata,
         "stream": False,
     }
@@ -1363,7 +1463,14 @@ def _start_generic_silent_experiments(
         return
     if plan.host_op not in SILENT_MODEL_MIRROR_ALLOWED_CALL_TYPES:
         return
-    if _has_mcp_config(kwargs) or _has_mcp_config(deployment_params):
+    if (
+        _has_mcp_config(kwargs)
+        or _has_mcp_config(deployment_params)
+        or _has_mcp_config(as_dict(deployment_params.get("extra_body")))
+    ):
+        return
+    # Caller credentials and destination overrides belong to the primary deployment.
+    if any(kwargs.get(key) is not None for key in _GENERIC_MIRROR_UPSTREAM_OVERRIDES):
         return
     if as_dict(kwargs.get("metadata")).get("is_silent_experiment") or as_dict(kwargs.get("litellm_metadata")).get(
         "is_silent_experiment"
@@ -1373,8 +1480,14 @@ def _start_generic_silent_experiments(
     if not targets:
         return
     try:
+        extra_body: Final = _GENERIC_MIRROR_EXTRA_BODY.validate_python(kwargs.get("extra_body"))
+    except ValidationError:
+        return
+    if extra_body and (_has_shadow_body_override(extra_body) or _has_mcp_config(extra_body)):
+        return
+    try:
         loop: Final = asyncio.get_running_loop()
-        snapshots: Final = tuple((target, _generic_silent_snapshot(kwargs)) for target in targets)
+        snapshots: Final = tuple((target, _generic_silent_snapshot(kwargs, extra_body)) for target in targets)
     except Exception as error:  # noqa: BLE001  # a background mirror must not fail the primary request
         verbose_router_logger.error("Could not prepare silent experiment: %s", error)
         return
@@ -1544,9 +1657,12 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
     return {"pinned_deployment_id": deployment_id} if deployment_id else {}
 
 
-def pinned_vector_store_file_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The deployment a call names because the upstream object it reaches lives on that deployment's account:
+    a vector store file, or a realtime call from its client secret to the sideband that meters it."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    if not plan.endpoint.startswith("avector_store_file_") or not isinstance(deployment_id, str) or not deployment_id:
+    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
+    if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}
 
@@ -2698,7 +2814,7 @@ __all__ = [
     "generic_plan",
     "log_refused_call",
     "log_refused_call_sync",
-    "pinned_vector_store_file_deployment",
+    "pinned_request_deployment",
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",

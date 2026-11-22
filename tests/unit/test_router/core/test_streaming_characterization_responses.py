@@ -194,6 +194,35 @@ async def test_a_mid_stream_fallback_does_not_repeat_a_silent_experiment(
     assert shadow.kwargs["stream"] is False
 
 
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"api_key": "test-marker"},
+        {"api_base": "https://primary.example.test"},
+        {"litellm_credential_name": "primary-credential"},
+        {"extra_body": {"azure_ad_token": "test-marker"}},
+        {"extra_body": {"provider_options": [{"API-Key": "test-marker"}]}},
+        {"extra_body": {"tools": [{"type": "mcp"}]}},
+    ],
+)
+async def test_responses_with_upstream_overrides_only_dispatches_to_primary(
+    make_core: MakeCore, host: ScriptedHost, override: Mapping[str, object]
+) -> None:
+    host.answer("openai/a", responses_stream(Event(CREATED), Event(TEXT_DELTA), Event(COMPLETED)))
+    core: Final = make_core(
+        model_list=[deployment("a", "a", silent_model="s"), deployment("s", "s")],
+        num_retries=0,
+    )
+
+    assert await collect_event_types(await open_stream(core, **override)) == [CREATED, TEXT_DELTA, COMPLETED]
+    pending: Final = tuple(
+        task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("_run_generic_silent")
+    )
+    await asyncio.gather(*pending)
+
+    assert [call.model_group for call in host.calls] == ["a"]
+
+
 async def test_a_mid_stream_error_before_output_without_fallbacks_flushes_held_events_then_raises(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

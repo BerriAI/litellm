@@ -893,7 +893,7 @@ async def test_generic_silent_model_mirrors_once_across_retries(
                     "api_base": "https://primary.example.test/v1"
                     if surface == "responses"
                     else "https://primary.example.test",
-                    "api_key": "fake-key",
+                    "api_key": "primary-test-key",
                     "silent_model": "shadow",
                 },
             },
@@ -904,7 +904,9 @@ async def test_generic_silent_model_mirrors_once_across_retries(
                     "api_base": "https://shadow.example.test/v1"
                     if surface == "responses"
                     else "https://shadow.example.test",
-                    "api_key": "fake-key",
+                    "api_key": "shadow-test-key",
+                    "extra_headers": {"X-Shadow-Header": "configured"},
+                    **({"extra_body": {"max_output_tokens": 32}} if surface == "responses" else {}),
                 },
             },
         ],
@@ -912,21 +914,56 @@ async def test_generic_silent_model_mirrors_once_across_retries(
         retry_after=0,
         disable_cooldowns=True,
     )
+    auth_header: Final = "Authorization" if surface == "responses" else "X-API-Key"
+    caller_auth: Final = "Bearer caller-test-key" if surface == "responses" else "caller-test-key"
+    headers: Final = {
+        "X-Request-ID": "trace-test",
+        "x-client-private-header": "primary-only",
+        auth_header: caller_auth,
+    }
     if surface == "responses":
-        response: Final = await router.aresponses(model="primary", input="hello", metadata={"user_id": "test-user"})
+        response: Final = await router.aresponses(
+            model="primary",
+            input="hello",
+            metadata={"user_id": "test-user"},
+            extra_headers=headers,
+            extra_body={"temperature": 0.2, "max_output_tokens": 24},
+        )
     else:
         response: Final = await router.aanthropic_messages(
-            model="primary", messages=[{"role": "user", "content": "hello"}], max_tokens=8
+            model="primary",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=8,
+            extra_headers=headers,
         )
     await asyncio.wait_for(shadow_seen.wait(), timeout=15)
 
     assert "primary" in str(response)
     assert primary.call_count == (2 if retry else 1)
     assert shadow.call_count == 1
-    assert "silent_model" not in json.loads(primary.calls.last.request.content)
-    assert "silent_model" not in json.loads(shadow.calls.last.request.content)
+    primary_request: Final = primary.calls.last.request
+    shadow_request: Final = shadow.calls.last.request
+    assert primary_request.headers["x-request-id"] == shadow_request.headers["x-request-id"] == "trace-test"
+    assert primary_request.headers["x-client-private-header"] == "primary-only"
+    assert "x-client-private-header" not in shadow_request.headers
+    assert shadow_request.headers["x-shadow-header"] == "configured"
+    primary_body: Final = json.loads(primary_request.content)
+    shadow_body: Final = json.loads(shadow_request.content)
+    assert "silent_model" not in primary_body
+    assert "silent_model" not in shadow_body
+    expected_shadow_auth: Final = "Bearer shadow-test-key" if surface == "responses" else "shadow-test-key"
+    assert primary_request.headers[auth_header] == caller_auth
+    assert shadow_request.headers[auth_header] == expected_shadow_auth
+    assert all("caller-test-key" not in value for value in shadow_request.headers.values())
+    assert "caller-test-key" not in shadow_request.content.decode()
     if surface == "responses":
-        assert json.loads(shadow.calls.last.request.content)["metadata"] == {"user_id": "test-user"}
+        assert (
+            primary_body["temperature"],
+            shadow_body["temperature"],
+            primary_body["max_output_tokens"],
+            shadow_body["max_output_tokens"],
+            shadow_body["metadata"],
+        ) == (0.2, 0.2, 24, 32, {"user_id": "test-user"})
 
 
 @pytest.mark.asyncio
@@ -1131,7 +1168,9 @@ async def test_streaming_responses_are_mirrored_as_non_streaming_requests(
         num_retries=0,
         disable_cooldowns=True,
     )
-    response: Final = await router.aresponses(model="primary", input="hello", stream=True)
+    response: Final = await router.aresponses(
+        model="primary", input="hello", stream=True, extra_body={"stream": True, "temperature": 0.2}
+    )
     observed: Final = [item async for item in response]
     pending: Final = tuple(
         task for task in asyncio.all_tasks() if task.get_coro().__qualname__.endswith("_run_generic_silent")
@@ -1143,3 +1182,4 @@ async def test_streaming_responses_are_mirrored_as_non_streaming_requests(
     assert shadow.call_count == 1
     assert json.loads(primary.calls.last.request.content)["stream"] is True
     assert not json.loads(shadow.calls.last.request.content).get("stream", False)
+    assert json.loads(shadow.calls.last.request.content)["temperature"] == 0.2
