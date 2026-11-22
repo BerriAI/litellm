@@ -139,6 +139,8 @@ class EventStore(Protocol):
         """Terminate the row only while it is still past its deadline, so a renewal that just landed survives."""
         ...
 
+    async def has_pending(self, subscription_id: str) -> bool: ...
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool: ...
 
     async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]: ...
@@ -371,6 +373,12 @@ class PrismaEventStore:
             data={"status": "terminated"},
         )
         return ended > 0
+
+    async def has_pending(self, subscription_id: str) -> bool:
+        return (
+            await self._deliveries.find_first(where={"subscription_id": subscription_id, "delivered_at": None})
+            is not None
+        )
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         from prisma.errors import UniqueViolationError

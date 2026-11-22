@@ -3,6 +3,9 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
 
+import anyio
+from mcp.shared.exceptions import MCPError
+
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of, stored_key_hash
 from litellm.proxy.mcp_server.events.admission import admit, binding_for
@@ -13,6 +16,7 @@ from litellm.proxy.mcp_server.events.cursors import (
     OpenedCursor,
     ensure_sealable,
     open_cursor,
+    seal_cursor,
 )
 from litellm.proxy.mcp_server.events.errors import (
     EventsFailure,
@@ -21,25 +25,39 @@ from litellm.proxy.mcp_server.events.errors import (
     forbidden,
     internal_error,
     invalid_params,
+    subscription_not_found,
     unsupported,
 )
+from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
+from litellm.proxy.mcp_server.events.upstream import routing_headers
 from litellm.proxy.mcp_server.events.webhooks.delivery import is_https_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import (
+    callback_url,
+    client_grant,
+    granted_ttl_ms,
+    iso,
+    parse_time,
     subscription_id,
 )
-from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_secret
+from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, new_webhook_id, parse_secret
 from litellm.proxy.mcp_server.events.webhooks.store import (
+    Activation,
     EventStore,
+    QueuedDelivery,
     SubscriptionRow,
+    SubscriptionStatus,
     default_store,
 )
 from litellm.proxy.mcp_server.events.webhooks.termination import end_upstream
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster, verify_callback
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
+    DeliveryStatus,
     EventsErrorCode,
+    GapEnvelope,
     SubscribeEventsParams,
+    SubscribeEventsResult,
 )
 
 _KNOWN_CODES: Final = frozenset(member.value for member in EventsErrorCode)
@@ -87,6 +105,24 @@ def _validate(
     return Ok(_Request(principal=principal, secret=secret, store=resolved_store))
 
 
+def delivery_status(row: SubscriptionRow) -> DeliveryStatus:
+    return DeliveryStatus(
+        active=row.status == "active",
+        last_delivery_at=iso(row.last_delivery_at),
+        last_error=row.last_error,
+        failed_since=iso(row.failed_since),
+    )
+
+
+def upstream_failure(error: MCPError) -> EventsFailure:
+    if error.error.code == EventsErrorCode.CALLBACK_ENDPOINT_ERROR:
+        return internal_error("The upstream server could not verify the gateway webhook endpoint")
+    known: Final = error.error.code in _KNOWN_CODES
+    return EventsFailure(
+        EventsErrorCode(error.error.code) if known else EventsErrorCode.INTERNAL_ERROR, error.error.message
+    )
+
+
 def _new_row(
     sid: str, request: _Request, context: OperationContext, prepared: PreparedEvent, params: SubscribeEventsParams
 ) -> SubscriptionRow:
@@ -116,6 +152,98 @@ async def _admit_new(
         return None
     failure: Final = await verify_callback(params.delivery.url, request.secret, sid, now, post)
     return callback_error(failure) if failure is not None else None
+
+
+async def _discard_pending(subscription: _Subscription) -> None:
+    if subscription.reserved:
+        with anyio.CancelScope(shield=True):
+            await subscription.request.store.discard_pending(subscription.base.id)
+
+
+async def _reactivation_gap(row: SubscriptionRow, cursor: str | None, store: EventStore) -> None:
+    gap_id: Final = new_webhook_id("gap")
+    await store.enqueue(
+        QueuedDelivery(
+            delivery_id=gap_id,
+            subscription_id=row.id,
+            body=GapEnvelope(cursor=cursor).model_dump_json(),
+            webhook_id=gap_id,
+            next_attempt_at=datetime.now(timezone.utc),
+            prepared=True,
+        )
+    )
+
+
+async def _roll_back(
+    subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
+) -> None:
+    """Undo an upstream subscription this request created but could not record."""
+    orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
+    await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
+    await _discard_pending(subscription)
+
+
+async def _activate(
+    subscription: _Subscription,
+    upstream: SubscribeEventsResult,
+    context: OperationContext,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+) -> Result[SubscribeEventsResult, EventsFailure]:
+    base: Final = subscription.base
+    existing: Final = subscription.existing
+    upstream_refresh: Final = parse_time(upstream.refresh_before)
+    refresh_before: Final = client_grant(
+        datetime.now(timezone.utc),
+        granted_ttl_ms(subscription.params, subscription.prepared.resolved.target.server),
+        upstream_refresh,
+    )
+    sealed: Final = seal_cursor(subscription.binding, upstream.cursor, runtime.now())
+    if isinstance(sealed, Error):
+        await _roll_back(subscription, upstream, settings, runtime)
+        return Error(sealed.error)
+    pending: Final = await subscription.request.store.has_pending(base.id)
+    watermark: Final = base.cursor if pending else sealed.ok
+    activation: Final = Activation(
+        client_secret=base.client_secret,
+        upstream_subscription_id=upstream.id,
+        upstream_refresh_before=upstream_refresh,
+        refresh_before=refresh_before,
+        cursor=watermark,
+    )
+    expected: Final[tuple[SubscriptionStatus, ...]] = (
+        ("pending",) if subscription.reserved else (existing.status,) if existing is not None else ("pending",)
+    )
+    try:
+        activated: Final = await subscription.request.store.activate(base.id, activation, expected)
+    except Exception:
+        await _roll_back(subscription, upstream, settings, runtime)
+        raise
+    if not activated:
+        await _roll_back(subscription, upstream, settings, runtime)
+        return Error(subscription_not_found())
+    refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
+    if refreshed is not None and refreshed.status == "suspended":
+        await _reactivation_gap(base, watermark, subscription.request.store)
+    await runtime.record(
+        EventActivity(
+            call_type="mcp_event_subscribe",
+            mode="webhook",
+            server_id=base.server_id,
+            event_name=subscription.prepared.resolved.gateway_name,
+            outcome="subscribed",
+            caller=context.user_api_key_auth,
+            subscription_id=base.id,
+        )
+    )
+    result: Final = SubscribeEventsResult(
+        id=base.id,
+        refresh_before=iso(refresh_before),
+        cursor=watermark,
+        truncated=upstream.truncated or subscription.opened.expired,
+        delivery_status=delivery_status(refreshed) if refreshed is not None else None,
+    )
+    return Ok(result)
 
 
 async def _retire_if_moved(
@@ -188,3 +316,23 @@ async def _reserve(subscription: _Subscription, settings: EventsSettings) -> Res
         await store.discard_pending(subscription.base.id)
         return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
     return Ok(replace(subscription, reserved=True))
+
+
+async def _unsubscribe_upstream(
+    row: SubscriptionRow, prepared: PreparedEvent, settings: EventsSettings, runtime: EventsRuntime
+) -> None:
+    if row.upstream_subscription_id is None:
+        return
+    try:
+        await runtime.call(
+            prepared.upstream,
+            "events/unsubscribe",
+            {
+                "name": row.event_name,
+                "arguments": dict(row.arguments),
+                "delivery": {"url": callback_url(settings, row.id)},
+            },
+            routing_headers(row.event_name, row.arguments, prepared.descriptor),
+        )
+    except (MCPError, OSError, TimeoutError):
+        return

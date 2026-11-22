@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Final
 
 import pytest
@@ -11,6 +12,7 @@ from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
+    _activate,
     _prepare,  # pyright: ignore[reportPrivateUsage]  # the reservation step is the unit under test
     _Request,  # pyright: ignore[reportPrivateUsage]  # see above
     _reserve,  # pyright: ignore[reportPrivateUsage]  # see above
@@ -88,3 +90,36 @@ def test_a_request_scoped_authority_cannot_open_a_durable_subscription(field: st
     caller: Final = CALLER.model_copy(update={field: "request-id"})
     result: Final = _validate(context(caller), _params(), SETTINGS, MemoryStore())
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.FORBIDDEN
+
+
+@pytest.mark.asyncio
+async def test_refresh_preserves_the_watermark_with_a_delivery_outstanding() -> None:
+    from litellm.proxy.mcp_server.events.webhooks.store import QueuedDelivery
+    from litellm.types.mcp_server.events import SubscribeEventsResult
+
+    store: Final = MemoryStore()
+    run: Final = runtime((server(),), upstream=FakeUpstream())
+    prepared: Final = await _prepare(context(), _params(), None, SETTINGS, run, _request(store), _Client())
+    assert isinstance(prepared, Ok)
+    reserved: Final = await _reserve(prepared.ok, SETTINGS)
+    assert isinstance(reserved, Ok)
+    first: Final = await _activate(
+        reserved.ok, SubscribeEventsResult.model_validate(UPSTREAM_OK), context(), SETTINGS, run
+    )
+    assert isinstance(first, Ok) and first.ok.cursor is not None
+    await store.enqueue(
+        QueuedDelivery(
+            delivery_id="waiting",
+            subscription_id=SID,
+            body="{}",
+            webhook_id="waiting",
+            next_attempt_at=datetime(2026, 11, 20, tzinfo=timezone.utc),
+        )
+    )
+    refresh: Final = await _prepare(context(), _params(), None, SETTINGS, run, _request(store), _Client())
+    assert isinstance(refresh, Ok)
+    result: Final = await _activate(
+        refresh.ok, SubscribeEventsResult.model_validate({**UPSTREAM_OK, "cursor": "ahead"}), context(), SETTINGS, run
+    )
+    assert isinstance(result, Ok) and result.ok.cursor == first.ok.cursor
+    assert store.rows[SID].cursor == first.ok.cursor

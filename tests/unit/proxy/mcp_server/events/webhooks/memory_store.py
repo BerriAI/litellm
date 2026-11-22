@@ -163,6 +163,9 @@ class MemoryStore:
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
         return True
 
+    async def has_pending(self, subscription_id: str) -> bool:
+        return any(delivery.subscription_id == subscription_id for delivery in self.queue.values())
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
             raise ConnectionError("database unavailable")
