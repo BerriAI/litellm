@@ -45,14 +45,32 @@ def test_only_the_marker_this_release_writes_splits_text_the_safeguard_cut():
 
 
 @pytest.mark.parametrize(
+    "marker",
+    [
+        pytest.param("... (litellm_truncated skipped  chars) ...", id="no-count"),
+        pytest.param(f"... (litellm_truncated skipped  chars{_NOTES_STORED_ROWS_CARRY[1]}) ...", id="no-count-note"),
+        pytest.param(f"... (litellm_truncated skipped 9 chars{_NOTES_STORED_ROWS_CARRY[1] * 2}) ...", id="two-notes"),
+    ],
+)
+def test_a_marker_no_release_writes_reads_as_text(marker: str):
+    assert TRUNCATION_MARKER.search(marker) is None
+    assert not was_truncated_for_db(f"{_LONG[:34]}{marker}{_LONG[-64:]}")
+
+
+@pytest.mark.parametrize(
     "whole",
     [
         pytest.param(f"-{_LONG}", id="another-start"),
         pytest.param(f"{_LONG}-", id="another-end"),
+        pytest.param(f"{_LONG[:34]}#{_LONG[35:]}", id="last-kept-start-character"),
+        pytest.param(f"{_LONG[:-65]}#{_LONG[-64:]}", id="first-kept-end-character"),
+        pytest.param(f"{_LONG}{_LONG}", id="same-ends-but-longer"),
+        pytest.param(_LONG[: len(_LONG) // 10], id="same-ends-but-shorter"),
+        pytest.param(_LONG[:95], id="ends-that-overlap"),
         pytest.param("", id="empty"),
     ],
 )
-def test_a_cut_value_is_no_truncation_of_a_value_with_other_ends(whole: str):
+def test_a_cut_value_is_no_truncation_of_another_value(whole: str):
     assert is_truncation_of(truncated_for_db(_LONG, 100), _LONG)
     assert not is_truncation_of(truncated_for_db(_LONG, 100), whole)
 

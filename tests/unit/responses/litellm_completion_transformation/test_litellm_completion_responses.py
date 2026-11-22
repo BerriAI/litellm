@@ -21,6 +21,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
+from litellm.litellm_core_utils.db_truncation import truncated_for_db
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -7262,22 +7263,29 @@ def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_co
     ]
 
 
+_LONG_ARGUMENTS: Final = f'{{"city": "{"Paris " * 600}"}}'
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "model", "target_gets_whole_arguments"),
     [
-        ("anthropic", "anthropic/claude-sonnet-5-5", False),
-        ("anthropic", "anthropic/house-model", False),
-        ("vertex_ai", "vertex_ai/claude-sonnet-5-5", False),
-        ("bedrock", "bedrock/converse/house-model", False),
-        ("snowflake", "snowflake/Claude-Sonnet-5-5", False),
-        ("gemini", "gemini/gemini-3.8-flash", True),
-        ("hosted_vllm", "hosted_vllm/house-model", True),
+        ("anthropic", "claude-sonnet-5-5", False),
+        ("anthropic", "house-model", False),
+        ("vertex_ai", "claude-sonnet-5-5", False),
+        ("bedrock", "converse/house-model", False),
+        ("bedrock", "invoke/mistral.house-model", True),
+        ("snowflake", "Claude-Sonnet-5-5", False),
+        ("gemini", "gemini-3.8-flash", True),
+        ("hosted_vllm", "house-model", True),
+        ("my-custom-llm", "house-model", True),
         (None, "house-model", True),
     ],
 )
 @pytest.mark.parametrize(
-    "stored_arguments", ['{"city": "Paris"}', "{}"], ids=["arguments-stored-whole", "arguments-redacted-in-storage"]
+    "stored_arguments",
+    [_LONG_ARGUMENTS, truncated_for_db(_LONG_ARGUMENTS, 2048), "{}"],
+    ids=["arguments-stored-whole", "arguments-stored-cut", "arguments-redacted-in-storage"],
 )
 @pytest.mark.parametrize("call_ids", [("toolu_1",), ("toolu_1", "toolu_2", "toolu_3")], ids=["one-call", "parallel"])
 async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this_process_remembers_them(
@@ -7294,7 +7302,7 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
         ]
 
     question: Final = {"role": "user", "content": "What is the weather?"}
-    remembered_calls: Final = calls('{"city": "Paris"}')
+    remembered_calls: Final = calls(_LONG_ARGUMENTS)
 
     async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
         return ChatCompletionSession(
@@ -7324,7 +7332,8 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
         for call_id in call_ids:
             TOOL_CALLS_CACHE.delete_cache(key=call_id)
 
-    replayed_calls: Final = remembered_calls if target_gets_whole_arguments else calls(stored_arguments)
+    gets_whole_arguments: Final = target_gets_whole_arguments and stored_arguments != "{}"
+    replayed_calls: Final = remembered_calls if gets_whole_arguments else calls(stored_arguments)
     assert request["messages"][:2] == [question, {"role": "assistant", "content": None, "tool_calls": replayed_calls}]
     assert [(message["role"], message["tool_call_id"]) for message in request["messages"][2:]] == [
         ("tool", call_id) for call_id in call_ids

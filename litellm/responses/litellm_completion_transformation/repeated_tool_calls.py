@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate
 from types import MappingProxyType
@@ -6,7 +6,6 @@ from typing import Final, TypeVar, cast  # noqa: TID251  # a dict of a generic t
 
 from pydantic import BaseModel
 
-from litellm.constants import REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.db_truncation import is_truncation_of
 from litellm.litellm_core_utils.prompt_templates.factory import tool_call_id_prefix
@@ -24,7 +23,9 @@ _NO_CALLS: Final[Mapping[str, int]] = MappingProxyType({})
 class _RepeatedCall:
     made_by: int
     key: str
+    name: object
     arguments: object
+    says_more: bool
 
 
 def _call_key(call_id: object) -> str | None:
@@ -51,13 +52,15 @@ def _repeated_call(message: object, unanswered: Mapping[str, int]) -> _RepeatedC
     key: Final = _call_key(call.get("id"))
     if key is None or key not in unanswered:
         return None
-    if (
-        _says_more(fields, _FIELDS_OF_A_LONE_CALL)
+    return _RepeatedCall(
+        made_by=unanswered[key],
+        key=key,
+        name=function.get("name"),
+        arguments=function.get("arguments"),
+        says_more=_says_more(fields, _FIELDS_OF_A_LONE_CALL)
         or _says_more(call, _FIELDS_OF_A_CALL)
-        or _says_more(function, _FIELDS_OF_A_FUNCTION)
-    ):
-        return None
-    return _RepeatedCall(made_by=unanswered[key], key=key, arguments=function.get("arguments"))
+        or _says_more(function, _FIELDS_OF_A_FUNCTION),
+    )
 
 
 def _unanswered_after(unanswered: Mapping[str, int], indexed_message: tuple[int, object]) -> Mapping[str, int]:
@@ -80,40 +83,43 @@ def _with_field(fields: _FieldsT, name: str, value: object) -> _FieldsT:
     return cast(_FieldsT, {**mapping, name: value})  # cast-ok: a copy of the same dict with one field set
 
 
-def _with_arguments_storage_lost(call: object, remembered: object) -> object:
+def _with_arguments_storage_cut(call: object, repeat: _RepeatedCall | None) -> object:
     function: Final = message_field(call, "function")
     stored: Final = message_field(function, "arguments")
-    if not isinstance(stored, str) or not isinstance(remembered, str):
+    if repeat is None or repeat.name != message_field(function, "name"):
         return call
-    if stored != REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER and not is_truncation_of(stored, remembered):
+    if not isinstance(stored, str) or not isinstance(repeat.arguments, str):
         return call
-    return _with_field(call, "function", _with_field(function, "arguments", remembered))
+    if not is_truncation_of(stored, repeat.arguments):
+        return call
+    return _with_field(call, "function", _with_field(function, "arguments", repeat.arguments))
 
 
-def _with_calls_whole(message: _MessageT, index: int, remembered: Mapping[tuple[int, str], object]) -> _MessageT:
+def _with_calls_whole(message: _MessageT, index: int, dropped: Mapping[tuple[int, str], _RepeatedCall]) -> _MessageT:
     calls: Final = _calls(message)
     made: Final = tuple((index, _call_key(message_field(call, "id")) or "") for call in calls)
-    if remembered.keys().isdisjoint(made):
+    if dropped.keys().isdisjoint(made):
         return message
     return _with_field(
         message,
         "tool_calls",
-        [_with_arguments_storage_lost(call, remembered.get(key)) for call, key in zip(calls, made)],
+        [_with_arguments_storage_cut(call, dropped.get(key)) for call, key in zip(calls, made)],
     )
 
 
-def without_repeated_tool_calls(messages: Sequence[_MessageT], *, keep_stored_arguments: bool) -> tuple[_MessageT, ...]:
+def without_repeated_tool_calls(
+    messages: Sequence[_MessageT], *, keep_stored_arguments: Callable[[], bool]
+) -> tuple[_MessageT, ...]:
     unanswered_before: Final = accumulate(enumerate(messages), _unanswered_after, initial=_NO_CALLS)
     repeated: Final = tuple(map(_repeated_call, messages, unanswered_before))
-    remembered: Final = MappingProxyType(
-        {
-            (call.made_by, call.key): call.arguments
-            for call in repeated
-            if call is not None and not keep_stored_arguments
-        }
+    dropped: Final = MappingProxyType(
+        {(call.made_by, call.key): call for call in repeated if call is not None and not call.says_more}
     )
-    return tuple(
-        _with_calls_whole(message, index, remembered)
-        for index, (message, repeat) in enumerate(zip(messages, repeated))
-        if repeat is None
+    kept: Final = tuple(
+        (index, message)
+        for index, (message, call) in enumerate(zip(messages, repeated))
+        if call is None or call.says_more
     )
+    as_stored: Final = tuple(message for _, message in kept)
+    whole: Final = tuple(_with_calls_whole(message, index, dropped) for index, message in kept)
+    return as_stored if whole == as_stored or keep_stored_arguments() else whole

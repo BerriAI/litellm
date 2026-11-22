@@ -674,6 +674,15 @@ SessionMessage: TypeAlias = (
 )
 
 
+def _with_each_call_made_once(
+    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
+) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(
+        messages,
+        keep_stored_arguments=partial(_target_may_bind_reasoning_to_earlier_turns, model, custom_llm_provider),
+    )
+
+
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
     kept_calls: Final = without_tool_search_calls(message)
     if not kept_calls and not message.get("content"):
@@ -1841,9 +1850,8 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages,
+            messages=_with_each_call_made_once(combined_messages, model, provider),
             tools=request_tools,
-            keep_stored_arguments=_target_may_bind_reasoning_to_earlier_turns(model, provider),
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -2525,7 +2533,6 @@ class LiteLLMCompletionResponsesConfig:
             | Message
         ],
         tools: Sequence[object] | None = None,
-        keep_stored_arguments: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -2542,7 +2549,6 @@ class LiteLLMCompletionResponsesConfig:
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
-            keep_stored_arguments: Whether a repeated call leaves the arguments storage holds unchanged
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
@@ -2559,7 +2565,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | ChatCompletionMessageToolCall
             | Message
-        ] = list(copy.deepcopy(without_repeated_tool_calls(messages, keep_stored_arguments=keep_stored_arguments)))
+        ] = list(copy.deepcopy(messages))
         messages_to_remove: Final = []
 
         # Count non-tool messages to avoid removing all messages
