@@ -246,8 +246,8 @@ class MlflowLogger(CustomLogger):
 
         try:
             for choice in iter_items(require_attributes(response_obj, _HasChoices, "choices").choices):
-                delta = require_attributes(choice, _ChoiceWithDelta, "delta").delta
-                model_dump = require_attributes(delta, _HasModelDump, "model_dump").model_dump
+                delta: Final = require_attributes(choice, _ChoiceWithDelta, "delta").delta
+                model_dump: Final = require_attributes(delta, _HasModelDump, "model_dump").model_dump
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
