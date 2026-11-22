@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -28,7 +28,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionTextObject
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -270,7 +270,7 @@ class MistralConfig(OpenAIGPTConfig):
                         return messages
 
         ## 2. If content is list, then convert to string
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        messages = [self._with_flattened_content(m) for m in messages]
 
         ## 3. Handle name in message
         new_messages: Final[list[AllMessageValues]] = []
@@ -433,6 +433,17 @@ class MistralConfig(OpenAIGPTConfig):
         if message["role"] != "assistant":
             return message
         return strip_litellm_internal_message_fields(message)
+
+    @staticmethod
+    def _with_flattened_content(message: AllMessageValues) -> AllMessageValues:
+        return handle_messages_with_content_list_to_str_conversion([message])[0]
+
+    @staticmethod
+    def _with_text_parts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues:
+        text_parts: Final = [ChatCompletionTextObject(type="text", text=text) for text in texts]
+        return cast(  # cast-ok: every message role takes a list of text parts
+            AllMessageValues, {**message, "content": text_parts}
+        )
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:
