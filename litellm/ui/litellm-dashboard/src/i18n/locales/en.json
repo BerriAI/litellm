@@ -21725,12 +21725,46 @@
     "frameTitle": "Lens",
     "unsupported": {
       "title": "Update Lens to use it here",
-      "body": "This page shows the Lens UI served by the Lens service this gateway is connected to. The connected Lens is an older version that cannot be shown inside the dashboard yet. Update Lens, or open it at its own address.",
-      "open": "Open Lens"
+      "body": "Lens is connected, but this version does not support opening inside the gateway. Update your Lens deployment to use the workspace here.",
+      "open": "Open Lens",
+      "noBrowserUrl": "To open Lens separately, ask your administrator to configure a Lens address that is accessible from your browser."
     },
     "unavailable": {
-      "title": "Lens is not reachable",
-      "body": "This page shows the Lens UI served by the Lens service this gateway is connected to. The gateway could not load it. Check that LITELLM_LENS_URL is set and that Lens is running."
+      "title": "Could not connect to Lens",
+      "body": "We could not verify the Lens connection. If Lens is already configured, check that the service is running and that the gateway has its connection credentials, then try again."
+    },
+    "retry": "Check connection",
+    "docs": "Lens documentation",
+    "introduction": {
+      "title": "The gateway that helps your agents improve",
+      "description": "Turn recorded agent runs into findings linked to the exact steps, so you know what happened and what to change.",
+      "setup": "Set up Lens",
+      "tracing": "Tracing",
+      "sampleTrace": "Sample trace · 14.2s",
+      "timeline": "Sample trace timeline",
+      "failed": "Failed",
+      "benchmarkError": "Error: benchmark runner unavailable (503)",
+      "sampleAnswer": "“The column store is 40% faster than the row store for your workload.”",
+      "findings": "Lens findings",
+      "sampleRuns": "500 sample runs reviewed",
+      "claimTitle": "Claims numbers it never measured",
+      "claimBody": "Reports a speedup even though the benchmark failed.",
+      "claimQuote": "“…40% faster than the row store for your workload.”",
+      "claimAction": "Report the failed benchmark instead of estimating.",
+      "claimPriority": "38 linked runs · High priority",
+      "followupTitle": "Promises to follow up, then stops",
+      "followupBody": "After an order lookup times out, the agent promises to check and ends the run.",
+      "followupPriority": "12 linked runs · Medium priority",
+      "nextStep": "Next step",
+      "highlight": "{{name}}, {{duration}} seconds. Highlight related finding",
+      "output": "{{name}} · output",
+      "duration": "{{duration}}s",
+      "gateway": "LiteLLM gateway",
+      "agents": "Agent swarms",
+      "agentSteps": "Every run, every recorded step",
+      "infrastructure": "One place, your infrastructure",
+      "findProblems": "Find what needs fixing",
+      "nextRun": "Insights for the next run"
     }
   }
 }
