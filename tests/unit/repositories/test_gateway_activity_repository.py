@@ -11,37 +11,21 @@ from litellm.repositories.gateway_activity_repository import GatewayActivityRepo
 @pytest.mark.asyncio
 async def test_gateway_activity_decodes_both_row_kinds_with_nullable_union_columns() -> None:
     prisma: Final = MagicMock()
-    prisma.db.query_raw = AsyncMock(
-        return_value=[
-            {
-                "kind": "route",
-                "date": "2026-01-02",
-                "category": "llm",
-                "route": "/chat/completions",
-                "successful_requests": 7,
-                "failed_requests": 2,
-                "status_code": None,
-            },
-            {
-                "kind": "status",
-                "date": None,
-                "category": None,
-                "route": None,
-                "successful_requests": 0,
-                "failed_requests": 2,
-                "status_code": 429,
-            },
-        ]
-    )
+    prisma.db.query_raw = AsyncMock(return_value=[
+        {
+            "kind": "route", "date": "2026-01-02", "category": "llm", "route": "/chat/completions",
+            "successful_requests": 7, "failed_requests": 2, "status_code": None,
+        },
+        {
+            "kind": "status", "date": None, "category": None, "route": None,
+            "successful_requests": 0, "failed_requests": 2, "status_code": 429,
+        },
+    ])
     result: Final = await GatewayActivityRepository(prisma).get_activity("2026-01-01", "2026-01-31")
     assert result == (
         GatewayRouteActivity(
-            kind="route",
-            date="2026-01-02",
-            category="llm",
-            route="/chat/completions",
-            successful_requests=7,
-            failed_requests=2,
+            kind="route", date="2026-01-02", category="llm", route="/chat/completions",
+            successful_requests=7, failed_requests=2,
         ),
         GatewayStatusCodeActivity(kind="status", status_code=429, failed_requests=2),
     )

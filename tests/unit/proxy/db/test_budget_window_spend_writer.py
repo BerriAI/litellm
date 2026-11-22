@@ -477,9 +477,7 @@ async def test_many_window_rolls_deduplicate_at_the_newest_start_in_one_guarded_
     shifted: Final = WINDOW_B.astimezone(timezone(timedelta(hours=-7)))
 
     await roll_window_spend_rows(
-        transaction,
-        "team",
-        "t1",
+        transaction, "team", "t1",
         (("30d", shifted), ("1d", WINDOW_A), ("30d", WINDOW_A), ("30d", WINDOW_B.replace(tzinfo=None))),
     )
 

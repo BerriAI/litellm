@@ -116,7 +116,9 @@ def test_aws_sigv4_defaults_to_the_ambient_credential_chain():
 
 
 def test_authconfig_discriminates_on_kind():
-    api_key = _AUTH_CONFIG.validate_python({"kind": "api_key", "key_source": {"source": "shared", "value": "k"}})
+    api_key = _AUTH_CONFIG.validate_python(
+        {"kind": "api_key", "key_source": {"source": "shared", "value": "k"}}
+    )
     assert isinstance(api_key, ApiKeyConfig)
     assert isinstance(api_key.key_source, SharedKey)
 
@@ -213,7 +215,9 @@ def test_id_jag_client_auth_discriminates_on_source():
 
 def test_id_jag_client_auth_rejects_unknown_source():
     with pytest.raises(ValidationError):
-        _AUTH_CONFIG.validate_python({**_ID_JAG_MINIMAL, "client_auth": {"source": "mystery"}})
+        _AUTH_CONFIG.validate_python(
+            {**_ID_JAG_MINIMAL, "client_auth": {"source": "mystery"}}
+        )
 
 
 def test_id_jag_config_defaults_id_token_subject_and_empty_optionals():
@@ -295,7 +299,7 @@ def test_every_resolved_credential_config_can_send_a_raw_value(name, build):
         "trailing\r\nX-Injected",
         "",
         "   ",
-        'quoted"name',
+        "quoted\"name",
     ],
 )
 def test_header_name_outside_the_rfc7230_token_grammar_is_rejected(bad):

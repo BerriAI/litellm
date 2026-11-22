@@ -22,7 +22,11 @@ from litellm.proxy.mcp_server.sampling_handler import (
 
 def _params(**overrides):
     base = dict(
-        messages=[SimpleNamespace(role="user", content=SimpleNamespace(type="text", text="hi"))],
+        messages=[
+            SimpleNamespace(
+                role="user", content=SimpleNamespace(type="text", text="hi")
+            )
+        ],
         system_prompt="be concise",
         max_tokens=128,
         temperature=None,
@@ -48,7 +52,11 @@ class TestBuildCompletionKwargs:
         params = _params(
             temperature=0.3,
             stop_sequences=["STOP"],
-            tools=[SimpleNamespace(name="search", description="d", input_schema={"type": "object"})],
+            tools=[
+                SimpleNamespace(
+                    name="search", description="d", input_schema={"type": "object"}
+                )
+            ],
             tool_choice=SimpleNamespace(mode="required"),
             metadata={"trace": "abc"},
         )
@@ -127,7 +135,9 @@ class TestHandleSamplingCreateMessagePipeline:
         response = SimpleNamespace(
             choices=[
                 SimpleNamespace(
-                    message=SimpleNamespace(content="the answer is 42", tool_calls=None),
+                    message=SimpleNamespace(
+                        content="the answer is 42", tool_calls=None
+                    ),
                     finish_reason="stop",
                 )
             ],
@@ -168,7 +178,7 @@ class TestHandleSamplingCreateMessagePipeline:
 
         assert isinstance(result, CreateMessageResult)
         assert result.content.text == "the answer is 42"
-        assert result.stop_reason == "endTurn"
+        assert result.stop_reason== "endTurn"
 
     async def test_should_reraise_known_proxy_exceptions(self):
         from litellm.exceptions import RateLimitError
@@ -192,7 +202,9 @@ class TestHandleSamplingCreateMessagePipeline:
             patch(
                 "litellm.proxy.mcp_server.sampling_handler._build_completion_kwargs",
                 new_callable=AsyncMock,
-                side_effect=RateLimitError("rate limited", llm_provider="openai", model="gpt-4o"),
+                side_effect=RateLimitError(
+                    "rate limited", llm_provider="openai", model="gpt-4o"
+                ),
             ),
         ):
             with pytest.raises(RateLimitError):

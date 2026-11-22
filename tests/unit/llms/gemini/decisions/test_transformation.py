@@ -377,10 +377,7 @@ def test_message_captions_keep_their_position_next_to_each_image() -> None:
         ("systemone", {"state": "cracked mug", "questions": {"damaged": {"type": "noul", "instructions": "Damaged?"}}}),
         (
             "decisions",
-            {
-                "input": "cracked mug",
-                "questions": [{"type": "predicate", "name": "damaged", "instructions": "Damaged?"}],
-            },
+            {"input": "cracked mug", "questions": [{"type": "predicate", "name": "damaged", "instructions": "Damaged?"}]},
         ),
     ],
     ids=("systemone", "decisions"),

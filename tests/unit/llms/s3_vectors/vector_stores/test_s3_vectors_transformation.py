@@ -184,9 +184,7 @@ class TestS3VectorsVectorStoreConfig:
         request_metadata = {"user_api_key_team_id": "team-a"}
 
         mock_bare = AsyncMock(return_value=_embedding_response(QUERY_VECTOR))
-        with patch(
-            "litellm.aembedding", new=mock_bare
-        ):  # test-quality-ok: stubs the bare-embedding fallback whose call the test asserts on
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose call the test asserts on
             _, request_body = await config.atransform_search_vector_store_request(
                 **_search_kwargs(
                     embedding_executor=RouterVectorStoreEmbeddingExecutor(router=router, metadata=request_metadata)
@@ -203,9 +201,7 @@ class TestS3VectorsVectorStoreConfig:
         config = S3VectorsVectorStoreConfig()
 
         mock_bare = AsyncMock(return_value=_embedding_response([0.6, 0.7]))
-        with patch(
-            "litellm.aembedding", new=mock_bare
-        ):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
+        with patch("litellm.aembedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = await config.atransform_search_vector_store_request(**_search_kwargs())
 
         mock_bare.assert_awaited_once_with(model="text-embedding-3-small", input=["test query"])
@@ -215,9 +211,7 @@ class TestS3VectorsVectorStoreConfig:
         config = S3VectorsVectorStoreConfig()
 
         mock_bare = MagicMock(return_value=_embedding_response([0.8, 0.9]))
-        with patch(
-            "litellm.embedding", new=mock_bare
-        ):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
+        with patch("litellm.embedding", new=mock_bare):  # test-quality-ok: stubs the bare-embedding fallback whose request body the test asserts on
             _, request_body = config.transform_search_vector_store_request(
                 **_search_kwargs(litellm_params={"embedding_model": "my-embedding-model"})
             )

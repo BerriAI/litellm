@@ -597,13 +597,9 @@ def test_customer_and_inline_monthly_windows_count_the_same_calendar_period(
     )
 
     assert counters[0].window_start == datetime.fromisoformat(expected)
-    assert (
-        get_budget_window_start(
-            {**limit.model_dump(), **get_budget_window_reset_fields("1mo", reset_at=limit.reset_at, settings=settings)},
-            settings,
-        )
-        == counters[0].window_start
-    )
+    assert get_budget_window_start(
+        {**limit.model_dump(), **get_budget_window_reset_fields("1mo", reset_at=limit.reset_at, settings=settings)}, settings
+    ) == counters[0].window_start
     assert counters[0].reset_at == datetime.fromisoformat(reset_at)
 
 
@@ -1111,9 +1107,7 @@ def test_configured_caps_never_shrink_an_uncapped_hold(route: str, config_source
 
 @pytest.mark.parametrize("config_source", ["deployment", "router_default"])
 @pytest.mark.parametrize("field", ["n", "best_of"])
-def test_a_configured_n_holds_like_a_requested_n_unless_the_request_sets_its_own(
-    config_source: str, field: str
-) -> None:
+def test_a_configured_n_holds_like_a_requested_n_unless_the_request_sets_its_own(config_source: str, field: str) -> None:
     body: Final = {"model": "priced-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1000}
     plain: Final = _router_with_configured_caps(config_source, {})
     configured: Final = _router_with_configured_caps(config_source, {field: 4})
@@ -1154,7 +1148,7 @@ def _priced_router(
                 ),
             ).model_dump()
             for index, backend_model in enumerate(backend_models)
-        ],
+        ]
     )
 
 
@@ -2165,10 +2159,7 @@ def test_customer_elapsed_windows_share_the_persisted_calendar_window(duration: 
     counter: Final = customer_window_counters(
         "customer_team", "hourly-team", (limit,), now=datetime.fromisoformat(now), reset_settings=settings
     )[0]
-    stored: Final = {
-        "budget_duration": duration,
-        **get_budget_window_reset_fields(duration, reset_at=reset, settings=settings),
-    }
+    stored: Final = {"budget_duration": duration, **get_budget_window_reset_fields(duration, reset_at=reset, settings=settings)}
 
     assert counter.window_start == reset - timedelta(hours=1)
     assert get_budget_window_start(stored, settings) == counter.window_start
@@ -2183,7 +2174,9 @@ def test_customer_elapsed_windows_share_the_persisted_calendar_window(duration: 
         ("5h", "UTC", "2026-07-15T15:00:00Z"),
     ),
 )
-def test_created_customer_and_inline_windows_keep_the_same_schedule(duration: str, zone: str, expected: str) -> None:
+def test_created_customer_and_inline_windows_keep_the_same_schedule(
+    duration: str, zone: str, expected: str
+) -> None:
     from litellm.litellm_core_utils.duration_parser import duration_in_seconds
     from litellm.models.budget import initialize_budget_limits
     from litellm.proxy.common_utils.timezone_utils import compute_budget_reset_at
@@ -2271,8 +2264,7 @@ def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_res
     saved_reset: Final = datetime(2026, 11, 1, 4, tzinfo=timezone.utc)
     start: Final = saved_reset + timedelta(days=days_after_reset)
     counter: Final = customer_window_counters(
-        "customer_team",
-        "daily-team",
+        "customer_team", "daily-team",
         (BudgetLimit(budget_duration="12h", max_budget=1, reset_at=saved_reset),),
         now=start + timedelta(minutes=1),
         reset_settings=BudgetResetSettings(timezone="America/New_York"),
@@ -2293,8 +2285,7 @@ def test_expired_customer_elapsed_schedule_keeps_its_saved_anchor(days_after_res
 )
 def test_expired_customer_daily_window_follows_local_midnight(duration: str, now: str, start: str, end: str) -> None:
     counter: Final = customer_window_counters(
-        "customer_team",
-        "daily-team",
+        "customer_team", "daily-team",
         (BudgetLimit(budget_duration=duration, max_budget=1, reset_at=datetime(2026, 11, 1, 4, tzinfo=timezone.utc)),),
         now=datetime.fromisoformat(now),
         reset_settings=BudgetResetSettings(timezone="America/New_York"),

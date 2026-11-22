@@ -151,7 +151,9 @@ class TestAiPolicySuggester:
             )
 
         assert len(result["selected_templates"]) == 1
-        assert result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        assert (
+            result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        )
         assert result["explanation"] == "Your examples contain PII data."
 
     @pytest.mark.asyncio
@@ -189,7 +191,9 @@ class TestAiPolicySuggester:
             )
 
         assert len(result["selected_templates"]) == 1
-        assert result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        assert (
+            result["selected_templates"][0]["template_id"] == "baseline-pii-protection"
+        )
 
     @pytest.mark.asyncio
     async def test_suggest_handles_no_tool_calls(self):
@@ -236,7 +240,9 @@ class TestAiPolicySuggester:
         suggester = AiPolicySuggester()
 
         mock_tool_call = MagicMock()
-        mock_tool_call.function.arguments = json.dumps({"selected_templates": [], "explanation": "None matched."})
+        mock_tool_call.function.arguments = json.dumps(
+            {"selected_templates": [], "explanation": "None matched."}
+        )
 
         mock_response = MagicMock()
         mock_response.choices = [MagicMock()]
@@ -257,7 +263,9 @@ class TestAiPolicySuggester:
         assert call_kwargs["drop_params"] is True
         assert len(call_kwargs["tools"]) == 1
         assert call_kwargs["tools"][0]["function"]["name"] == "select_policy_templates"
-        assert call_kwargs["tool_choice"]["function"]["name"] == "select_policy_templates"
+        assert (
+            call_kwargs["tool_choice"]["function"]["name"] == "select_policy_templates"
+        )
         assert len(call_kwargs["messages"]) == 2
         assert call_kwargs["messages"][0]["role"] == "system"
         assert call_kwargs["messages"][1]["role"] == "user"
@@ -299,7 +307,9 @@ class TestSuggesterToleratesAModelThatRefusesItsSamplingParams:
 
     @pytest.mark.asyncio
     @respx.mock
-    async def test_a_reasoning_model_gets_past_param_mapping(self, monkeypatch, local_model_cost_map, httpx_transport):
+    async def test_a_reasoning_model_gets_past_param_mapping(
+        self, monkeypatch, local_model_cost_map, httpx_transport
+    ):
         """Drives the real entry point with no patching and no network. Which exception escapes is
         the discriminator: param mapping runs before any credential check, so UnsupportedParamsError
         means the call died on the pinned temperature, while AuthenticationError means it survived

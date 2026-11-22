@@ -71,8 +71,12 @@ class TestLangChainAgentCompatibility:
         )
 
         # Verify strict is NOT in model.params (would cause 400 error)
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
-        assert "strict" not in model_params, "strict should be filtered from model.params"
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
+        assert (
+            "strict" not in model_params
+        ), "strict should be filtered from model.params"
 
         # Verify other params are preserved
         assert model_params.get("temperature") == 0
@@ -124,7 +128,9 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         assert model_params.get("max_tokens") == 1000
 
@@ -175,7 +181,9 @@ class TestLangChainAgentCompatibility:
         )
 
         # Top-level strict should be filtered
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
 
         # Tools should be included
@@ -199,7 +207,9 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         assert model_params.get("temperature") == 0.5
 
@@ -231,7 +241,9 @@ class TestLangChainAgentCompatibility:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         # Anthropic models CAN have strict in model.params (SAP API accepts it)
         assert model_params.get("strict") is True
         assert model_params.get("max_tokens") == 2000
@@ -324,8 +336,12 @@ class TestLangChainRequestPayloadStructure:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
-            assert "strict" not in model_params, f"strict leaked into model.params with input: {params}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"][
+                "params"
+            ]
+            assert (
+                "strict" not in model_params
+            ), f"strict leaked into model.params with input: {params}"
 
 
 class TestEdgeCases:
@@ -343,7 +359,9 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
 
     def test_empty_optional_params(self):
@@ -358,7 +376,9 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
 
     def test_only_strict_in_params(self):
@@ -373,7 +393,9 @@ class TestEdgeCases:
             headers={},
         )
 
-        model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
+        model_params = request["config"]["modules"]["prompt_templating"]["model"][
+            "params"
+        ]
         assert "strict" not in model_params
         # model_params might be empty or have other defaults, but no strict
 
@@ -398,9 +420,15 @@ class TestEdgeCases:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
-            assert "strict" not in model_params, f"strict should be filtered for GPT model: {model}"
-            assert model_params.get("temperature") == 0.5, f"temperature missing for model: {model}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"][
+                "params"
+            ]
+            assert (
+                "strict" not in model_params
+            ), f"strict should be filtered for GPT model: {model}"
+            assert (
+                model_params.get("temperature") == 0.5
+            ), f"temperature missing for model: {model}"
 
     def test_non_gpt_models_preserve_strict(self):
         """Verify strict is preserved for non-GPT models (Anthropic, Gemini, Mistral, etc.)."""
@@ -422,6 +450,12 @@ class TestEdgeCases:
                 headers={},
             )
 
-            model_params = request["config"]["modules"]["prompt_templating"]["model"]["params"]
-            assert model_params.get("strict") is True, f"strict should be preserved for non-GPT model: {model}"
-            assert model_params.get("temperature") == 0.5, f"temperature missing for model: {model}"
+            model_params = request["config"]["modules"]["prompt_templating"]["model"][
+                "params"
+            ]
+            assert (
+                model_params.get("strict") is True
+            ), f"strict should be preserved for non-GPT model: {model}"
+            assert (
+                model_params.get("temperature") == 0.5
+            ), f"temperature missing for model: {model}"

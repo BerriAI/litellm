@@ -297,7 +297,9 @@ async def test_non_bearer_token_type_is_logged():
     from unittest.mock import patch
 
     post = _RecordingPost({"access_token": "x", "token_type": "N_A", "expires_in": 3600})
-    with patch("litellm.proxy.mcp_server.outbound_credentials.token_exchanger.verbose_logger") as mock_logger:
+    with patch(
+        "litellm.proxy.mcp_server.outbound_credentials.token_exchanger.verbose_logger"
+    ) as mock_logger:
         await OboTokenExchanger(post, clock=_Clock()).exchange("jwt", _SERVER, _CONFIG)
     assert mock_logger.warning.called
     assert "N_A" in repr(mock_logger.warning.call_args)

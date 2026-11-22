@@ -30,15 +30,7 @@ from litellm.main import acompletion as python_acompletion
 from litellm.main import completion as python_completion
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
-from litellm.types.utils import (
-    CallTypes,
-    CallTypesLiteral,
-    Choices,
-    CredentialItem,
-    LLMResponseTypes,
-    Message,
-    ModelResponse,
-)
+from litellm.types.utils import CallTypes, CallTypesLiteral, Choices, CredentialItem, LLMResponseTypes, Message, ModelResponse
 from litellm.vector_stores.vector_store_registry import LiteLLM_ManagedVectorStore, VectorStoreRegistry
 
 LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])

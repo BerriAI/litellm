@@ -7,7 +7,9 @@ import sys
 from unittest.mock import patch
 
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+)
 
 
 class TestSimpleProviderConfigSupportedEndpoints:
@@ -17,7 +19,9 @@ class TestSimpleProviderConfigSupportedEndpoints:
         """supported_endpoints defaults to [] (chat always enabled, nothing else)"""
         from litellm.llms.openai_like.json_loader import SimpleProviderConfig
 
-        config = SimpleProviderConfig("test", {"base_url": "https://example.com", "api_key_env": "TEST_KEY"})
+        config = SimpleProviderConfig(
+            "test", {"base_url": "https://example.com", "api_key_env": "TEST_KEY"}
+        )
         assert config.supported_endpoints == []
 
     def test_custom_supported_endpoints(self):
@@ -53,11 +57,15 @@ class TestSimpleProviderConfigSupportedEndpoints:
 class TestJSONProviderRegistryResponsesAPI:
     """Test supports_responses_api on JSONProviderRegistry."""
 
+
     def test_nonexistent_provider(self):
         """Non-existent provider returns False"""
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-        assert JSONProviderRegistry.supports_responses_api("nonexistent_provider_xyz") is False
+        assert (
+            JSONProviderRegistry.supports_responses_api("nonexistent_provider_xyz")
+            is False
+        )
 
 
 class TestCreateResponsesConfigClass:
@@ -110,7 +118,9 @@ class TestCreateResponsesConfigClass:
         config_cls = create_responses_config_class(provider)
         config = config_cls()
 
-        url = config.get_complete_url(api_base="https://custom.api.com/v1", litellm_params={})
+        url = config.get_complete_url(
+            api_base="https://custom.api.com/v1", litellm_params={}
+        )
         assert url == "https://custom.api.com/v1/responses"
 
     def test_generated_class_get_complete_url_strips_trailing_slash(self):
@@ -123,7 +133,9 @@ class TestCreateResponsesConfigClass:
         config_cls = create_responses_config_class(provider)
         config = config_cls()
 
-        url = config.get_complete_url(api_base="https://custom.api.com/v1/", litellm_params={})
+        url = config.get_complete_url(
+            api_base="https://custom.api.com/v1/", litellm_params={}
+        )
         assert url == "https://custom.api.com/v1/responses"
 
     def test_generated_class_validate_environment(self):
@@ -140,7 +152,9 @@ class TestCreateResponsesConfigClass:
             "litellm.llms.openai_like.dynamic_config.get_secret_str",
             return_value="sk-test-key-123",
         ):
-            headers = config.validate_environment(headers={}, model="test-model", litellm_params=None)
+            headers = config.validate_environment(
+                headers={}, model="test-model", litellm_params=None
+            )
         assert headers["Authorization"] == "Bearer sk-test-key-123"
 
     def test_generated_class_validate_environment_litellm_params_override(self):
@@ -155,7 +169,9 @@ class TestCreateResponsesConfigClass:
         config = config_cls()
 
         litellm_params = GenericLiteLLMParams(api_key="sk-override-key")
-        headers = config.validate_environment(headers={}, model="test-model", litellm_params=litellm_params)
+        headers = config.validate_environment(
+            headers={}, model="test-model", litellm_params=litellm_params
+        )
         assert headers["Authorization"] == "Bearer sk-override-key"
 
     def test_generated_class_inherits_openai_responses_methods(self):

@@ -324,20 +324,8 @@ def test_continuation_output_ceilings_decline_once_a_ceiling_has_no_tokens_left(
         ({"tool_choice": "required"}, True),
         ({"tool_choice": "auto"}, False),
         ({"tool_choice": {"type": "function", "name": "lookup"}}, True),
-        (
-            {
-                "tool_choice": {
-                    "type": "allowed_tools",
-                    "mode": "required",
-                    "tools": [{"type": "function", "name": "f"}],
-                }
-            },
-            True,
-        ),
-        (
-            {"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}},
-            True,
-        ),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "f"}]}}, True),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, True),
         ({"tool_choice": {"type": "allowed_tools", "allowed_tools": {"mode": "auto", "tools": []}}}, True),
         ({"tool_choice": {"type": "web_search_preview"}}, True),
     ],
@@ -362,20 +350,8 @@ def test_constrains_continuation_reads_the_responses_text_format(sent, expected)
 @pytest.mark.parametrize(
     "sent,expected",
     [
-        (
-            {"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}},
-            False,
-        ),
-        (
-            {
-                "tool_choice": {
-                    "type": "allowed_tools",
-                    "mode": "required",
-                    "tools": [{"type": "function", "name": "f"}],
-                }
-            },
-            True,
-        ),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "name": "f"}]}}, False),
+        ({"tool_choice": {"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "f"}]}}, True),
         ({"tool_choice": {"type": "function", "name": "lookup"}}, True),
         ({"tool_choice": {"type": "web_search_preview"}}, True),
         ({"tool_choice": "required"}, True),
@@ -409,19 +385,11 @@ def test_constrains_responses_continuation_lets_allowed_tools_in_auto_mode_answe
         (_deployment(CLAUDE_NON_PREFILL_MODEL, "b"), False),
         (_deployment(PREFILL_MODEL, "c"), False),
         (
-            {
-                "litellm_params": {"model": "anthropic/support-model-v1"},
-                "model_info": {"id": "d", "base_model": CLAUDE_PREFILL_MODEL},
-            },
+            {"litellm_params": {"model": "anthropic/support-model-v1"}, "model_info": {"id": "d", "base_model": CLAUDE_PREFILL_MODEL}},
             True,
         ),
     ],
-    ids=[
-        "claude_with_prefill",
-        "claude_without_prefill",
-        "prefill_capable_but_not_claude",
-        "claude_named_by_base_model",
-    ],
+    ids=["claude_with_prefill", "claude_without_prefill", "prefill_capable_but_not_claude", "claude_named_by_base_model"],
 )
 def test_deployment_takes_responses_prefill_only_on_claude_with_prefill(deployment, expected):
     assert deployment_takes_responses_prefill(deployment) is expected

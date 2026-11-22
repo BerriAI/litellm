@@ -531,7 +531,9 @@ async def test_classifier_call_drops_a_reasoning_effort_level_the_deployment_ref
 async def test_classifier_call_keeps_a_reasoning_effort_level_the_deployment_sends(
     make_core: MakeCore, host: EndpointHost, listed: bool, deployment_params: dict[str, object]
 ):
-    level: Final = _catalog_levels(LEVELED_FOUNDRY_MODEL)[-1] if listed else _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    level: Final = (
+        _catalog_levels(LEVELED_FOUNDRY_MODEL)[-1] if listed else _unlisted_level(LEVELED_FOUNDRY_MODEL)
+    )
     core: Final = make_core(model_list=[deployment("g", "d1", model=LEVELED_FOUNDRY_MODEL, **deployment_params)])
     await core.acompletion(
         model="g", messages=MESSAGES, reasoning_effort=level, litellm_metadata=dict(CLASSIFIER_METADATA)

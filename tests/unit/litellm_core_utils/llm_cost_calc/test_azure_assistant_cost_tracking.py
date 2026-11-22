@@ -3,7 +3,7 @@ Test Azure OpenAI Assistant Features Cost Tracking
 
 Tests cost calculation for Azure's new assistant features:
 - File Search (storage-based pricing)
-- Code Interpreter (session-based pricing)
+- Code Interpreter (session-based pricing) 
 - Computer Use (token-based pricing)
 - Vector Store (storage-based pricing)
 """
@@ -76,7 +76,9 @@ class TestAzureAssistantCostTracking:
         )
         # Read expected cost from model cost map (azure/container)
         azure_container_info = litellm.model_cost.get("azure/container", {})
-        cost_per_session = azure_container_info.get("code_interpreter_cost_per_session", 0.03)
+        cost_per_session = azure_container_info.get(
+            "code_interpreter_cost_per_session", 0.03
+        )
         expected_cost = 5 * cost_per_session  # $0.15
         assert cost == expected_cost, f"Expected {expected_cost}, got {cost}"
 
@@ -87,6 +89,7 @@ class TestAzureAssistantCostTracking:
             provider="azure",
         )
         assert cost == 0.0, "Should return 0 for zero sessions"
+
 
     @pytest.mark.parametrize(
         "input_tokens,output_tokens,expected_cost",
@@ -110,14 +113,18 @@ class TestAzureAssistantCostTracking:
             (0, 0, 0.0),  # $0.000
         ],
     )
-    def test_azure_computer_use_cost_calculation(self, input_tokens, output_tokens, expected_cost):
+    def test_azure_computer_use_cost_calculation(
+        self, input_tokens, output_tokens, expected_cost
+    ):
         """Test Azure computer use cost calculation with various token combinations."""
         cost = StandardBuiltInToolCostTracking.get_cost_for_computer_use(
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             provider="azure",
         )
-        assert abs(cost - expected_cost) < 0.0001, f"Expected {expected_cost}, got {cost}"
+        assert (
+            abs(cost - expected_cost) < 0.0001
+        ), f"Expected {expected_cost}, got {cost}"
 
     def test_openai_computer_use_free(self):
         """Test OpenAI computer use has no separate charges."""
@@ -198,6 +205,11 @@ class TestAzureAssistantCostTracking:
     def test_none_inputs_return_zero(self):
         """Test that None inputs return zero cost."""
         assert StandardBuiltInToolCostTracking.get_cost_for_file_search(None) == 0.0
-        assert StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(None) == 0.0
-        assert StandardBuiltInToolCostTracking.get_cost_for_computer_use(None, None) == 0.0
+        assert (
+            StandardBuiltInToolCostTracking.get_cost_for_code_interpreter(None) == 0.0
+        )
+        assert (
+            StandardBuiltInToolCostTracking.get_cost_for_computer_use(None, None) == 0.0
+        )
         assert StandardBuiltInToolCostTracking.get_cost_for_vector_store(None) == 0.0
+

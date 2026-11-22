@@ -1582,7 +1582,9 @@ async def test_a_sandbox_failure_answers_the_chat_tool_call_with_a_fixed_failure
 
     tool_messages: Final = [message for message in _iter_messages(plan) if message.get("role") == "tool"]
     assert plan.run_agentic_loop is True
-    assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == [("call_1", expected_output)]
+    assert [(message["tool_call_id"], message["content"]) for message in tool_messages] == [
+        ("call_1", expected_output)
+    ]
     assert [call["status"] for call in plan.metadata["code_interpreter_calls"]] == ["failed"]
 
 

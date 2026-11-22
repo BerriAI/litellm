@@ -166,9 +166,7 @@ def test_flux2_image_edit_rejects_a_reference_image_it_cannot_read():
         _flux2_reference_request("cat.png")
 
 
-@pytest.mark.parametrize(
-    "dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"})
-)
+@pytest.mark.parametrize("dimensions", ({"size": "2048x1024"}, {"width": 2048, "height": 1024}, {"width": "2048", "height": "1024"}))
 @pytest.mark.usefixtures("local_model_cost_map")
 def test_flux2_image_edit_preserves_controls_and_pixel_cost(dimensions: Mapping[str, int | str]):
     def respond(request: httpx.Request) -> httpx.Response:

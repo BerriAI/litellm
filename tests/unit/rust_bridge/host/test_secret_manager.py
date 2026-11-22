@@ -296,9 +296,7 @@ async def test_aws_primary_values_match_python_reads(monkeypatch: pytest.MonkeyP
         asynchronous: Final = await handle.read_secret_async("KEY", settings_dump)
         assert synchronous == reference
         assert asynchronous == reference
-        assert (
-            tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
-        )
+        assert tuple(json.loads(request.raw_body) for request in server.requests) == ({"SecretId": primary or "KEY"},) * 3
 
 
 @pytest.mark.parametrize("primary", (None, "primary"))

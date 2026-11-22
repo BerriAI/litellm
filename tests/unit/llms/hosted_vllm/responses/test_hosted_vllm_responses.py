@@ -227,9 +227,7 @@ def test_hosted_vllm_responses_folds_a_later_developer_item_into_instructions_fo
 
 
 @respx.mock
-def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> (
-    None
-):
+def test_hosted_vllm_responses_folds_for_a_deployment_declared_system_first_and_sends_a_closing_developer_as_user() -> None:
     assistant_turn: Final = {"type": "message", "role": "assistant", "content": "Paris"}
     route: Final = _vllm_responses_route("PONG")
     litellm.responses(
@@ -264,9 +262,7 @@ def test_hosted_vllm_responses_forwards_a_later_developer_item_in_place_for_an_u
 
 
 @respx.mock
-def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> (
-    None
-):
+def test_hosted_vllm_responses_forwards_a_developer_item_without_content_on_a_deployment_declared_system_first() -> None:
     route: Final = _vllm_responses_route("Paris")
     input_items: Final = (
         {"role": "user", "content": "What is the capital of France?"},

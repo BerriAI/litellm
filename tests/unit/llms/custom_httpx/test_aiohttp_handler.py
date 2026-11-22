@@ -40,7 +40,9 @@ class TestBaseLLMAIOHTTPHandler:
 
         dynamic_session = Mock()
 
-        result = handler._get_async_client_session(dynamic_client_session=dynamic_session)
+        result = handler._get_async_client_session(
+            dynamic_client_session=dynamic_session
+        )
 
         assert result is dynamic_session
 
@@ -132,7 +134,9 @@ class TestBaseLLMAIOHTTPHandler:
 
         handler = BaseLLMAIOHTTPHandler(client_session=instance_session)
 
-        result = handler._get_async_client_session(dynamic_client_session=dynamic_session)
+        result = handler._get_async_client_session(
+            dynamic_client_session=dynamic_session
+        )
 
         assert result is dynamic_session
         assert result is not instance_session
@@ -235,7 +239,9 @@ class TestBaseLLMAIOHTTPHandler:
         mock_transport = Mock(spec=LiteLLMAiohttpTransport)
         mock_session = Mock()
 
-        handler = BaseLLMAIOHTTPHandler(client_session=mock_session, transport=mock_transport)
+        handler = BaseLLMAIOHTTPHandler(
+            client_session=mock_session, transport=mock_transport
+        )
 
         assert handler.transport is mock_transport
         assert handler._owns_transport is False
@@ -309,7 +315,9 @@ class TestBaseLLMAIOHTTPHandler:
             assert session.connector is connector
 
     @pytest.mark.asyncio
-    async def test_create_client_session_default_honors_global_ssl_verify_false(self, monkeypatch: pytest.MonkeyPatch):
+    async def test_create_client_session_default_honors_global_ssl_verify_false(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         """Regression test for LIT-3369: `litellm.ssl_verify = False` (set via
         `litellm_settings.ssl_verify: false`) must reach the default session's
         connector instead of being ignored by a bare `aiohttp.ClientSession()`."""
@@ -336,7 +344,9 @@ class TestBaseLLMAIOHTTPHandler:
             await session.close()
             await handler.close()
 
-    def test_get_or_create_transport_resolves_global_ssl_verify(self, monkeypatch: pytest.MonkeyPatch):
+    def test_get_or_create_transport_resolves_global_ssl_verify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         """The lazily created transport must carry the resolved global ssl config."""
         monkeypatch.setattr(litellm, "ssl_verify", False)
 

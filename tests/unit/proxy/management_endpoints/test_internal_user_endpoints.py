@@ -2697,13 +2697,9 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
     prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
     prisma_client.jsonify_object = PrismaClient.jsonify_object.__get__(prisma_client)
     transaction: Final = prisma_client.tx.return_value.__aenter__.return_value
-    transaction.query_raw = mocker.AsyncMock(
-        return_value=[
-            {
-                "budget_limits": saved_user.model_dump(mode="json")["budget_limits"],
-            }
-        ]
-    )
+    transaction.query_raw = mocker.AsyncMock(return_value=[{
+        "budget_limits": saved_user.model_dump(mode="json")["budget_limits"],
+    }])
     transaction.litellm_usertable.upsert = mocker.AsyncMock(return_value=saved_user)
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
@@ -2720,9 +2716,7 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN),
     )
 
-    _assert_resent_windows_keep_their_resets(
-        transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"]
-    )
+    _assert_resent_windows_keep_their_resets(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"])
 
 
 @pytest.mark.asyncio
@@ -2737,15 +2731,9 @@ async def test_user_window_write_keeps_a_reset_committed_after_admin_read() -> N
     transaction: Final = database.tx.return_value.__aenter__.return_value
     transaction.query_raw = AsyncMock(return_value=[{"budget_limits": [{**original, "reset_at": reset}]}])
     transaction.litellm_usertable.upsert = AsyncMock(return_value=user)
-    await _write_user_update(
-        database,
-        user.user_id,
-        {
-            "user_id": user.user_id,
-            "budget_limits": json.dumps([{**original, "max_budget": 50.0}]),
-        },
-        user,
-    )
+    await _write_user_update(database, user.user_id, {
+        "user_id": user.user_id, "budget_limits": json.dumps([{**original, "max_budget": 50.0}]),
+    }, user)
     assert json.loads(transaction.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["budget_limits"]) == [
         {**original, "max_budget": 50.0, "reset_at": reset},
     ]
@@ -3432,7 +3420,7 @@ async def test_delete_user_evicts_jwt_key_mapping_cache_of_its_keys(mocker, rust
             JWTMappingRow("hashed-jwt-key", "sub", "jwt-user"),
             JWTMappingRow("hashed-issuer-key", "sub", "jwt-user", "https://issuer.example"),
             JWTMappingRow("hashed-unrelated-key", "sub", "other-user"),
-        ],
+        ]
     )
     cache: Final = UserApiKeyCache()
     for cache_key, hashed_token in (
@@ -5784,7 +5772,9 @@ _DB_OUTAGE_503_BODY: Final = {
 }
 
 
-def _user_read_raising(mocker: MockerFixture, stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
+def _user_read_raising(
+    mocker: MockerFixture, stores: RustAuthStores, error: Exception
+) -> tuple[MagicMock, MagicMock]:
     prisma_client = MagicMock()
     stores.user.error = error
     cache = MagicMock()
@@ -5808,9 +5798,7 @@ def _db_unavailable_fallback_identity(route: str) -> UserAPIKeyAuth:
 
 @pytest.mark.asyncio
 async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_answering_403(mocker, rust_auth_stores):
-    prisma_client, cache = _user_read_raising(
-        mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed")
-    )
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
 
     with pytest.raises(httpx.ConnectError):
         await _authorize_user_list_request(
@@ -5826,9 +5814,7 @@ async def test_authorize_user_list_request_propagates_a_db_outage_instead_of_ans
 async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead_of_answering_403(
     mocker, rust_auth_stores
 ):
-    prisma_client, cache = _user_read_raising(
-        mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed")
-    )
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5848,9 +5834,7 @@ async def test_resolve_org_filter_for_user_search_propagates_a_db_outage_instead
 async def test_ui_view_users_answers_a_db_outage_as_503_no_db_connection_not_as_its_own_500(
     mocker, caplog, rust_auth_stores
 ):
-    prisma_client, cache = _user_read_raising(
-        mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed")
-    )
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -5890,9 +5874,7 @@ def test_user_routes_answer_503_no_db_connection_when_the_callers_user_read_hits
 ):
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-    prisma_client, cache = _user_read_raising(
-        mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed")
-    )
+    prisma_client, cache = _user_read_raising(mocker, rust_auth_stores, httpx.ConnectError("All connection attempts failed"))
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={"scope_user_search_to_org": True},
@@ -6207,18 +6189,13 @@ async def test_user_info_v2_without_budget_windows_reads_no_window_spend(mocker)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "stored_duration,stored_reset,expected",
-    [
-        ("5h", "2026-07-15T15:00:00Z", "2026-07-15T10:45:00Z"),
-        ("45m", "2026-07-15T11:30:00Z", "2026-07-15T11:30:00Z"),
-        ("45m", "2026-07-15T10:00:00Z", "2026-07-15T10:00:00Z"),
-    ],
-)
+@pytest.mark.parametrize("stored_duration,stored_reset,expected", [
+    ("5h", "2026-07-15T15:00:00Z", "2026-07-15T10:45:00Z"),
+    ("45m", "2026-07-15T11:30:00Z", "2026-07-15T11:30:00Z"),
+    ("45m", "2026-07-15T10:00:00Z", "2026-07-15T10:00:00Z"),
+])
 async def test_user_duration_edits_use_the_writers_current_schedule(
-    stored_duration: str,
-    stored_reset: str,
-    expected: str,
+    stored_duration: str, stored_reset: str, expected: str,
 ) -> None:
     import time_machine
     from litellm.proxy.management_endpoints.internal_user_endpoints import _write_user_update

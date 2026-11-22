@@ -43,9 +43,7 @@ def test_capture_rate_gauge_holds_the_latest_rate_per_provider_and_nan_when_ther
         _clear_prometheus_registry()
 
 
-def test_capture_rate_gauge_still_records_when_api_provider_is_an_excluded_label(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_capture_rate_gauge_still_records_when_api_provider_is_an_excluded_label(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "prometheus_exclude_labels", ["api_provider"])
     _clear_prometheus_registry()
     try:

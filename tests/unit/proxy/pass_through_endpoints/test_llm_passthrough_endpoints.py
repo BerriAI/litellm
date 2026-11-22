@@ -192,7 +192,9 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
-    upstream: Final = respx_mock.post(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
+    upstream: Final = respx_mock.post(
+        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
+    ).mock(
         return_value=httpx.Response(
             200,
             json={"totalTokens": 9},
@@ -232,7 +234,6 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.path == f"/{endpoint}"
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
-
 
 class _DenyingFileAccessGuard:
     def __init__(self) -> None:
@@ -663,6 +664,7 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
+
 @pytest.mark.parametrize(
     "configured",
     [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],
@@ -690,7 +692,6 @@ def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_heade
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert upstream.calls.last.request.headers["anthropic-beta"] == "claude-code-20250219,effort-2025-11-24"
-
 
 def test_vertex_pass_through_refuses_a_malformed_drop_setting_without_calling_vertex(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
@@ -738,9 +739,7 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
     assert "anthropic-beta" not in upstream.calls.last.request.headers
 
 
-_VERTEX_GEMINI_MODEL_PATH: Final = (
-    "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-2.5-flash"
-)
+_VERTEX_GEMINI_MODEL_PATH: Final = "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-2.5-flash"
 _VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 _VERTEX_IDENTITY_LABELS: Final = {"user_api_key_alias": "search-bot", "user_api_key_team_alias": "search-team"}
 _VERTEX_SPEND_LOGS_LABELS: Final = {"cost_center": "cc-42"}
@@ -868,9 +867,9 @@ def test_vertex_pass_through_replaces_forged_labels_on_any_endpoint(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
-    upstream: Final = respx_mock.post(
-        f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens"
-    ).mock(return_value=httpx.Response(200, json={"totalTokens": 1}))
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens").mock(
+        return_value=httpx.Response(200, json={"totalTokens": 1})
+    )
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}], "labels": _VERTEX_FORGED_LABELS}
 
     response: Final = vertex_proxy.post(
@@ -888,9 +887,9 @@ def test_vertex_pass_through_adds_no_labels_where_the_caller_sent_none_outside_b
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
-    upstream: Final = respx_mock.post(
-        f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens"
-    ).mock(return_value=httpx.Response(200, json={"totalTokens": 1}))
+    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens").mock(
+        return_value=httpx.Response(200, json={"totalTokens": 1})
+    )
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 
     response: Final = vertex_proxy.post(
@@ -946,9 +945,7 @@ def test_vertex_claude_pass_through_replaces_a_forged_labels_header(
     )
 
     response: Final = vertex_proxy.post(
-        f"/vertex_ai/{model_path}",
-        json=_VERTEX_CLAUDE_BODY,
-        headers={"x-litellm-api-key": "sk-caller", **caller_headers},
+        f"/vertex_ai/{model_path}", json=_VERTEX_CLAUDE_BODY, headers={"x-litellm-api-key": "sk-caller", **caller_headers}
     )
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)

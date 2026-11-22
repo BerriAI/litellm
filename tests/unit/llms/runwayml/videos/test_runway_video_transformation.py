@@ -219,7 +219,9 @@ class TestRunwayMLVideoTransformation:
         from litellm.types.videos.utils import encode_video_id_with_provider
 
         # Test status request URL construction
-        video_id = encode_video_id_with_provider("63fd0f13-f29d-4e58-99d3-1cb9efa14a5b", "runwayml", "gen4_turbo")
+        video_id = encode_video_id_with_provider(
+            "63fd0f13-f29d-4e58-99d3-1cb9efa14a5b", "runwayml", "gen4_turbo"
+        )
         api_base = "https://api.dev.runwayml.com/v1"
 
         url, params = self.config.transform_video_status_retrieve_request(
@@ -229,7 +231,10 @@ class TestRunwayMLVideoTransformation:
             headers={},
         )
 
-        assert url == "https://api.dev.runwayml.com/v1/tasks/63fd0f13-f29d-4e58-99d3-1cb9efa14a5b"
+        assert (
+            url
+            == "https://api.dev.runwayml.com/v1/tasks/63fd0f13-f29d-4e58-99d3-1cb9efa14a5b"
+        )
         assert params == {}
 
         # Test status response with ISO 8601 timestamp parsing
@@ -263,7 +268,9 @@ class TestRunwayMLVideoTransformation:
         from litellm.types.videos.utils import encode_video_id_with_provider
 
         # Test content request URL
-        video_id = encode_video_id_with_provider("63fd0f13-f29d-4e58-99d3-1cb9efa14a5b", "runwayml", "gen4_turbo")
+        video_id = encode_video_id_with_provider(
+            "63fd0f13-f29d-4e58-99d3-1cb9efa14a5b", "runwayml", "gen4_turbo"
+        )
         api_base = "https://api.dev.runwayml.com/v1"
 
         url, params = self.config.transform_video_content_request(
@@ -273,7 +280,10 @@ class TestRunwayMLVideoTransformation:
             headers={},
         )
 
-        assert url == "https://api.dev.runwayml.com/v1/tasks/63fd0f13-f29d-4e58-99d3-1cb9efa14a5b"
+        assert (
+            url
+            == "https://api.dev.runwayml.com/v1/tasks/63fd0f13-f29d-4e58-99d3-1cb9efa14a5b"
+        )
 
         # Test video URL extraction from response
         response_data = {
@@ -298,7 +308,10 @@ class TestRunwayMLVideoTransformation:
             headers={},
         )
 
-        assert url == "https://api.dev.runwayml.com/v1/tasks/..%2F..%2Ftasks%2Fother%3Fx%3D1%23frag"
+        assert (
+            url
+            == "https://api.dev.runwayml.com/v1/tasks/..%2F..%2Ftasks%2Fother%3Fx%3D1%23frag"
+        )
         assert params == {}
 
     def test_full_video_workflow(self):
@@ -374,6 +387,4 @@ def test_first_class_video_fields_are_rejected_or_dropped(field: str) -> None:
     config: Final = RunwayMLVideoConfig()
     with pytest.raises(UnsupportedParamsError, match=field):
         config.map_openai_params({field: 1}, "video-model", False)
-    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params(
-        {}, "video-model", True
-    )
+    assert config.map_openai_params({field: 1}, "video-model", True) == config.map_openai_params({}, "video-model", True)

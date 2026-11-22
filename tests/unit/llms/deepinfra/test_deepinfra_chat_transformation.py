@@ -21,7 +21,9 @@ def test_deepseek_supported_openai_params(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    supported_openai_params = DeepInfraConfig().get_supported_openai_params(model="deepinfra/deepseek-ai/DeepSeek-V3.1")
+    supported_openai_params = DeepInfraConfig().get_supported_openai_params(
+        model="deepinfra/deepseek-ai/DeepSeek-V3.1"
+    )
     print(supported_openai_params)
     assert "reasoning_effort" in supported_openai_params
 
@@ -212,7 +214,9 @@ async def test_deepinfra_request_stringifies_tool_content_without_touching_the_c
         {
             "role": "assistant",
             "content": "",
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": "{}"}}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "calculator", "arguments": "{}"}}
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": "20"}]},
     ]

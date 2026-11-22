@@ -103,7 +103,9 @@ def test_reload_anthropic_beta_headers_admin_success(client, auth_as, monkeypatc
     prisma.db.litellm_config.upsert.assert_awaited_once()
 
 
-def test_reload_anthropic_beta_headers_preserves_existing_interval(client, auth_as, monkeypatch):
+def test_reload_anthropic_beta_headers_preserves_existing_interval(
+    client, auth_as, monkeypatch
+):
     """When an existing reload config has an interval set, the force-reload
     write must preserve that interval (the route reads it back then upserts
     with the same number). This pins the read-then-write behaviour."""
@@ -125,7 +127,11 @@ def test_reload_anthropic_beta_headers_preserves_existing_interval(client, auth_
     call_kwargs = prisma.db.litellm_config.upsert.await_args.kwargs
     data = call_kwargs["data"]
     update_payload = data["update"]["param_value"]
-    parsed = json.loads(update_payload) if isinstance(update_payload, str) else update_payload
+    parsed = (
+        json.loads(update_payload)
+        if isinstance(update_payload, str)
+        else update_payload
+    )
     assert parsed["interval_hours"] == 12
     assert parsed["force_reload"] is True
 
@@ -158,7 +164,9 @@ def test_reload_anthropic_beta_headers_no_db_returns_500(client, auth_as, monkey
 # ---------------------------------------------------------------------------
 
 
-def test_schedule_anthropic_beta_headers_reload_admin_success(client, auth_as, monkeypatch):
+def test_schedule_anthropic_beta_headers_reload_admin_success(
+    client, auth_as, monkeypatch
+):
     """Happy path: admin schedules every N hours — response echoes interval."""
     from litellm.proxy._types import LitellmUserRoles
 
@@ -166,7 +174,9 @@ def test_schedule_anthropic_beta_headers_reload_admin_success(client, auth_as, m
     _install_prisma(monkeypatch, prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/schedule/anthropic_beta_headers_reload", params={"hours": 6})
+        response = client.post(
+            "/schedule/anthropic_beta_headers_reload", params={"hours": 6}
+        )
 
     assert response.status_code == 200
     assert normalize(response.json(), _VOLATILE) == {
@@ -178,7 +188,9 @@ def test_schedule_anthropic_beta_headers_reload_admin_success(client, auth_as, m
     prisma.db.litellm_config.upsert.assert_awaited_once()
 
 
-def test_schedule_anthropic_beta_headers_reload_zero_hours_400(client, auth_as, monkeypatch):
+def test_schedule_anthropic_beta_headers_reload_zero_hours_400(
+    client, auth_as, monkeypatch
+):
     """``hours <= 0`` is rejected with 400 and a descriptive message."""
     from litellm.proxy._types import LitellmUserRoles
 
@@ -186,7 +198,9 @@ def test_schedule_anthropic_beta_headers_reload_zero_hours_400(client, auth_as, 
     _install_prisma(monkeypatch, prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/schedule/anthropic_beta_headers_reload", params={"hours": 0})
+        response = client.post(
+            "/schedule/anthropic_beta_headers_reload", params={"hours": 0}
+        )
 
     assert response.status_code == 400
     assert "Hours must be greater than 0" in response.json().get("detail", "")
@@ -196,7 +210,9 @@ def test_schedule_anthropic_beta_headers_reload_not_admin_forbidden(client, auth
     from litellm.proxy._types import LitellmUserRoles
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.post("/schedule/anthropic_beta_headers_reload", params={"hours": 6})
+        response = client.post(
+            "/schedule/anthropic_beta_headers_reload", params={"hours": 6}
+        )
 
     assert response.status_code == 403
     assert "Admin role required" in response.json().get("detail", "")
@@ -218,7 +234,9 @@ def test_schedule_anthropic_beta_headers_reload_missing_hours_422(client, auth_a
 # ---------------------------------------------------------------------------
 
 
-def test_cancel_anthropic_beta_headers_reload_admin_success(client, auth_as, monkeypatch):
+def test_cancel_anthropic_beta_headers_reload_admin_success(
+    client, auth_as, monkeypatch
+):
     """Admin cancel: deletes the LiteLLM_Config row and returns success dict."""
     from litellm.proxy._types import LitellmUserRoles
 
@@ -249,7 +267,9 @@ def test_cancel_anthropic_beta_headers_reload_not_admin_forbidden(client, auth_a
     assert "Admin role required" in response.json().get("detail", "")
 
 
-def test_cancel_anthropic_beta_headers_reload_no_db_returns_500(client, auth_as, monkeypatch):
+def test_cancel_anthropic_beta_headers_reload_no_db_returns_500(
+    client, auth_as, monkeypatch
+):
     from litellm.proxy._types import LitellmUserRoles
 
     _install_prisma(monkeypatch, None)
@@ -266,7 +286,9 @@ def test_cancel_anthropic_beta_headers_reload_no_db_returns_500(client, auth_as,
 # ---------------------------------------------------------------------------
 
 
-def test_get_anthropic_beta_headers_reload_status_scheduled(client, auth_as, monkeypatch):
+def test_get_anthropic_beta_headers_reload_status_scheduled(
+    client, auth_as, monkeypatch
+):
     """When a config row with ``interval_hours`` is present, ``scheduled`` is True
     and ``interval_hours`` echoes the DB value. Pins the full response shape."""
     from litellm.proxy import proxy_server as ps
@@ -293,7 +315,9 @@ def test_get_anthropic_beta_headers_reload_status_scheduled(client, auth_as, mon
     }
 
 
-def test_get_anthropic_beta_headers_reload_status_not_scheduled_no_db(client, auth_as, monkeypatch):
+def test_get_anthropic_beta_headers_reload_status_not_scheduled_no_db(
+    client, auth_as, monkeypatch
+):
     """No DB connection: handler returns the unscheduled-status dict (not 500)."""
     from litellm.proxy._types import LitellmUserRoles
 
@@ -311,7 +335,9 @@ def test_get_anthropic_beta_headers_reload_status_not_scheduled_no_db(client, au
     }
 
 
-def test_get_anthropic_beta_headers_reload_status_no_interval_unscheduled(client, auth_as, monkeypatch):
+def test_get_anthropic_beta_headers_reload_status_no_interval_unscheduled(
+    client, auth_as, monkeypatch
+):
     """Config row present but ``interval_hours`` is None → unscheduled response."""
     from litellm.proxy._types import LitellmUserRoles
 

@@ -75,9 +75,7 @@ def _ctx_double(
     ctx.settings.return_value.allowed_fails_policy = None
     ctx.settings.return_value.allowed_fails_for.return_value = None
     ctx.health.return_value.store = store if store is not None else DualCache(in_memory_cache=InMemoryCache())
-    ctx.health.return_value.cooldowns = CooldownCache(
-        RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
-    )
+    ctx.health.return_value.cooldowns = CooldownCache(RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
     return ctx
 
 
@@ -366,9 +364,7 @@ class TestShouldCooldownBasedOnDeploymentPolicy:
 class TestShouldCooldownBasedOnAllowedFailsPolicy:
     def _make_router(self, cooldown_time: float = 60.0, store: RouterCooldowns | None = None) -> MagicMock:
         ctx: Final = _ctx_double(cooldown_time=cooldown_time, allowed_fails=0)
-        ctx.health.return_value.cooldowns = CooldownCache(
-            store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time
-        )
+        ctx.health.return_value.cooldowns = CooldownCache(store or RouterCooldownStore(connect(None).router_cooldowns()), cooldown_time)
         return ctx
 
     def test_cooldown_time_override_zero_is_not_falsy(self):
@@ -844,6 +840,8 @@ class TestCooldownCacheTTLCorrection:
         assert result == ([("deployment", value)] if active else [])
 
 
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestSingleDeploymentModelGroupProtection:
     def test_generic_allowed_fails_does_not_bypass_single_deployment_protection(self):
@@ -1093,6 +1091,8 @@ class TestCallerScopedOAuthAuthFailureCooldown:
         assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
 
 
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestPerUserCopilotAuthFailureCooldown:
     @staticmethod
@@ -1175,6 +1175,10 @@ class TestPerUserCopilotAuthFailureCooldown:
             )
         assert get_deployment_failures_for_current_minute(RoutingContext(router), model_id) == 1
         assert get_cooldown_deployments(RoutingContext(router), parent_otel_span=None) == [model_id]
+
+
+
+
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")

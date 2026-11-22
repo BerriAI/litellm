@@ -492,7 +492,9 @@ async def test_aim_anonymize_callback_redacts_content_with_respx(mode: str) -> N
     response_body = {
         "required_action": {"action_type": "anonymize_action"},
         "analysis_result": {"policy_drill_down": {}},
-        "redacted_chat": {"all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]},
+        "redacted_chat": {
+            "all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]
+        },
     }
 
     with respx.mock(assert_all_called=True) as router:
@@ -546,7 +548,9 @@ async def test_aim_anonymize_rejects_multimodal_content_with_respx() -> None:
     response_body = {
         "required_action": {"action_type": "anonymize_action"},
         "analysis_result": {"policy_drill_down": {}},
-        "redacted_chat": {"all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]},
+        "redacted_chat": {
+            "all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]
+        },
     }
 
     with respx.mock(assert_all_called=True) as router:
@@ -688,7 +692,9 @@ async def test_aim_post_call_preserves_anonymized_entities_with_respx() -> None:
             json={
                 "required_action": {"action_type": "anonymize_action"},
                 "analysis_result": {"policy_drill_down": {}},
-                "redacted_chat": {"all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]},
+                "redacted_chat": {
+                    "all_redacted_messages": [{"role": "user", "content": "Hi my name is [NAME_1]"}]
+                },
             },
         )
 

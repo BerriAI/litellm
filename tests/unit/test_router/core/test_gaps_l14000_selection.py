@@ -361,7 +361,9 @@ async def test_a_tier_param_the_request_allowlists_is_kept(make_core: MakeCore, 
 async def test_a_tier_param_the_deployment_allowlists_is_kept(make_core: MakeCore, allowlist: object) -> None:
     core: Final = make_core(
         model_list=[
-            deployment("small", "s", model="anthropic/claude-3-5-sonnet-20240620", allowed_openai_params=allowlist),
+            deployment(
+                "small", "s", model="anthropic/claude-3-5-sonnet-20240620", allowed_openai_params=allowlist
+            ),
             deployment("big", "b"),
             _complexity_router(tiers=_pinned(logit_bias={"1": 2})),
         ]

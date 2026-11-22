@@ -121,9 +121,7 @@ def test_unresolved_saved_api_base_does_not_contact_the_default_endpoint(
 
     app.dependency_overrides[nim_http_client] = connection
     with patch.object(litellm, "credential_list", [credential]):
-        response: Final = client.post(
-            "/credentials/nvidia_nim/models", json={"credential_name": credential.credential_name}
-        )
+        response: Final = client.post("/credentials/nvidia_nim/models", json={"credential_name": credential.credential_name})
 
     assert response.status_code == 200, response.text
     assert requests == []

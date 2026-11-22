@@ -1511,10 +1511,7 @@ def test_gemini_manual_vad_activity_markers_are_empty_messages():
     ("session", "expected_keys"),
     [
         ({"turn_detection": None}, [["activityStart", "audio"], ["activityEnd"]]),
-        (
-            {"type": "realtime", "audio": {"input": {"turn_detection": None}}},
-            [["activityStart", "audio"], ["activityEnd"]],
-        ),
+        ({"type": "realtime", "audio": {"input": {"turn_detection": None}}}, [["activityStart", "audio"], ["activityEnd"]]),
         ({"type": "realtime", "audio": {"input": {}}}, [["audio"], ["audioStreamEnd"]]),
     ],
 )
@@ -2318,9 +2315,7 @@ def test_google_ai_studio_forwards_a_documented_voice(drop_params):
 
     speech_config: Final = mapped["generationConfig"]["speechConfig"]
     assert speech_config["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == _DOCUMENTED_VOICE
-    assert (
-        config.setup_session_update_rejection("gemini-3.8-live", {"voice": _DOCUMENTED_VOICE}, setup_sent=False) is None
-    )
+    assert config.setup_session_update_rejection("gemini-3.8-live", {"voice": _DOCUMENTED_VOICE}, setup_sent=False) is None
 
 
 @pytest.mark.parametrize(
@@ -2887,9 +2882,7 @@ def test_gemini_video_inline_data_becomes_output_video_delta() -> None:
 
 def test_gemini_video_only_frame_emits_no_audio_delta() -> None:
     config: Final = GeminiRealtimeConfig()
-    frame: Final = {
-        "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}
-    }
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
     result: Final = config.transform_realtime_response(
         json.dumps(frame),
         "gemini-3.8-live",
@@ -2937,9 +2930,7 @@ def test_gemini_video_only_frame_never_opens_a_response() -> None:
     """Avatar video flows continuously, outside any turn: a video-only frame opens no
     response and leaves the delta state untouched; the transcript opens the spoken turn."""
     config: Final = GeminiRealtimeConfig()
-    frame: Final = {
-        "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}
-    }
+    frame: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "video/mp4", "data": "bXA0"}}]}}}
     result: Final = config.transform_realtime_response(
         json.dumps(frame), "gemini-3.8-live", MagicMock(), realtime_response_transform_input=_transform_input()
     )

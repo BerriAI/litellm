@@ -172,7 +172,9 @@ class TestArizePhoenixConfig(unittest.TestCase):
         ),
     ],
 )
-def test_get_arize_phoenix_config(monkeypatch, env_vars, expected_headers, expected_endpoint, expected_protocol):
+def test_get_arize_phoenix_config(
+    monkeypatch, env_vars, expected_headers, expected_endpoint, expected_protocol
+):
     # Clear all Phoenix-related env vars first to ensure clean state
     for key in [
         "PHOENIX_API_KEY",
@@ -200,7 +202,9 @@ def test_get_arize_phoenix_config(monkeypatch, env_vars, expected_headers, expec
             id="missing api_key with explicit Arize Phoenix Cloud endpoint",
         ),
         pytest.param(
-            {"PHOENIX_COLLECTOR_HTTP_ENDPOINT": "https://app.phoenix.arize.com/v1/traces"},
+            {
+                "PHOENIX_COLLECTOR_HTTP_ENDPOINT": "https://app.phoenix.arize.com/v1/traces"
+            },
             id="missing api_key with HTTP Arize Phoenix Cloud endpoint",
         ),
     ],
@@ -217,7 +221,9 @@ def test_get_arize_phoenix_config_expection_on_missing_api_key(monkeypatch, env_
     for key, value in env_vars.items():
         monkeypatch.setenv(key, value)
 
-    with pytest.raises(ValueError, match="PHOENIX_API_KEY must be set when using Phoenix Cloud"):
+    with pytest.raises(
+        ValueError, match="PHOENIX_API_KEY must be set when using Phoenix Cloud"
+    ):
         ArizePhoenixLogger.get_arize_phoenix_config()
 
 
@@ -229,7 +235,9 @@ def test_get_arize_phoenix_config_expection_on_missing_api_key(monkeypatch, env_
         pytest.param("http://localhost:6006", "Authorization", id="http"),
     ],
 )
-def test_get_arize_phoenix_config_auth_header_key_casing(monkeypatch, collector_endpoint, expected_key):
+def test_get_arize_phoenix_config_auth_header_key_casing(
+    monkeypatch, collector_endpoint, expected_key
+):
     """Regression for #34882: gRPC metadata keys must be lowercase.
 
     HTTP headers are case-insensitive, but the OTLP/gRPC exporter rejects an
@@ -382,7 +390,9 @@ class TestResolveProjectName:
                 "metadata": {"phoenix_project_name": "attacker-project"},
             },
         }
-        with patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "env-project"}, clear=True):
+        with patch.dict(
+            "os.environ", {"PHOENIX_PROJECT_NAME": "env-project"}, clear=True
+        ):
             assert ArizePhoenixLogger._resolve_project_name(kwargs) == "env-project"
 
 
@@ -390,7 +400,9 @@ class TestProjectNameNotOnSpan:
     """Project routing uses Resource on TracerProvider, not span attributes."""
 
     @patch("litellm.integrations.arize._utils.set_attributes")
-    def test_set_arize_phoenix_attributes_does_not_set_project_on_span(self, _mock_set_attrs):
+    def test_set_arize_phoenix_attributes_does_not_set_project_on_span(
+        self, _mock_set_attrs
+    ):
         span = MagicMock()
         kwargs = {
             "standard_logging_object": {
@@ -446,7 +458,9 @@ class TestPerProjectTracerProviderCache:
         )
 
         spans = exporter.get_finished_spans()
-        project_names = {s.resource.attributes.get("openinference.project.name") for s in spans}
+        project_names = {
+            s.resource.attributes.get("openinference.project.name") for s in spans
+        }
         assert "project-a" in project_names
         assert "project-b" in project_names
 
@@ -457,7 +471,9 @@ class TestPerProjectTracerProviderCache:
         )
 
         mock_processor = MagicMock()
-        with patch.object(OpenTelemetry, "_get_span_processor", return_value=mock_processor) as mock_get_processor:
+        with patch.object(
+            OpenTelemetry, "_get_span_processor", return_value=mock_processor
+        ) as mock_get_processor:
             logger = ArizePhoenixLogger(
                 config=OpenTelemetryConfig(exporter=MagicMock()),
                 callback_name="arize_phoenix",
@@ -523,7 +539,9 @@ class TestGetLitellmResourceForProject:
 
         with patch.dict(
             "os.environ",
-            {"OTEL_RESOURCE_ATTRIBUTES": "openinference.project.name=env-pinned,model_id=env-model"},
+            {
+                "OTEL_RESOURCE_ATTRIBUTES": "openinference.project.name=env-pinned,model_id=env-model"
+            },
             clear=False,
         ):
             resource = logger._get_litellm_resource_for_project("dynamic-proj")
@@ -537,7 +555,9 @@ class TestGetLitellmResourceForProject:
         from litellm.integrations.opentelemetry import OpenTelemetryConfig
 
         logger = ArizePhoenixLogger(
-            config=OpenTelemetryConfig(exporter=MagicMock(), deployment_environment="staging"),
+            config=OpenTelemetryConfig(
+                exporter=MagicMock(), deployment_environment="staging"
+            ),
             callback_name="arize_phoenix",
         )
         resource = logger._get_litellm_resource_for_project("my-proj")
@@ -648,7 +668,9 @@ class TestTracerResolutionAndCache:
         )
 
         assert getattr(logger, "_use_injected_tracer_provider", False) is True
-        assert not hasattr(logger, "_project_providers") or not getattr(logger, "_project_providers", None)
+        assert not hasattr(logger, "_project_providers") or not getattr(
+            logger, "_project_providers", None
+        )
 
         tracer_a = logger._get_tracer_for("any-project")
         tracer_b = logger.get_tracer_to_use_for_request(
@@ -731,7 +753,10 @@ class TestPhoenixTraceHandling:
         request_spans = [s for s in spans if s.name == LITELLM_REQUEST_SPAN_NAME]
         assert len(request_spans) == 1
         assert request_spans[0].status.status_code == StatusCode.ERROR
-        assert request_spans[0].resource.attributes.get("openinference.project.name") == "fail-proj"
+        assert (
+            request_spans[0].resource.attributes.get("openinference.project.name")
+            == "fail-proj"
+        )
 
     def test_proxy_mode_parent_and_child_share_trace_id(self):
         from datetime import datetime
@@ -782,7 +807,10 @@ class TestPhoenixTraceHandling:
         trace_ids = {s.context.trace_id for s in spans}
         assert len(trace_ids) == 1
         for span in spans:
-            assert span.resource.attributes.get("openinference.project.name") == "proxy-proj"
+            assert (
+                span.resource.attributes.get("openinference.project.name")
+                == "proxy-proj"
+            )
 
     def test_override_routes_all_spans_to_one_project_in_single_request(self):
         from datetime import datetime
@@ -825,7 +853,10 @@ class TestPhoenixTraceHandling:
         )
 
         for span in exporter.get_finished_spans():
-            assert span.resource.attributes.get("openinference.project.name") == "unified-proj"
+            assert (
+                span.resource.attributes.get("openinference.project.name")
+                == "unified-proj"
+            )
             assert span.resource.attributes.get("model_id") == "unified-proj"
 
 
@@ -871,7 +902,9 @@ def test_failed_proxy_request_puts_the_error_message_on_every_phoenix_span_statu
 
 
 class TestGetArizePhoenixConfigProjectName:
-    @patch.dict("os.environ", {"PHOENIX_PROJECT_NAME": "phoenix-config-proj"}, clear=True)
+    @patch.dict(
+        "os.environ", {"PHOENIX_PROJECT_NAME": "phoenix-config-proj"}, clear=True
+    )
     def test_project_name_from_phoenix_env(self):
         config = ArizePhoenixLogger.get_arize_phoenix_config()
         assert config.project_name == "phoenix-config-proj"
@@ -931,7 +964,9 @@ def test_arize_phoenix_client_sanitize_id_allows_uuid():
 def test_arize_phoenix_client_get_prompt_version_rejects_traversal():
     from litellm.integrations.arize.arize_phoenix_client import ArizePhoenixClient
 
-    client = ArizePhoenixClient(api_key="test-key", api_base="https://app.phoenix.arize.com")
+    client = ArizePhoenixClient(
+        api_key="test-key", api_base="https://app.phoenix.arize.com"
+    )
     with pytest.raises(ValueError, match="disallowed characters"):
         client.get_prompt_version("../../projects")
 
@@ -958,7 +993,6 @@ def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
-
 
 @pytest.fixture(scope="function")
 def isolate_litellm_state():
@@ -1012,7 +1046,6 @@ def isolate_litellm_state():
             setattr(litellm, attr, original_value)
     publish(litellm.model_cost)
 
-
 _SCALAR_DEFAULTS = {
     "num_retries": getattr(litellm, "num_retries", None),
     "num_retries_per_request": getattr(litellm, "num_retries_per_request", None),
@@ -1032,7 +1065,6 @@ _SCALAR_DEFAULTS = {
     "api_base": getattr(litellm, "api_base", None),
     "api_key": getattr(litellm, "api_key", None),
 }
-
 
 @pytest.fixture(scope="module")
 def setup_and_teardown():
@@ -1055,7 +1087,6 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
-
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
 @pytest.mark.asyncio()

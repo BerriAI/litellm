@@ -121,7 +121,9 @@ class TestDuckDuckGoSearchMocked:
             mock_get.return_value = mock_response
 
             # Make the search call
-            response = await litellm.asearch(query="python programming", search_provider="duckduckgo", max_results=5)
+            response = await litellm.asearch(
+                query="python programming", search_provider="duckduckgo", max_results=5
+            )
 
             # Verify the get method was called once
             assert mock_get.call_count == 1
@@ -145,7 +147,10 @@ class TestDuckDuckGoSearchMocked:
             # Verify first result (Abstract)
             first_result = response.results[0]
             assert first_result.title == "Python (programming language)"
-            assert first_result.url == "https://en.wikipedia.org/wiki/Python_(programming_language)"
+            assert (
+                first_result.url
+                == "https://en.wikipedia.org/wiki/Python_(programming_language)"
+            )
             assert "Python is a high-level programming language" in first_result.snippet
 
             # Verify related topics are included
@@ -209,7 +214,9 @@ class TestDuckDuckGoSearchMocked:
             mock_get.return_value = mock_response
 
             # Make the search call
-            response = await litellm.asearch(query="India", search_provider="duckduckgo")
+            response = await litellm.asearch(
+                query="India", search_provider="duckduckgo"
+            )
 
             # Verify response structure
             assert hasattr(response, "results")

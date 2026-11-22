@@ -102,12 +102,18 @@ def _common_call_kwargs(client) -> Dict[str, Any]:
 
 
 class TestSyncAudioUrl:
-    def test_should_create_poll_fetch_and_cleanup_when_audio_url_supplied(self, monkeypatch):
+    def test_should_create_poll_fetch_and_cleanup_when_audio_url_supplied(
+        self, monkeypatch
+    ):
         monkeypatch.setattr("time.sleep", lambda *_: None)
         responses = {
-            "POST https://api.soniox.com/v1/transcriptions": [_make_response({"id": "tx_1", "status": "queued"})],
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1", "status": "queued"})
+            ],
             "GET https://api.soniox.com/v1/transcriptions/tx_1": [
-                _make_response({"id": "tx_1", "status": "completed", "audio_duration_ms": 1500}),
+                _make_response(
+                    {"id": "tx_1", "status": "completed", "audio_duration_ms": 1500}
+                ),
             ],
             "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
                 _make_response({"text": "hello world", "tokens": []}),
@@ -759,6 +765,7 @@ class TestCleanupNormalization:
         deletes = [c["url"] for c in client.calls if c["method"] == "DELETE"]
         assert "https://api.soniox.com/v1/transcriptions/tx_1" in deletes
 
+
     def test_should_skip_non_string_cleanup_entries(self):
         _, _, _, opts = SonioxAudioTranscriptionHandler()._prepare(
             audio_file=None,
@@ -1070,14 +1077,18 @@ class TestSecretRedaction:
         assert post_call["json"]["webhook_auth_header_value"] == "super-secret-token"
 
         # 2. Pre-call logging must receive a redacted body.
-        pre_call_body = logging_obj.pre_call.call_args.kwargs["additional_args"]["complete_input_dict"]
+        pre_call_body = logging_obj.pre_call.call_args.kwargs["additional_args"][
+            "complete_input_dict"
+        ]
         assert pre_call_body["webhook_auth_header_value"] == "[REDACTED]"
         # Non-secret fields unchanged.
         assert pre_call_body["webhook_url"] == "https://example.com/hook"
         assert pre_call_body["webhook_auth_header_name"] == "X-Webhook-Auth"
 
         # 3. Post-call logging must also receive a redacted body.
-        post_call_body = logging_obj.post_call.call_args.kwargs["additional_args"]["complete_input_dict"]
+        post_call_body = logging_obj.post_call.call_args.kwargs["additional_args"][
+            "complete_input_dict"
+        ]
         assert post_call_body["webhook_auth_header_value"] == "[REDACTED]"
 
 
@@ -1254,3 +1265,4 @@ class TestSpendTracking:
         finally:
             litellm.model_cost = original_model_cost
             litellm.get_model_info.cache_clear()
+

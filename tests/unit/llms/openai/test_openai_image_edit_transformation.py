@@ -21,20 +21,12 @@ def image_edit_config() -> OpenAIImageEditConfig:
 @pytest.mark.parametrize("config", [OpenAIImageEditConfig(), AzureImageEditConfig()])
 def test_transform_image_edit_response_retains_svg_authoring_usage(config: OpenAIImageEditConfig) -> None:
     svg_usage: Final = {
-        "model": "gpt-6.2-sol",
-        "input_tokens": 10,
-        "output_tokens": 20,
-        "reasoning_tokens": 5,
-        "total_tokens": 30,
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 5, "total_tokens": 30,
     }
     logging_obj: Final = Logging(
-        model="gpt-image-2.6-flare",
-        messages=[],
-        stream=False,
-        call_type="image_edit",
-        start_time=datetime(2026, 1, 1),
-        litellm_call_id="svg-edit",
-        function_id="svg-edit",
+        model="gpt-image-2.6-flare", messages=[], stream=False, call_type="image_edit",
+        start_time=datetime(2026, 1, 1), litellm_call_id="svg-edit", function_id="svg-edit",
     )
     result: Final = config.transform_image_edit_response(
         model="gpt-image-2.6-flare",

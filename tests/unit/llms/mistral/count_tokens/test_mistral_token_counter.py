@@ -894,9 +894,7 @@ async def test_count_tokens_sends_the_tool_choice_chat_sends_in_the_responses_sh
 
 @pytest.mark.asyncio
 async def test_count_tokens_sends_no_tool_choice_without_tools_like_chat(monkeypatch: pytest.MonkeyPatch) -> None:
-    sent: Final = await _sent_count_body(
-        monkeypatch, "mistral-large-4", _LOOKUP_ASK, chat_params={"tool_choice": "none"}
-    )
+    sent: Final = await _sent_count_body(monkeypatch, "mistral-large-4", _LOOKUP_ASK, chat_params={"tool_choice": "none"})
 
     assert "tool_choice" not in sent
 
@@ -953,10 +951,7 @@ async def test_count_tokens_sends_each_system_message_where_chat_sends_it(monkey
             {"role": "system", "content": "You are a terse assistant."},
             {"role": "user", "content": "Say hello."},
             {"role": "assistant", "content": "Hello."},
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "Now answer "}, {"type": "text", "text": "in French."}],
-            },
+            {"role": "system", "content": [{"type": "text", "text": "Now answer "}, {"type": "text", "text": "in French."}]},
             {"role": "user", "content": "Say goodbye."},
         ],
     )
@@ -1009,16 +1004,12 @@ async def test_count_tokens_joins_text_blocks_the_way_mistral_chat_does(monkeypa
 
     counted_input: Final = counted["input"]
     assert isinstance(counted_input, list)
-    assert (
-        _texts(counted_input, "content", "output")
-        == _texts(chat_sent, "content")
-        == [
-            "Summarize the plan for the release.",
-            "Ship the fix.",
-            "Look it up.",
-            "Release on Monday.",
-        ]
-    )
+    assert _texts(counted_input, "content", "output") == _texts(chat_sent, "content") == [
+        "Summarize the plan for the release.",
+        "Ship the fix.",
+        "Look it up.",
+        "Release on Monday.",
+    ]
 
 
 @pytest.mark.asyncio

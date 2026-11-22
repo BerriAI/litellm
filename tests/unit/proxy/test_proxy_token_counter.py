@@ -5431,9 +5431,7 @@ async def test_framed_stand_in_counts_a_prompt_like_the_same_text_sent_as_a_user
 ) -> None:
     _framed_kimi(monkeypatch)
 
-    from_prompt: Final = await count_request_tokens(
-        request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True
-    )
+    from_prompt: Final = await count_request_tokens(request=TokenCountRequest(model="kimi", prompt=_FOX), call_endpoint=True)
     from_message: Final = await count_request_tokens(
         request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": _FOX}]), call_endpoint=True
     )
@@ -6824,9 +6822,7 @@ async def test_responses_count_on_mistral_counts_the_turns_previous_response_id_
         bodies.append(json.loads(request.content))
         return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 41}, request=request)
 
-    monkeypatch.setattr(
-        litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,)))
-    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable((stored_turn,))))
     with patch.object(
         mistral_count_tokens_http,
         "get_async_httpx_client",
@@ -7037,10 +7033,7 @@ async def test_messages_count_tokens_counts_deepseek_on_its_anthropic_count_rout
     sent_request: Final = route.calls.last.request
     sent: Final = json.loads(sent_request.content)
     inference: Final = _messages_inference_fields(
-        DeepSeekAnthropicMessagesConfig(),
-        "deepseek-v4-pro",
-        body,
-        ("tool_choice", "output_config", "tools", "thinking"),
+        DeepSeekAnthropicMessagesConfig(), "deepseek-v4-pro", body, ("tool_choice", "output_config", "tools", "thinking")
     )
     assert response == {"input_tokens": 91, "litellm_count_source": "provider"}
     assert sent_request.headers["x-api-key"] == "sk-deepseek-test"
@@ -7099,9 +7092,7 @@ async def _count_deepseek_responses(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     with respx.mock:
-        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(
-            return_value=httpx.Response(200, json={"input_tokens": 91})
-        )
+        route: Final = respx.post(_DEEPSEEK_COUNT_ROUTE).mock(return_value=httpx.Response(200, json={"input_tokens": 91}))
         result: Final = await count_request_tokens(
             request=TokenCountRequest.model_validate(
                 {"model": "deepseek-counted", "messages": [{"role": "user", "content": "Say hi."}], **request_options}
@@ -7450,13 +7441,7 @@ def _nested_json(depth: int) -> JsonValue:
         (_messages_route_count, "thinking"),
         (_responses_route_count, "tool_choice"),
     ],
-    ids=[
-        "utils-tool-choice",
-        "utils-drop-params",
-        "messages-tool-choice",
-        "messages-thinking",
-        "responses-tool-choice",
-    ],
+    ids=["utils-tool-choice", "utils-drop-params", "messages-tool-choice", "messages-thinking", "responses-tool-choice"],
 )
 async def test_count_routes_skip_a_value_nested_too_deep_to_validate(
     monkeypatch: pytest.MonkeyPatch,

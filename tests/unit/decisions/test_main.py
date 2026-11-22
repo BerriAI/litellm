@@ -752,10 +752,7 @@ async def test_litellm_proxy_systemone_goes_to_the_proxy_systemone_endpoint_unch
     [
         (
             "decisions",
-            {
-                "input": "review",
-                "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
-            },
+            {"input": "review", "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]},
             _OPENAI_PREDICATE_RESPONSE,
         ),
         ("systemone", {"state": "review", "questions": _QUESTIONS}, _RESPONSE),
@@ -800,10 +797,7 @@ async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_con
                     "type": "choice",
                     "name": "sentiment",
                     "choice": "positive",
-                    "probabilities": [
-                        {"value": "positive", "probability": 0.8},
-                        {"value": "negative", "probability": 0.2},
-                    ],
+                    "probabilities": [{"value": "positive", "probability": 0.8}, {"value": "negative", "probability": 0.2}],
                 }
             ],
         }
@@ -812,11 +806,7 @@ async def test_litellm_proxy_calls_pass_on_answers_the_proxy_returns_without_con
         json={
             **_RESPONSE,
             "answers": {
-                "sentiment": {
-                    "type": "choice",
-                    "choice": "positive",
-                    "probabilities": {"positive": 0.8, "negative": 0.2},
-                }
+                "sentiment": {"type": "choice", "choice": "positive", "probabilities": {"positive": 0.8, "negative": 0.2}}
             },
         }
     )

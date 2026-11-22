@@ -19,7 +19,9 @@ from litellm.types.utils import ImageResponse
 
 
 def test_openai_style_model_supports_full_openai_param_surface():
-    params = AimlImageGenerationConfig().get_supported_openai_params("openai/gpt-image-2")
+    params = AimlImageGenerationConfig().get_supported_openai_params(
+        "openai/gpt-image-2"
+    )
     assert {
         "n",
         "size",
@@ -109,7 +111,7 @@ def test_flux_style_request_still_remaps_to_legacy_fields():
 
 
 def test_openai_style_unsupported_param_raises_without_drop_params():
-    with pytest.raises(ValueError, match="Supported parameters are"):
+    with pytest.raises(ValueError, match='Supported parameters are'):
         AimlImageGenerationConfig().map_openai_params(
             non_default_params={"image_size": {"width": 1024, "height": 1024}},
             optional_params={},

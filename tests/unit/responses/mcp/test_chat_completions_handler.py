@@ -184,7 +184,10 @@ async def test_acompletion_with_mcp_passes_mcp_server_auth_headers_to_process_to
     mcp_server_auth_headers = captured_process_kwargs["mcp_server_auth_headers"]
     assert mcp_server_auth_headers is not None
     assert "linear_config" in mcp_server_auth_headers
-    assert mcp_server_auth_headers["linear_config"]["Authorization"] == "Bearer linear-token"
+    assert (
+        mcp_server_auth_headers["linear_config"]["Authorization"]
+        == "Bearer linear-token"
+    )
 
 
 @pytest.mark.asyncio
@@ -289,7 +292,9 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
         if kwargs.get("stream", False):
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg)) for msg in messages
+                msg.get("role") == "tool"
+                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
+                for msg in messages
             )
             if is_follow_up:
                 return FollowUpStreamingResponse()
@@ -424,7 +429,9 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     follow_up_call = None
     for call in mock_acompletion_func.await_args_list:
         messages = call.kwargs.get("messages", [])
-        if messages and any(msg.get("role") == "tool" for msg in messages if isinstance(msg, dict)):
+        if messages and any(
+            msg.get("role") == "tool" for msg in messages if isinstance(msg, dict)
+        ):
             follow_up_call = call.kwargs
             break
     assert follow_up_call is not None, "Should have a follow-up call"
@@ -572,12 +579,18 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
 
     # Verify mcp_list_tools is in the first chunk
     first_chunk = all_chunks[0]
-    assert hasattr(first_chunk, "choices") and first_chunk.choices, "First chunk must have choices"
+    assert (
+        hasattr(first_chunk, "choices") and first_chunk.choices
+    ), "First chunk must have choices"
     choice = first_chunk.choices[0]
     assert hasattr(choice, "delta") and choice.delta, "First choice must have delta"
     provider_fields = getattr(choice.delta, "provider_specific_fields", None)
-    assert provider_fields is not None, f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
-    assert "mcp_list_tools" in provider_fields, f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
+    assert (
+        provider_fields is not None
+    ), f"First chunk should have provider_specific_fields. Delta: {choice.delta}"
+    assert (
+        "mcp_list_tools" in provider_fields
+    ), f"First chunk should have mcp_list_tools. Fields: {provider_fields}"
     assert provider_fields["mcp_list_tools"] == openai_tools
 
 
@@ -749,7 +762,9 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
     # Verify that the first call was made with stream=True
     assert mock_acompletion.await_count >= 1
     first_call = mock_acompletion.await_args_list[0].kwargs
-    assert first_call["stream"] is True, "First call should be streaming with new implementation"
+    assert (
+        first_call["stream"] is True
+    ), "First call should be streaming with new implementation"
 
 
 @pytest.mark.asyncio
@@ -872,7 +887,9 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         if kwargs.get("stream", False):
             messages = kwargs.get("messages", [])
             is_follow_up = any(
-                msg.get("role") == "tool" or (isinstance(msg, dict) and "tool_call_id" in str(msg)) for msg in messages
+                msg.get("role") == "tool"
+                or (isinstance(msg, dict) and "tool_call_id" in str(msg))
+                for msg in messages
             )
             if is_follow_up:
                 return FollowUpStreamingResponse()
@@ -991,28 +1008,53 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
         for chunk in all_chunks:
             if hasattr(chunk, "choices") and chunk.choices:
                 choice = chunk.choices[0]
-                if hasattr(choice, "finish_reason") and choice.finish_reason == "tool_calls":
+                if (
+                    hasattr(choice, "finish_reason")
+                    and choice.finish_reason == "tool_calls"
+                ):
                     initial_final_chunk = chunk
 
         assert first_chunk is not None, "Should have a first chunk"
-        assert initial_final_chunk is not None, "Should have a final chunk from initial response"
+        assert (
+            initial_final_chunk is not None
+        ), "Should have a final chunk from initial response"
 
         # Verify mcp_list_tools is in the first chunk
-        assert hasattr(first_chunk, "choices") and first_chunk.choices, "First chunk must have choices"
+        assert (
+            hasattr(first_chunk, "choices") and first_chunk.choices
+        ), "First chunk must have choices"
         first_choice = first_chunk.choices[0]
-        assert hasattr(first_choice, "delta") and first_choice.delta, "First choice must have delta"
-        first_provider_fields = getattr(first_choice.delta, "provider_specific_fields", None)
-        assert first_provider_fields is not None, "First chunk should have provider_specific_fields"
-        assert "mcp_list_tools" in first_provider_fields, "First chunk should have mcp_list_tools"
+        assert (
+            hasattr(first_choice, "delta") and first_choice.delta
+        ), "First choice must have delta"
+        first_provider_fields = getattr(
+            first_choice.delta, "provider_specific_fields", None
+        )
+        assert (
+            first_provider_fields is not None
+        ), "First chunk should have provider_specific_fields"
+        assert (
+            "mcp_list_tools" in first_provider_fields
+        ), "First chunk should have mcp_list_tools"
 
         # Verify mcp_tool_calls and mcp_call_results are in the final chunk of initial response
-        assert hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices, "Final chunk must have choices"
+        assert (
+            hasattr(initial_final_chunk, "choices") and initial_final_chunk.choices
+        ), "Final chunk must have choices"
         final_choice = initial_final_chunk.choices[0]
-        assert hasattr(final_choice, "delta") and final_choice.delta, "Final choice must have delta"
-        final_provider_fields = getattr(final_choice.delta, "provider_specific_fields", None)
-        assert final_provider_fields is not None, "Final chunk should have provider_specific_fields"
+        assert (
+            hasattr(final_choice, "delta") and final_choice.delta
+        ), "Final choice must have delta"
+        final_provider_fields = getattr(
+            final_choice.delta, "provider_specific_fields", None
+        )
+        assert (
+            final_provider_fields is not None
+        ), "Final chunk should have provider_specific_fields"
         assert "mcp_tool_calls" in final_provider_fields, "Should have mcp_tool_calls"
-        assert "mcp_call_results" in final_provider_fields, "Should have mcp_call_results"
+        assert (
+            "mcp_call_results" in final_provider_fields
+        ), "Should have mcp_call_results"
 
 
 @pytest.mark.asyncio
@@ -1048,7 +1090,9 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     # NOTE: avoid monkeypatch string path here because `litellm.responses` is also
     # exported as a function on the top-level `litellm` package, which can confuse
     # pytest's dotted-path resolver.
-    mcp_handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    mcp_handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
     monkeypatch.setattr(mcp_handler_module, "function_setup", mock_function_setup)
     monkeypatch.setattr(
         "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
@@ -1078,7 +1122,9 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     )
 
     # Verify that proxy_server_request was set with arguments
-    assert "proxy_server_request" in captured_kwargs, "proxy_server_request should be in logging_request_data"
+    assert (
+        "proxy_server_request" in captured_kwargs
+    ), "proxy_server_request should be in logging_request_data"
     proxy_server_request = captured_kwargs["proxy_server_request"]
     assert "body" in proxy_server_request, "proxy_server_request should have body"
     assert "name" in proxy_server_request["body"], "body should have name"
@@ -1207,7 +1253,11 @@ async def test_acompletion_with_mcp_streaming_drain_error_does_not_drop_final_ch
         async for chunk in result:
             all_chunks.append(chunk)
 
-    final_chunks = [chunk for chunk in all_chunks if chunk.choices and chunk.choices[0].finish_reason == "stop"]
+    final_chunks = [
+        chunk
+        for chunk in all_chunks
+        if chunk.choices and chunk.choices[0].finish_reason == "stop"
+    ]
     assert len(final_chunks) == 1, f"Final chunk must survive a drain error. Got chunks: {all_chunks}"
     assert all_chunks[-1].choices[0].finish_reason == "stop"
 
@@ -1366,9 +1416,7 @@ async def test_acompletion_with_mcp_forwards_unserved_external_mcp_tool_to_the_p
 @pytest.mark.parametrize("stream", [False, True])
 @pytest.mark.parametrize("selection_source", ["metadata", "litellm_metadata", "body"])
 @pytest.mark.parametrize("logging_failure", [False, True])
-async def test_request_selected_mcp_guardrail_blocks_before_upstream(
-    monkeypatch, selected, stream, selection_source, logging_failure
-):
+async def test_request_selected_mcp_guardrail_blocks_before_upstream(monkeypatch, selected, stream, selection_source, logging_failure):
     from mcp.types import Tool
 
     from litellm.caching.caching import DualCache
@@ -1391,17 +1439,10 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(
     guardrail = BlockSelected(guardrail_name="block-all", event_hook="pre_mcp_call", default_on=False)
     monkeypatch.setattr(litellm, "callbacks", [guardrail])
     manager = mcp_server_manager.MCPServerManager()
-    manager.registry = {
-        "observer": MCPServer(
-            server_id="observer",
-            name="observer",
-            server_name="observer",
-            transport="http",
-            url="https://observer.example/mcp",
-            spec_path="observer.json",
-            auth_type="none",
-        )
-    }
+    manager.registry = {"observer": MCPServer(
+        server_id="observer", name="observer", server_name="observer", transport="http",
+        url="https://observer.example/mcp", spec_path="observer.json", auth_type="none",
+    )}
     manager.tool_name_to_mcp_server_name_mapping = {"observer-execute": "observer"}
     upstream = AsyncMock(return_value={"executed": True})
     registry = tool_registry.MCPToolRegistry()
@@ -1409,94 +1450,49 @@ async def test_request_selected_mcp_guardrail_blocks_before_upstream(
     monkeypatch.setattr(tool_registry, "global_mcp_tool_registry", registry)
     monkeypatch.setattr(mcp_server_manager, "global_mcp_server_manager", manager)
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
-    monkeypatch.setattr(
-        server,
-        "_get_tools_from_mcp_servers",
-        AsyncMock(
-            return_value=AggregateToolListing(
-                tools=[Tool(name="observer-execute", inputSchema={"type": "object"})], outcomes={}
-            )
-        ),
-    )
+    monkeypatch.setattr(server, "_get_tools_from_mcp_servers", AsyncMock(return_value=AggregateToolListing(
+        tools=[Tool(name="observer-execute", inputSchema={"type": "object"})], outcomes={}
+    )))
     responses = [
-        ModelResponse(
-            choices=[
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": None,
-                        "tool_calls": [
-                            {
-                                "id": "call-1",
-                                "type": "function",
-                                "function": {"name": "observer-execute", "arguments": "{}"},
-                            }
-                        ],
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ]
-        ),
+        ModelResponse(choices=[{"message": {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "call-1", "type": "function", "function": {"name": "observer-execute", "arguments": "{}"}}
+        ]}, "finish_reason": "tool_calls"}]),
         ModelResponse(choices=[{"message": {"role": "assistant", "content": "done"}}]),
     ]
     if stream:
         from litellm.types.utils import ModelResponseStream
-
         responses = [
             await litellm.acompletion(
-                model="openai/gpt-5",
-                messages=[{"role": "user", "content": "execute"}],
-                stream=True,
-                mock_response=ModelResponseStream(
-                    choices=[
-                        {
-                            "index": 0,
-                            "delta": {
-                                "role": "assistant",
-                                "content": None,
-                                "tool_calls": [
-                                    {
-                                        "index": 0,
-                                        "id": "call-1",
-                                        "type": "function",
-                                        "function": {"name": "observer-execute", "arguments": "{}"},
-                                    }
-                                ],
-                            },
-                            "finish_reason": "tool_calls",
-                        }
-                    ]
-                ),
+                model="openai/gpt-5", messages=[{"role": "user", "content": "execute"}], stream=True,
+                mock_response=ModelResponseStream(choices=[{"index": 0, "delta": {
+                    "role": "assistant", "content": None, "tool_calls": [{
+                        "index": 0, "id": "call-1", "type": "function",
+                        "function": {"name": "observer-execute", "arguments": "{}"},
+                    }],
+                }, "finish_reason": "tool_calls"}]),
             ),
             await litellm.acompletion(
-                model="openai/gpt-5",
-                messages=[{"role": "user", "content": "done"}],
-                stream=True,
-                mock_response="done",
+                model="openai/gpt-5", messages=[{"role": "user", "content": "done"}],
+                stream=True, mock_response="done",
             ),
         ]
     if logging_failure:
         from litellm.responses.mcp import litellm_proxy_mcp_handler
-
         def fail_logging(*args, **kwargs):
             raise RuntimeError("logging initialization failed")
-
         monkeypatch.setattr(litellm_proxy_mcp_handler, "function_setup", fail_logging)
     model_call = AsyncMock(side_effect=responses)
     monkeypatch.setattr(litellm, "acompletion", model_call)
     result = await acompletion_with_mcp(
-        model="test-model",
-        messages=[{"role": "user", "content": "execute"}],
+        model="test-model", messages=[{"role": "user", "content": "execute"}],
         tools=[{"type": "mcp", "server_url": "litellm_proxy/observer", "require_approval": "never"}],
         stream=stream,
         user_api_key_auth=UserAPIKeyAuth(
             object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="test", mcp_servers=["observer"])
         ),
-        **(
-            {"guardrails": ["block-all"] if selected else []}
-            if selection_source == "body"
-            else {selection_source: {"guardrails": ["block-all"] if selected else []}}
-        ),
+        **({"guardrails": ["block-all"] if selected else []} if selection_source == "body" else {
+            selection_source: {"guardrails": ["block-all"] if selected else []}
+        }),
     )
     if stream:
         chunks = [chunk async for chunk in result]
@@ -2249,9 +2245,7 @@ async def test_stream_auto_execute_sends_its_usage_chunk_under_the_id_of_the_row
     await recorder.settled(logged=1)
 
     usage_chunks: Final = tuple(chunk for chunk in chunks if isinstance(getattr(chunk, "usage", None), Usage))
-    answer_chunks: Final = tuple(
-        chunk for chunk in chunks if chunk.choices and chunk.choices[0].delta.content == "PING"
-    )
+    answer_chunks: Final = tuple(chunk for chunk in chunks if chunk.choices and chunk.choices[0].delta.content == "PING")
     assert len(recorder.logged) == 1
     assert [chunk.id for chunk in answer_chunks] == [_CHAT_ROUND_TWO["id"]]
     assert len(usage_chunks) == 1
@@ -2897,16 +2891,8 @@ def _anthropic_answer() -> Response:
     )
 
 
-_WHOLE_DEMO_SERVER: Final = {
-    "type": "allowed_tools",
-    "mode": "auto",
-    "tools": [{"type": "mcp", "server_label": "demo"}],
-}
-_WHOLE_OTHER_SERVER: Final = {
-    "type": "allowed_tools",
-    "mode": "auto",
-    "tools": [{"type": "mcp", "server_label": "other"}],
-}
+_WHOLE_DEMO_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "demo"}]}
+_WHOLE_OTHER_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "other"}]}
 
 
 async def _call_echo_on_anthropic_under_drop_params(
@@ -3009,11 +2995,7 @@ def _choice_of(*tools: Mapping[str, object]) -> Mapping[str, object]:
 @pytest.mark.parametrize(
     ("tool_choice", "server_url", "listed"),
     [
-        (
-            _choice_of({"type": "mcp", "server_label": "demo", "name": "echo"}),
-            "litellm_proxy/mcp/demo",
-            _DEMO_ECHO_TOOL,
-        ),
+        (_choice_of({"type": "mcp", "server_label": "demo", "name": "echo"}), "litellm_proxy/mcp/demo", _DEMO_ECHO_TOOL),
         (
             _choice_of({"type": "mcp", "server_label": "demo", "name": "demo-echo"}),
             "litellm_proxy/mcp/demo",

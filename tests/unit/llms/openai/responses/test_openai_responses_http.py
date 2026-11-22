@@ -455,7 +455,7 @@ def test_codex_chat_completion_stream_strips_cache_control_and_transforms_tools(
             "role": "system",
             "content": [{"type": "input_text", "text": "Use tools carefully."}],
         },
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the value."}]},
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the value."}]}
     ]
     assert request_body["tools"] == [
         {

@@ -6,13 +6,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.pass_through_endpoints.managed_id_codec import (
+from litellm.proxy.pass_through_endpoints.managed_id_codec import(
     decode,
     encode,
     is_managed,
     new_managed_id,
 )
-from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+from litellm.proxy.pass_through_endpoints.managed_id_rewriter import(
     _canonical_path,
     _MAX_RAW_ID_GUARD_LOOKUPS,
     _passthrough_provider_marker,
@@ -26,7 +26,7 @@ from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
     rewrite_streamed_response_ids,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.base_llm.managed_resources.utils import (
+from litellm.llms.base_llm.managed_resources.utils import(
     resolve_passthrough_managed_id_provider,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -340,22 +340,18 @@ async def _drain_logging_worker():
     await GLOBAL_LOGGING_WORKER.stop()
     yield
 
-
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
     yield
     record_vcr_outcome(request, vcr)
 
-
 def _user_passthrough_managed(user_id: str = "user-1", team_id: str = "team-1") -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_id=user_id, team_id=team_id)
-
 
 def _admin_user() -> UserAPIKeyAuth:
     u = UserAPIKeyAuth(user_id="admin", user_role="proxy_admin")
     return u
-
 
 def _prisma_client_passthrough_managed() -> MagicMock:
     """Return a MagicMock prisma_client with async db methods."""
@@ -371,13 +367,11 @@ def _prisma_client_passthrough_managed() -> MagicMock:
     pc.db.litellm_managedobjecttable.update = AsyncMock(return_value=None)
     return pc
 
-
 def _managed_files_hook(store_side_effect: Any = None) -> MagicMock:
     hook = MagicMock()
     hook.get_unified_file_id = AsyncMock(return_value=None)
     hook.store_unified_file_id = AsyncMock(side_effect=store_side_effect)
     return hook
-
 
 def _owner_scoped_file_find_many(row: Any):
     """Return a ``find_many`` that mimics Prisma owner-scoping for the managed
@@ -394,7 +388,6 @@ def _owner_scoped_file_find_many(row: Any):
         return [row]
 
     return _impl
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestCodec:
@@ -443,7 +436,6 @@ class TestCodec:
             p = decode(mid)
             assert p is not None and p.raw_provider_id == raw
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestManagedIdProviderScope:
     """Managed-ID scoping is keyed on the explicit forwarded provider, and both
@@ -487,7 +479,6 @@ class TestManagedIdProviderScope:
         for provider in (None, "", "cohere", "vllm", "anthropic", "gemini", "bedrock"):
             assert resolve_passthrough_managed_id_provider(provider) is None
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestCanonicalPath:
     def test_strips_openai_prefix(self):
@@ -520,7 +511,6 @@ class TestCanonicalPath:
 
     def test_strips_azure_openai_file_with_id(self):
         assert _canonical_path("/azure/openai/files/file-abc") == "/v1/files/file-abc"
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestResolveOne:
@@ -596,7 +586,6 @@ class TestResolveOne:
         hook.get_unified_file_id = AsyncMock(return_value=file_row)
         result = await _resolve_one(mid, "openai", _admin_user(), None, hook)
         assert result == "file-xyz"
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRewriteResponseIds:
@@ -1353,7 +1342,6 @@ class TestRewriteResponseIds:
         assert snapshot["input_file_id"] == result["input_file_id"]
         assert decode(snapshot["input_file_id"]).raw_provider_id == "file-in"  # type: ignore[union-attr]
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRewritePathIds:
     @pytest.mark.asyncio
@@ -1382,7 +1370,6 @@ class TestRewritePathIds:
             await rewrite_path_ids(f"/v1/batches/{mid}", "openai", _user_passthrough_managed(), None, None)
         assert exc_info.value.status_code == 404
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRewriteQueryIds:
     @pytest.mark.asyncio
@@ -1408,7 +1395,6 @@ class TestRewriteQueryIds:
         result = await rewrite_query_ids(params, "openai", _user_passthrough_managed(), None, hook)
         assert result is not params
         assert result["file_id"] == "file-abc"  # type: ignore[index]
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRewriteBodyIds:
@@ -1566,7 +1552,6 @@ class TestRewriteBodyIds:
             cursor = cursor["nested"]  # type: ignore[index]
         assert cursor["input_file_id"] == "file-deep"  # type: ignore[index]
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRawProviderIdInputGuard:
     @staticmethod
@@ -1705,7 +1690,6 @@ class TestRawProviderIdInputGuard:
         )
         assert result == "/openai/v1/files/file-victim"
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestRawProviderIdGuardBudget:
     @pytest.mark.asyncio
@@ -1756,7 +1740,6 @@ class TestRawProviderIdGuardBudget:
         assert exc_info.value.status_code == 400
         assert pc.db.litellm_managedfiletable.find_many.call_count == _MAX_RAW_ID_GUARD_LOOKUPS
 
-
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestFlagOff:
     """
@@ -1785,7 +1768,6 @@ class TestFlagOff:
         body = {"id": "file-abc123"}
         result = await rewrite_body_ids(body, "openai", _user_passthrough_managed(), None, None)
         assert result is body
-
 
 def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
     """Return a prisma_client whose find_many honors the provider scope pushed
@@ -1819,7 +1801,6 @@ def _prisma_with_list(file_rows=None, batch_rows=None) -> MagicMock:
         pc.db.litellm_managedobjecttable.find_many = AsyncMock(side_effect=_batch_filter)
     return pc
 
-
 def _fake_file_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
     row = MagicMock()
     row.unified_file_id = unified_id
@@ -1836,7 +1817,6 @@ def _fake_file_row(unified_id: str, created_by: str = "user-1", team_id: str = "
     row.created_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
     return row
 
-
 def _fake_batch_row(unified_id: str, created_by: str = "user-1", team_id: str = "team-1"):
     row = MagicMock()
     row.unified_object_id = unified_id
@@ -1851,7 +1831,6 @@ def _fake_batch_row(unified_id: str, created_by: str = "user-1", team_id: str = 
 
     row.created_at = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
     return row
-
 
 @pytest.mark.usefixtures("_drain_logging_worker", "_vcr_outcome_gate")
 class TestListPassthroughIdsFromDb:

@@ -23,7 +23,9 @@ class TestProviderRegistration:
 
     def test_should_resolve_soniox_via_get_llm_provider(self, monkeypatch):
         monkeypatch.setenv("SONIOX_API_KEY", "test-key")
-        model, provider, api_key, api_base = litellm.get_llm_provider(model="soniox/stt-async-v4")
+        model, provider, api_key, api_base = litellm.get_llm_provider(
+            model="soniox/stt-async-v4"
+        )
         assert provider == "soniox"
         assert model == "stt-async-v4"
         assert api_key == "test-key"
@@ -31,7 +33,9 @@ class TestProviderRegistration:
 
     def test_should_resolve_soniox_v5_via_get_llm_provider(self, monkeypatch):
         monkeypatch.setenv("SONIOX_API_KEY", "test-key")
-        model, provider, api_key, api_base = litellm.get_llm_provider(model="soniox/stt-async-v5")
+        model, provider, api_key, api_base = litellm.get_llm_provider(
+            model="soniox/stt-async-v5"
+        )
         assert provider == "soniox"
         assert model == "stt-async-v5"
         assert api_key == "test-key"
@@ -39,13 +43,17 @@ class TestProviderRegistration:
 
     def test_should_resolve_soniox_v6_via_get_llm_provider(self, monkeypatch):
         monkeypatch.setenv("SONIOX_API_KEY", "test-key")
-        model, provider, api_key, api_base = litellm.get_llm_provider(model="soniox/stt-async-v6")
+        model, provider, api_key, api_base = litellm.get_llm_provider(
+            model="soniox/stt-async-v6"
+        )
         assert provider == "soniox"
         assert model == "stt-async-v6"
         assert api_key == "test-key"
         assert api_base == "https://api.soniox.com"
 
-        model, provider, api_key, api_base = litellm.get_llm_provider(model="soniox/stt-rt-v6")
+        model, provider, api_key, api_base = litellm.get_llm_provider(
+            model="soniox/stt-rt-v6"
+        )
         assert provider == "soniox"
         assert model == "stt-rt-v6"
         assert api_key == "test-key"

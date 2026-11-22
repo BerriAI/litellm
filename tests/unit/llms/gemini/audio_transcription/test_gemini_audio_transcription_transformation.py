@@ -266,6 +266,7 @@ class TestTransformResponse:
         assert response.get("duration") is None
 
 
+
 class TestNonCompletedInteractionThroughRouter:
     @pytest.fixture
     def router(self, monkeypatch):

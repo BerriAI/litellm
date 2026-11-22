@@ -2562,9 +2562,7 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     )
 
     created: Final = next(
-        json.loads(call.content)
-        for call in calls
-        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
@@ -2619,9 +2617,7 @@ async def test_cache_creation_drops_tool_call_arguments_gemini_cannot_use_when_d
     )
 
     created: Final = next(
-        json.loads(call.content)
-        for call in calls
-        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     function_call: Final = created["contents"][1]["parts"][0]["function_call"]
     assert (function_call["name"], function_call["args"]) == ("get_weather", {})

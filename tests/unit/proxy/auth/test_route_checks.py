@@ -216,9 +216,7 @@ def test_user_banner_read_open_to_non_admin_roles(role):
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_latest_release_info_read_open_to_non_admin_roles(
-    role,
-):  # test-quality-ok: allowed path returns None, not raising is the observable
+def test_latest_release_info_read_open_to_non_admin_roles(role):  # test-quality-ok: allowed path returns None, not raising is the observable
     user_obj = LiteLLM_UserTable(
         user_id="test_user",
         user_email="test@example.com",
@@ -245,9 +243,7 @@ def test_latest_release_info_read_open_to_non_admin_roles(
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY.value,
     ],
 )
-def test_reference_exchange_rates_read_open_to_non_admin_roles(
-    role: str,
-) -> None:  # test-quality-ok: allowed path returns None, not raising is the observable
+def test_reference_exchange_rates_read_open_to_non_admin_roles(role: str) -> None:  # test-quality-ok: allowed path returns None, not raising is the observable
     RouteChecks.non_proxy_admin_allowed_routes_check(
         user_obj=LiteLLM_UserTable(user_id="test_user", user_email="test@example.com", user_role=role),
         _user_role=role,
@@ -386,15 +382,12 @@ def test_proxy_admin_viewer_allowed_management_reads(allowed_read_route):
     )
 
 
-@pytest.mark.parametrize(
-    "group, route",
-    (
-        ("openai_routes", "/chat/completions"),
-        ("skill_hub_routes", "/skill-hub/skills/release-notes/downloads"),
-        ("management_routes", "/skill-hub/skills/release-notes/downloads"),
-        ("anthropic_routes", "/claude-code/plugins/release-notes/downloads"),
-    ),
-)
+@pytest.mark.parametrize("group, route", (
+    ("openai_routes", "/chat/completions"),
+    ("skill_hub_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("management_routes", "/skill-hub/skills/release-notes/downloads"),
+    ("anthropic_routes", "/claude-code/plugins/release-notes/downloads"),
+))
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_allowed(group: str, route: str) -> None:
     """Test that virtual key is allowed to call routes when allowed_routes contains LiteLLMRoutes member name"""
 
@@ -1940,7 +1933,9 @@ def test_an_empty_key_list_falls_back_to_the_team_list(key_routes: object) -> No
         team_metadata={"allowed_passthrough_routes": ["/custom-endpoint"]},
     )
 
-    assert RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is True
+    assert (
+        RouteChecks.check_passthrough_route_access(route="/custom-endpoint/x", user_api_key_dict=valid_token) is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -5258,14 +5253,11 @@ def test_every_dashboard_role_can_send_telemetry_ui_events(
         pytest.fail(f"{user_role.value} was denied {method} {route}: {exc.detail}")
 
 
-@pytest.mark.parametrize(
-    "route",
-    [
-        "/skill-hub/skills/{name}/versions",
-        "/skill-hub/skills/{name}/versions/{version_id}",
-        "/skill-hub/skills/{name}/versions/{version_id}/archive",
-    ],
-)
+@pytest.mark.parametrize("route", [
+    "/skill-hub/skills/{name}/versions",
+    "/skill-hub/skills/{name}/versions/{version_id}",
+    "/skill-hub/skills/{name}/versions/{version_id}/archive",
+])
 def test_member_can_reach_skill_history_visibility_checks(route: str) -> None:
     request: Final = MagicMock(spec=Request)
     request.method = "GET"

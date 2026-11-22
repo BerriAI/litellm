@@ -72,7 +72,9 @@ def test_old_node_switches_via_nvm_when_present(tmp_path):
     home = tmp_path / "home"
     nvm_dir = home / ".nvm"
     nvm_dir.mkdir(parents=True)
-    (nvm_dir / "nvm.sh").write_text(f'nvm() {{ [ "$1" = use ] && PATH="{new}:$PATH"; return 0; }}\n')
+    (nvm_dir / "nvm.sh").write_text(
+        f'nvm() {{ [ "$1" = use ] && PATH="{new}:$PATH"; return 0; }}\n'
+    )
     proc = _run([old], home)
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "v99.0.0"
@@ -83,7 +85,9 @@ def test_old_node_switches_via_fnm_when_nvm_is_absent(tmp_path):
     old = _fake_node(tmp_path / "old-bin", _bump_major(_floor(), -1))
     new = _fake_node(tmp_path / "new-bin", "99.0.0")
     fnm = tmp_path / "old-bin" / "fnm"
-    fnm.write_text(f'#!/bin/sh\n[ "$1" = env ] && echo \'export PATH="{new}:$PATH"\'\nexit 0\n')
+    fnm.write_text(
+        f'#!/bin/sh\n[ "$1" = env ] && echo \'export PATH="{new}:$PATH"\'\nexit 0\n'
+    )
     fnm.chmod(0o755)
     proc = _run([old], tmp_path / "home")
     assert proc.returncode == 0, proc.stderr

@@ -202,7 +202,9 @@ def make_handler() -> CLIHarnessHandler:
     return CLIHarnessHandler(ClaudeCodeHarnessConfig())
 
 
-def request_for(ctx: SessionContext, native_session_id: str | None = None, prompt: str = "hi") -> HarnessTurnRequest:
+def request_for(
+    ctx: SessionContext, native_session_id: str | None = None, prompt: str = "hi"
+) -> HarnessTurnRequest:
     cfg = ClaudeCodeHarnessConfig()
     setup = cfg.transform_session_setup(ctx, PRIV)
     return cfg.transform_turn_request(ctx, setup, PRIV, prompt, native_session_id)
@@ -279,7 +281,9 @@ def test_parse_compaction_and_garbage():
             "compact_metadata": {"trigger": "auto", "pre_tokens": 1234},
         }
     )
-    assert parse_line(line, state) == [Compaction(tokens_before=1234, tokens_after=None)]
+    assert parse_line(line, state) == [
+        Compaction(tokens_before=1234, tokens_after=None)
+    ]
     assert parse_line("not json", state) == []
     assert parse_line("", state) == []
     assert parse_line("[1,2]", state) == []
@@ -309,7 +313,9 @@ def test_parse_skips_subagent_messages_and_maps_errors():
             ]
         },
     }
-    assert cfg.transform_stream_line(err, state) == [ToolResult(id="t1", output="boom", is_error=True)]
+    assert cfg.transform_stream_line(err, state) == [
+        ToolResult(id="t1", output="boom", is_error=True)
+    ]
 
 
 def test_user_message_yields_only_its_tool_result_objects():
@@ -437,7 +443,9 @@ def test_session_setup_and_turn_request_env_and_command(tmp_path):
 
 
 def test_background_model_is_the_session_model(tmp_path):
-    env = ClaudeCodeHarnessConfig().transform_session_setup(pure_ctx(tmp_path), PRIV).env
+    env = (
+        ClaudeCodeHarnessConfig().transform_session_setup(pure_ctx(tmp_path), PRIV).env
+    )
     assert env["ANTHROPIC_SMALL_FAST_MODEL"] == "claude-haiku-4-5-20251001"
 
 
@@ -448,7 +456,9 @@ def test_resume_argv(tmp_path):
 
 def test_missing_endpoint_raises(tmp_path):
     with pytest.raises(HarnessError, match="endpoint"):
-        ClaudeCodeHarnessConfig().transform_session_setup(pure_ctx(tmp_path, endpoint=None), PRIV)
+        ClaudeCodeHarnessConfig().transform_session_setup(
+            pure_ctx(tmp_path, endpoint=None), PRIV
+        )
 
 
 @pytest.mark.parametrize("key", sorted(MANAGED_ENV_KEYS))
@@ -460,11 +470,15 @@ def test_options_env_cannot_override_managed_keys(tmp_path, key):
 
 def test_wrong_options_type_rejected(tmp_path):
     with pytest.raises(OptionsMismatch):
-        ClaudeCodeHarnessConfig().validate_environment(pure_ctx(tmp_path, options=CodexOptions()))
+        ClaudeCodeHarnessConfig().validate_environment(
+            pure_ctx(tmp_path, options=CodexOptions())
+        )
 
 
 def test_structured_output_system_prompt(tmp_path):
-    argv = list(request_for(pure_ctx(tmp_path, output=Answer, instructions="Base.")).argv)
+    argv = list(
+        request_for(pure_ctx(tmp_path, output=Answer, instructions="Base.")).argv
+    )
     prompt = argv[argv.index("--append-system-prompt") + 1]
     assert prompt.startswith("Base.\n\n")
     assert json.dumps(Answer.model_json_schema()) in prompt
@@ -489,7 +503,9 @@ def test_turn_response_api_error_includes_stderr(tmp_path):
 def test_turn_response_max_turns(tmp_path):
     _, state = parse_fixture("max_turns.jsonl")
     with pytest.raises(HarnessTurnError, match="maximum number of turns"):
-        ClaudeCodeHarnessConfig().transform_turn_response(pure_ctx(tmp_path), state, 1, [])
+        ClaudeCodeHarnessConfig().transform_turn_response(
+            pure_ctx(tmp_path), state, 1, []
+        )
 
 
 def test_turn_error_message_no_result():
@@ -512,7 +528,9 @@ def test_turn_response_structured_output_and_fallback(tmp_path):
     assert response.final_text == "hello.txt"
     assert response.output_json is None  # "hello.txt" holds no JSON object
 
-    text_json = ClaudeCodeStreamState(result_seen=True, result_text='answer: {"answer": 1, "word": "x"}')
+    text_json = ClaudeCodeStreamState(
+        result_seen=True, result_text='answer: {"answer": 1, "word": "x"}'
+    )
     response = cfg.transform_turn_response(ctx, text_json, 0, [])
     assert json.loads(response.output_json or "") == {"answer": 1, "word": "x"}
 

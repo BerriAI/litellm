@@ -19,7 +19,9 @@ class TestImageGenerationExtraHeaders:
     """Test that extra_headers are forwarded on the OpenAI code path."""
 
     @patch("litellm.images.main.openai_chat_completions")
-    def test_extra_headers_forwarded_to_openai_image_generation(self, mock_openai_chat_completions):
+    def test_extra_headers_forwarded_to_openai_image_generation(
+        self, mock_openai_chat_completions
+    ):
         """
         extra_headers passed to image_generation() should appear in
         optional_params["extra_headers"] when the provider is openai.
@@ -40,7 +42,9 @@ class TestImageGenerationExtraHeaders:
 
         mock_openai_chat_completions.image_generation.assert_called_once()
         call_kwargs = mock_openai_chat_completions.image_generation.call_args
-        optional_params = call_kwargs.kwargs.get("optional_params", call_kwargs[1].get("optional_params", {}))
+        optional_params = call_kwargs.kwargs.get(
+            "optional_params", call_kwargs[1].get("optional_params", {})
+        )
 
         assert "extra_headers" in optional_params
         assert optional_params["extra_headers"] == extra_headers
@@ -64,6 +68,8 @@ class TestImageGenerationExtraHeaders:
 
         mock_openai_chat_completions.image_generation.assert_called_once()
         call_kwargs = mock_openai_chat_completions.image_generation.call_args
-        optional_params = call_kwargs.kwargs.get("optional_params", call_kwargs[1].get("optional_params", {}))
+        optional_params = call_kwargs.kwargs.get(
+            "optional_params", call_kwargs[1].get("optional_params", {})
+        )
 
         assert "extra_headers" not in optional_params

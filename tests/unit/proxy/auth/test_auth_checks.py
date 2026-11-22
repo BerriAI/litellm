@@ -98,15 +98,9 @@ def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(contro
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scope,expected",
-    [
-        ("project", "model restrictions"),
-        ("user", "model restrictions"),
-        ("member", "model restrictions"),
-        ("missing-user", "owner"),
-        ("missing-project", "inherited policies"),
-        ("personal-key", "personal-key"),
-        ("member-model-budget", "model_max_budget"),
-    ],
+    [("project", "model restrictions"), ("user", "model restrictions"), ("member", "model restrictions"),
+     ("missing-user", "owner"), ("missing-project", "inherited policies"), ("personal-key", "personal-key"),
+     ("member-model-budget", "model_max_budget")],
 )
 async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
     monkeypatch: pytest.MonkeyPatch, scope: str, expected: str
@@ -134,10 +128,8 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
         else None
     )
     user: Final = LiteLLM_UserTable(
-        user_id="opaque-user",
-        models=["scoped-model"] if scope == "user" else [],
-        teams=["restricted-owner-team"] if scope == "personal-key" else [],
-        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="opaque-user", models=["scoped-model"] if scope == "user" else [],
+        teams=["restricted-owner-team"] if scope == "personal-key" else [], user_role=LitellmUserRoles.PROXY_ADMIN
     )
     identity: Final = UserAPIKeyAuth(
         user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None,
@@ -167,27 +159,17 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "scope",
-    [
-        "owner-budget",
-        "customer-model",
-        "customer-tokens",
-        "customer-budget",
-        "customer_org_id",
-        "customer_team_id",
-        "customer_member_id",
-        "resolved-customer-model",
-    ],
-)
+@pytest.mark.parametrize("scope", [
+    "owner-budget", "customer-model", "customer-tokens", "customer-budget",
+    "customer_org_id", "customer_team_id", "customer_member_id", "resolved-customer-model",
+])
 async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: str) -> None:
     from litellm.models.budget import BudgetLimit
     from litellm.models.team import BudgetLimitEntry
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     customer_scope: Final = CustomerScopeAuth(
-        key="customer_org",
-        entity_id="restricted-customer",
+        key="customer_org", entity_id="restricted-customer",
         allowed_models=("restricted-model",) if scope == "customer-model" else None,
         tpm_limit=1000 if scope == "customer-tokens" else None,
         budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),) if scope == "customer-budget" else (),
@@ -197,23 +179,15 @@ async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: st
         metadata={scope: "bound-customer"} if scope.endswith("_id") else {},
     ).with_customer_model_scopes((("restricted-model",),) if scope == "resolved-customer-model" else ())
     user: Final = LiteLLM_UserTable(
-        user_id="restricted-owner",
-        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="restricted-owner", user_role=LitellmUserRoles.PROXY_ADMIN,
         budget_limits=(BudgetLimitEntry(budget_duration="1d", max_budget=10),) if scope == "owner-budget" else None,
     )
     route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
     with pytest.raises(HTTPException) as denied:
         await common_checks(
-            request_body={},
-            team_object=None,
-            user_object=user,
-            end_user_object=None,
-            global_proxy_spend=None,
-            general_settings={},
-            route=route,
-            llm_router=None,
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
-            valid_token=identity,
+            request_body={}, team_object=None, user_object=user, end_user_object=None,
+            global_proxy_spend=None, general_settings={}, route=route, llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()), valid_token=identity,
             request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
             skip_budget_checks=True,
         )
@@ -2750,7 +2724,10 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_broad
     handle: Final = _GatedChannel()
     _install_channel(monkeypatch, handle)
     cache: Final = UserApiKeyCache(max_size_in_memory=2_000)
-    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(600)
+    )
     for hashed_token in hashed_tokens:
         cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
     seeded: Final = tuple(
@@ -2761,7 +2738,9 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_broad
         delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
     )
     await asyncio.sleep(0.05)
-    still_cached: Final = tuple(token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None)
+    still_cached: Final = tuple(
+        token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None
+    )
     handle.release.set()
     await eviction
 
@@ -2804,7 +2783,10 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 ) -> None:
     handle: Final = _GatedChannel()
     _install_channel(monkeypatch, handle)
-    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
+    hashed_tokens: Final = tuple(
+        hashlib.sha256(f"token-{index}".encode()).hexdigest()
+        for index in range(600)
+    )
     cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
         cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
@@ -2814,7 +2796,9 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
     )
     await asyncio.sleep(0.05)
     refilled: Final = [
-        token for token in hashed_tokens if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
+        token
+        for token in hashed_tokens
+        if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
     ]
     handle.release.set()
     await eviction

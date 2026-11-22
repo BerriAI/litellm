@@ -49,7 +49,10 @@ async def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
     ]
 
     url, payload = logger._get_ingest_request()
-    assert url == "https://api.galileo.ai/ingest/traces/86ff8ebe-a297-4134-b167-748bdd8d2c20"
+    assert (
+        url
+        == "https://api.galileo.ai/ingest/traces/86ff8ebe-a297-4134-b167-748bdd8d2c20"
+    )
     assert payload["log_stream_id"] == "76c4ea50-8aa3-4771-a0d7-8567b112210f"
     assert payload["is_complete"] is True
     assert payload["traces"][0]["type"] == "trace"
@@ -66,7 +69,9 @@ async def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
 
 
 def test_galileo_token_metrics_from_record_falls_back_to_sum():
-    metrics = GalileoObserve._token_metrics_from_record({"num_input_tokens": 5, "num_output_tokens": 7})
+    metrics = GalileoObserve._token_metrics_from_record(
+        {"num_input_tokens": 5, "num_output_tokens": 7}
+    )
     assert metrics == {
         "num_input_tokens": 5,
         "num_output_tokens": 7,
@@ -100,7 +105,9 @@ def test_galileo_token_metrics_from_record_includes_cost():
 def test_galileo_input_text_from_messages():
     assert GalileoObserve._input_text_from_messages("hello") == "hello"
     assert (
-        GalileoObserve._input_text_from_messages([{"role": "user", "content": "test responses api 1"}])
+        GalileoObserve._input_text_from_messages(
+            [{"role": "user", "content": "test responses api 1"}]
+        )
         == "test responses api 1"
     )
 
@@ -150,7 +157,9 @@ def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
             {"role": "user", "content": "hello"},
         ],
     }
-    span = GalileoObserve._record_to_v2_span(record, trace_id="trace-id", span_id="span-id")
+    span = GalileoObserve._record_to_v2_span(
+        record, trace_id="trace-id", span_id="span-id"
+    )
     assert span["input"] == [
         {"role": "system", "content": "be helpful"},
         {"role": "user", "content": "hello"},
@@ -175,7 +184,9 @@ def test_galileo_v2_span_unwraps_prompt_messages(galileo_v2_env):
             ]
         },
     }
-    span = GalileoObserve._record_to_v2_span(record, trace_id="trace-id", span_id="span-id")
+    span = GalileoObserve._record_to_v2_span(
+        record, trace_id="trace-id", span_id="span-id"
+    )
     assert span["input"] == [
         {"role": "system", "content": "be helpful"},
         {"role": "user", "content": "hello"},
@@ -218,7 +229,9 @@ async def test_galileo_flush_swallows_http_errors(galileo_v2_env):
         }
     ]
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.side_effect = Exception("404 Not Found")
         await logger.flush_in_memory_records()
 
@@ -246,7 +259,9 @@ async def test_galileo_flush_clears_records_on_201(galileo_v2_env):
     mock_response.is_success = True
     mock_response.status_code = 201
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.return_value = mock_response
         await logger.flush_in_memory_records()
 
@@ -291,10 +306,12 @@ def test_galileo_is_configured_branches(monkeypatch):
 
 
 def test_galileo_input_messages_fallbacks():
-    assert GalileoObserve._galileo_input_messages(None, "hi") == [{"role": "user", "content": "hi"}]
-    assert GalileoObserve._galileo_input_messages(["not-a-dict", {"content": "no role"}], "fallback") == [
-        {"role": "user", "content": "fallback"}
+    assert GalileoObserve._galileo_input_messages(None, "hi") == [
+        {"role": "user", "content": "hi"}
     ]
+    assert GalileoObserve._galileo_input_messages(
+        ["not-a-dict", {"content": "no role"}], "fallback"
+    ) == [{"role": "user", "content": "fallback"}]
 
 
 def test_galileo_format_created_at_converts_local_naive_to_utc():
@@ -341,21 +358,42 @@ def test_galileo_record_to_v2_span_with_tags_and_offset():
 def test_galileo_get_output_str_variants(galileo_v2_env):
     logger = GalileoObserve()
     assert logger.get_output_str_from_response(None, {}) == ""
-    assert logger.get_output_str_from_response(EmbeddingResponse(), {"call_type": "embedding"}) == "embedding-output"
-    assert logger.get_output_str_from_response(EmbeddingResponse(), {"call_type": "aembedding"}) == "embedding-output"
+    assert (
+        logger.get_output_str_from_response(
+            EmbeddingResponse(), {"call_type": "embedding"}
+        )
+        == "embedding-output"
+    )
+    assert (
+        logger.get_output_str_from_response(
+            EmbeddingResponse(), {"call_type": "aembedding"}
+        )
+        == "embedding-output"
+    )
 
     text_resp = TextCompletionResponse()
     text_resp.choices = [MagicMock(text="text-completion-output")]
-    assert logger.get_output_str_from_response(text_resp, {"call_type": "text_completion"}) == "text-completion-output"
+    assert (
+        logger.get_output_str_from_response(text_resp, {"call_type": "text_completion"})
+        == "text-completion-output"
+    )
 
     image_resp = ImageResponse(data=[ImageObject(url="https://x/y.png")])
     assert "y.png" in logger.get_output_str_from_response(image_resp, {})
 
     speech_resp = HttpxBinaryResponseContent(response=MagicMock())
-    assert logger.get_output_str_from_response(speech_resp, {"call_type": "aspeech"}) == "speech-output"
+    assert (
+        logger.get_output_str_from_response(speech_resp, {"call_type": "aspeech"})
+        == "speech-output"
+    )
 
     transcription_resp = TranscriptionResponse(text="hello world")
-    assert logger.get_output_str_from_response(transcription_resp, {"call_type": "atranscription"}) == "hello world"
+    assert (
+        logger.get_output_str_from_response(
+            transcription_resp, {"call_type": "atranscription"}
+        )
+        == "hello world"
+    )
 
     realtime_output = [{"type": "response", "text": "hi"}]
     assert (
@@ -368,11 +406,15 @@ def test_galileo_get_output_str_variants(galileo_v2_env):
 
     pass_through_output = {"response": "passthrough-body", "status": 200}
     assert (
-        logger.get_output_str_from_response(pass_through_output, {"call_type": "pass_through_endpoint"})
+        logger.get_output_str_from_response(
+            pass_through_output, {"call_type": "pass_through_endpoint"}
+        )
         == "passthrough-body"
     )
 
-    model_resp = ModelResponse(choices=[Choices(message=Message(content="chat reply", role="assistant"))])
+    model_resp = ModelResponse(
+        choices=[Choices(message=Message(content="chat reply", role="assistant"))]
+    )
     assert '"chat reply"' in logger.get_output_str_from_response(
         model_resp,
         {"call_type": "acompletion", "messages": [{"role": "user", "content": "hi"}]},
@@ -401,7 +443,9 @@ def test_galileo_get_output_str_rerank_response(galileo_v2_env):
             {"index": 0, "relevance_score": 0.12},
         ]
     )
-    output = logger.get_output_str_from_response(rerank_response, {"call_type": "arerank"})
+    output = logger.get_output_str_from_response(
+        rerank_response, {"call_type": "arerank"}
+    )
     assert output is not None
     assert '"index": 2' in output
     assert '"relevance_score": 0.98' in output
@@ -412,7 +456,9 @@ async def test_galileo_async_log_success_embedding(galileo_v2_env):
     import datetime
 
     logger = GalileoObserve()
-    embedding_response = EmbeddingResponse(data=[{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}])
+    embedding_response = EmbeddingResponse(
+        data=[{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}]
+    )
 
     mock_response = MagicMock()
     mock_response.is_success = True
@@ -431,8 +477,12 @@ async def test_galileo_async_log_success_embedding(galileo_v2_env):
                     "completion_tokens": 0,
                     "total_tokens": 2,
                     "response_cost": 0.0,
-                    "startTime": datetime.datetime(2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp(),
-                    "endTime": datetime.datetime(2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc).timestamp(),
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
                 },
             },
             response_obj=embedding_response,
@@ -469,8 +519,12 @@ async def test_galileo_async_log_success_rerank(galileo_v2_env):
                     "completion_tokens": 0,
                     "total_tokens": 0,
                     "response_cost": 0.0,
-                    "startTime": datetime.datetime(2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp(),
-                    "endTime": datetime.datetime(2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc).timestamp(),
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
                 },
             },
             response_obj=rerank_response,
@@ -524,7 +578,9 @@ async def test_galileo_async_health_check_success(galileo_v2_env):
     current_user_resp = MagicMock()
     current_user_resp.status_code = 200
 
-    with patch.object(logger.async_httpx_handler, "get", new_callable=AsyncMock) as mock_get:
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
         mock_get.return_value = current_user_resp
         result = await logger.async_health_check()
 
@@ -545,7 +601,9 @@ async def test_galileo_async_health_check_api_error(galileo_v2_env):
     current_user_resp = MagicMock()
     current_user_resp.status_code = 401
 
-    with patch.object(logger.async_httpx_handler, "get", new_callable=AsyncMock) as mock_get:
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
         mock_get.return_value = current_user_resp
         result = await logger.async_health_check()
 
@@ -605,7 +663,9 @@ async def test_galileo_async_health_check_auth_failed(monkeypatch):
     monkeypatch.setenv("GALILEO_PASSWORD", "pw")
     logger = GalileoObserve()
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.side_effect = Exception("login failed")
         result = await logger.async_health_check()
 
@@ -617,7 +677,9 @@ async def test_galileo_async_health_check_auth_failed(monkeypatch):
 async def test_galileo_async_health_check_request_exception(galileo_v2_env):
     logger = GalileoObserve()
 
-    with patch.object(logger.async_httpx_handler, "get", new_callable=AsyncMock) as mock_get:
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
         mock_get.side_effect = Exception("connection refused")
         result = await logger.async_health_check()
 
@@ -645,8 +707,12 @@ async def test_galileo_async_log_success_empty_model_response(galileo_v2_env):
                 "completion_tokens": 0,
                 "total_tokens": 1,
                 "response_cost": 0.0,
-                "startTime": datetime.datetime(2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp(),
-                "endTime": datetime.datetime(2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc).timestamp(),
+                "startTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+                "endTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                ).timestamp(),
             },
         },
         response_obj=empty_response,
@@ -689,7 +755,9 @@ async def test_galileo_ensure_headers_legacy_login(monkeypatch):
     login_resp.raise_for_status = MagicMock()
     login_resp.json = MagicMock(return_value={"access_token": "tok"})
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.return_value = login_resp
         assert await logger._ensure_headers() is True
 
@@ -705,7 +773,9 @@ async def test_galileo_ensure_headers_legacy_login_failure(monkeypatch):
     monkeypatch.setenv("GALILEO_PROJECT_ID", "p")
     logger = GalileoObserve()
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.side_effect = Exception("boom")
         assert await logger._ensure_headers() is False
 
@@ -737,7 +807,9 @@ async def test_galileo_flush_resets_headers_on_401(monkeypatch):
     mock_response.status_code = 401
     mock_response.text = "unauthorized"
 
-    with patch.object(logger.async_httpx_handler, "post", new_callable=AsyncMock) as mock_post:
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
         mock_post.return_value = mock_response
         await logger.flush_in_memory_records()
 
@@ -770,8 +842,12 @@ async def test_galileo_async_log_success_preserves_passthrough_messages(
                 "completion_tokens": 2,
                 "total_tokens": 0,
                 "response_cost": 0.001,
-                "startTime": datetime.datetime(2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp(),
-                "endTime": datetime.datetime(2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc).timestamp(),
+                "startTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+                "endTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                ).timestamp(),
             },
         },
         response_obj={"response": "ok"},
@@ -789,7 +865,9 @@ async def test_galileo_async_log_success_appends_and_flushes(galileo_v2_env):
 
     logger = GalileoObserve()
     response = ModelResponse(
-        choices=[Choices(message=Message(content="reply", role="assistant", annotations=[]))],
+        choices=[
+            Choices(message=Message(content="reply", role="assistant", annotations=[]))
+        ],
         usage={"prompt_tokens": 1, "completion_tokens": 2},
     )
 
@@ -816,8 +894,12 @@ async def test_galileo_async_log_success_appends_and_flushes(galileo_v2_env):
                     "completion_tokens": 2,
                     "total_tokens": 3,
                     "response_cost": 0.001,
-                    "startTime": datetime.datetime(2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc).timestamp(),
-                    "endTime": datetime.datetime(2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc).timestamp(),
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
                 },
             },
             response_obj=response,

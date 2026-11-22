@@ -40,7 +40,9 @@ async def test_streaming_hook_transforms_response():
     """
     Test that async_post_call_streaming_hook can transform streaming responses.
     """
-    transformer = StreamingResponseTransformerLogger(transform_content="Modified streaming response")
+    transformer = StreamingResponseTransformerLogger(
+        transform_content="Modified streaming response"
+    )
 
     with patch("litellm.callbacks", [transformer]):
         from litellm.proxy.utils import ProxyLogging
@@ -134,7 +136,9 @@ async def test_streaming_hook_works_with_sse_format():
     Test that hook works with SSE-formatted strings (data: prefix).
     This was the only supported format before the fix.
     """
-    transformer = StreamingResponseTransformerLogger(transform_content='data: {"error": "custom error"}\n\n')
+    transformer = StreamingResponseTransformerLogger(
+        transform_content='data: {"error": "custom error"}\n\n'
+    )
 
     with patch("litellm.callbacks", [transformer]):
         from litellm.proxy.utils import ProxyLogging

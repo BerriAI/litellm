@@ -134,7 +134,9 @@ class TestApplyPoliciesEarlyReturn:
             ),
             patch(
                 "litellm.proxy.management_endpoints.policy_endpoints.endpoints.PolicyResolver.resolve_policy_guardrails",
-                return_value=ResolvedPolicy(policy_name="p", guardrails=[], inheritance_chain=[]),
+                return_value=ResolvedPolicy(
+                    policy_name="p", guardrails=[], inheritance_chain=[]
+                ),
             ),
         ):
             result = await apply_policies(
@@ -162,12 +164,16 @@ class TestApplyPoliciesWithGuardrails:
         mock_registry.is_initialized.return_value = True
         mock_registry.get_all_policies.return_value = {}
 
-        modified_inputs: GenericGuardrailAPIInputs = {"texts": ["modified by guardrail"]}
+        modified_inputs: GenericGuardrailAPIInputs = {
+            "texts": ["modified by guardrail"]
+        }
         callback = _FakeGuardrailWithApply(guardrail_name="my_guardrail")
         callback.set_return(modified_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         with (
             patch(
@@ -199,7 +205,9 @@ class TestApplyPoliciesWithGuardrails:
         assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
-    async def test_applies_multiple_guardrails_in_order(self, sample_inputs, request_data, proxy_logging_obj):
+    async def test_applies_multiple_guardrails_in_order(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
         from litellm.types.proxy.policy_engine import ResolvedPolicy
 
         mock_registry = MagicMock()
@@ -222,7 +230,9 @@ class TestApplyPoliciesWithGuardrails:
             return None
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = get_callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
 
         with (
             patch(
@@ -254,7 +264,9 @@ class TestApplyPoliciesWithGuardrails:
         assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
-    async def test_skips_missing_guardrail_callback(self, sample_inputs, request_data, proxy_logging_obj):
+    async def test_skips_missing_guardrail_callback(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
         from litellm.types.proxy.policy_engine import ResolvedPolicy
 
         mock_registry = MagicMock()
@@ -294,7 +306,9 @@ class TestApplyPoliciesWithGuardrails:
         assert result["guardrail_errors"] == []
 
     @pytest.mark.asyncio
-    async def test_records_guardrail_error_on_failure(self, sample_inputs, request_data, proxy_logging_obj):
+    async def test_records_guardrail_error_on_failure(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
         """When a guardrail's apply_guardrail raises, error is recorded and inputs still returned."""
         from litellm.types.proxy.policy_engine import ResolvedPolicy
 
@@ -310,7 +324,9 @@ class TestApplyPoliciesWithGuardrails:
         callback.apply_guardrail = _raise
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         with (
             patch(
@@ -347,7 +363,9 @@ class TestApplyPoliciesWithGuardrails:
         ]
 
     @pytest.mark.asyncio
-    async def test_skips_callback_without_apply_guardrail(self, sample_inputs, request_data, proxy_logging_obj):
+    async def test_skips_callback_without_apply_guardrail(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
         """Guardrails that do not define apply_guardrail on their class are skipped."""
         from litellm.types.proxy.policy_engine import ResolvedPolicy
 
@@ -364,7 +382,9 @@ class TestApplyPoliciesWithGuardrails:
         mock_registry.get_all_policies.return_value = {}
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback_no_apply
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback_no_apply
+        )
 
         with (
             patch(
@@ -428,7 +448,9 @@ class TestApplyPoliciesWithGuardrails:
             return None
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = get_callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
 
         with (
             patch(
@@ -458,7 +480,9 @@ class TestApplyPoliciesWithGuardrails:
 
         assert result["inputs"] == sample_inputs
         assert len(result["guardrail_errors"]) == 2
-        by_name = {e["guardrail_name"]: e["message"] for e in result["guardrail_errors"]}
+        by_name = {
+            e["guardrail_name"]: e["message"] for e in result["guardrail_errors"]
+        }
         assert by_name["guardrail_a"] == "PII detected"
         assert by_name["guardrail_b"] == "Toxicity detected"
 
@@ -467,7 +491,9 @@ class TestApplyPoliciesMultiplePolicies:
     """Test apply_policies with multiple policy names (guardrail union)."""
 
     @pytest.mark.asyncio
-    async def test_resolves_guardrails_from_multiple_policies(self, sample_inputs, request_data, proxy_logging_obj):
+    async def test_resolves_guardrails_from_multiple_policies(
+        self, sample_inputs, request_data, proxy_logging_obj
+    ):
         from litellm.types.proxy.policy_engine import ResolvedPolicy
 
         mock_registry = MagicMock()
@@ -479,7 +505,9 @@ class TestApplyPoliciesMultiplePolicies:
         callback.set_return(final_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         resolve_returns = [
             ResolvedPolicy(
@@ -528,12 +556,16 @@ class TestApplyPoliciesDirectGuardrailNames:
         self, sample_inputs, request_data, proxy_logging_obj
     ):
         """When only guardrail_names is passed, policy registry is not used."""
-        modified_inputs: GenericGuardrailAPIInputs = {"texts": ["from direct guardrail"]}
+        modified_inputs: GenericGuardrailAPIInputs = {
+            "texts": ["from direct guardrail"]
+        }
         callback = _FakeGuardrailWithApply(guardrail_name="my_guardrail")
         callback.set_return(modified_inputs)
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.return_value = (
+            callback
+        )
 
         with patch(
             "litellm.proxy.management_endpoints.policy_endpoints.endpoints.GuardrailRegistry",
@@ -580,7 +612,9 @@ class TestApplyPoliciesDirectGuardrailNames:
             return None
 
         mock_guardrail_registry = MagicMock()
-        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = get_callback
+        mock_guardrail_registry.get_initialized_guardrail_callback.side_effect = (
+            get_callback
+        )
 
         with (
             patch(
@@ -758,7 +792,9 @@ class TestBuildAllNamesPerCompetitor:
     """Tests for build_all_names_per_competitor."""
 
     def test_includes_canonical_and_variations(self):
-        result = build_all_names_per_competitor(["Delta Airlines"], {"Delta Airlines": ["Delta", "DeltaAir"]})
+        result = build_all_names_per_competitor(
+            ["Delta Airlines"], {"Delta Airlines": ["Delta", "DeltaAir"]}
+        )
         assert result["Delta Airlines"] == ["Delta Airlines", "Delta", "DeltaAir"]
 
     def test_no_variations(self):
@@ -824,7 +860,9 @@ class TestBuildComparisonBlockedWords:
 
     def test_generates_brand_comparisons_once(self):
         all_names = {"Delta": ["Delta"], "United": ["United"]}
-        result = build_comparison_blocked_words(["Delta", "United"], all_names, "Emirates")
+        result = build_comparison_blocked_words(
+            ["Delta", "United"], all_names, "Emirates"
+        )
         keywords = [r["keyword"] for r in result]
         # Brand-level entries should appear exactly once
         assert keywords.count("better than Emirates") == 1
@@ -851,13 +889,21 @@ class TestBuildCompetitorGuardrailDefinitions:
                 "litellm_params": {"blocked_words": []},
             },
         ]
-        result = build_competitor_guardrail_definitions(definitions, ["Delta"], "Emirates", {"Delta": ["DL"]})
+        result = build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates", {"Delta": ["DL"]}
+        )
         # Name blocker should have entries
-        name_blocker = next(d for d in result if d["guardrail_name"] == "competitor-name-blocker")
+        name_blocker = next(
+            d for d in result if d["guardrail_name"] == "competitor-name-blocker"
+        )
         assert len(name_blocker["litellm_params"]["blocked_words"]) > 0
 
         # Recommendation filter should have entries
-        rec_filter = next(d for d in result if d["guardrail_name"] == "competitor-recommendation-filter")
+        rec_filter = next(
+            d
+            for d in result
+            if d["guardrail_name"] == "competitor-recommendation-filter"
+        )
         assert len(rec_filter["litellm_params"]["blocked_words"]) > 0
 
     def test_does_not_modify_unknown_guardrail_names(self):
@@ -867,7 +913,9 @@ class TestBuildCompetitorGuardrailDefinitions:
                 "litellm_params": {"blocked_words": ["original"]},
             },
         ]
-        result = build_competitor_guardrail_definitions(definitions, ["Delta"], "Emirates")
+        result = build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates"
+        )
         assert result[0]["litellm_params"]["blocked_words"] == ["original"]
 
     def test_does_not_mutate_original_definitions(self):
@@ -892,6 +940,8 @@ class TestBuildCompetitorGuardrailDefinitions:
                 "litellm_params": {"blocked_words": []},
             },
         ]
-        result = build_competitor_guardrail_definitions(definitions, ["Delta"], "Emirates")
+        result = build_competitor_guardrail_definitions(
+            definitions, ["Delta"], "Emirates"
+        )
         for defn in result:
             assert len(defn["litellm_params"]["blocked_words"]) > 0

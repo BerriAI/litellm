@@ -18,9 +18,7 @@ _Answer = TypeVar("_Answer")
 class FakeRedisCache(RedisCache):
     """A ``RedisCache`` the native stores connect to by its settings; Python itself must never open a client on it."""
 
-    def __init__(
-        self, namespace: str | None = None, failure_threshold: int = 5
-    ) -> None:  # super().__init__ needs a server
+    def __init__(self, namespace: str | None = None, failure_threshold: int = 5) -> None:  # super().__init__ needs a server
         self.namespace = namespace
         self.redis_kwargs = {"host": f"batch-{uuid.uuid4().hex}.invalid", "port": 1, "socket_timeout": 0.2}
         self.service_logger_obj = ServiceLogging()

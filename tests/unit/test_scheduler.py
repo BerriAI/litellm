@@ -282,6 +282,7 @@ async def test_wait_for_turn_during_cooldown_survives_the_queue_key_expiring():
     assert await scheduler.get_queue("sched-model") == []
 
 
+
 class _JsonRoundTripRedisCache:
     def __init__(self) -> None:
         self.store: dict[str, str] = {}
@@ -310,7 +311,6 @@ async def test_second_replica_enqueues_behind_a_queue_decoded_from_redis():
     assert await replica_b.poll(request=waiting_on_a, health_deployments=[])
     await replica_b.remove_request(request_id="waiting-on-a", model_name="sched-model")
     assert await replica_b.get_queue("sched-model") == []
-
 
 class _PausesAfterEnqueueScheduler(Scheduler):
     def __init__(self) -> None:

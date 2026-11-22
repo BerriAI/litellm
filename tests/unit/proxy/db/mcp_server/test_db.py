@@ -25,7 +25,9 @@ def _prisma_client_returning(team_record: object) -> MagicMock:
         (SimpleNamespace(object_permission=SimpleNamespace(mcp_servers=None)), []),
         (SimpleNamespace(object_permission=SimpleNamespace(mcp_servers=[])), []),
         (
-            SimpleNamespace(object_permission=SimpleNamespace(mcp_servers=["server_a", "server_b"])),
+            SimpleNamespace(
+                object_permission=SimpleNamespace(mcp_servers=["server_a", "server_b"])
+            ),
             ["server_a", "server_b"],
         ),
     ],

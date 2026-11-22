@@ -68,6 +68,7 @@ async def test_vertex_passthrough_load_balancing():
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route,
     ):
+
         # Setup additional mocks to avoid side effects
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
         mock_prep_headers.return_value = (
@@ -214,7 +215,9 @@ def test_get_available_deployment_for_pass_through_load_balancing():
     # Call multiple times and track selected deployments
     selections = {"project-1": 0, "project-2": 0}
     for _ in range(100):
-        deployment = router.get_available_deployment_for_pass_through(model="gemini-pro")
+        deployment = router.get_available_deployment_for_pass_through(
+            model="gemini-pro"
+        )
         project = deployment["litellm_params"]["vertex_project"]
         selections[project] += 1
 
@@ -243,7 +246,9 @@ async def test_async_get_available_deployment_for_pass_through():
 
     router = Router(model_list=model_list, routing_strategy="simple-shuffle")
 
-    deployment = await router.async_get_available_deployment_for_pass_through(model="gemini-pro", request_kwargs={})
+    deployment = await router.async_get_available_deployment_for_pass_through(
+        model="gemini-pro", request_kwargs={}
+    )
 
     assert deployment is not None
     assert deployment["litellm_params"]["use_in_pass_through"] is True
@@ -301,6 +306,7 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
             return_value=("new-access-token", None),
         ) as mock_get_token,
     ):
+
         # Call the function
         (
             headers,
@@ -470,6 +476,7 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
             return_value=("vertex-access-token", None),
         ),
     ):
+
         (
             headers,
             _headers_passed_through,
@@ -709,6 +716,7 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
         ) as mock_create_route,
     ):
+
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
         mock_prep_headers.return_value = (
             {},
@@ -719,7 +727,9 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         mock_endpoint_func = AsyncMock()
         mock_create_route.return_value = mock_endpoint_func
 
-        mock_handler.get_default_base_target_url.return_value = "https://global-aiplatform.googleapis.com"
+        mock_handler.get_default_base_target_url.return_value = (
+            "https://global-aiplatform.googleapis.com"
+        )
 
         await _base_vertex_proxy_route(
             endpoint=test_endpoint,
@@ -737,10 +747,12 @@ async def test_vertex_passthrough_custom_model_name_replaced_in_url():
         # the REAL Vertex AI model name, not the custom one
         create_route_call = mock_create_route.call_args
         target_url = create_route_call.kwargs.get("target", "")
-        assert "gcp/google/gemini-3-pro" not in target_url, (
-            f"Custom model name should have been replaced in target URL. Got: {target_url}"
-        )
-        assert "gemini-3-pro" in target_url, f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
+        assert (
+            "gcp/google/gemini-3-pro" not in target_url
+        ), f"Custom model name should have been replaced in target URL. Got: {target_url}"
+        assert (
+            "gemini-3-pro" in target_url
+        ), f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
 
 
 @pytest.mark.asyncio
@@ -748,17 +760,15 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     """The router deployment that rewrote the upstream URL is the one the logging kwargs must name, so
     the Prometheus model_id label (and SpendLogs.model_id) on a Vertex passthrough success reads the
     deployment's id instead of "" (LIT-1761)."""
-    mock_request: Final = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "scheme": "http",
-            "server": ("0.0.0.0", 4000),
-            "path": "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
-            "headers": [],
-            "query_string": b"",
-        }
-    )
+    mock_request: Final = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("0.0.0.0", 4000),
+        "path": "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
+        "headers": [],
+        "query_string": b"",
+    })
     mock_handler = MagicMock()
     mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
 

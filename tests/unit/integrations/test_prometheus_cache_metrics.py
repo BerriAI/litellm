@@ -46,7 +46,9 @@ class TestPrometheusCacheMetrics:
         assert hasattr(PrometheusMetricLabels, "litellm_cache_hits_metric")
         assert hasattr(PrometheusMetricLabels, "litellm_cache_misses_metric")
         assert hasattr(PrometheusMetricLabels, "litellm_cached_tokens_metric")
-        assert hasattr(PrometheusMetricLabels, "litellm_provider_cache_read_input_tokens_metric")
+        assert hasattr(
+            PrometheusMetricLabels, "litellm_provider_cache_read_input_tokens_metric"
+        )
         assert hasattr(
             PrometheusMetricLabels,
             "litellm_provider_cache_creation_input_tokens_metric",
@@ -66,8 +68,14 @@ class TestPrometheusCacheMetrics:
             assert label in PrometheusMetricLabels.litellm_cache_hits_metric
             assert label in PrometheusMetricLabels.litellm_cache_misses_metric
             assert label in PrometheusMetricLabels.litellm_cached_tokens_metric
-            assert label in PrometheusMetricLabels.litellm_provider_cache_read_input_tokens_metric
-            assert label in PrometheusMetricLabels.litellm_provider_cache_creation_input_tokens_metric
+            assert (
+                label
+                in PrometheusMetricLabels.litellm_provider_cache_read_input_tokens_metric
+            )
+            assert (
+                label
+                in PrometheusMetricLabels.litellm_provider_cache_creation_input_tokens_metric
+            )
 
     def test_increment_cache_metrics_on_cache_hit(self, sample_enum_values):
         """Test that cache hit increments the correct metrics"""
@@ -124,14 +132,20 @@ class TestPrometheusCacheMetrics:
 
         # Verify cached tokens metric was incremented with total_tokens
         mock_logger.litellm_cached_tokens_metric.labels.assert_called()
-        mock_logger.litellm_cached_tokens_metric.labels().inc.assert_called_once_with(100)
+        mock_logger.litellm_cached_tokens_metric.labels().inc.assert_called_once_with(
+            100
+        )
 
         # Verify cache misses metric was NOT called
         mock_logger.litellm_cache_misses_metric.labels.assert_not_called()
 
         # Verify provider prompt caching metrics were incremented
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(25)
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(10)
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
+            25
+        )
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
+            10
+        )
 
     def test_increment_cache_metrics_on_cache_miss(self, sample_enum_values):
         """Test that cache miss increments the correct metrics"""
@@ -190,10 +204,14 @@ class TestPrometheusCacheMetrics:
         mock_logger.litellm_cached_tokens_metric.labels.assert_not_called()
 
         # Provider prompt caching metrics should still be emitted
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(20)
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
+            20
+        )
         mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
 
-    def test_provider_cache_read_does_not_fallback_on_explicit_zero(self, sample_enum_values):
+    def test_provider_cache_read_does_not_fallback_on_explicit_zero(
+        self, sample_enum_values
+    ):
         """Explicit cache_read_input_tokens=0 must not trigger fallback to cached_tokens."""
         mock_logger = MagicMock()
 
@@ -240,7 +258,9 @@ class TestPrometheusCacheMetrics:
         # Should not emit read metric, because explicit provider value is zero.
         mock_logger.litellm_provider_cache_read_input_tokens_metric.labels.assert_not_called()
 
-    def test_provider_cache_creation_fallback_to_cache_write_tokens(self, sample_enum_values):
+    def test_provider_cache_creation_fallback_to_cache_write_tokens(
+        self, sample_enum_values
+    ):
         """OpenAI-style usage (prompt_tokens_details.cache_write_tokens, no top-level
         cache_creation_input_tokens) must populate the provider cache creation metric."""
         mock_logger = MagicMock()
@@ -287,9 +307,13 @@ class TestPrometheusCacheMetrics:
             enum_values=sample_enum_values,
         )
 
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(800)
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
+            800
+        )
 
-    def test_provider_cache_creation_fallback_to_cache_creation_tokens(self, sample_enum_values):
+    def test_provider_cache_creation_fallback_to_cache_creation_tokens(
+        self, sample_enum_values
+    ):
         """Normalized litellm usage dumps carry cache_creation_tokens in
         prompt_tokens_details; the fallback must read it when cache_write_tokens is absent."""
         mock_logger = MagicMock()
@@ -333,9 +357,13 @@ class TestPrometheusCacheMetrics:
             enum_values=sample_enum_values,
         )
 
-        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(42)
+        mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels().inc.assert_called_once_with(
+            42
+        )
 
-    def test_provider_cache_creation_does_not_fallback_on_explicit_zero(self, sample_enum_values):
+    def test_provider_cache_creation_does_not_fallback_on_explicit_zero(
+        self, sample_enum_values
+    ):
         """Explicit cache_creation_input_tokens=0 must not trigger fallback to
         prompt_tokens_details, mirroring the cache-read semantics."""
         mock_logger = MagicMock()
@@ -435,7 +463,9 @@ class TestPrometheusCacheMetrics:
         mock_logger.litellm_cached_tokens_metric.labels.assert_not_called()
 
         # Provider prompt caching metrics should still be emitted
-        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(25)
+        mock_logger.litellm_provider_cache_read_input_tokens_metric.labels().inc.assert_called_once_with(
+            25
+        )
         mock_logger.litellm_provider_cache_creation_input_tokens_metric.labels.assert_not_called()
 
 

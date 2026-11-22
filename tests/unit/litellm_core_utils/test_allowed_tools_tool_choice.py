@@ -41,11 +41,7 @@ _CHOICES_WITH_A_NAME_THAT_IS_NOT_A_STRING: Final = (
     {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "function", "function": {"name": 7}}]},
 )
 
-_WHOLE_DOCS_SERVER: Final = {
-    "type": "allowed_tools",
-    "mode": "auto",
-    "tools": [{"type": "mcp", "server_label": "docs"}],
-}
+_WHOLE_DOCS_SERVER: Final = {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs"}]}
 
 _CHAT_LAYOUT: Final[dict[str, object]] = {
     "type": "allowed_tools",
@@ -356,18 +352,16 @@ def test_an_mcp_entry_without_a_name_allows_every_call_its_server_serves():
         (_WHOLE_DOCS_SERVER, frozenset({"other"})),
         (_WHOLE_DOCS_SERVER, frozenset()),
         (
-            {
-                "type": "allowed_tools",
-                "mode": "auto",
-                "tools": [{"type": "mcp", "server_label": "docs", "name": "read"}],
-            },
+            {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "mcp", "server_label": "docs", "name": "read"}]},
             frozenset({"docs"}),
         ),
         (_DOCS_SEARCH, frozenset({"other"})),
         (_DOCS_SEARCH, frozenset()),
     ],
 )
-def test_an_mcp_entry_allows_no_call_outside_its_server_or_its_name(tool_choice: object, server_labels: frozenset[str]):
+def test_an_mcp_entry_allows_no_call_outside_its_server_or_its_name(
+    tool_choice: object, server_labels: frozenset[str]
+):
     assert tool_calls_the_choice_excludes(
         tool_choice, ("docs_server-search",), _gateway_serving_search(*server_labels)
     ) == ("docs_server-search",)
@@ -380,11 +374,7 @@ def _is_web_search(tool: Mapping[str, object]) -> bool:
 @pytest.mark.parametrize(
     "tool_choice",
     [
-        {
-            "type": "allowed_tools",
-            "mode": "auto",
-            "tools": [{"type": "web_search"}, {"type": "function", "name": "get_time"}],
-        },
+        {"type": "allowed_tools", "mode": "auto", "tools": [{"type": "web_search"}, {"type": "function", "name": "get_time"}]},
         {
             "type": "allowed_tools",
             "allowed_tools": {
@@ -410,10 +400,7 @@ def test_a_function_or_mcp_entry_is_never_taken_for_a_builtin():
     tool_choice: Final = {
         "type": "allowed_tools",
         "mode": "auto",
-        "tools": [
-            {"type": "function", "name": "web_search"},
-            {"type": "mcp", "server_label": "docs", "name": "web_search"},
-        ],
+        "tools": [{"type": "function", "name": "web_search"}, {"type": "mcp", "server_label": "docs", "name": "web_search"}],
     }
 
     rewritten: Final = allowed_tools_tool_choice_with_builtin_as_function(
@@ -435,10 +422,7 @@ def test_a_function_or_mcp_entry_is_never_taken_for_a_builtin():
     ],
 )
 def test_any_other_or_malformed_choice_is_left_as_sent(tool_choice: object):
-    assert (
-        allowed_tools_tool_choice_with_builtin_as_function(tool_choice, _is_web_search, "litellm_web_search")
-        is tool_choice
-    )
+    assert allowed_tools_tool_choice_with_builtin_as_function(tool_choice, _is_web_search, "litellm_web_search") is tool_choice
 
 
 _GATEWAY_WITH_TWO_SERVERS: Final = GatewayTools(
@@ -447,9 +431,7 @@ _GATEWAY_WITH_TWO_SERVERS: Final = GatewayTools(
         "docs_server-search": GatewayTool(
             names=frozenset({"docs_server-search", "search"}), server_labels=frozenset({"docs"})
         ),
-        "docs_server-read": GatewayTool(
-            names=frozenset({"docs_server-read", "read"}), server_labels=frozenset({"docs"})
-        ),
+        "docs_server-read": GatewayTool(names=frozenset({"docs_server-read", "read"}), server_labels=frozenset({"docs"})),
         "weather_server-forecast": GatewayTool(
             names=frozenset({"weather_server-forecast", "forecast"}), server_labels=frozenset({"weather"})
         ),
@@ -525,13 +507,9 @@ def test_gateway_entries_that_allow_no_converted_tool_send_none_instead_of_an_em
     assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) == "none"
 
 
-@pytest.mark.parametrize(
-    "tool_choice", ["auto", None, _FLAT_CHOICE, {"type": "allowed_tools", "mode": "auto", "tools": []}]
-)
+@pytest.mark.parametrize("tool_choice", ["auto", None, _FLAT_CHOICE, {"type": "allowed_tools", "mode": "auto", "tools": []}])
 def test_a_choice_without_gateway_entries_is_forwarded_as_sent(tool_choice: object):
-    assert (
-        allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) is tool_choice
-    )
+    assert allowed_tools_tool_choice_with_gateway_tools_as_functions(tool_choice, _GATEWAY_WITH_TWO_SERVERS) is tool_choice
 
 
 @pytest.mark.parametrize(
@@ -546,18 +524,12 @@ def test_a_choice_without_gateway_entries_is_forwarded_as_sent(tool_choice: obje
             },
         ),
         (
-            {
-                "type": "allowed_tools",
-                "allowed_tools": {"mode": "required", "tools": [{"type": "mcp", "server_label": "x"}]},
-            },
+            {"type": "allowed_tools", "allowed_tools": {"mode": "required", "tools": [{"type": "mcp", "server_label": "x"}]}},
             {
                 "type": "allowed_tools",
                 "allowed_tools": {
                     "mode": "required",
-                    "tools": [
-                        {"type": "mcp", "server_label": "x"},
-                        {"type": "function", "function": {"name": "retrieve"}},
-                    ],
+                    "tools": [{"type": "mcp", "server_label": "x"}, {"type": "function", "function": {"name": "retrieve"}}],
                 },
             },
         ),
@@ -588,10 +560,7 @@ def test_a_choice_that_is_not_allowed_tools_or_already_lists_the_function_is_lef
         (
             {
                 "type": "allowed_tools",
-                "allowed_tools": {
-                    "mode": "required",
-                    "tools": [{"type": "function", "function": {"name": "get_time"}}],
-                },
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
             },
             {
                 "type": "allowed_tools",

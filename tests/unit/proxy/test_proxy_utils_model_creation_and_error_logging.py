@@ -4760,9 +4760,7 @@ async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supp
     from mcp.types import CallToolResult, TextContent
 
     guardrail = guardrail_class(event_hook=GuardrailEventHooks.post_mcp_call)
-    litellm.callbacks = [
-        guardrail
-    ]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
+    litellm.callbacks = [guardrail]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
 

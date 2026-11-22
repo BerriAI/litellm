@@ -24,7 +24,9 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 @dataclass(slots=True)
 class _LoggingObject:
-    model_call_details: dict[str, object] = field(default_factory=lambda: {"litellm_params": {"metadata": {}}})
+    model_call_details: dict[str, object] = field(
+        default_factory=lambda: {"litellm_params": {"metadata": {}}}
+    )
 
 
 @dataclass(frozen=True, slots=True)

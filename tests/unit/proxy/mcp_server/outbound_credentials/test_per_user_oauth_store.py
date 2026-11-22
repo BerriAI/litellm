@@ -59,10 +59,7 @@ async def test_credential_persistence_preserves_known_and_unknown_scopes(credent
     [((), None, []), (("read", "write"), "", []), (("read", "write"), None, ["read", "write"])],
 )
 async def test_native_refresh_persists_actual_grant_through_storage_adapter(
-    credential_database,
-    prior_scopes,
-    response_scope,
-    expected,
+    credential_database, prior_scopes, response_scope, expected,
 ):
     from litellm.proxy.mcp_server.db import decode_oauth_payload
     from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
@@ -70,13 +67,8 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     server = MCPServer(
-        server_id="srv",
-        name="srv",
-        transport="http",
-        auth_type="oauth2",
-        token_url="https://idp.example/token",
-        client_id="client",
-        client_secret="secret",
+        server_id="srv", name="srv", transport="http", auth_type="oauth2",
+        token_url="https://idp.example/token", client_id="client", client_secret="secret",
     )
 
     async def token_endpoint(url, form, headers):

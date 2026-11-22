@@ -1498,7 +1498,11 @@ def test_mcp_extra_matches_proxy_extra_and_supports_streamable_http():
 
     sdk2_names: Final = frozenset(("mcp", "httpx2", "pydantic"))
     mcp_extra: Final = {Requirement(req).name: req for req in extras["mcp"]}
-    assert mcp_extra == {name: req for req in extras["proxy"] if (name := Requirement(req).name) in sdk2_names}
+    assert mcp_extra == {
+        name: req
+        for req in extras["proxy"]
+        if (name := Requirement(req).name) in sdk2_names
+    }
 
     specifier: Final = Requirement(mcp_extra["mcp"]).specifier
     assert not specifier.contains("2.2.0")
@@ -2002,18 +2006,12 @@ async def test_sse_catalog_limit_reports_the_failure_and_allows_smaller_pages(pa
         if isinstance(payload, JSONRPCNotification):
             return httpx2.Response(202)
         if payload.method == "initialize":
-            return httpx2.Response(
-                200,
-                json={
-                    "jsonrpc": "2.0",
-                    "id": payload.id,
-                    "result": {
-                        "protocolVersion": LATEST_HANDSHAKE_VERSION,
-                        "capabilities": {"tools": {}},
-                        "serverInfo": {"name": "catalog", "version": "1"},
-                    },
+            return httpx2.Response(200, json={
+                "jsonrpc": "2.0", "id": payload.id, "result": {
+                    "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                    "capabilities": {"tools": {}}, "serverInfo": {"name": "catalog", "version": "1"},
                 },
-            )
+            })
         assert payload.method == "tools/list"
         cursor: Final = (payload.params or {}).get("cursor")
         page: Final = catalog[1:] if cursor == "next-page" else catalog[:1] if paginated else catalog
@@ -2029,9 +2027,7 @@ async def test_sse_catalog_limit_reports_the_failure_and_allows_smaller_pages(pa
         return streamable_http_client(url, http_client=http_client, max_sse_event_size=limit)
 
     client: Final = _MockTransportClient(
-        respond,
-        server_url="https://upstream.example/mcp",
-        transport_context=transport_context,
+        respond, server_url="https://upstream.example/mcp", transport_context=transport_context,
     )
     if paginated:
         assert await client.list_tools(raise_on_error=True) == list(tools)
@@ -3948,10 +3944,7 @@ async def test_subscription_fingerprint_preserves_context_across_managed_renewal
     assert fingerprint != await client("renewed", tenant="bob").subscription_auth_fingerprint()
     assert await original.discovery_auth_fingerprint() != await client("renewed").discovery_auth_fingerprint()
     assert fingerprint != await client("renewed", scopes=None).subscription_auth_fingerprint()
-    assert (
-        await client("original", scopes=None).subscription_auth_fingerprint()
-        != await client("renewed", scopes=None).subscription_auth_fingerprint()
-    )
+    assert await client("original", scopes=None).subscription_auth_fingerprint() != await client("renewed", scopes=None).subscription_auth_fingerprint()
     assert (await original.prepare_request_auth()).headers[header_name] == "Bearer original"
 
 

@@ -67,7 +67,9 @@ class TestAnthropicBetaHeadersFiltering:
     def get_supported_headers(self, provider: str) -> List[str]:
         """Get headers with non-null values for a provider."""
         provider_config = self.get_header_column(provider)
-        return [header for header, value in provider_config.items() if value is not None]
+        return [
+            header for header, value in provider_config.items() if value is not None
+        ]
 
     def get_unsupported_headers(self, provider: str) -> List[str]:
         """Get headers with null values for a provider."""
@@ -77,7 +79,11 @@ class TestAnthropicBetaHeadersFiltering:
     def get_mapped_headers(self, provider: str) -> Dict[str, str]:
         """Get mapping of input headers to provider-specific headers."""
         provider_config = self.get_header_column(provider)
-        return {header: value for header, value in provider_config.items() if value is not None}
+        return {
+            header: value
+            for header, value in provider_config.items()
+            if value is not None
+        }
 
     @pytest.mark.parametrize(
         "provider",
@@ -90,23 +96,27 @@ class TestAnthropicBetaHeadersFiltering:
         unsupported_headers = self.get_unsupported_headers(provider)
         mapped_headers = self.get_mapped_headers(provider)
 
-        filtered = filter_and_transform_beta_headers(beta_headers=all_headers, provider=provider)
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider=provider
+        )
         # Bedrock InvokeModel serves the compact-2026-09-04 `compaction` parameter; Converse does not.
         # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
         assert ("compact-2026-09-04" in filtered) is (provider in ("anthropic", "azure_ai", "vertex_ai", "bedrock"))
         assert ("mid-conversation-tool-changes-2026-07-01" in filtered) is (provider != "bedrock_converse")
 
         for header in unsupported_headers:
-            assert header not in filtered, f"Unsupported header '{header}' should be filtered out for {provider}"
-            assert mapped_headers.get(header) not in filtered, (
-                f"Mapped value of unsupported header '{header}' should not appear for {provider}"
-            )
+            assert (
+                header not in filtered
+            ), f"Unsupported header '{header}' should be filtered out for {provider}"
+            assert (
+                mapped_headers.get(header) not in filtered
+            ), f"Mapped value of unsupported header '{header}' should not appear for {provider}"
 
         for header in supported_headers:
             expected_mapped = mapped_headers[header]
-            assert expected_mapped in filtered, (
-                f"Supported header '{header}' should be mapped to '{expected_mapped}' for {provider}"
-            )
+            assert (
+                expected_mapped in filtered
+            ), f"Supported header '{header}' should be mapped to '{expected_mapped}' for {provider}"
 
     @pytest.mark.parametrize(
         "provider",
@@ -121,14 +131,20 @@ class TestAnthropicBetaHeadersFiltering:
         ]
         all_headers = self.get_all_beta_headers() + unknown_headers
 
-        filtered = filter_and_transform_beta_headers(beta_headers=all_headers, provider=provider)
+        filtered = filter_and_transform_beta_headers(
+            beta_headers=all_headers, provider=provider
+        )
 
         for unknown in unknown_headers:
-            assert unknown not in filtered, f"Unknown header '{unknown}' should be filtered out for {provider}"
+            assert (
+                unknown not in filtered
+            ), f"Unknown header '{unknown}' should be filtered out for {provider}"
 
     def test_update_request_with_filtered_beta_vertex_ai(self):
         """Test combined filtering for both HTTP headers and request body betas."""
-        headers = {"anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"}
+        headers = {
+            "anthropic-beta": "files-api-2025-04-14,context-management-2025-06-27,code-execution-2025-05-22"
+        }
         request_data = {
             "anthropic_beta": [
                 "files-api-2025-04-14",
@@ -144,7 +160,9 @@ class TestAnthropicBetaHeadersFiltering:
         )
 
         assert filtered_headers.get("anthropic-beta") == "context-management-2025-06-27"
-        assert filtered_request_data.get("anthropic_beta") == ["context-management-2025-06-27"]
+        assert filtered_request_data.get("anthropic_beta") == [
+            "context-management-2025-06-27"
+        ]
 
     @pytest.mark.asyncio
     async def test_anthropic_messages_http_headers_filtering(self):
@@ -152,7 +170,9 @@ class TestAnthropicBetaHeadersFiltering:
         all_headers = self.get_all_beta_headers()
         unsupported = self.get_unsupported_headers("anthropic")
 
-        with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_client_factory:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -188,9 +208,9 @@ class TestAnthropicBetaHeadersFiltering:
                 if beta_header:
                     beta_values = [b.strip() for b in beta_header.split(",")]
                     for unsupported_header in unsupported:
-                        assert unsupported_header not in beta_values, (
-                            f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Anthropic"
-                        )
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Anthropic"
 
     @pytest.mark.asyncio
     async def test_azure_ai_messages_http_headers_filtering(self):
@@ -198,7 +218,9 @@ class TestAnthropicBetaHeadersFiltering:
         all_headers = self.get_all_beta_headers()
         unsupported = self.get_unsupported_headers("azure_ai")
 
-        with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_client_factory:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -236,9 +258,9 @@ class TestAnthropicBetaHeadersFiltering:
                 if beta_header:
                     beta_values = [b.strip() for b in beta_header.split(",")]
                     for unsupported_header in unsupported:
-                        assert unsupported_header not in beta_values, (
-                            f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Azure AI"
-                        )
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Azure AI"
 
     @pytest.mark.asyncio
     async def test_bedrock_converse_headers_and_body_filtering(self):
@@ -251,7 +273,9 @@ class TestAnthropicBetaHeadersFiltering:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "output": {"message": {"role": "assistant", "content": [{"text": "Hello"}]}},
+                "output": {
+                    "message": {"role": "assistant", "content": [{"text": "Hello"}]}
+                },
                 "stopReason": "end_turn",
                 "usage": {"inputTokens": 10, "outputTokens": 20},
             }
@@ -283,25 +307,27 @@ class TestAnthropicBetaHeadersFiltering:
                 if beta_header:
                     beta_values = [b.strip() for b in beta_header.split(",")]
                     for unsupported_header in unsupported:
-                        assert unsupported_header not in beta_values, (
-                            f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Bedrock Converse"
-                        )
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Bedrock Converse"
 
                 data = call_kwargs.get("data")
                 if data:
                     body = json.loads(data)
-                    body_beta = body.get("additionalModelRequestFields", {}).get("anthropic_beta", [])
+                    body_beta = body.get("additionalModelRequestFields", {}).get(
+                        "anthropic_beta", []
+                    )
 
                     for unsupported_header in unsupported:
-                        assert unsupported_header not in body_beta, (
-                            f"Unsupported header '{unsupported_header}' should not be in request body for Bedrock Converse"
-                        )
+                        assert (
+                            unsupported_header not in body_beta
+                        ), f"Unsupported header '{unsupported_header}' should not be in request body for Bedrock Converse"
 
                     for header, mapped_value in mapped_headers.items():
                         if header in all_headers and mapped_value in body_beta:
-                            assert mapped_value in body_beta, (
-                                f"Supported header '{header}' should be mapped to '{mapped_value}' in request body for Bedrock Converse"
-                            )
+                            assert (
+                                mapped_value in body_beta
+                            ), f"Supported header '{header}' should be mapped to '{mapped_value}' in request body for Bedrock Converse"
 
     @pytest.mark.asyncio
     async def test_vertex_ai_messages_http_headers_filtering(self):
@@ -309,7 +335,9 @@ class TestAnthropicBetaHeadersFiltering:
         all_headers = self.get_all_beta_headers()
         unsupported = self.get_unsupported_headers("vertex_ai")
 
-        with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client") as mock_client_factory:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
+        ) as mock_client_factory:
             mock_response = MagicMock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
@@ -327,7 +355,9 @@ class TestAnthropicBetaHeadersFiltering:
             mock_client.post = AsyncMock(return_value=mock_response)
             mock_client_factory.return_value = mock_client
 
-            with patch("litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token") as mock_token:
+            with patch(
+                "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token"
+            ) as mock_token:
                 mock_token.return_value = ("test-token", "test-project")
 
                 try:
@@ -350,9 +380,9 @@ class TestAnthropicBetaHeadersFiltering:
                 if beta_header:
                     beta_values = [b.strip() for b in beta_header.split(",")]
                     for unsupported_header in unsupported:
-                        assert unsupported_header not in beta_values, (
-                            f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Vertex AI"
-                        )
+                        assert (
+                            unsupported_header not in beta_values
+                        ), f"Unsupported header '{unsupported_header}' should not be in HTTP headers for Vertex AI"
 
     def test_header_mapping_correctness(self):
         """Test that headers are mapped correctly for providers with transformations."""
@@ -389,9 +419,9 @@ class TestAnthropicBetaHeadersFiltering:
                 beta_headers=[test_case["input"]], provider=test_case["provider"]
             )
 
-            assert test_case["expected"] in filtered, (
-                f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
-            )
+            assert (
+                test_case["expected"] in filtered
+            ), f"Header '{test_case['input']}' should be mapped to '{test_case['expected']}' for {test_case['provider']}, but got: {filtered}"
 
     @pytest.mark.parametrize(
         "beta",
@@ -402,7 +432,9 @@ class TestAnthropicBetaHeadersFiltering:
             "redact-thinking-2026-02-12",
         ],
     )
-    def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(self, beta: str) -> None:
+    def test_vertex_ai_header_only_beta_is_forwarded_as_the_header_and_dropped_from_the_body(
+        self, beta: str
+    ) -> None:
         headers, body = update_request_with_filtered_beta(
             headers={"anthropic-beta": f"{beta},context-1m-2025-08-07"},
             request_data={"anthropic_beta": [beta, "context-1m-2025-08-07"]},
@@ -551,11 +583,13 @@ class TestAnthropicBetaHeadersFiltering:
             unsupported = self.get_unsupported_headers(provider)
 
             if unsupported:
-                filtered = filter_and_transform_beta_headers(beta_headers=unsupported, provider=provider)
-
-                assert len(filtered) == 0, (
-                    f"All null-value headers should be filtered out for {provider}, but got: {filtered}"
+                filtered = filter_and_transform_beta_headers(
+                    beta_headers=unsupported, provider=provider
                 )
+
+                assert (
+                    len(filtered) == 0
+                ), f"All null-value headers should be filtered out for {provider}, but got: {filtered}"
 
     def test_empty_headers_list(self):
         """Test that empty headers list returns empty result."""
@@ -566,9 +600,13 @@ class TestAnthropicBetaHeadersFiltering:
             "bedrock",
             "vertex_ai",
         ]:
-            filtered = filter_and_transform_beta_headers(beta_headers=[], provider=provider)
+            filtered = filter_and_transform_beta_headers(
+                beta_headers=[], provider=provider
+            )
 
-            assert len(filtered) == 0, f"Empty headers list should return empty result for {provider}"
+            assert (
+                len(filtered) == 0
+            ), f"Empty headers list should return empty result for {provider}"
 
     def test_mixed_supported_and_unsupported_headers(self):
         """Test filtering with a mix of supported, unsupported, and unknown headers."""
@@ -588,12 +626,20 @@ class TestAnthropicBetaHeadersFiltering:
 
             test_headers = [supported[0]] + [unsupported[0]] + ["unknown-header-123"]
 
-            filtered = filter_and_transform_beta_headers(beta_headers=test_headers, provider=provider)
+            filtered = filter_and_transform_beta_headers(
+                beta_headers=test_headers, provider=provider
+            )
 
             expected_mapped = mapped_headers[supported[0]]
-            assert expected_mapped in filtered, f"Supported header should be in result for {provider}"
-            assert unsupported[0] not in filtered, f"Unsupported header should not be in result for {provider}"
-            assert "unknown-header-123" not in filtered, f"Unknown header should not be in result for {provider}"
+            assert (
+                expected_mapped in filtered
+            ), f"Supported header should be in result for {provider}"
+            assert (
+                unsupported[0] not in filtered
+            ), f"Unsupported header should not be in result for {provider}"
+            assert (
+                "unknown-header-123" not in filtered
+            ), f"Unknown header should not be in result for {provider}"
 
     @pytest.mark.parametrize("provider", ["anthropic", "bedrock", "bedrock_mantle", "vertex_ai"])
     def test_blank_anthropic_beta_header_is_removed(self, provider):

@@ -7,7 +7,6 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
 
-
 @pytest.mark.parametrize("message", ("Short error", "Rate limit " + "secret" * 100))
 @pytest.mark.parametrize("ttl", (None, 5.5, 30.0))
 def test_cooldown_masks_exception_and_preserves_status_timestamp_and_ttl(message: str, ttl: float | None) -> None:

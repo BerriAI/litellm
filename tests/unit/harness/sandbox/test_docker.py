@@ -8,7 +8,6 @@ from litellm import sandbox
 from litellm.harness.errors import SandboxError
 from litellm.harness.sandbox import DockerSandbox, Sandbox
 from litellm.harness.sandbox.docker import parse_sha256sum
-
 CID = "cid123"
 
 
@@ -163,7 +162,9 @@ async def test_read_write_which_tempdir(fake):
 async def test_snapshot_parses_output(fake):
     box = sandbox.docker("img")
     digest = "a" * 64
-    fake.responses["exec"] = FakeHandle(stdout=f"{digest}  ./x.txt\n{digest}  ./dir/with space.txt\n".encode())
+    fake.responses["exec"] = FakeHandle(
+        stdout=f"{digest}  ./x.txt\n{digest}  ./dir/with space.txt\n".encode()
+    )
     snap = await box.snapshot()
     assert snap == {"x.txt": digest, "dir/with space.txt": digest}
     script = fake.calls[-1][-3]

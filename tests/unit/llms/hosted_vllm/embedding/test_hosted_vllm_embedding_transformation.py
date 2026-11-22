@@ -440,7 +440,9 @@ def test_hosted_vllm_embedding_repeats_identical_input_and_result(respx_mock: re
     )
     input_text: Final = "repeated embedding input"
 
-    responses: Final = tuple(litellm.embedding(model=_MODEL, input=input_text, api_base=_API_BASE) for _ in range(2))
+    responses: Final = tuple(
+        litellm.embedding(model=_MODEL, input=input_text, api_base=_API_BASE) for _ in range(2)
+    )
 
     assert tuple(_request_json(call.request) for call in route.calls) == (
         {"model": _UPSTREAM_MODEL, "input": [input_text]},

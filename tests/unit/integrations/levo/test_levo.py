@@ -156,7 +156,7 @@ class TestLevoIntegration(unittest.TestCase):
         """Test health check returns unhealthy status when required vars are missing."""
         # Try to create logger without required env vars
         # This should fail during config, but we can test health check logic
-        with pytest.raises(ValueError, match="LEVOAI_API_KEY environment variable is required for Levo"):
+        with pytest.raises(ValueError, match='LEVOAI_API_KEY environment variable is required for Levo'):
             LevoLogger.get_levo_config()
 
     @patch.dict(
@@ -168,8 +168,12 @@ class TestLevoIntegration(unittest.TestCase):
             "LEVOAI_COLLECTOR_URL": "https://collector.levo.ai",
         },
     )
-    @pytest.mark.skipif(not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed")
-    @patch("litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy")
+    @pytest.mark.skipif(
+        not OPENTELEMETRY_AVAILABLE, reason="OpenTelemetry packages not installed"
+    )
+    @patch(
+        "litellm.integrations.opentelemetry.OpenTelemetry._init_otel_logger_on_litellm_proxy"
+    )
     def test_levo_logger_callback_name(self, mock_init_proxy):
         """Test that callback_name is properly set and used."""
         # Mock the proxy initialization to avoid importing proxy code
@@ -186,7 +190,9 @@ class TestLevoIntegration(unittest.TestCase):
         tracer_provider = TracerProvider()
         tracer_provider.add_span_processor(SimpleSpanProcessor(InMemorySpanExporter()))
 
-        levo_logger = LevoLogger(config=otel_config, callback_name="levo", tracer_provider=tracer_provider)
+        levo_logger = LevoLogger(
+            config=otel_config, callback_name="levo", tracer_provider=tracer_provider
+        )
 
         # Verify callback_name attribute
         self.assertEqual(levo_logger.callback_name, "levo")

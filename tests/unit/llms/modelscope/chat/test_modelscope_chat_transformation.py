@@ -80,7 +80,9 @@ class TestModelScopeConfig:
 
         response = completion(
             model=f"modelscope/{DEFAULT_MODEL}",
-            messages=[{"role": "user", "content": "write code for saying hey from LiteLLM"}],
+            messages=[
+                {"role": "user", "content": "write code for saying hey from LiteLLM"}
+            ],
             api_key=api_key,
             api_base=api_base,
         )

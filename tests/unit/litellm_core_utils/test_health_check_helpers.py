@@ -2058,11 +2058,7 @@ async def test_calls_after_a_health_check_still_use_the_global_model_fallbacks(
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "model_fallbacks", ["openai/healthy-fallback"])
     monkeypatch.setenv("OPENAI_API_KEY", "openai-env-key")
-    deployment: Final = {
-        "model": "anthropic/missing-model",
-        "api_base": "https://deployment.example",
-        "api_key": "sk-test",
-    }
+    deployment: Final = {"model": "anthropic/missing-model", "api_base": "https://deployment.example", "api_key": "sk-test"}
     _ = _mock_failing_deployment_with_a_healthy_openai_fallback(respx_mock, "https://deployment.example/v1/messages")
 
     _ = await ahealth_check(deployment, mode="chat")

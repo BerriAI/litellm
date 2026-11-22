@@ -12,27 +12,20 @@ from litellm.proxy.middleware.request_size_limit_middleware import (
 )
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "root_path", "operator_mb", "route_mb"),
-    [
-        ("POST", "/chat/completions", "", 1, None),
-        ("POST", "/claude-code/plugins/upload", "", None, 1),
-        ("POST", "/skill-hub/skills/upload", "", None, 1),
-        ("POST", "/gateway/claude-code/plugins/upload", "/gateway", None, 1),
-        ("POST", "/claude-code/plugins/upload", "", 2, 1),
-        ("POST", "/claude-code/plugins/upload", "", 1, 2),
-        ("PUT", "/skill-hub/skills/example/upload", "", None, 1),
-        ("PUT", "/gateway/skill-hub/skills/example/upload", "/gateway", None, 1),
-        ("PUT", "/skill-hub/skills/example/upload", "/gateway", None, 1),
-        ("PUT", "/skill-hub/skills/example/upload", "", 1, 2),
-    ],
-)
+@pytest.mark.parametrize(("method", "path", "root_path", "operator_mb", "route_mb"), [
+    ("POST", "/chat/completions", "", 1, None),
+    ("POST", "/claude-code/plugins/upload", "", None, 1),
+    ("POST", "/skill-hub/skills/upload", "", None, 1),
+    ("POST", "/gateway/claude-code/plugins/upload", "/gateway", None, 1),
+    ("POST", "/claude-code/plugins/upload", "", 2, 1),
+    ("POST", "/claude-code/plugins/upload", "", 1, 2),
+    ("PUT", "/skill-hub/skills/example/upload", "", None, 1),
+    ("PUT", "/gateway/skill-hub/skills/example/upload", "/gateway", None, 1),
+    ("PUT", "/skill-hub/skills/example/upload", "/gateway", None, 1),
+    ("PUT", "/skill-hub/skills/example/upload", "", 1, 2),
+])
 def test_request_size_limit_middleware_rejects_content_length_before_body_read(
-    method: str,
-    path: str,
-    root_path: str,
-    operator_mb: int | None,
-    route_mb: int | None,
+    method: str, path: str, root_path: str, operator_mb: int | None, route_mb: int | None,
 ) -> None:
     downstream_called = False
 
@@ -51,16 +44,13 @@ def test_request_size_limit_middleware_rejects_content_length_before_body_read(
                 ("POST", "/claude-code/plugins/upload"): route_mb,
                 ("POST", "/skill-hub/skills/upload"): route_mb,
                 ("PUT", "/skill-hub/skills/{name}/upload"): route_mb,
-            }
-            if route_mb
-            else None,
+            } if route_mb else None,
         ),
         root_path=root_path,
     )
 
     response = client.request(
-        method,
-        path,
+        method, path,
         content=b"x" * (1024 * 1024 + 1),
         headers={"content-type": "application/json"},
     )
@@ -72,26 +62,19 @@ def test_request_size_limit_middleware_rejects_content_length_before_body_read(
 
 
 @pytest.mark.parametrize(("enabled", "operator_mb"), [(True, 0), (False, 1)])
-@pytest.mark.parametrize(
-    ("method", "path", "root_path"),
-    [
-        ("POST", "/chat/completions", ""),
-        ("PUT", "/claude-code/plugins/upload", ""),
-        ("POST", "/claude-code/plugins/upload-other", ""),
-        ("POST", "/claude-code/plugins", ""),
-        ("POST", "/skill-hub/skills/example/upload", ""),
-        ("PUT", "/skill-hub/skills/example/upload-other", ""),
-        ("PUT", "/skill-hub/skills/example/nested/upload", ""),
-        ("PUT", "/skill-hub/skills//upload", ""),
-        ("PUT", "/gateway-other/skill-hub/skills/example/upload", "/gateway"),
-    ],
-)
+@pytest.mark.parametrize(("method", "path", "root_path"), [
+    ("POST", "/chat/completions", ""),
+    ("PUT", "/claude-code/plugins/upload", ""),
+    ("POST", "/claude-code/plugins/upload-other", ""),
+    ("POST", "/claude-code/plugins", ""),
+    ("POST", "/skill-hub/skills/example/upload", ""),
+    ("PUT", "/skill-hub/skills/example/upload-other", ""),
+    ("PUT", "/skill-hub/skills/example/nested/upload", ""),
+    ("PUT", "/skill-hub/skills//upload", ""),
+    ("PUT", "/gateway-other/skill-hub/skills/example/upload", "/gateway"),
+])
 def test_request_size_limit_middleware_zero_or_disabled_global_limit_preserves_other_routes(
-    enabled: bool,
-    operator_mb: int,
-    method: str,
-    path: str,
-    root_path: str,
+    enabled: bool, operator_mb: int, method: str, path: str, root_path: str,
 ) -> None:
     downstream_called = False
 
@@ -115,8 +98,7 @@ def test_request_size_limit_middleware_zero_or_disabled_global_limit_preserves_o
     )
 
     response = client.request(
-        method,
-        path,
+        method, path,
         content=b"x" * (1024 * 1024 + 1),
         headers={"content-type": "application/json"},
     )
@@ -127,20 +109,14 @@ def test_request_size_limit_middleware_zero_or_disabled_global_limit_preserves_o
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "path", "root_path", "operator_mb"),
-    [
-        ("POST", "/chat/completions", "", 1),
-        ("POST", "/skill-hub/skills/upload", "", None),
-        ("PUT", "/skill-hub/skills/example/upload", "", None),
-        ("PUT", "/gateway/skill-hub/skills/example/upload", "/gateway", None),
-    ],
-)
+@pytest.mark.parametrize(("method", "path", "root_path", "operator_mb"), [
+    ("POST", "/chat/completions", "", 1),
+    ("POST", "/skill-hub/skills/upload", "", None),
+    ("PUT", "/skill-hub/skills/example/upload", "", None),
+    ("PUT", "/gateway/skill-hub/skills/example/upload", "/gateway", None),
+])
 async def test_request_size_limit_middleware_rejects_streamed_body_without_content_length(
-    method: str,
-    path: str,
-    root_path: str,
-    operator_mb: int | None,
+    method: str, path: str, root_path: str, operator_mb: int | None,
 ) -> None:
     received_body_bytes = 0
 
@@ -162,8 +138,7 @@ async def test_request_size_limit_middleware_rejects_streamed_body_without_conte
         get_max_request_size_mb=lambda: operator_mb,
         is_request_size_limit_enabled=lambda: operator_mb is not None,
         route_max_request_size_mb={
-            ("POST", "/skill-hub/skills/upload"): 1,
-            ("PUT", "/skill-hub/skills/{name}/upload"): 1,
+            ("POST", "/skill-hub/skills/upload"): 1, ("PUT", "/skill-hub/skills/{name}/upload"): 1,
         },
     )
     sent_messages: list[Message] = []
@@ -235,20 +210,15 @@ def test_an_oversized_messages_request_gets_the_anthropic_request_too_large_erro
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "path", "route"),
-    [
-        ("POST", "/claude-code/plugins/upload", "/claude-code/plugins/upload"),
-        ("POST", "/skill-hub/skills/upload", "/skill-hub/skills/upload"),
-        ("POST", "/chat/completions", "/chat/completions"),
-        ("PUT", "/skill-hub/skills/example/upload", "/skill-hub/skills/{name}/upload"),
-        ("PUT", "/skill-hub/submissions/absent/upload", "/skill-hub/submissions/{submission_id}/upload"),
-    ],
-)
+@pytest.mark.parametrize(("method", "path", "route"), [
+    ("POST", "/claude-code/plugins/upload", "/claude-code/plugins/upload"),
+    ("POST", "/skill-hub/skills/upload", "/skill-hub/skills/upload"),
+    ("POST", "/chat/completions", "/chat/completions"),
+    ("PUT", "/skill-hub/skills/example/upload", "/skill-hub/skills/{name}/upload"),
+    ("PUT", "/skill-hub/submissions/absent/upload", "/skill-hub/submissions/{submission_id}/upload"),
+])
 async def test_chunked_upload_overflow_stops_fastapi_and_auth_multipart_parsing(
-    method: str,
-    path: str,
-    route: str,
+    method: str, path: str, route: str,
 ) -> None:
     from litellm.proxy.proxy_server import app
 
@@ -266,8 +236,7 @@ async def test_chunked_upload_overflow_stops_fastapi_and_auth_multipart_parsing(
 
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=limited), base_url="http://test") as client:
         response: Final = await client.request(
-            method,
-            path,
+            method, path,
             content=chunks(),
             headers={"content-type": "multipart/form-data; boundary=skill"},
         )

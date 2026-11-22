@@ -27,7 +27,9 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = ""  # Empty string response
 
         mock_client = MagicMock()
-        mock_client.post.return_value = mock_raw_response
+        mock_client.post.return_value = (
+            mock_raw_response
+        )
 
         with pytest.raises(OpenAIError) as exc_info:
             openai_chat.make_sync_openai_chat_completion_request(
@@ -38,7 +40,9 @@ class TestEmptyResponseHandling:
             )
 
         assert "Empty or invalid response from LLM endpoint" in str(exc_info.value)
-        assert "Check the reverse proxy or model server configuration" in str(exc_info.value)
+        assert "Check the reverse proxy or model server configuration" in str(
+            exc_info.value
+        )
 
     def test_sync_none_response_raises_clear_error(self):
         """Test that None response also produces a clear error"""
@@ -49,7 +53,9 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = None
 
         mock_client = MagicMock()
-        mock_client.post.return_value = mock_raw_response
+        mock_client.post.return_value = (
+            mock_raw_response
+        )
 
         with pytest.raises(OpenAIError) as exc_info:
             openai_chat.make_sync_openai_chat_completion_request(
@@ -74,7 +80,9 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = mock_response
 
         mock_client = MagicMock()
-        mock_client.post.return_value = mock_raw_response
+        mock_client.post.return_value = (
+            mock_raw_response
+        )
 
         headers, response = openai_chat.make_sync_openai_chat_completion_request(
             openai_client=mock_client,
@@ -101,7 +109,9 @@ class TestEmptyResponseHandling:
         mock_raw_response.parse.return_value = mock_stream
 
         mock_client = MagicMock()
-        mock_client.post.return_value = mock_raw_response
+        mock_client.post.return_value = (
+            mock_raw_response
+        )
 
         # Key: data has stream=True - this should bypass the model_dump check
         headers, response = openai_chat.make_sync_openai_chat_completion_request(

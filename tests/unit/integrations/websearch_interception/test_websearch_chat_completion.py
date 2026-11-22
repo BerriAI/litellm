@@ -480,10 +480,7 @@ async def test_execute_chat_completion_agentic_loop_keeps_an_allowed_tools_choic
         (
             {
                 "type": "allowed_tools",
-                "allowed_tools": {
-                    "mode": "required",
-                    "tools": [{"type": "function", "function": {"name": "get_time"}}],
-                },
+                "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
             },
             {
                 "type": "allowed_tools",

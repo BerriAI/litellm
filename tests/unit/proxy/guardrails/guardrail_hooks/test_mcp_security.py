@@ -94,9 +94,7 @@ class TestMCPSecurityGuardrailPreCall:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()
-            ),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()),
             pytest.raises(HTTPException) as exc_info,
         ):
             await guardrail.async_pre_call_hook(
@@ -120,9 +118,7 @@ class TestMCPSecurityGuardrailPreCall:
 
         with (
             patch("litellm.proxy.proxy_server.prisma_client", None),
-            patch(
-                "litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()
-            ),
+            patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", _manager_with_saved_server()),
         ):
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -199,18 +195,15 @@ async def test_guardrail_observes_saved_server_creation_and_deletion_on_another_
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     manager = MCPServerManager()
-    row = LiteLLM_MCPServerTable(
-        server_id="peer-server", alias="peer_server", transport="http", url="https://upstream.example/mcp"
-    )
+    row = LiteLLM_MCPServerTable(server_id="peer-server", alias="peer_server", transport="http",
+        url="https://upstream.example/mcp")
     prisma = MagicMock()
     prisma.writer_db = prisma.db
     prisma.db.litellm_mcpservertable.find_many = AsyncMock(side_effect=([row], []))
     prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
     prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(return_value=None)
-    data = {
-        "tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/peer-server"}],
-        "guardrails": ["test-mcp-security"],
-    }
+    data = {"tools": [{"type": "mcp", "server_url": "litellm_proxy/mcp/peer-server"}],
+        "guardrails": ["test-mcp-security"]}
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch("litellm.proxy.proxy_server.general_settings", {}),

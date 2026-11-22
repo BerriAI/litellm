@@ -397,7 +397,9 @@ class TestContentBlockState:
             message=BLOCK_MESSAGE, model="claude-3-5-sonnet", request_data={}, guardrail_name="g"
         )
 
-        raw = b"".join(self._handler().build_block_sse_chunks(exc, stream_started=True, responses_so_far=seen)).decode()
+        raw = b"".join(
+            self._handler().build_block_sse_chunks(exc, stream_started=True, responses_so_far=seen)
+        ).decode()
         payloads = _parse_sse_payloads(raw)
         stop_position = payloads.index({"type": "content_block_stop", "index": 0})
 

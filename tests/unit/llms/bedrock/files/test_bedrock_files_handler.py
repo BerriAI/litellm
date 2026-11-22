@@ -103,7 +103,9 @@ class TestBedrockFilesHandler:
             )
 
     def test_should_extract_unified_managed_s3_uri(self):
-        file_id = _encode_unified_file_id("s3://safe-bucket/litellm-batch-outputs/job/output.jsonl")
+        file_id = _encode_unified_file_id(
+            "s3://safe-bucket/litellm-batch-outputs/job/output.jsonl"
+        )
 
         assert (
             self.handler._extract_s3_uri_from_file_id(file_id)

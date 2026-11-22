@@ -459,7 +459,9 @@ def test_sync_annotations_arrive_once_with_the_last_content_slice():
     assert chunks[last_content].choices[0].delta.annotations == annotations
 
 
-async def _client_stream(message: dict[str, JsonValue], replay: Literal["async", "sync"]) -> list[dict[str, JsonValue]]:
+async def _client_stream(
+    message: dict[str, JsonValue], replay: Literal["async", "sync"]
+) -> list[dict[str, JsonValue]]:
     payload: Final = {
         **_async_payload(),
         "choices": [{"index": 0, "message": {"role": "assistant", **message}, "finish_reason": "stop"}],

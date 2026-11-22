@@ -13,7 +13,9 @@ _LOCAL_FAKE_IMPORT: Final = "fake_openai_endpoint"
 
 def _local_fake_users_with_hosted_mock(root: Path) -> tuple[Path, ...]:
     sources: Final = ((path, path.read_text()) for path in sorted(root.rglob("*.py")))
-    return tuple(path for path, source in sources if _LOCAL_FAKE_IMPORT in source and _LIVE_HOSTED_MOCK.search(source))
+    return tuple(
+        path for path, source in sources if _LOCAL_FAKE_IMPORT in source and _LIVE_HOSTED_MOCK.search(source)
+    )
 
 
 @pytest.mark.parametrize("host", ("127.0.0.1", "localhost", "[::1]"))

@@ -139,7 +139,9 @@ def test_backend_session_events_do_not_override_client_turn_detection():
     meter = XAIRealtimeUsageMeter()
 
     meter.observe_client_event({"type": "session.update", "session": {"turn_detection": None}})
-    meter.observe_backend_event({"type": "session.created", "session": {"turn_detection": {"type": None}}})
+    meter.observe_backend_event(
+        {"type": "session.created", "session": {"turn_detection": {"type": None}}}
+    )
     meter.observe_backend_event({"type": "session.updated", "session": {"modalities": ["audio"]}})
 
     assert meter.snapshot().push_to_talk is True
@@ -149,7 +151,9 @@ def test_later_client_server_vad_turn_detection_disables_push_to_talk():
     meter = XAIRealtimeUsageMeter()
 
     meter.observe_client_event({"type": "session.update", "session": {"turn_detection": None}})
-    meter.observe_client_event({"type": "session.update", "session": {"turn_detection": {"type": "server_vad"}}})
+    meter.observe_client_event(
+        {"type": "session.update", "session": {"turn_detection": {"type": "server_vad"}}}
+    )
 
     assert meter.snapshot().push_to_talk is False
 
@@ -157,7 +161,9 @@ def test_later_client_server_vad_turn_detection_disables_push_to_talk():
 def test_backend_turn_detection_alone_is_ignored():
     meter = XAIRealtimeUsageMeter()
 
-    meter.observe_backend_event({"type": "session.created", "session": {"turn_detection": {"type": None}}})
+    meter.observe_backend_event(
+        {"type": "session.created", "session": {"turn_detection": {"type": None}}}
+    )
 
     assert meter.snapshot().push_to_talk is False
 

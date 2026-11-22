@@ -1,7 +1,9 @@
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+)
 
 import pytest
 
@@ -38,12 +40,16 @@ class TestAzureAnthropicProviderRouting:
 
     def test_get_llm_provider_routes_azure_ai_claude_to_azure_ai(self):
         """Test that azure_ai/claude-* models route through azure_ai"""
-        model, provider, dynamic_api_key, api_base = get_llm_provider(model="azure_ai/claude-sonnet-4-5")
+        model, provider, dynamic_api_key, api_base = get_llm_provider(
+            model="azure_ai/claude-sonnet-4-5"
+        )
         assert provider == "azure_ai"
         assert model == "claude-sonnet-4-5"
 
     def test_get_llm_provider_does_not_route_non_claude_azure_models(self):
         """Test that non-Claude Azure models are not routed to azure_ai"""
-        model, provider, dynamic_api_key, api_base = get_llm_provider(model="azure/gpt-4")
+        model, provider, dynamic_api_key, api_base = get_llm_provider(
+            model="azure/gpt-4"
+        )
         # Should be routed to regular azure provider
         assert provider == "azure" or provider == "openai"

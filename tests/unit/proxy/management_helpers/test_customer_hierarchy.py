@@ -662,10 +662,8 @@ def test_budget_windows_reject_duplicate_durations(request_type: type[BaseModel]
 
 
 @pytest.mark.parametrize("request_type", (Budget, BudgetWriteRequest))
-@pytest.mark.parametrize(
-    "duration",
-    ("", "0s", "-1d", "1y", "1.5h", "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"),
-)
+@pytest.mark.parametrize("duration", ("", "0s", "-1d", "1y", "1.5h",
+                                    "999999999999999999999d", "999999999999999999999h", "999999999999999999999s"))
 def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseModel], duration: str) -> None:
     with pytest.raises(ValidationError):
         request_type.model_validate({"budget_limits": [{"budget_duration": duration, "max_budget": 0}]})
@@ -673,12 +671,10 @@ def test_budget_windows_reject_noncanonical_durations(request_type: type[BaseMod
 
 @pytest.mark.parametrize("duration", ("30s", "15m", "2h", "6d", "2w", "30d", "daily"))
 def test_additional_budget_windows_keep_the_submitted_duration_without_changing_the_scalar(duration: str) -> None:
-    budget: Final = Budget(
-        max_budget=50, budget_duration="daily", budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),)
-    )
+    budget: Final = Budget(max_budget=50, budget_duration="daily",
+                          budget_limits=(BudgetLimit(budget_duration=duration, max_budget=0),))
     assert (budget.max_budget, budget.budget_duration) == (50, "daily")
     assert tuple(limit.budget_duration for limit in budget.budget_limits or ()) == (duration,)
-
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("elapsed", (1, 3))
@@ -729,11 +725,8 @@ class ResetAdvancingBudgetTable(Table):
         self.rows = {
             **self.rows,
             budget_id: row.model_copy(
-                update={
-                    "budget_limits": [
-                        {**window, "reset_at": (NOW + timedelta(days=2)).isoformat()} for window in windows
-                    ]
-                }
+                update={"budget_limits": [{**window, "reset_at": (NOW + timedelta(days=2)).isoformat()}
+                                          for window in windows]}
             ),
         }
 
@@ -798,23 +791,20 @@ async def test_customer_budget_edit_preserves_a_racing_reset(change: str) -> Non
         "clear-empty": Budget(budget_limits=()),
         "scalar": Budget(max_budget=75),
     }
-    result: Final = await hierarchy.update_organization("org", OrganizationPatch(budget=edits[change]), "admin")
+    result: Final = await hierarchy.update_organization(
+        "org", OrganizationPatch(budget=edits[change]), "admin"
+    )
     assert not isinstance(result, Failure)
     stored: Final = database.budget_rows.rows[organization.budget_id].model_dump()
     expected_windows: Final = (
-        None
-        if change == "clear-null"
-        else []
-        if change == "clear-empty"
-        else [
-            {
-                "budget_duration": "2d",
-                "max_budget": 20 if change == "edit" else 10,
-                "reset_at": (NOW + timedelta(days=2)).isoformat(),
-            }
+        None if change == "clear-null" else [] if change == "clear-empty" else [
+            {"budget_duration": "2d", "max_budget": 20 if change == "edit" else 10,
+             "reset_at": (NOW + timedelta(days=2)).isoformat()}
         ]
     )
-    assert (stored["max_budget"], stored["budget_limits"]) == (75 if change == "scalar" else 50, expected_windows)
+    assert (stored["max_budget"], stored["budget_limits"]) == (
+        75 if change == "scalar" else 50, expected_windows
+    )
 
 
 def test_window_override_preserves_other_period_and_scalar_fields() -> None:

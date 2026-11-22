@@ -200,6 +200,14 @@ def test_maps_no_usage_details():
     assert cost_per_google_maps_grounding_request(usage=usage, model_info=model_info) == 0.0
 
 
+
+
+
+
+
+
+
+
 def _image_response_with_web_search(web_search_requests):
     usage = ImageUsage(
         input_tokens=20,
@@ -213,6 +221,10 @@ def _image_response_with_web_search(web_search_requests):
     if web_search_requests is not None:
         usage.web_search_requests = web_search_requests
     return ImageResponse(data=[ImageObject(b64_json="img1")], usage=usage)
+
+
+
+
 
 
 @pytest.mark.parametrize(
@@ -230,7 +242,9 @@ def _image_response_with_web_search(web_search_requests):
         ("SOMETHING_UNKNOWN", None),
     ],
 )
-def test_map_traffic_type_to_service_tier(traffic_type: str | None, expected_service_tier: str | None):
+def test_map_traffic_type_to_service_tier(
+    traffic_type: str | None, expected_service_tier: str | None
+):
     """
     Gemini/Vertex usageMetadata.trafficType maps to the LiteLLM service_tier
     that selects flex/priority cost keys. ON_DEMAND_FLEX (Vertex's flex opt-in
@@ -238,7 +252,9 @@ def test_map_traffic_type_to_service_tier(traffic_type: str | None, expected_ser
     """
     from litellm.cost_calculator import _map_traffic_type_to_service_tier
 
-    assert _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    assert (
+        _map_traffic_type_to_service_tier(traffic_type) == expected_service_tier
+    )
 
 
 # Alias targets are the `modelVersion` returned by
@@ -251,7 +267,9 @@ def test_map_traffic_type_to_service_tier(traffic_type: str | None, expected_ser
         ("gemini/gemini-pro-latest", "gemini/gemini-3.1-pro-preview"),
     ],
 )
-def test_latest_aliases_cost_the_same_as_their_current_target(monkeypatch, alias, target):
+def test_latest_aliases_cost_the_same_as_their_current_target(
+    monkeypatch, alias, target
+):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 

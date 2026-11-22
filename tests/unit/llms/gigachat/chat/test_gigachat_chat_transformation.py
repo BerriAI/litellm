@@ -24,7 +24,9 @@ from litellm.types.utils import ModelResponse, Usage
 TRANSFORM_MODULE = "litellm.llms.gigachat.chat.transformation"
 
 
-def _make_httpx_response(body: dict, status_code: int = 200) -> httpx.Response:
+def _make_httpx_response(
+    body: dict, status_code: int = 200
+) -> httpx.Response:
     return httpx.Response(
         status_code=status_code,
         headers={"content-type": "application/json"},
@@ -124,7 +126,9 @@ class TestValidateEnvironment:
 
     @patch(f"{TRANSFORM_MODULE}.get_access_token", return_value="token")
     @patch(f"{TRANSFORM_MODULE}.get_secret_str", return_value=None)
-    def test_stores_credentials_and_api_base_for_image_uploads(self, mock_get_secret, mock_get_token):
+    def test_stores_credentials_and_api_base_for_image_uploads(
+        self, mock_get_secret, mock_get_token
+    ):
         self.config.validate_environment(
             headers={},
             model="GigaChat",
@@ -141,7 +145,9 @@ class TestValidateEnvironment:
         f"{TRANSFORM_MODULE}.get_access_token",
         side_effect=lambda credentials, litellm_params: f"token-for-{credentials}",
     )
-    def test_falls_back_to_env_credentials_when_api_key_missing(self, mock_get_token, monkeypatch: pytest.MonkeyPatch):
+    def test_falls_back_to_env_credentials_when_api_key_missing(
+        self, mock_get_token, monkeypatch: pytest.MonkeyPatch
+    ):
         monkeypatch.setenv("GIGACHAT_CREDENTIALS", "env-creds")
         result = self.config.validate_environment(
             headers={},
@@ -380,11 +386,15 @@ class TestMapToolChoice:
         assert self.config._map_tool_choice("required") == "auto"
 
     def test_dict_with_function(self):
-        result = self.config._map_tool_choice({"type": "function", "function": {"name": "get_weather"}})
+        result = self.config._map_tool_choice(
+            {"type": "function", "function": {"name": "get_weather"}}
+        )
         assert result == {"name": "get_weather"}
 
     def test_dict_without_name(self):
-        result = self.config._map_tool_choice({"type": "function", "function": {}})
+        result = self.config._map_tool_choice(
+            {"type": "function", "function": {}}
+        )
         assert result is None
 
     def test_unknown_value(self):
@@ -396,80 +406,84 @@ class TestTransformMessages:
         self.config = GigaChatConfig()
 
     def test_developer_role_to_system(self):
-        result = self.config._transform_messages([{"role": "developer", "content": "be helpful"}])
+        result = self.config._transform_messages(
+            [{"role": "developer", "content": "be helpful"}]
+        )
         assert result[0]["role"] == "system"
         assert result[0]["content"] == "be helpful"
 
     def test_system_message_not_first_becomes_user(self):
-        result = self.config._transform_messages(
-            [
-                {"role": "user", "content": "hi"},
-                {"role": "system", "content": "instruction"},
-            ]
-        )
+        result = self.config._transform_messages([
+            {"role": "user", "content": "hi"},
+            {"role": "system", "content": "instruction"},
+        ])
         assert result[0]["role"] == "user"
         assert result[1]["role"] == "user"
         assert result[1]["content"] == "instruction"
 
     def test_tool_role_to_function(self):
-        result = self.config._transform_messages([{"role": "tool", "content": '{"result": "ok"}'}])
+        result = self.config._transform_messages([
+            {"role": "tool", "content": '{"result": "ok"}'}
+        ])
         assert result[0]["role"] == "function"
 
     def test_tool_role_content_wraps_non_json(self):
-        result = self.config._transform_messages([{"role": "tool", "content": "plain text"}])
+        result = self.config._transform_messages([
+            {"role": "tool", "content": "plain text"}
+        ])
         assert result[0]["role"] == "function"
         assert is_valid_json(result[0]["content"])
 
     def test_none_content_becomes_empty_string(self):
-        result = self.config._transform_messages([{"role": "user", "content": None}])
+        result = self.config._transform_messages([
+            {"role": "user", "content": None}
+        ])
         assert result[0]["content"] == ""
 
     def test_name_field_removed(self):
-        result = self.config._transform_messages([{"role": "user", "content": "hi", "name": "John"}])
+        result = self.config._transform_messages([
+            {"role": "user", "content": "hi", "name": "John"}
+        ])
         assert "name" not in result[0]
 
     def test_tool_calls_converted_to_function_call(self):
-        result = self.config._transform_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call_abc",
-                            "type": "function",
-                            "function": {
-                                "name": "get_weather",
-                                "arguments": '{"city": "London"}',
-                            },
-                        }
-                    ],
-                }
-            ]
-        )
+        result = self.config._transform_messages([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "London"}',
+                        },
+                    }
+                ],
+            }
+        ])
         assert "tool_calls" not in result[0]
         assert result[0]["function_call"]["name"] == "get_weather"
         assert result[0]["function_call"]["arguments"] == {"city": "London"}
 
     def test_tool_calls_with_dict_arguments(self):
-        result = self.config._transform_messages(
-            [
-                {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [
-                        {
-                            "id": "call_xyz",
-                            "type": "function",
-                            "function": {
-                                "name": "search",
-                                "arguments": {"query": "test"},
-                            },
-                        }
-                    ],
-                }
-            ]
-        )
+        result = self.config._transform_messages([
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_xyz",
+                        "type": "function",
+                        "function": {
+                            "name": "search",
+                            "arguments": {"query": "test"},
+                        },
+                    }
+                ],
+            }
+        ])
         assert result[0]["function_call"]["arguments"] == {"query": "test"}
 
     def test_list_content_multimodal(self):
@@ -481,7 +495,9 @@ class TestTransformMessages:
             },
         ]
         with patch.object(self.config, "_upload_image", return_value="file-123"):
-            result = self.config._transform_messages([{"role": "user", "content": content}])
+            result = self.config._transform_messages([
+                {"role": "user", "content": content}
+            ])
         assert result[0]["content"] == "describe this"
         assert result[0]["attachments"] == ["file-123"]
 
@@ -491,7 +507,9 @@ class TestTransformMessages:
             {"type": "image_url", "image_url": "https://example.com/img.jpg"},
         ]
         with patch.object(self.config, "_upload_image", return_value="file-456"):
-            result = self.config._transform_messages([{"role": "user", "content": content}])
+            result = self.config._transform_messages([
+                {"role": "user", "content": content}
+            ])
         assert result[0]["content"] == "look"
         assert "file-456" in result[0]["attachments"]
 
@@ -502,7 +520,9 @@ class TestTransformMessages:
             {"type": "file", "file": {"filename": "report.pdf", "file_data": pdf_data_url}},
         ]
         with patch.object(self.config, "_upload_image", return_value="file-789") as upload:
-            result: Final = self.config._transform_messages([{"role": "user", "content": content}])
+            result: Final = self.config._transform_messages([
+                {"role": "user", "content": content}
+            ])
         upload.assert_called_once_with(pdf_data_url)
         assert result[0]["content"] == "summarize"
         assert result[0]["attachments"] == ["file-789"]
@@ -581,21 +601,19 @@ class TestTransformResponse:
         self.config = GigaChatConfig()
 
     def test_basic_response(self):
-        raw = _make_httpx_response(
-            {
-                "id": "chatcmpl-123",
-                "created": 1700000000,
-                "model": "GigaChat",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {"role": "assistant", "content": "Hello!"},
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-            }
-        )
+        raw = _make_httpx_response({
+            "id": "chatcmpl-123",
+            "created": 1700000000,
+            "model": "GigaChat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -614,28 +632,26 @@ class TestTransformResponse:
         assert result.usage.total_tokens == 8
 
     def test_function_call_into_tool_calls(self):
-        raw = _make_httpx_response(
-            {
-                "id": "chatcmpl-456",
-                "created": 1700000000,
-                "model": "GigaChat",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "function_call": {
-                                "name": "get_weather",
-                                "arguments": {"city": "Moscow"},
-                            },
+        raw = _make_httpx_response({
+            "id": "chatcmpl-456",
+            "created": 1700000000,
+            "model": "GigaChat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "function_call": {
+                            "name": "get_weather",
+                            "arguments": {"city": "Moscow"},
                         },
-                        "finish_reason": "function_call",
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            }
-        )
+                    },
+                    "finish_reason": "function_call",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -656,28 +672,26 @@ class TestTransformResponse:
         assert '{"city": "Moscow"}' in tool_calls[0].function.arguments
 
     def test_function_call_structured_output(self):
-        raw = _make_httpx_response(
-            {
-                "id": "chatcmpl-789",
-                "created": 1700000000,
-                "model": "GigaChat",
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "function_call": {
-                                "name": "test_schema",
-                                "arguments": {"name": "John"},
-                            },
+        raw = _make_httpx_response({
+            "id": "chatcmpl-789",
+            "created": 1700000000,
+            "model": "GigaChat",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "function_call": {
+                            "name": "test_schema",
+                            "arguments": {"name": "John"},
                         },
-                        "finish_reason": "function_call",
-                    }
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            }
-        )
+                    },
+                    "finish_reason": "function_call",
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -696,24 +710,22 @@ class TestTransformResponse:
         assert '"name": "John"' in result.choices[0].message.content
 
     def test_function_call_string_arguments(self):
-        raw = _make_httpx_response(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "function_call": {
-                                "name": "get_weather",
-                                "arguments": '{"city": "Moscow"}',
-                            },
+        raw = _make_httpx_response({
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "function_call": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Moscow"}',
                         },
-                        "finish_reason": "function_call",
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
-        )
+                    },
+                    "finish_reason": "function_call",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -730,22 +742,20 @@ class TestTransformResponse:
         assert '{"city": "Moscow"}' in tc.function.arguments
 
     def test_cleans_up_gigachat_specific_fields(self):
-        raw = _make_httpx_response(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "content": "done",
-                            "functions_state_id": "some-state",
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
-        )
+        raw = _make_httpx_response({
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "done",
+                        "functions_state_id": "some-state",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -784,12 +794,10 @@ class TestTransformResponse:
         assert "Invalid JSON response" in str(exc_info.value.message)
 
     def test_empty_choices(self):
-        raw = _make_httpx_response(
-            {
-                "choices": [],
-                "usage": {},
-            }
-        )
+        raw = _make_httpx_response({
+            "choices": [],
+            "usage": {},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",
@@ -805,24 +813,22 @@ class TestTransformResponse:
         assert result.choices == []
 
     def test_function_call_with_non_dict_arguments(self):
-        raw = _make_httpx_response(
-            {
-                "choices": [
-                    {
-                        "index": 0,
-                        "message": {
-                            "role": "assistant",
-                            "function_call": {
-                                "name": "say_hello",
-                                "arguments": "hello",
-                            },
+        raw = _make_httpx_response({
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "function_call": {
+                            "name": "say_hello",
+                            "arguments": "hello",
                         },
-                        "finish_reason": "function_call",
-                    }
-                ],
-                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-            }
-        )
+                    },
+                    "finish_reason": "function_call",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        })
         model_response = ModelResponse()
         result = self.config.transform_response(
             model="gigachat/GigaChat",

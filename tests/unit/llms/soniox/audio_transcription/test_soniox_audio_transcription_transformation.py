@@ -435,7 +435,9 @@ class TestCueGroupingAlignment:
 
         tokens, _ = _subword_tokens(["hello"] * 20)
         result = render_soniox_tokens_as_srt(tokens)
-        text_lines = [line for line in result.split("\n") if line and "-->" not in line and not line.isdigit()]
+        text_lines = [
+            line for line in result.split("\n") if line and "-->" not in line and not line.isdigit()
+        ]
         assert len(text_lines) >= 2
         for line in text_lines:
             assert set(line.split()) == {"hello"}
@@ -455,7 +457,9 @@ class TestCueGroupingAlignment:
 
         tokens, _ = _subword_tokens(["wonderful"] * 12)
         result = render_soniox_tokens_as_srt(tokens)
-        text_lines = [line for line in result.split("\n") if line and "-->" not in line and not line.isdigit()]
+        text_lines = [
+            line for line in result.split("\n") if line and "-->" not in line and not line.isdigit()
+        ]
         assert len(text_lines) >= 2
         for line in text_lines:
             assert len(line) <= 84

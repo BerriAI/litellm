@@ -161,12 +161,13 @@ class TestSessionCache:
         identity: Final = "\n".join((credentials.base_url, credentials.api_key, SESSION_ID))
         previous_cache: Final = tmp_path / hashlib.sha256(identity.encode()).hexdigest()
         tmp_path.chmod(0o700)
-        previous_cache.write_text(json.dumps({"fetched_at": 1.0, "session": RECORDED._replace(spend=10.0)._asdict()}))
-        whole_session: Final = RECORDED._replace(spend=10.0, baseline_spend=10.24)
-        assert (
-            load_session(credentials, SESSION_ID, tmp_path, lambda c, s: Fetched(whole_session, True), now=lambda: 1.0)
-            == whole_session
+        previous_cache.write_text(
+            json.dumps({"fetched_at": 1.0, "session": RECORDED._replace(spend=10.0)._asdict()})
         )
+        whole_session: Final = RECORDED._replace(spend=10.0, baseline_spend=10.24)
+        assert load_session(
+            credentials, SESSION_ID, tmp_path, lambda c, s: Fetched(whole_session, True), now=lambda: 1.0
+        ) == whole_session
 
     def test_a_definite_answer_is_served_from_the_cache_within_the_ttl(self, tmp_path):
         calls = []
@@ -327,45 +328,23 @@ class TestRender:
         )
         assert model_label("claude-sonnet", config_dir) == "Sonnet"
         session = _session_from_payload(
-            {
-                "router_name": "auto\x07",
-                "last_model": hostile,
-                "spend": 0.1,
-                "baseline_spend": 0.2,
-                "baseline_model": "op\x1bus",
-            }
+            {"router_name": "auto\x07", "last_model": hostile, "spend": 0.1, "baseline_spend": 0.2, "baseline_model": "op\x1bus"}
         )
         assert session == Session("auto", "claude-sonnet", 0.1, 0.2, "opus")
         assert latest_transcript_model(str(path)) == "claude-sonnet"
         assert "\x1b]52;c;ZXZpbA==" not in render(
             latest_transcript_model(str(path)),
-            _session_from_payload(
-                {
-                    "router_name": "a",
-                    "last_model": "m",
-                    "spend": 0.1,
-                    "baseline_spend": 0.2,
-                    "baseline_model": "\x1b]52;c;ZXZpbA==\x07",
-                }
-            ),
+            _session_from_payload({"router_name": "a", "last_model": "m", "spend": 0.1, "baseline_spend": 0.2, "baseline_model": "\x1b]52;c;ZXZpbA==\x07"}),
             config_dir,
             use_color=False,
         )
 
-    @pytest.mark.parametrize(
-        "spend,delta", ((0.50, "+25%"), (0.40, "0%"), (0.4001, "0%"), (0.3999, "0%"), (0.30, "-25%"))
-    )
+    @pytest.mark.parametrize("spend,delta", ((0.50, "+25%"), (0.40, "0%"), (0.4001, "0%"), (0.3999, "0%"), (0.30, "-25%")))
     def test_rounded_cost_delta_uses_a_sign_only_for_nonzero_percentages(
-        self,
-        config_dir: Path,
-        spend: float,
-        delta: str,
+        self, config_dir: Path, spend: float, delta: str,
     ) -> None:
         session: Final = RECORDED._replace(spend=spend, baseline_spend=0.40)
-        assert (
-            render("m", session, config_dir, use_color=False).splitlines()[0]
-            == f"Routed to: m  {delta} vs Claude Opus 5"
-        )
+        assert render("m", session, config_dir, use_color=False).splitlines()[0] == f"Routed to: m  {delta} vs Claude Opus 5"
 
     def test_without_a_baseline_only_the_routed_line_shows(self, config_dir):
         assert render("m", RECORDED._replace(baseline_model=None), config_dir, False) == "Routed to: m"
@@ -530,9 +509,7 @@ class TestCodexMode:
         payload = {"hook_event_name": "Stop", "session_id": SESSION_ID}
         env = _env(tmp_path, config_dir, OPENAI_BASE_URL="http://127.0.0.1:4000/v1", OPENAI_API_KEY="sk-codex")
         assert _run(payload, env, lambda c, s: next(answers)) == ""
-        assert (
-            "Routed to: claude-sonnet-5" in json.loads(_run(payload, env, lambda c, s: next(answers)))["systemMessage"]
-        )
+        assert "Routed to: claude-sonnet-5" in json.loads(_run(payload, env, lambda c, s: next(answers)))["systemMessage"]
 
 
 class TestStandalone:

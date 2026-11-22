@@ -542,9 +542,9 @@ def _deployment_github_app_rejection_kwargs() -> dict[str, object]:
     )
     with pytest.raises(litellm.AuthenticationError) as rejected:
         tokens.resolve(AppConfig("test-client", 123, "os.environ/TEST_APP_KEY"))
-    return {key: value for key, value in _provider_auth_failure_kwargs().items() if key not in CALLED_THE_PROVIDER} | {
-        "exception": rejected.value
-    }
+    return {
+        key: value for key, value in _provider_auth_failure_kwargs().items() if key not in CALLED_THE_PROVIDER
+    } | {"exception": rejected.value}
 
 
 def _metric_values(name: str, model_id: str) -> list[float]:

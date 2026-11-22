@@ -1580,6 +1580,7 @@ def test_fix_enum_types():
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
 
+
 def test_build_vertex_schema_sends_integer_enum_as_string_values():
     """An integer enum tool parameter reaches Gemini as INTEGER with string values and no enum format."""
     from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
@@ -1692,29 +1693,10 @@ def _deep_root_ref_chain(end: Mapping[str, JsonValue]) -> Mapping[str, JsonValue
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"anyOf": [_OBJECT_BRANCH]}}}, True),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": _OBJECT_BRANCH}}, False),
         ({"$ref": "#/$defs/Lookup", "anyOf": [{"required": ["a"]}], "$defs": {"Lookup": _OBJECT_BRANCH}}, True),
-        (
-            {
-                "$ref": "#/$defs/A",
-                "$defs": {"A": {"$ref": "#/$defs/B", "oneOf": [_OBJECT_BRANCH]}, "B": _OBJECT_BRANCH},
-            },
-            True,
-        ),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B", "oneOf": [_OBJECT_BRANCH]}, "B": _OBJECT_BRANCH}}, True),
         ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
-        (
-            {
-                "$ref": "#/$defs/A",
-                "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}},
-            },
-            False,
-        ),
-        (
-            {
-                "$ref": "#/$defs/A",
-                "anyOf": [{"required": ["a"]}],
-                "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}},
-            },
-            False,
-        ),
+        ({"$ref": "#/$defs/A", "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A", "anyOf": [_OBJECT_BRANCH]}}}, False),
+        ({"$ref": "#/$defs/A", "anyOf": [{"required": ["a"]}], "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}}}, False),
         (_deep_root_ref_chain({"anyOf": [_OBJECT_BRANCH]}), True),
         (_deep_root_ref_chain(_OBJECT_BRANCH), False),
     ],
@@ -1815,7 +1797,6 @@ def test_fix_enum_types_sends_only_integer_enums_gemini_accepts(
 
     assert schema.get("enum") == expected_enum
     assert "format" not in schema
-
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2012,9 +1993,7 @@ async def test_vertex_claude_count_forwards_the_context_edits_and_beta_vertex_in
     fake_http_client: Final = FakeHttpClient()
     spec: Final[dict[str, JsonValue]] = {"edits": [{"type": edit_type}]}
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr(
-        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
-    )
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -2059,9 +2038,7 @@ async def test_vertex_claude_count_sends_the_thinking_vertex_inference_sends(
 
     fake_http_client: Final = FakeHttpClient()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr(
-        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
-    )
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
     with patch.object(handler, "get_async_httpx_client", return_value=fake_http_client):
         result: Final = await VertexAITokenCounter().count_tokens(
             model_to_use="claude-opus-4-8",
@@ -2109,9 +2086,7 @@ async def test_vertex_claude_count_with_an_edit_fetches_the_remote_beta_config_o
     monkeypatch.setattr(anthropic_beta_headers_manager, "_BETA_HEADERS_CONFIG", None)
     fetch_threads: Final = FetchThreads()
     application_default_credentials: Final = MagicMock(token="fake-token", valid=True, expiry=None)
-    monkeypatch.setattr(
-        "google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project")
-    )
+    monkeypatch.setattr("google.auth.default", lambda *args, **kwargs: (application_default_credentials, "test-project"))
     with patch.object(handler, "get_async_httpx_client", return_value=FakeHttpClient()), respx.mock:
         respx.get(litellm.anthropic_beta_headers_url).mock(side_effect=fetch_threads)
         result: Final = await VertexAITokenCounter().count_tokens(

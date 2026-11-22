@@ -21,7 +21,9 @@ from litellm.llms.cometapi.common_utils import CometAPIException
 
 class TestCometAPIChatCompletionStreamingHandler:
     def test_chunk_parser_successful(self):
-        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = CometAPIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
 
         # Test input chunk
         chunk = {
@@ -29,7 +31,9 @@ class TestCometAPIChatCompletionStreamingHandler:
             "created": 1234567890,
             "model": "gpt-3.5-turbo",
             "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
-            "choices": [{"delta": {"content": "test content", "reasoning": "test reasoning"}}],
+            "choices": [
+                {"delta": {"content": "test content", "reasoning": "test reasoning"}}
+            ],
         }
 
         # Parse chunk
@@ -48,7 +52,9 @@ class TestCometAPIChatCompletionStreamingHandler:
         assert result.choices[0]["delta"]["reasoning_content"] == "test reasoning"
 
     def test_chunk_parser_error_response(self):
-        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = CometAPIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
 
         # Test error chunk
         error_chunk = {
@@ -66,7 +72,9 @@ class TestCometAPIChatCompletionStreamingHandler:
         assert exc_info.value.status_code == 400
 
     def test_chunk_parser_key_error(self):
-        handler = CometAPIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+        handler = CometAPIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
 
         # Test invalid chunk missing required fields
         invalid_chunk = {"incomplete": "data"}
@@ -93,7 +101,9 @@ class TestCometAPIConfig:
         )
 
         assert transformed_request["model"] == "cometapi/gpt-3.5-turbo"
-        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
+        assert transformed_request["messages"] == [
+            {"role": "user", "content": "Hello, world!"}
+        ]
 
     def test_transform_request_with_extra_body(self):
         """Test request transformation with extra_body parameters"""
@@ -109,7 +119,9 @@ class TestCometAPIConfig:
 
         # Validate that extra_body parameters are merged into the request
         assert transformed_request["custom_param"] == "custom_value"
-        assert transformed_request["messages"] == [{"role": "user", "content": "Hello, world!"}]
+        assert transformed_request["messages"] == [
+            {"role": "user", "content": "Hello, world!"}
+        ]
 
     def test_cache_control_flag_removal(self):
         """Test cache control flag removal from messages"""

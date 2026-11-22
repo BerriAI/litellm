@@ -60,7 +60,9 @@ class TestSearchAPIConfig:
         mock_get_secret.return_value = "test_api_key"
         config = SearchAPIConfig()
 
-        result = config.transform_search_request(query="test query", optional_params={}, api_key="test_api_key")
+        result = config.transform_search_request(
+            query="test query", optional_params={}, api_key="test_api_key"
+        )
 
         assert "_searchapi_params" in result
         params = result["_searchapi_params"]
@@ -120,7 +122,9 @@ class TestSearchAPIConfig:
         mock_get_secret.return_value = "test_api_key"
         config = SearchAPIConfig()
 
-        result = config.transform_search_request(query=["test", "query"], optional_params={}, api_key="test_api_key")
+        result = config.transform_search_request(
+            query=["test", "query"], optional_params={}, api_key="test_api_key"
+        )
 
         params = result["_searchapi_params"]
         assert params["q"] == "test query"
@@ -168,7 +172,9 @@ class TestSearchAPIConfig:
             ]
         }
 
-        result = config.transform_search_response(raw_response=mock_response, logging_obj=None)
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
 
         assert isinstance(result, SearchResponse)
         assert result.object == "search"
@@ -194,7 +200,9 @@ class TestSearchAPIConfig:
         mock_response = Mock(spec=httpx.Response)
         mock_response.json.return_value = {"organic_results": []}
 
-        result = config.transform_search_response(raw_response=mock_response, logging_obj=None)
+        result = config.transform_search_response(
+            raw_response=mock_response, logging_obj=None
+        )
 
         assert isinstance(result, SearchResponse)
         assert len(result.results) == 0
@@ -306,7 +314,9 @@ def test_searchapi_malformed_result_is_rejected_without_naming_its_position():
     assert "429" not in str(exc_info.value)
 
 
-def test_search_request_and_result_mapping(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
+def test_search_request_and_result_mapping(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
     route: Final = respx_mock.get("https://www.searchapi.io/api/v1/search").respond(
         json={
             "organic_results": [

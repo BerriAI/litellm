@@ -68,7 +68,9 @@ class TestVoyageContextualEmbeddings:
         )
 
         config = VoyageContextualEmbeddingConfig()
-        headers = config.validate_environment({}, "voyage-context-4", [], {}, {}, api_key="test-key")
+        headers = config.validate_environment(
+            {}, "voyage-context-4", [], {}, {}, api_key="test-key"
+        )
         assert headers == {"Authorization": "Bearer test-key"}
 
     def test_validate_environment_secret_fallback(self, monkeypatch):
@@ -78,7 +80,9 @@ class TestVoyageContextualEmbeddings:
 
         monkeypatch.setenv("VOYAGE_API_KEY", "secret-key")
         config = VoyageContextualEmbeddingConfig()
-        headers = config.validate_environment({}, "voyage-context-4", [], {}, {}, api_key=None)
+        headers = config.validate_environment(
+            {}, "voyage-context-4", [], {}, {}, api_key=None
+        )
         assert headers == {"Authorization": "Bearer secret-key"}
 
     def test_nested_list_passthrough(self):
@@ -88,7 +92,9 @@ class TestVoyageContextualEmbeddings:
 
         config = VoyageContextualEmbeddingConfig()
         nested = [["Hello", "world"], ["Test"]]
-        transformed = config.transform_embedding_request("voyage-context-4", nested, {}, {})
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", nested, {}, {}
+        )
         assert transformed["inputs"] == nested
         assert transformed["model"] == "voyage-context-4"
         assert "enable_auto_chunking" not in transformed
@@ -99,7 +105,9 @@ class TestVoyageContextualEmbeddings:
         )
 
         config = VoyageContextualEmbeddingConfig()
-        transformed = config.transform_embedding_request("voyage-context-4", ["Hello", "world"], {}, {})
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello", "world"], {}, {}
+        )
         assert transformed["inputs"] == ["Hello", "world"]
         assert transformed["enable_auto_chunking"] is True
         assert transformed["chunk_size"] == 32000
@@ -124,7 +132,9 @@ class TestVoyageContextualEmbeddings:
         )
 
         config = VoyageContextualEmbeddingConfig()
-        transformed = config.transform_embedding_request("voyage-context-4", ["Hello"], {"input_type": "document"}, {})
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", ["Hello"], {"input_type": "document"}, {}
+        )
         assert transformed["input_type"] == "document"
         assert transformed["enable_auto_chunking"] is True
 
@@ -179,7 +189,9 @@ class TestVoyageContextualEmbeddings:
         )
 
         config = VoyageContextualEmbeddingConfig()
-        transformed = config.transform_embedding_request("voyage-context-4", "Hello", {}, {})
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {}, {}
+        )
         assert transformed["inputs"] == ["Hello"]
         assert transformed["enable_auto_chunking"] is True
         assert transformed["input_type"] == "document"
@@ -190,7 +202,9 @@ class TestVoyageContextualEmbeddings:
         )
 
         config = VoyageContextualEmbeddingConfig()
-        transformed = config.transform_embedding_request("voyage-context-4", "Hello", {"input_type": "query"}, {})
+        transformed = config.transform_embedding_request(
+            "voyage-context-4", "Hello", {"input_type": "query"}, {}
+        )
         assert transformed["inputs"] == ["Hello"]
         assert transformed["input_type"] == "query"
         assert "enable_auto_chunking" not in transformed
@@ -214,7 +228,9 @@ class TestVoyageContextualEmbeddings:
         raw_response.text = json.dumps(response_payload)
 
         model_response = EmbeddingResponse()
-        transformed = config.transform_embedding_response("voyage-context-4", raw_response, model_response, MagicMock())
+        transformed = config.transform_embedding_response(
+            "voyage-context-4", raw_response, model_response, MagicMock()
+        )
         assert transformed.model == "voyage-context-4"
         assert transformed.object == "list"
         assert transformed.data == response_payload["data"]
@@ -235,7 +251,9 @@ class TestVoyageContextualEmbeddings:
         raw_response.text = "bad request"
 
         with pytest.raises(VoyageError) as exc_info:
-            config.transform_embedding_response("voyage-context-4", raw_response, EmbeddingResponse(), MagicMock())
+            config.transform_embedding_response(
+                "voyage-context-4", raw_response, EmbeddingResponse(), MagicMock()
+            )
         assert exc_info.value.status_code == 400
         assert exc_info.value.message == "bad request"
 

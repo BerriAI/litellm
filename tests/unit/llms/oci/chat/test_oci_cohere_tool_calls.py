@@ -186,7 +186,9 @@ class TestOCICohereToolCalls:
                 "apiFormat": "COHERE",
                 "text": "I will look up the weather in Tokyo.",
                 "finishReason": "COMPLETE",
-                "toolCalls": [{"name": "get_weather", "parameters": {"location": "Tokyo"}}],
+                "toolCalls": [
+                    {"name": "get_weather", "parameters": {"location": "Tokyo"}}
+                ],
                 "usage": {
                     "promptTokens": 26,
                     "completionTokens": 22,
@@ -216,7 +218,9 @@ class TestOCICohereToolCalls:
         # Verify response structure
         assert isinstance(result, ModelResponse)
         assert result.model == "cohere.command-latest"
-        assert result.choices[0].message.content == "I will look up the weather in Tokyo."
+        assert (
+            result.choices[0].message.content == "I will look up the weather in Tokyo."
+        )
 
         # Verify tool calls are present
         assert result.choices[0].message.tool_calls is not None
@@ -383,7 +387,10 @@ class TestOCICohereToolCalls:
         assert tool_msg.role == "TOOL"
         assert tool_msg.toolResults[0].call.name == "get_weather"
         assert tool_msg.toolResults[0].call.parameters == {"location": "Tokyo"}
-        assert tool_msg.toolResults[0].outputs[0]["output"] == "The weather in Tokyo is 22°C with partly cloudy skies."
+        assert (
+            tool_msg.toolResults[0].outputs[0]["output"]
+            == "The weather in Tokyo is 22°C with partly cloudy skies."
+        )
 
     def test_cohere_streaming_chunk_handling(self):
         """Test Cohere streaming chunk handling"""
@@ -392,7 +399,9 @@ class TestOCICohereToolCalls:
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
 
-        stream_wrapper = OCIStreamWrapper(completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging)
+        stream_wrapper = OCIStreamWrapper(
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
+        )
 
         # Mock Cohere streaming chunk
         cohere_chunk = {
@@ -416,7 +425,9 @@ class TestOCICohereToolCalls:
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
 
-        stream_wrapper = OCIStreamWrapper(completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging)
+        stream_wrapper = OCIStreamWrapper(
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
+        )
 
         # Mock Cohere finish chunk
         cohere_finish_chunk = {
@@ -436,19 +447,7 @@ class TestOCICohereToolCalls:
 
     _TOOL_TURN_TEXT = "I will use the tool to find out the weather in Paris."
     _TOOL_TURN_DELTAS = [
-        "I",
-        " will",
-        " use",
-        " the",
-        " tool",
-        " to",
-        " find",
-        " out",
-        " the",
-        " weather",
-        " in",
-        " Paris",
-        ".",
+        "I", " will", " use", " the", " tool", " to", " find", " out", " the", " weather", " in", " Paris", ".",
     ]
     _TOOL_TURN_CALLS = [{"name": "get_weather", "parameters": {"city": "Paris"}}]
     _TOOL_TURN_HISTORY = [
@@ -589,7 +588,9 @@ class TestOCICohereToolCalls:
                 "apiFormat": "COHERE",
                 "text": "",
                 "finishReason": "TOOL_CALL",
-                "toolCalls": [{"name": "get_weather", "parameters": {"location": "London"}}],
+                "toolCalls": [
+                    {"name": "get_weather", "parameters": {"location": "London"}}
+                ],
                 "usage": {
                     "promptTokens": 20,
                     "completionTokens": 10,
@@ -671,7 +672,9 @@ class TestOCICohereToolCalls:
         assert get_vendor_from_model("cohere.command-latest") == OCIVendors.COHERE
         assert get_vendor_from_model("cohere.command-a-03-2025") == OCIVendors.COHERE
         assert get_vendor_from_model("cohere.command-plus-latest") == OCIVendors.COHERE
-        assert get_vendor_from_model("cohere.command-r-plus-08-2024") == OCIVendors.COHERE
+        assert (
+            get_vendor_from_model("cohere.command-r-plus-08-2024") == OCIVendors.COHERE
+        )
         assert get_vendor_from_model("cohere.command-r-08-2024") == OCIVendors.COHERE
 
     def test_cohere_error_handling_invalid_tool_format(self):
@@ -784,7 +787,10 @@ class TestOCICoherePreambleOverride:
         )
 
         chat_request = result["chatRequest"]
-        assert chat_request["preambleOverride"] == "You are a helpful assistant.\nAlways respond in JSON."
+        assert (
+            chat_request["preambleOverride"]
+            == "You are a helpful assistant.\nAlways respond in JSON."
+        )
 
     def test_system_message_with_content_array(self):
         """Test system message with list-style content (text blocks)"""
@@ -956,7 +962,10 @@ class TestOCICohereStreaming:
         mock_model = "cohere.command-latest"
         mock_logging = MagicMock()
 
-        return OCIStreamWrapper(completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging)
+        return OCIStreamWrapper(
+            completion_stream=mock_stream, model=mock_model, logging_obj=mock_logging
+        )
+
 
     def test_cohere_streaming_chunk_parsing(self):
         """Test parsing of Cohere streaming chunks"""

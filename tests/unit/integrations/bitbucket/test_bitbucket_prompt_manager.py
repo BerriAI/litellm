@@ -69,13 +69,19 @@ def test_bitbucket_client_initialization():
 
 def test_bitbucket_client_missing_required_fields():
     """Test BitBucketClient initialization with missing required fields."""
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"workspace": "test"})
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"repository": "test"})
 
-    with pytest.raises(ValueError, match="workspace, repository, and access_token are required"):
+    with pytest.raises(
+        ValueError, match="workspace, repository, and access_token are required"
+    ):
         BitBucketClient({"access_token": "test"})
 
 
@@ -256,7 +262,9 @@ def test_bitbucket_prompt_manager_parse_prompt_file_no_frontmatter():
     }
 
     manager = BitBucketPromptManager(config)
-    template = manager.prompt_manager._parse_prompt_file(prompt_content, "simple_prompt")
+    template = manager.prompt_manager._parse_prompt_file(
+        prompt_content, "simple_prompt"
+    )
 
     assert template.template_id == "simple_prompt"
     assert template.content == "Simple prompt: {{message}}"
@@ -281,7 +289,9 @@ def test_bitbucket_prompt_manager_render_template():
     )
     manager.prompt_manager.prompts["test_template"] = template
 
-    rendered = manager.prompt_manager.render_template("test_template", {"name": "World", "place": "Earth"})
+    rendered = manager.prompt_manager.render_template(
+        "test_template", {"name": "World", "place": "Earth"}
+    )
     assert rendered == "Hello World! Welcome to Earth."
 
 

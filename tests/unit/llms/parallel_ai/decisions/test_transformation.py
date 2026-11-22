@@ -99,9 +99,7 @@ def test_provider_routes_systemone_questions_to_parallel_without_a_model_field()
     assert config.get_complete_url("https://gateway.example/v1/", "decision") == "https://gateway.example/v1/decisions"
 
 
-@pytest.mark.parametrize(
-    "suffix", ["", "/", "/v1", "/v1/", "/v1/decisions", "/v1/decisions/", "/v1/search", "/v1/search/"]
-)
+@pytest.mark.parametrize("suffix", ["", "/", "/v1", "/v1/", "/v1/decisions", "/v1/decisions/", "/v1/search", "/v1/search/"])
 def test_base_carrying_a_parallel_route_reaches_the_decisions_endpoint(suffix: str) -> None:
     complete_url: Final = ParallelAIDecisionsConfig().get_complete_url(f"https://api.parallel.ai{suffix}", "decision")
     assert complete_url == "https://api.parallel.ai/v1/decisions"

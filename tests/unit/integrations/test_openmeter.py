@@ -393,6 +393,7 @@ class TestOpenMeterIntegration:
         with pytest.raises(Exception, match="OpenMeter: user is required"):
             logger._common_logic(kwargs, response_obj)
 
+
     def test_common_logic_integer_token_user_id(self):
         """Test that integer token user_id is converted to string"""
         logger = OpenMeterLogger()
@@ -428,7 +429,9 @@ class TestOpenMeterIntegration:
             "model": "gpt-4",
             "response_cost": 0.002,
             "litellm_call_id": "test-call-id",
-            "litellm_params": {"metadata": {"user_api_key_user_id": "real-tenant-id"}},
+            "litellm_params": {
+                "metadata": {"user_api_key_user_id": "real-tenant-id"}
+            },
         }
 
         response_obj = {
@@ -471,7 +474,9 @@ class TestOpenMeterIntegration:
             "model": "gpt-4",
             "response_cost": 0.002,
             "litellm_call_id": "test-call-id",
-            "litellm_params": {"metadata": {"user_api_key_user_id": "key-user"}},
+            "litellm_params": {
+                "metadata": {"user_api_key_user_id": "key-user"}
+            },
         }
 
         response_obj = {

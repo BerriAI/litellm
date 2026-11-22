@@ -101,7 +101,9 @@ class TestDeploymentIdentityCredential:
 
         assert "EnvironmentCredential" in full_chain
         assert "AzureCliCredential" in full_chain
-        assert "EnvironmentCredential" not in self._chain_for(AzureCredentialType.DeploymentIdentityCredential)
+        assert "EnvironmentCredential" not in self._chain_for(
+            AzureCredentialType.DeploymentIdentityCredential
+        )
 
     @patch.dict(
         os.environ,
@@ -196,7 +198,9 @@ class TestGetAzureAdTokenProvider:
             client_secret="test-client-secret",
             tenant_id="test-tenant-id",
         )
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()
@@ -229,8 +233,12 @@ class TestGetAzureAdTokenProvider:
 
         # Assertions
         assert callable(result)
-        mock_managed_identity_credential.assert_called_once_with(client_id="test-client-id")
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_managed_identity_credential.assert_called_once_with(
+            client_id="test-client-id"
+        )
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()
@@ -270,7 +278,9 @@ class TestGetAzureAdTokenProvider:
             tenant_id="test-tenant-id",
             certificate_path="/path/to/cert.pem",
         )
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()
@@ -312,7 +322,9 @@ class TestGetAzureAdTokenProvider:
             certificate_path="/path/to/cert.pem",
             password="pwd4cert.pem",
         )
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()
@@ -344,7 +356,9 @@ class TestGetAzureAdTokenProvider:
         # Assertions
         assert callable(result)
         mock_certificate_credential.assert_called_once_with()
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()
@@ -376,11 +390,16 @@ class TestGetAzureAdTokenProvider:
         DefaultAzureCredential's chain reaches WorkloadIdentityCredential."""
         mock_credential_instance = MagicMock()
         mock_default_azure_credential.return_value = mock_credential_instance
-        mock_get_bearer_token_provider.return_value = MagicMock(return_value="mock-workload-identity-token")
+        mock_get_bearer_token_provider.return_value = MagicMock(
+            return_value="mock-workload-identity-token"
+        )
 
         result = get_azure_ad_token_provider()
 
-        assert infer_credential_type_from_environment() == AzureCredentialType.DefaultAzureCredential
+        assert (
+            infer_credential_type_from_environment()
+            == AzureCredentialType.DefaultAzureCredential
+        )
         mock_managed_identity_credential.assert_not_called()
         mock_default_azure_credential.assert_called_once_with()
         assert result() == "mock-workload-identity-token"
@@ -406,7 +425,9 @@ class TestGetAzureAdTokenProvider:
         # Assertions
         assert callable(result)
         mock_default_azure_credential.assert_called_once_with()
-        mock_get_bearer_token_provider.assert_called_once_with(ANY, "https://cognitiveservices.azure.com/.default")
+        mock_get_bearer_token_provider.assert_called_once_with(
+            ANY, "https://cognitiveservices.azure.com/.default"
+        )
 
         # Test that the returned callable works
         token = result()

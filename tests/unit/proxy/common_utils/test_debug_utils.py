@@ -182,11 +182,7 @@ def router_with_pins(monkeypatch: pytest.MonkeyPatch) -> None:
             2 * PINNED_PREFIXES,
         ),
         ("/memory-usage-in-mem-cache-items", lambda body: len(body["prompt_caching_pin_cache"]), PINNED_PREFIXES),
-        (
-            "/debug/memory/summary",
-            lambda body: body["caches"]["breakdown"]["prompt_caching_pins"]["count"],
-            PINNED_PREFIXES,
-        ),
+        ("/debug/memory/summary", lambda body: body["caches"]["breakdown"]["prompt_caching_pins"]["count"], PINNED_PREFIXES),
         (
             "/debug/memory/details?include_process_info=false",
             lambda body: body["cache_memory"]["prompt_caching_pin_cache"]["num_items"],

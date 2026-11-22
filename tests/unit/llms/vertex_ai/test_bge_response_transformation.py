@@ -5,6 +5,8 @@ This test verifies that the BGE response transformer properly validates
 and handles different response formats.
 """
 
+
+
 import pytest
 
 from litellm.llms.vertex_ai.vertex_embeddings.bge import VertexBGEConfig
@@ -68,7 +70,9 @@ def test_bge_response_missing_predictions():
     model_response = EmbeddingResponse()
 
     with pytest.raises(KeyError, match="Response missing 'predictions' field"):
-        VertexBGEConfig.transform_response(response=response, model="bge-small-en-v1.5", model_response=model_response)
+        VertexBGEConfig.transform_response(
+            response=response, model="bge-small-en-v1.5", model_response=model_response
+        )
 
 
 def test_bge_response_invalid_predictions_type():
@@ -82,4 +86,6 @@ def test_bge_response_invalid_predictions_type():
     model_response = EmbeddingResponse()
 
     with pytest.raises(ValueError, match="Expected 'predictions' to be a list"):
-        VertexBGEConfig.transform_response(response=response, model="bge-small-en-v1.5", model_response=model_response)
+        VertexBGEConfig.transform_response(
+            response=response, model="bge-small-en-v1.5", model_response=model_response
+        )

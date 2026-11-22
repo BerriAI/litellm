@@ -58,7 +58,8 @@ def test_transform_search_request_encodes_vector_store_id():
     )
 
     assert (
-        url == "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/..%2F..%2Fknowledgebases%2Fother"
+        url
+        == "https://bedrock-agent-runtime.us-west-2.amazonaws.com/knowledgebases/..%2F..%2Fknowledgebases%2Fother"
         "%3Fx%3D1%23frag/retrieve"
     )
     assert body["retrievalQuery"].get("text") == "hello"
@@ -89,7 +90,12 @@ def test_transform_search_request_uses_only_retrieval_config_from_extra_body():
 
     assert url.endswith("/kb123/retrieve")
     assert body["retrievalQuery"].get("text") == "hello"
-    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["overrideSearchType"] == "HYBRID"
+    assert (
+        body["retrievalConfiguration"]["vectorSearchConfiguration"][
+            "overrideSearchType"
+        ]
+        == "HYBRID"
+    )
     assert "unrelatedField" not in body
     assert "userContext" not in body
 
@@ -117,8 +123,16 @@ def test_transform_search_request_does_not_mutate_extra_body_and_overrides_numbe
         extra_body=extra_body,
     )
 
-    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"] == 10
-    assert extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"] == 8
+    assert (
+        body["retrievalConfiguration"]["vectorSearchConfiguration"]["numberOfResults"]
+        == 10
+    )
+    assert (
+        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"][
+            "numberOfResults"
+        ]
+        == 8
+    )
 
 
 def test_transform_search_request_overrides_filter_without_mutating_extra_body():
@@ -126,7 +140,11 @@ def test_transform_search_request_overrides_filter_without_mutating_extra_body()
     mock_log = MagicMock()
     mock_log.model_call_details = {}
     extra_body = {
-        "retrievalConfiguration": {"vectorSearchConfiguration": {"filter": {"equals": {"key": "tenant", "value": "a"}}}}
+        "retrievalConfiguration": {
+            "vectorSearchConfiguration": {
+                "filter": {"equals": {"key": "tenant", "value": "a"}}
+            }
+        }
     }
     new_filter = {"equals": {"key": "tenant", "value": "b"}}
 
@@ -140,8 +158,16 @@ def test_transform_search_request_overrides_filter_without_mutating_extra_body()
         extra_body=extra_body,
     )
 
-    assert body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"] == new_filter
-    assert extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]["equals"]["value"] == "a"
+    assert (
+        body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"]
+        == new_filter
+    )
+    assert (
+        extra_body["retrievalConfiguration"]["vectorSearchConfiguration"]["filter"][
+            "equals"
+        ]["value"]
+        == "a"
+    )
 
 
 def _search_body(extra_body: dict[str, object] | None, litellm_params: dict[str, object]) -> dict[str, object]:

@@ -399,7 +399,9 @@ async def test_a2a_completion_bridge_bedrock_agentcore(respx_mock, monkeypatch):
     )
     invoke_route = respx_mock.post(
         url__regex=r"https://bedrock-agentcore\.us-west-2\.amazonaws\.com/runtimes/.*/invocations.*"
-    ).mock(return_value=httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"}))
+    ).mock(
+        return_value=httpx.Response(200, content=sse_body.encode(), headers={"content-type": "text/event-stream"})
+    )
 
     send_message_payload = {
         "message": {

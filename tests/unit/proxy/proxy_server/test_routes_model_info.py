@@ -222,57 +222,39 @@ def test_deleted_model_params_stay_absent_after_reload_and_another_save(
     from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
     configured: Final = {
-        "model": "openai/test-model",
-        "api_key": "synthetic-runtime-secret",
-        "use_litellm_proxy": True,
-        "use_in_pass_through": True,
-        "use_chat_completions_api": False,
-        "litellm_image_enabled": True,
-        "timeout": 30,
-        "input_cost_per_token": 0.003,
-        "team_id": "param-only-team",
-        "temperature": 0,
-        "metadata": {},
+        "model": "openai/test-model", "api_key": "synthetic-runtime-secret",
+        "use_litellm_proxy": True, "use_in_pass_through": True, "use_chat_completions_api": False,
+        "litellm_image_enabled": True, "timeout": 30, "input_cost_per_token": 0.003,
+        "team_id": "param-only-team", "temperature": 0, "metadata": {},
     }
     original: Final = Deployment(
-        model_name="editor-model",
-        litellm_params=LiteLLM_Params.model_validate(configured),
+        model_name="editor-model", litellm_params=LiteLLM_Params.model_validate(configured),
         model_info=ModelInfo(id="editor-model", team_id="owner-team", access_groups=["retained-group"]),
     )
     removals: Final = ("litellm_image_enabled", "use_litellm_proxy", "input_cost_per_token", "team_id")
     deleted: Final = update_db_model(
         db_model=original,
         updated_patch=PatchModelRequest(
-            litellm_params=updateLiteLLMParams(max_retries=0),
-            litellm_params_to_remove=removals,
+            litellm_params=updateLiteLLMParams(max_retries=0), litellm_params_to_remove=removals,
             model_info=ModelInfo(id="editor-model", input_cost_per_token=0.003),
         ),
     )
     saved_params: Final = json.loads(deleted["litellm_params"])
     saved_info: Final = json.loads(deleted["model_info"])
-    assert saved_params == {
-        **{key: value for key, value in configured.items() if key not in removals},
-        "max_retries": 0,
-    }
+    assert saved_params == {**{key: value for key, value in configured.items() if key not in removals}, "max_retries": 0}
     assert "input_cost_per_token" not in saved_info
     assert saved_info["team_id"] == "owner-team"
     assert saved_info["access_groups"] == ["retained-group"]
     reloaded: Final = Deployment.model_validate(
         {"model_name": original.model_name, "litellm_params": saved_params, "model_info": saved_info}
     )
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "editor-model",
-                "litellm_params": saved_params,
-                "model_info": {"id": "editor-model", "db_model": True},
-            }
-        ]
-    )
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "editor-model", "litellm_params": saved_params,
+        "model_info": {"id": "editor-model", "db_model": True},
+    }])
     stored_params: Final = {**saved_params, "api_key": "synthetic-stored-secret"}
     mock_prisma.db.litellm_proxymodeltable.find_unique.return_value = LiteLLM_ProxyModelTable(
-        model_id="editor-model",
-        model_name="editor-model",
+        model_id="editor-model", model_name="editor-model",
         litellm_params=json.dumps(stored_params) if encoded else stored_params,
         model_info={"id": "editor-model"},
     )
@@ -548,7 +530,9 @@ def test_model_info_ignores_a_deployment_by_default_key_the_router_reads_only_fr
             }
         )["model_info"]["supports_native_structured_output"]
 
-    assert reported_native({"supports_bedrock_native_structured_output_by_default": by_default}) is reported_native({})
+    assert reported_native({"supports_bedrock_native_structured_output_by_default": by_default}) is reported_native(
+        {}
+    )
 
 
 def test_model_info_id_lookup_reports_the_same_cost_as_the_list(
@@ -639,9 +623,7 @@ async def test_v1_model_info_star_wildcard_filter_keeps_provider_expansion(monke
         allowed_model_names=allowed_model_names,
     )
 
-    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [
-        ("gpt-4o", "openai/gpt-4o")
-    ]
+    assert [(model["model_name"], model["litellm_params"]["model"]) for model in result] == [("gpt-4o", "openai/gpt-4o")]
     assert router.registry().names("gpt-4o", kind="wildcard") == frozenset({"openai/gpt-4o"})
 
 
@@ -1494,7 +1476,9 @@ def test_saving_a_replayed_model_info_wildcard_row_stores_none_of_its_shown_meta
         rows: Final = _expanded_wildcard_rows(client)
 
     assert sorted(rows) == ["gpt-5.6-acme", "my-fw/acme-max", "my-fw/acme-mini", "my-fw/acme-pro"]
-    sources: Final = {deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []}
+    sources: Final = {
+        deployment["model_info"]["id"]: deployment for deployment in router.get_model_list() or []
+    }
     stored: Final = {
         name: json.loads(
             update_db_model(

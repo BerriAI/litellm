@@ -34,7 +34,9 @@ class TestDeepEvalLogger(unittest.TestCase):
     def tearDown(self):
         self.api_patcher.stop()
 
-    def _common_assertions(self, expected_status: TraceSpanApiStatus, expected_output: str):
+    def _common_assertions(
+        self, expected_status: TraceSpanApiStatus, expected_output: str
+    ):
         self.mock_api_instance.send_request.assert_called_once()
         call_args = self.mock_api_instance.send_request.call_args
 
@@ -55,7 +57,9 @@ class TestDeepEvalLogger(unittest.TestCase):
         self.assertEqual(llm_span["uuid"], self.span_id)
 
         expected_name = (
-            "litellm_success_callback" if expected_status == TraceSpanApiStatus.SUCCESS else "litellm_failure_callback"
+            "litellm_success_callback"
+            if expected_status == TraceSpanApiStatus.SUCCESS
+            else "litellm_failure_callback"
         )
         self.assertEqual(llm_span["name"], expected_name)
 
@@ -84,9 +88,13 @@ class TestDeepEvalLogger(unittest.TestCase):
             },
         }
 
-        self.logger.log_success_event(kwargs, self.mock_response_obj, self.start_time, self.end_time)
+        self.logger.log_success_event(
+            kwargs, self.mock_response_obj, self.start_time, self.end_time
+        )
 
-        llm_span = self._common_assertions(TraceSpanApiStatus.SUCCESS, "This is a success.")
+        llm_span = self._common_assertions(
+            TraceSpanApiStatus.SUCCESS, "This is a success."
+        )
         self.assertEqual(llm_span["inputTokenCount"], 10)
         self.assertEqual(llm_span["outputTokenCount"], 20)
 
@@ -116,7 +124,8 @@ class TestDeepEvalLogger(unittest.TestCase):
             self.logger.log_success_event(kwargs, self.mock_response_obj, self.start_time, self.end_time)
 
         span_uuids: Final = [
-            call.kwargs["body"]["llmSpans"][0]["uuid"] for call in self.mock_api_instance.send_request.call_args_list
+            call.kwargs["body"]["llmSpans"][0]["uuid"]
+            for call in self.mock_api_instance.send_request.call_args_list
         ]
         self.assertEqual(span_uuids, ["resp_YWJjZA", f"resp_YWJjZA{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"])
 
@@ -133,7 +142,9 @@ class TestDeepEvalLogger(unittest.TestCase):
             },
         }
 
-        self.logger.log_failure_event(kwargs, self.mock_response_obj, self.start_time, self.end_time)
+        self.logger.log_failure_event(
+            kwargs, self.mock_response_obj, self.start_time, self.end_time
+        )
 
         llm_span = self._common_assertions(TraceSpanApiStatus.ERRORED, error_message)
         self.assertIsNone(llm_span.get("inputTokenCount"))

@@ -298,13 +298,8 @@ def test_installed_botocore_signs_the_completion_request():
     from litellm.llms.sagemaker.completion.handler import SagemakerLLM
 
     request = SagemakerLLM()._prepare_request(
-        credentials=Credentials("test-key", "test-secret"),
-        model="test-endpoint",
-        data={"inputs": "ping"},
-        messages=[],
-        litellm_params={},
-        optional_params={},
-        aws_region_name="us-west-2",
+        credentials=Credentials("test-key", "test-secret"), model="test-endpoint", data={"inputs": "ping"},
+        messages=[], litellm_params={}, optional_params={}, aws_region_name="us-west-2",
     )
     assert request.body == b'{"inputs": "ping"}'
     assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]
@@ -452,7 +447,9 @@ def test_completion_sagemaker_prompt_template_non_stream(
             },
         )
     )
-    url: Final = "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/deepseek_coder_6.7_instruct/invocations"
+    url: Final = (
+        "https://runtime.sagemaker.us-east-1.amazonaws.com/endpoints/deepseek_coder_6.7_instruct/invocations"
+    )
     route: Final = respx_mock.post(url).mock(
         return_value=httpx.Response(200, json={"generated_text": "SageMaker reply"})
     )

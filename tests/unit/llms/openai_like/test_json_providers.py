@@ -431,9 +431,7 @@ _CHAT_COMPLETION: Final = {
 def _complete_with_headers(**header_kwargs: dict[str, str]) -> object:
     import litellm
 
-    return litellm.completion(
-        model="parasail/some-model", messages=[{"role": "user", "content": "hi"}], **header_kwargs
-    )
+    return litellm.completion(model="parasail/some-model", messages=[{"role": "user", "content": "hi"}], **header_kwargs)
 
 
 def _text_complete_with_headers(**header_kwargs: dict[str, str]) -> object:

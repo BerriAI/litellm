@@ -469,30 +469,21 @@ def test_resolve_effective_team_member_budget_preserves_member_and_default_prece
 
     assert resolve_effective_team_member_budget(member_budget, None, now) == 110
     assert resolve_effective_team_member_budget(expired_member_budget, None, now) == 100
-    assert (
-        resolve_effective_team_member_budget(
-            active_inherited_increase,
-            LiteLLM_BudgetTable(max_budget=50),
-            now,
-        )
-        == 60
-    )
-    assert (
-        resolve_effective_team_member_budget(
-            expired_inherited_increase,
-            LiteLLM_BudgetTable(max_budget=50),
-            now,
-        )
-        == 50
-    )
-    assert (
-        resolve_effective_team_member_budget(
-            LiteLLM_BudgetTable(max_budget=0),
-            LiteLLM_BudgetTable(max_budget=50),
-            now,
-        )
-        == 0
-    )
+    assert resolve_effective_team_member_budget(
+        active_inherited_increase,
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 60
+    assert resolve_effective_team_member_budget(
+        expired_inherited_increase,
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 50
+    assert resolve_effective_team_member_budget(
+        LiteLLM_BudgetTable(max_budget=0),
+        LiteLLM_BudgetTable(max_budget=50),
+        now,
+    ) == 0
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=50), now) == 50
     assert resolve_effective_team_member_budget(None, LiteLLM_BudgetTable(max_budget=0), now) is None
     assert resolve_effective_team_member_budget(None, None, now) is None

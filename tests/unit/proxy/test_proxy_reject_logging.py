@@ -42,6 +42,7 @@ from litellm.proxy.utils import ProxyLogging, hash_token
 
 
 class testLogger(CustomLogger):
+
     def __init__(self):
         self.reaches_sync_failure_event = False
         self.reaches_async_failure_event = False
@@ -62,7 +63,9 @@ class testLogger(CustomLogger):
             "rerank",
         ],
     ):
-        raise HTTPException(status_code=429, detail={"error": "Max parallel request limit reached"})
+        raise HTTPException(
+            status_code=429, detail={"error": "Max parallel request limit reached"}
+        )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.reaches_async_failure_event = True

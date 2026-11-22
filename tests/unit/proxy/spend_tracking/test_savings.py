@@ -20,57 +20,37 @@ from litellm.types.utils import Usage
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 
-@pytest.mark.parametrize(
-    "model,usage",
-    [
-        (None, {"cache_read_input_tokens": 100}),
-        ("claude-sonnet-5", None),
-        ("claude-sonnet-5", {"prompt_tokens": "invalid"}),
-    ],
-)
-def test_prompt_cache_estimate_distinguishes_unknown_from_zero(
-    model: str | None, usage: dict[str, object] | None
-) -> None:
+@pytest.mark.parametrize("model,usage", [
+    (None, {"cache_read_input_tokens": 100}),
+    ("claude-sonnet-5", None),
+    ("claude-sonnet-5", {"prompt_tokens": "invalid"}),
+])
+def test_prompt_cache_estimate_distinguishes_unknown_from_zero(model: str | None, usage: dict[str, object] | None) -> None:
     assert prompt_caching_savings_for_request(model, "anthropic", usage) is None
     assert compute_savings_spend(model, "anthropic", 0, False, usage_object=usage).prompt_caching == 0
     assert prompt_caching_savings_for_request("claude-sonnet-5", "anthropic", {"prompt_tokens": 100}) == 0
 
 
 def test_prompt_cache_estimate_uses_the_rollup_pricing_and_retains_write_premiums() -> None:
-    router: Final = Router(
-        model_list=[
-            {
-                "model_name": "negotiated",
-                "litellm_params": {
-                    "model": "anthropic/claude-sonnet-5",
-                    "input_cost_per_token": 1e-6,
-                    "cache_creation_input_token_cost": 1.25e-6,
-                    "cache_read_input_token_cost": 1e-7,
-                },
-                "model_info": {"id": "negotiated-cache-prices"},
-            }
-        ]
-    )
+    router: Final = Router(model_list=[{
+        "model_name": "negotiated",
+        "litellm_params": {
+            "model": "anthropic/claude-sonnet-5", "input_cost_per_token": 1e-6,
+            "cache_creation_input_token_cost": 1.25e-6, "cache_read_input_token_cost": 1e-7,
+        },
+        "model_info": {"id": "negotiated-cache-prices"},
+    }])
 
     def current_router() -> Router:
         return router
 
     usage: Final = {"cache_read_input_tokens": 1000, "cache_creation_input_tokens": 20000}
     estimate: Final = prompt_caching_savings_for_request(
-        "claude-sonnet-5",
-        "anthropic",
-        usage,
-        model_id="negotiated-cache-prices",
-        llm_router=current_router,
+        "claude-sonnet-5", "anthropic", usage, model_id="negotiated-cache-prices", llm_router=current_router,
     )
     rollup: Final = compute_savings_spend(
-        "claude-sonnet-5",
-        "anthropic",
-        0,
-        True,
-        usage_object=usage,
-        model_id="negotiated-cache-prices",
-        llm_router=current_router,
+        "claude-sonnet-5", "anthropic", 0, True, usage_object=usage,
+        model_id="negotiated-cache-prices", llm_router=current_router,
     )
     assert estimate == pytest.approx(1000 * (1e-6 - 1e-7) - 20000 * (1.25e-6 - 1e-6))
     assert estimate == rollup.prompt_caching == rollup.gateway_injected_caching
@@ -87,11 +67,7 @@ def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], c
     assert usage.prompt_tokens_details.cached_tokens == 0
     selected_cost: Final = 0.013
     assert compute_autorouter_savings(
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "anthropic",
-        usage,
-        baseline_usage=expected,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_usage=expected,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(sum(anthropic_cost_per_token("claude-opus-5", expected)) - selected_cost)
 
@@ -99,18 +75,11 @@ def test_baseline_preserves_anthropic_pricing_fields(modifier: dict[str, str], c
 def test_anthropic_baseline_keeps_negotiated_prices_with_provider_multiplier() -> None:
     info: Final = {
         **litellm.get_model_info("claude-opus-5", "anthropic"),
-        "input_cost_per_token": 1e-6,
-        "output_cost_per_token": 2e-6,
-        "cache_read_input_token_cost": 3e-7,
+        "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6, "cache_read_input_token_cost": 3e-7,
     }
     usage: Final = _usage(1000, 1000, 0, 100).model_copy(update={"speed": "fast"})
     assert compute_autorouter_savings(
-        "claude-opus-5",
-        "claude-sonnet-5",
-        "anthropic",
-        usage,
-        baseline_info=info,
-        baseline_usage=usage,
+        "claude-opus-5", "claude-sonnet-5", "anthropic", usage, baseline_info=info, baseline_usage=usage,
         cost_breakdown={"input_cost": 0.01, "output_cost": 0.003},
     ) == pytest.approx(0.0015 * 2 - 0.013)
 
@@ -509,10 +478,7 @@ def _usage(fresh: int, cached: int, written: int, out: int, *, hour: bool = Fals
         completion_tokens=out,
         total_tokens=fresh + cached + written + out,
         prompt_tokens_details={
-            "cached_tokens": cached,
-            "cache_creation_tokens": written,
-            "text_tokens": fresh - image,
-            "image_tokens": image,
+            "cached_tokens": cached, "cache_creation_tokens": written, "text_tokens": fresh - image, "image_tokens": image,
             "cache_creation_token_details": {"ephemeral_1h_input_tokens": written} if hour else None,
         },
         cache_read_input_tokens=cached,
@@ -530,65 +496,22 @@ def _savings(baseline: str, selected: str, usage: Usage, baseline_usage: Usage |
     )
 
 
-@pytest.mark.parametrize(
-    "baseline, selected, actual, modeled, loses_money",
-    [
-        pytest.param(
-            "claude-sonnet-5",
-            "claude-haiku-4-5",
-            _usage(3, 500, 12304, 500),
-            _usage(3, 12804, 0, 500),
-            True,
-            id="warm-baseline-cold-route",
-        ),
-        pytest.param(
-            "claude-opus-5",
-            "claude-opus-5",
-            _usage(0, 0, 20000, 1000),
-            _usage(0, 20000, 0, 1000),
-            True,
-            id="same-model-cold-route",
-        ),
-        pytest.param(
-            "claude-opus-5",
-            "claude-sonnet-5",
-            _usage(0, 19000, 1000, 1000),
-            _usage(0, 19500, 500, 1000),
-            False,
-            id="partly-cached-growth",
-        ),
-        pytest.param(
-            "claude-opus-5",
-            "claude-sonnet-5",
-            _usage(0, 0, 100000, 1000, hour=True),
-            _usage(0, 0, 100000, 1000, hour=True),
-            False,
-            id="expired-one-hour",
-        ),
-        pytest.param(
-            "claude-opus-5",
-            "claude-sonnet-5",
-            _usage(0, 0, 100000, 1000, hour=True),
-            _usage(0, 100000, 0, 1000),
-            True,
-            id="invented-one-hour-hit",
-        ),
-        pytest.param(
-            "claude-opus-5",
-            "claude-sonnet-5",
-            _usage(4000, 0, 16000, 1000, hour=True, image=4000),
-            _usage(4000, 0, 16000, 1000, hour=True, image=4000),
-            False,
-            id="image-and-one-hour-write",
-        ),
-    ],
-)
+@pytest.mark.parametrize("baseline, selected, actual, modeled, loses_money", [
+    pytest.param("claude-sonnet-5", "claude-haiku-4-5", _usage(3, 500, 12304, 500),
+                 _usage(3, 12804, 0, 500), True, id="warm-baseline-cold-route"),
+    pytest.param("claude-opus-5", "claude-opus-5", _usage(0, 0, 20000, 1000),
+                 _usage(0, 20000, 0, 1000), True, id="same-model-cold-route"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 19000, 1000, 1000),
+                 _usage(0, 19500, 500, 1000), False, id="partly-cached-growth"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 0, 100000, 1000, hour=True),
+                 _usage(0, 0, 100000, 1000, hour=True), False, id="expired-one-hour"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(0, 0, 100000, 1000, hour=True),
+                 _usage(0, 100000, 0, 1000), True, id="invented-one-hour-hit"),
+    pytest.param("claude-opus-5", "claude-sonnet-5", _usage(4000, 0, 16000, 1000, hour=True, image=4000),
+                 _usage(4000, 0, 16000, 1000, hour=True, image=4000), False, id="image-and-one-hour-write"),
+])
 def test_supplied_baseline_usage_is_priced_independently(
-    baseline: str,
-    selected: str,
-    actual: Usage,
-    modeled: Usage,
-    loses_money: bool,
+    baseline: str, selected: str, actual: Usage, modeled: Usage, loses_money: bool,
 ) -> None:
     result: Final = _savings(baseline, selected, actual, modeled)
     expected: Final = sum(generic_cost_per_token(model=baseline, usage=modeled, custom_llm_provider="anthropic")) - sum(
@@ -603,9 +526,7 @@ def test_supplied_baseline_usage_is_priced_independently(
 @pytest.mark.parametrize("negotiated", [False, True])
 @pytest.mark.parametrize("provenance", [None, "modeled", "observed_initial"])
 def test_observed_initial_uses_provider_billing_and_effective_rates(
-    modifier: dict[str, str],
-    multiplier: float,
-    negotiated: bool,
+    modifier: dict[str, str], multiplier: float, negotiated: bool,
     provenance: Literal["modeled", "observed_initial"] | None,
 ) -> None:
     usage: Final = _usage(1000, 2000, 3000, 100).model_copy(update=modifier)
@@ -618,65 +539,41 @@ def test_observed_initial_uses_provider_billing_and_effective_rates(
     billed: Final = anthropic_cost_per_token("claude-opus-5", usage, model_info=info)
     if negotiated:
         assert sum(billed) == pytest.approx(0.0138 * multiplier)
-    assert (
-        compute_autorouter_savings(
-            "anthropic/claude-opus-5",
-            "claude-opus-5",
-            "anthropic",
-            usage,
-            selected_info=info,
-            baseline_info=info,
-            baseline_usage=usage,
-            baseline_deployment_id="same",
-            selected_deployment_id="same",
-            cost_breakdown={"input_cost": billed[0], "output_cost": billed[1]},
-            baseline_provenance=provenance,
-        )
-        == 0.0
-    )
+    assert compute_autorouter_savings(
+        "anthropic/claude-opus-5", "claude-opus-5", "anthropic", usage,
+        selected_info=info, baseline_info=info, baseline_usage=usage,
+        baseline_deployment_id="same", selected_deployment_id="same",
+        cost_breakdown={"input_cost": billed[0], "output_cost": billed[1]},
+        baseline_provenance=provenance,
+    ) == 0.0
 
 
-@pytest.mark.parametrize(
-    "model, deployment, known, delta",
-    [
-        ("claude-sonnet-5", "same", "observed", 0.0),
-        ("claude-opus-5", "other", "observed", 0.0),
-        ("claude-opus-5", "", "observed", 0.0),
-        ("claude-opus-5", "same", "missing", 0.0),
-        ("claude-opus-5", "same", "different", 0.0),
-        ("claude-opus-5", "same", "observed", 0.01),
-        ("claude-opus-5", "same", "prices", 0.0),
-        ("claude-opus-5", "same", "unbilled", 0.0),
-    ],
-)
+@pytest.mark.parametrize("model, deployment, known, delta", [
+    ("claude-sonnet-5", "same", "observed", 0.0),
+    ("claude-opus-5", "other", "observed", 0.0),
+    ("claude-opus-5", "", "observed", 0.0),
+    ("claude-opus-5", "same", "missing", 0.0),
+    ("claude-opus-5", "same", "different", 0.0),
+    ("claude-opus-5", "same", "observed", 0.01),
+    ("claude-opus-5", "same", "prices", 0.0),
+    ("claude-opus-5", "same", "unbilled", 0.0),
+])
 def test_initial_provenance_cannot_override_mismatched_evidence(
-    model: str,
-    deployment: str,
-    known: Literal["observed", "missing", "different", "prices", "unbilled"],
-    delta: float,
+    model: str, deployment: str, known: Literal["observed", "missing", "different", "prices", "unbilled"], delta: float,
 ) -> None:
     usage: Final = _usage(1000, 0, 1000, 100)
     billed: Final = anthropic_cost_per_token("claude-opus-5", usage)
     info: Final = litellm.get_model_info(model, "anthropic").copy()
     if known == "prices":
         info["cache_read_input_token_cost"] = 0.001  # No reads here: equal charge alone cannot establish equal rates.
-    assert (
-        compute_autorouter_savings(
-            "claude-opus-5",
-            model,
-            "anthropic",
-            usage,
-            baseline_usage=(
-                None if known == "missing" else _usage(1000, 1000, 0, 100) if known == "different" else usage
-            ),
-            selected_info=info,
-            baseline_provenance="observed_initial",
-            baseline_deployment_id="same",
-            selected_deployment_id=deployment,
-            cost_breakdown=None if known == "unbilled" else {"input_cost": billed[0] + delta, "output_cost": billed[1]},
-        )
-        is None
-    )
+    assert compute_autorouter_savings(
+        "claude-opus-5", model, "anthropic", usage,
+        baseline_usage=(None if known == "missing" else _usage(1000, 1000, 0, 100) if known == "different" else usage),
+        selected_info=info,
+        baseline_provenance="observed_initial",
+        baseline_deployment_id="same", selected_deployment_id=deployment,
+        cost_breakdown=None if known == "unbilled" else {"input_cost": billed[0] + delta, "output_cost": billed[1]},
+    ) is None
 
 
 def test_uncached_request_is_the_plain_rate_difference():
@@ -764,6 +661,8 @@ def test_equal_modeled_usage_is_zero_under_equivalent_model_names() -> None:
     usage: Final = _usage(3, 500, 12304, 500)
     assert _savings("anthropic/claude-opus-5", "claude-opus-5", usage, usage) == 0.0
     assert _savings("claude-opus-5", "anthropic/claude-opus-5", usage, usage) == 0.0
+
+
 
 
 def test_unresolvable_baseline_remains_unknown():
@@ -1204,7 +1103,9 @@ def test_savings_follow_a_deployments_updated_price() -> None:
     def deployment(input_cost_per_token: float) -> Deployment:
         return Deployment(
             model_name="negotiated",
-            litellm_params=LiteLLM_Params(model="anthropic/claude-sonnet-5", input_cost_per_token=input_cost_per_token),
+            litellm_params=LiteLLM_Params(
+                model="anthropic/claude-sonnet-5", input_cost_per_token=input_cost_per_token
+            ),
             model_info={"id": "repriced"},
         )
 
@@ -1496,16 +1397,11 @@ def test_observed_baseline_keeps_both_costs_and_classifier_overhead(classifier: 
     from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot, price_baseline_comparison
 
     snapshot: Final = BaselineCostSnapshot(
-        model="baseline",
-        provider="anthropic",
-        prices=None,
-        actual_spend=0.17,
-        classifier_cost=classifier,
+        model="baseline", provider="anthropic", prices=None,
+        actual_spend=0.17, classifier_cost=classifier,
     )
     restored: Final = BaselineCostSnapshot.model_validate_json(snapshot.model_dump_json())
-    result: Final = price_baseline_comparison(
-        restored, Usage(prompt_tokens=100, completion_tokens=10), "observed_identical"
-    )
+    result: Final = price_baseline_comparison(restored, Usage(prompt_tokens=100, completion_tokens=10), "observed_identical")
     assert result is not None
     assert result.baseline == snapshot.actual_spend
     assert result.actual == snapshot.actual_spend + classifier
@@ -1517,16 +1413,12 @@ def test_modeled_baseline_uses_recorded_prices_and_preserves_other_actual_charge
     from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot, price_baseline_comparison
 
     snapshot: Final = BaselineCostSnapshot(
-        model="claude-opus-5",
-        provider="anthropic",
+        model="claude-opus-5", provider="anthropic",
         prices={
             **litellm.get_model_info("claude-opus-5", custom_llm_provider="anthropic"),
-            "input_cost_per_token": 0.001,
-            "output_cost_per_token": 0.002,
+            "input_cost_per_token": 0.001, "output_cost_per_token": 0.002,
         },
-        actual_token_cost=0.2,
-        actual_spend=0.23,
-        classifier_cost=0.01,
+        actual_token_cost=0.2, actual_spend=0.23, classifier_cost=0.01,
     )
     usage: Final = Usage(prompt_tokens=100, completion_tokens=10)
     result: Final = price_baseline_comparison(snapshot, usage, "modeled")

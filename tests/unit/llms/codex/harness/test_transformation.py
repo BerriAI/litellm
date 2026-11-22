@@ -43,7 +43,9 @@ THREAD_ID = "01a0f341-fe37-7072-93b3-055358e8147f"
 
 
 def load_fixture(name: str) -> list[dict]:
-    return [json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line]
+    return [
+        json.loads(line) for line in (FIXTURES / name).read_text().splitlines() if line
+    ]
 
 
 def parse_event(obj: dict, state: CodexStreamState) -> list:
@@ -165,7 +167,9 @@ def make_ctx(sandbox, **kwargs) -> SessionContext:
     )
 
 
-def request_for(ctx: SessionContext, native_session_id: Optional[str] = None, prompt: str = "hi") -> HarnessTurnRequest:
+def request_for(
+    ctx: SessionContext, native_session_id: Optional[str] = None, prompt: str = "hi"
+) -> HarnessTurnRequest:
     cfg = CodexHarnessConfig()
     setup = cfg.transform_session_setup(ctx, HOME)
     return cfg.transform_turn_request(ctx, setup, HOME, prompt, native_session_id)
@@ -271,10 +275,7 @@ def test_parse_file_change_and_mcp_and_web_search():
 @pytest.mark.parametrize(
     ("changes", "output"),
     [
-        (
-            [{"path": "a.txt", "kind": "add"}, {"path": "b.txt", "kind": "update", "diff": "@@"}],
-            "add a.txt\nupdate b.txt",
-        ),
+        ([{"path": "a.txt", "kind": "add"}, {"path": "b.txt", "kind": "update", "diff": "@@"}], "add a.txt\nupdate b.txt"),
         ([{"path": "only-path.txt"}, {"kind": "delete"}, {}], "only-path.txt\ndelete\n"),
         ([], ""),
         (None, ""),
@@ -394,7 +395,9 @@ def test_session_setup_env_and_schema():
     schema = json.loads(setup.files[CODEX_SCHEMA_FILENAME])
     assert schema["additionalProperties"] is False
     assert schema["required"] == ["file", "content"]
-    no_schema = CodexHarnessConfig().transform_session_setup(make_ctx(FakeSandbox()), HOME)
+    no_schema = CodexHarnessConfig().transform_session_setup(
+        make_ctx(FakeSandbox()), HOME
+    )
     assert no_schema.files == {}
 
 
@@ -407,7 +410,11 @@ def test_missing_endpoint_raises():
 def test_validate_environment_rejects_managed_config_and_wrong_options():
     cfg = CodexHarnessConfig()
     with pytest.raises(OptionsMismatch):
-        cfg.validate_environment(make_ctx(FakeSandbox(), options=CodexOptions(config={"model_provider": "openai"})))
+        cfg.validate_environment(
+            make_ctx(
+                FakeSandbox(), options=CodexOptions(config={"model_provider": "openai"})
+            )
+        )
     with pytest.raises(OptionsMismatch):
         cfg.validate_environment(make_ctx(FakeSandbox(), options=ClaudeCodeOptions()))
 
@@ -496,7 +503,9 @@ def test_no_model_omits_flag():
 def test_turn_response_failed_raises():
     _, state = parse_all("turn_failed.jsonl")
     with pytest.raises(HarnessTurnError, match="no healthy deployments"):
-        CodexHarnessConfig().transform_turn_response(make_ctx(FakeSandbox()), state, 1, [])
+        CodexHarnessConfig().transform_turn_response(
+            make_ctx(FakeSandbox()), state, 1, []
+        )
 
 
 def test_turn_response_nonzero_exit_uses_stderr_tail():
@@ -508,13 +517,17 @@ def test_turn_response_nonzero_exit_uses_stderr_tail():
             ["Error loading config.toml: bad", ""],
         )
     with pytest.raises(HarnessTurnError, match="code 2: no output"):
-        CodexHarnessConfig().transform_turn_response(make_ctx(FakeSandbox()), CodexStreamState(), 2, [])
+        CodexHarnessConfig().transform_turn_response(
+            make_ctx(FakeSandbox()), CodexStreamState(), 2, []
+        )
 
 
 def test_turn_response_output_json_only_with_output():
     state = CodexStreamState(final_text='{"file": "a", "content": "b"}')
     cfg = CodexHarnessConfig()
-    with_out = cfg.transform_turn_response(make_ctx(FakeSandbox(), output=Answer), state, 0, [])
+    with_out = cfg.transform_turn_response(
+        make_ctx(FakeSandbox(), output=Answer), state, 0, []
+    )
     assert with_out.output_json == state.final_text
     without = cfg.transform_turn_response(make_ctx(FakeSandbox()), state, 0, [])
     assert without.output_json is None and without.final_text == state.final_text
@@ -531,7 +544,11 @@ async def test_start_missing_binary():
 
 async def test_start_rejects_managed_config_and_wrong_options():
     with pytest.raises(OptionsMismatch):
-        await make_handler().start(make_ctx(FakeSandbox(), options=CodexOptions(config={"model_provider": "openai"})))
+        await make_handler().start(
+            make_ctx(
+                FakeSandbox(), options=CodexOptions(config={"model_provider": "openai"})
+            )
+        )
     with pytest.raises(OptionsMismatch):
         await make_handler().start(make_ctx(FakeSandbox(), options=ClaudeCodeOptions()))
 
@@ -628,7 +645,11 @@ async def test_turn_failed_raises():
 
 
 async def test_nonzero_exit_raises_with_stderr_tail():
-    sbx = FakeSandbox(outputs=[FakeProcess(b"", stderr=b"Error loading config.toml: bad\n", exit_code=1)])
+    sbx = FakeSandbox(
+        outputs=[
+            FakeProcess(b"", stderr=b"Error loading config.toml: bad\n", exit_code=1)
+        ]
+    )
     handler = make_handler()
     ctx = make_ctx(sbx)
     await handler.start(ctx)
@@ -673,5 +694,7 @@ def test_capabilities():
     assert cfg.get_binary() == "codex"
     assert "@openai/codex" in cfg.get_install_hint()
     assert caps.structured_output and caps.skills and caps.resume
-    assert not (caps.tool_approval or caps.tool_filtering or caps.custom_tools or caps.history)
+    assert not (
+        caps.tool_approval or caps.tool_filtering or caps.custom_tools or caps.history
+    )
     assert caps.permission_modes == frozenset({"read-only", "full"})

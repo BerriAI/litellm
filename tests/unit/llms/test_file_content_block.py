@@ -65,7 +65,9 @@ _WELL_FORMED_MESSAGES_RAW = [
     }
 ]
 
-MALFORMED_FILE_OBJECT: ChatCompletionFileObject = cast(ChatCompletionFileObject, {"type": "file"})
+MALFORMED_FILE_OBJECT: ChatCompletionFileObject = cast(
+    ChatCompletionFileObject, {"type": "file"}
+)
 
 EXPLICIT_NULL_FILE_OBJECT: ChatCompletionFileObject = cast(
     ChatCompletionFileObject,
@@ -315,16 +317,24 @@ def test_bedrock_async_process_file_message_malformed_raises_bad_request():
     when the file object is missing the 'file' sub-field."""
 
     async def _run() -> None:
-        with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-            await BedrockConverseMessagesProcessor._async_process_file_message(MALFORMED_FILE_OBJECT)
+        with pytest.raises(
+            litellm.BadRequestError, match="missing the required 'file' field"
+        ):
+            await BedrockConverseMessagesProcessor._async_process_file_message(
+                MALFORMED_FILE_OBJECT
+            )
 
     asyncio.run(_run())
 
 
 def test_bedrock_async_process_file_message_explicit_null_file_field_raises_bad_request():
     async def _run() -> None:
-        with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
-            await BedrockConverseMessagesProcessor._async_process_file_message(EXPLICIT_NULL_FILE_OBJECT)
+        with pytest.raises(
+            litellm.BadRequestError, match="missing the required 'file' field"
+        ):
+            await BedrockConverseMessagesProcessor._async_process_file_message(
+                EXPLICIT_NULL_FILE_OBJECT
+            )
 
     asyncio.run(_run())
 
@@ -338,7 +348,9 @@ def test_openai_apply_common_transform_malformed_file_raises_bad_request():
     """_apply_common_transform_content_item should raise BadRequestError (not KeyError)
     when a content block has type='file' but no 'file' sub-field."""
     config = OpenAIGPTConfig()
-    malformed_block: OpenAIMessageContentListBlock = cast(OpenAIMessageContentListBlock, {"type": "file"})
+    malformed_block: OpenAIMessageContentListBlock = cast(
+        OpenAIMessageContentListBlock, {"type": "file"}
+    )
     with pytest.raises(litellm.BadRequestError, match="missing the required 'file' field"):
         config._apply_common_transform_content_item(malformed_block)
 

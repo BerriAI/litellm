@@ -252,7 +252,9 @@ def test_base_counts_cached_falls_back_to_compute_on_a_fetch_miss(tmp_path: Path
         calls.append(ref)
         return {"reportAny": 4}
 
-    assert counts.base_counts_cached(_CHECKER, "abc123", local, cache_dir=tmp_path, fetch=_no_fetch) == {"reportAny": 4}
+    assert counts.base_counts_cached(_CHECKER, "abc123", local, cache_dir=tmp_path, fetch=_no_fetch) == {
+        "reportAny": 4
+    }
     assert calls == ["abc123"]
 
 
@@ -326,13 +328,17 @@ def test_fetcher_asks_for_the_artifact_named_by_the_checker_and_base_point() -> 
 
 def test_fetcher_rejects_an_artifact_for_a_different_base_point() -> None:
     payload: Final = {"base_point": "someothersha", "counts": {"reportAny": 3}}
-    assert counts.fetch_ci_base_counts(_CHECKER, "abc123", gh=_gh_stub(_live_listing(), _artifact_zip(payload))) is None
+    assert (
+        counts.fetch_ci_base_counts(_CHECKER, "abc123", gh=_gh_stub(_live_listing(), _artifact_zip(payload))) is None
+    )
 
 
 @pytest.mark.parametrize("bad_counts", [{}, {"reportAny": "three"}, {"reportAny": True}])
 def test_fetcher_rejects_empty_or_misshapen_artifact_counts(bad_counts: Mapping[str, object]) -> None:
     payload: Final = {"base_point": "abc123", "counts": bad_counts}
-    assert counts.fetch_ci_base_counts(_CHECKER, "abc123", gh=_gh_stub(_live_listing(), _artifact_zip(payload))) is None
+    assert (
+        counts.fetch_ci_base_counts(_CHECKER, "abc123", gh=_gh_stub(_live_listing(), _artifact_zip(payload))) is None
+    )
 
 
 def test_fetcher_rejects_an_expired_artifact() -> None:

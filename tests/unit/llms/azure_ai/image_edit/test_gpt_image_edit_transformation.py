@@ -22,9 +22,7 @@ def test_gpt_image_edit_url_uses_foundry_deployment_route_and_configured_version
         litellm_params={"api_version": "2025-06-01-preview"},
     )
 
-    assert (
-        url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
-    )
+    assert url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
 
 
 def test_gpt_image_edit_url_defaults_to_an_edit_capable_version_on_a_proxy(monkeypatch: pytest.MonkeyPatch):
@@ -54,9 +52,7 @@ def test_gpt_image_edit_url_uses_azure_ai_api_base_and_version_env(monkeypatch: 
         litellm_params={},
     )
 
-    assert (
-        url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
-    )
+    assert url == f"{FOUNDRY_API_BASE}/openai/deployments/gpt-image-2.5-flare/images/edits?api-version=2025-06-01-preview"
 
 
 def test_gpt_image_edit_url_uses_v1_surface_for_preview_version():

@@ -64,14 +64,20 @@ def _decode_attribute(value: AnyValue) -> object:
 
 
 def _exported_spans(route: respx.Route) -> tuple[dict[str, object], ...]:
-    exported: Final = tuple(ExportTraceServiceRequest.FromString(call.request.content) for call in route.calls)
+    exported: Final = tuple(
+        ExportTraceServiceRequest.FromString(call.request.content)
+        for call in route.calls
+    )
     return tuple(
         {
             "trace_id": span.trace_id.hex(),
             "span_id": span.span_id.hex(),
             "parent_span_id": span.parent_span_id.hex() or None,
             "name": span.name,
-            "attributes": {attribute.key: _decode_attribute(attribute.value) for attribute in span.attributes},
+            "attributes": {
+                attribute.key: _decode_attribute(attribute.value)
+                for attribute in span.attributes
+            },
         }
         for request in exported
         for resource in request.resource_spans
@@ -85,7 +91,9 @@ def _comparable(span: Mapping[str, object]) -> dict[str, object]:
     return {
         "name": span["name"],
         "parent_span_id": span["parent_span_id"],
-        "attributes": {key: value for key, value in sorted(attributes.items()) if key not in _VOLATILE_ATTRIBUTES},
+        "attributes": {
+            key: value for key, value in sorted(attributes.items()) if key not in _VOLATILE_ATTRIBUTES
+        },
     }
 
 
@@ -138,7 +146,9 @@ async def _flush_langfuse() -> None:
 
 
 @pytest.fixture
-def langfuse_export(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> Iterator[tuple[respx.Route, str]]:
+def langfuse_export(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> Iterator[tuple[respx.Route, str]]:
     trace_id: Final = f"litellm-migration-{uuid4()}"
     route: Final = respx_mock.post(_EXPORT_URL).respond(status_code=200)
     monkeypatch.setenv("LANGFUSE_HOST", "https://langfuse.unit")
@@ -159,7 +169,9 @@ def langfuse_export(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRoute
     monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
     langfuse_client_init.cache_clear()
     yield route, trace_id
-    logger: Final = litellm_logging.in_memory_dynamic_logger_cache.get_cache(credentials={}, service_name="langfuse")
+    logger: Final = litellm_logging.in_memory_dynamic_logger_cache.get_cache(
+        credentials={}, service_name="langfuse"
+    )
     if isinstance(logger, LangFuseLogger):
         logger.stop()
     client_cache.flush_cache()

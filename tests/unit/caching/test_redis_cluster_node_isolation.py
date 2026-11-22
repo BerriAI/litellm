@@ -60,7 +60,9 @@ class _Fake8xRedisCluster:
     def __init__(self) -> None:
         self._initialize = False
 
-    async def _execute_command(self, target_node: _FakeClusterNode, *args: object, **kwargs: object) -> object:
+    async def _execute_command(
+        self, target_node: _FakeClusterNode, *args: object, **kwargs: object
+    ) -> object:
         try:
             return await target_node.execute_command(*args, **kwargs)
         except (RedisConnectionError, RedisTimeoutError):
@@ -84,7 +86,9 @@ class _FakeNodesManager:
 
 
 def _build_cluster_instance() -> "_AsyncRedisClusterType":
-    cluster_cls = get_litellm_async_redis_cluster_class(cluster_node_class=_NodeClassWithoutPerConnectionRecovery)
+    cluster_cls = get_litellm_async_redis_cluster_class(
+        cluster_node_class=_NodeClassWithoutPerConnectionRecovery
+    )
     instance = cluster_cls.__new__(cluster_cls)
     instance.RedisClusterRequestTTL = 1
     instance.reinitialize_counter = 0

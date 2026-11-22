@@ -78,9 +78,9 @@ async def test_scalar_and_window_resets_do_not_reopen_the_fall_back_allowance(
 def test_budget_table_window_uses_the_sweep_clock(duration: str, end_month: int, end_day: int) -> None:
     zone: Final = ZoneInfo("America/New_York")
     now: Final = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1).astimezone(timezone.utc)
-    expected: Final = datetime(2027 if duration == "12mo" else 2026, end_month, end_day, 1, 30, tzinfo=zone).astimezone(
-        timezone.utc
-    )
+    expected: Final = datetime(
+        2027 if duration == "12mo" else 2026, end_month, end_day, 1, 30, tzinfo=zone
+    ).astimezone(timezone.utc)
 
     result: Final = ResetBudgetJob._next_window_reset(
         {"budget_duration": duration, "reset_at": "2026-11-01T05:30:00Z"},
@@ -182,9 +182,7 @@ async def test_annual_reset_persists_the_same_calendar_start_as_admission(  # te
 
 
 @pytest.mark.asyncio
-async def test_hourly_reset_persists_millisecond_window_start() -> (
-    None
-):  # test-quality-ok: the SQL write is the reset job's observable persistence contract
+async def test_hourly_reset_persists_millisecond_window_start() -> None:  # test-quality-ok: the SQL write is the reset job's observable persistence contract
     client: Final = MagicMock(spec=PrismaClient)
     client.db = MagicMock()
     client.db.execute_raw = AsyncMock(return_value=1)
@@ -198,10 +196,7 @@ async def test_hourly_reset_persists_millisecond_window_start() -> (
     )
 
     assert client.db.execute_raw.await_args.args[1:5] == (
-        "key",
-        "fractional-key",
-        "1h",
-        datetime(2026, 11, 15, 4, 48, 2, 123000),
+        "key", "fractional-key", "1h", datetime(2026, 11, 15, 4, 48, 2, 123000),
     )
 
 
@@ -1003,12 +998,7 @@ def _quiet_customer_evictions(monkeypatch):
 
 
 def _customer_member(
-    member_id,
-    spend,
-    template_cap=10.0,
-    override_cap=None,
-    override_duration=None,
-    expires_at=None,
+    member_id, spend, template_cap=10.0, override_cap=None, override_duration=None, expires_at=None,
     template_duration="7d",
 ):
     """A member row as the paged reset reads it: its budget rows included, so the cap it carries over is its own."""
@@ -1033,7 +1023,9 @@ def test_uncapped_tier_preserves_customer_spend_but_resets_endusers_and_tags(
     reset_budget_job, mock_prisma_client, monkeypatch, max_budget
 ):
     _quiet_customer_evictions(monkeypatch)
-    mock_prisma_client.data["budget"] = [_budget_row(budget_id="tier", budget_duration="7d", max_budget=max_budget)]
+    mock_prisma_client.data["budget"] = [
+        _budget_row(budget_id="tier", budget_duration="7d", max_budget=max_budget)
+    ]
     mock_prisma_client.db.litellm_customermembertable.set_find_many_results(
         [_customer_member("member", 1.0, template_cap=max_budget)]
     )
@@ -1083,12 +1075,8 @@ def test_customer_reset_uses_effective_cap_when_clock_tier_is_uncapped(
         _budget_row(budget_id=clock_id, max_budget=None, budget_duration="1mo" if clock_id == "tier" else "7d")
     ]
     row: Final = _customer_member(
-        "member",
-        12.0,
-        template_cap=template_cap,
-        override_cap=override_cap,
-        override_duration=override_duration,
-        template_duration="1mo",
+        "member", 12.0, template_cap=template_cap, override_cap=override_cap,
+        override_duration=override_duration, template_duration="1mo",
     )
     getattr(mock_prisma_client.db, f"litellm_customer{entity}table").set_find_many_results(
         [types.SimpleNamespace(**{**vars(row), f"customer_{entity}_id": "member"})]
@@ -1733,8 +1721,7 @@ def test_reset_budget_windows_resets_expired_key_window(monkeypatch):
 
 
 def test_reset_budget_windows_advances_an_expired_customer_budget_window_without_touching_counters(
-    monkeypatch: pytest.MonkeyPatch,
-    frozen_reset_clock: datetime,
+    monkeypatch: pytest.MonkeyPatch, frozen_reset_clock: datetime,
 ) -> None:
     now: Final = frozen_reset_clock.replace(tzinfo=None)
     expired: Final = (now - timedelta(minutes=5)).isoformat() + "Z"
@@ -1774,20 +1761,19 @@ def _window_spend_rolls(prisma_client):
 
 def _window_cas_writes(prisma_client: MagicMock) -> tuple[tuple[str, str, str, str], ...]:
     return tuple(
-        call.args for call in prisma_client.db.execute_raw.await_args_list if "SET budget_limits =" in call.args[0]
+        call.args
+        for call in prisma_client.db.execute_raw.await_args_list
+        if "SET budget_limits =" in call.args[0]
     )
 
 
 @pytest.mark.parametrize("source", _WINDOW_SOURCES[:3], ids=("user", "key", "team"))
 @pytest.mark.parametrize("invalid_duration", [None, "unrecognized"])
 def test_invalid_window_metadata_does_not_block_its_valid_sibling(
-    source: _WindowSource,
-    frozen_reset_clock: datetime,
-    invalid_duration: str | None,
+    source: _WindowSource, frozen_reset_clock: datetime, invalid_duration: str | None,
 ) -> None:
     malformed: Final = {
-        "max_budget": 10,
-        "reset_at": "2000-01-01T00:00:00Z",
+        "max_budget": 10, "reset_at": "2000-01-01T00:00:00Z",
         **({"budget_duration": invalid_duration} if invalid_duration is not None else {}),
     }
     windows: Final = [malformed, {**malformed, "budget_duration": "1d"}]
@@ -1996,8 +1982,7 @@ async def test_window_cas_retry_uses_fresh_limits_and_preserves_removed_and_unex
     assert json.loads(retry[2]) == list(fresh)
     updated: Final = json.loads(retry[3])
     assert updated == [
-        {**fresh[0], "reset_at": updated[0]["reset_at"], "window_start": "2024-06-15T00:00:00+00:00"},
-        fresh[1],
+        {**fresh[0], "reset_at": updated[0]["reset_at"], "window_start": "2024-06-15T00:00:00+00:00"}, fresh[1]
     ]
     assert datetime.fromisoformat(updated[0]["reset_at"]) > frozen_reset_clock
     assert [roll[3] for roll in _window_spend_rolls(client)] == ([("1d",)] if source.counters else [])
@@ -2006,13 +1991,10 @@ async def test_window_cas_retry_uses_fresh_limits_and_preserves_removed_and_unex
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", _WINDOW_SOURCES, ids=("user", "key", "team", "budget"))
-@pytest.mark.parametrize(
-    "fresh", ([], [{"budget_limits": None}], [{"budget_limits": []}]), ids=("deleted", "null", "empty")
-)
+@pytest.mark.parametrize("fresh", ([], [{"budget_limits": None}], [{"budget_limits": []}]),
+    ids=("deleted", "null", "empty"))
 async def test_window_reset_does_not_restore_concurrently_removed_limits(
-    source: _WindowSource,
-    fresh: Sequence[Mapping[str, object]],
-    frozen_reset_clock: datetime,
+    source: _WindowSource, fresh: Sequence[Mapping[str, object]], frozen_reset_clock: datetime,
 ) -> None:
     client: Final = _window_prisma_client()
     windows: Final = ({"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 10.0},)
@@ -2054,11 +2036,7 @@ async def test_window_counter_changes_only_after_successful_commit(
 
     client.tx.side_effect = transaction
     operation: Final = job._reset_window_row(
-        source,
-        "ordered",
-        windows,
-        frozen_reset_clock,
-        counters.store(),
+        source, "ordered", windows, frozen_reset_clock, counters.store(),
     )
     if commit_fails:
         with pytest.raises(RuntimeError, match="commit failed"):
@@ -2102,7 +2080,8 @@ async def test_duplicate_due_windows_apply_each_cap_to_the_shared_counter(
     saved: Final = json.loads(_window_cas_writes(client)[0][3])
     assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
     assert saved == [
-        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"} for window in windows
+        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"}
+        for window in windows
     ]
     assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
 
@@ -2131,9 +2110,7 @@ async def test_duplicate_unexpired_window_does_not_reduce_the_shared_rollover(
     saved: Final = json.loads(_window_cas_writes(client)[0][3])
     expired_index: Final = 0 if expired_first else 1
     advanced: Final = {
-        **expired,
-        "reset_at": saved[expired_index]["reset_at"],
-        "window_start": "2024-06-15T10:00:00+00:00",
+        **expired, "reset_at": saved[expired_index]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"
     }
     assert datetime.fromisoformat(advanced["reset_at"]) > frozen_reset_clock
     assert saved == ([advanced, upcoming] if expired_first else [upcoming, advanced])
@@ -2183,7 +2160,8 @@ async def test_duplicate_window_cas_retry_recalculates_from_fresh_limits_and_spe
     saved: Final = json.loads(retry[3])
     assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
     assert saved == [
-        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"} for window in fresh
+        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"}
+        for window in fresh
     ]
     assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
 
@@ -2194,9 +2172,10 @@ async def test_many_duplicate_windows_roll_once_per_duration_without_losing_conf
 ) -> None:
     client: Final = _window_prisma_client()
     source: Final = _WINDOW_SOURCES[1]
-    windows: Final = ({"budget_duration": "1d", "reset_at": "2024-06-15T00:00:00Z", "max_budget": 20.0},) * 5000 + (
-        {"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 10.0},
-    ) * 5000
+    windows: Final = (
+        ({"budget_duration": "1d", "reset_at": "2024-06-15T00:00:00Z", "max_budget": 20.0},) * 5000
+        + ({"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z", "max_budget": 10.0},) * 5000
+    )
     counters: Final = FakeSpendCounters(redis={})
     job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
 
@@ -2212,9 +2191,7 @@ async def test_many_duplicate_windows_roll_once_per_duration_without_losing_conf
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "source", tuple(source for source in _WINDOW_SOURCES if source.counters), ids=("user", "key", "team")
-)
+@pytest.mark.parametrize("source", tuple(source for source in _WINDOW_SOURCES if source.counters), ids=("user", "key", "team"))
 @pytest.mark.parametrize("failure", ("invalid-json", "transaction"))
 async def test_bad_window_row_does_not_stop_healthy_rows_in_this_page_or_the_next(
     source: _WindowSource,
@@ -2228,15 +2205,13 @@ async def test_bad_window_row_does_not_stop_healthy_rows_in_this_page_or_the_nex
     bad, same_page, next_page = (source.counters[1](identity, "1h") for identity in ("a", "b", "c"))
     counters: Final = FakeSpendCounters(redis=None, memory={bad: 12.0, same_page: 12.0, next_page: 12.0})
     monkeypatch.setattr(reset_budget_job_module, "RESET_BUDGET_JOB_BATCH_SIZE", 2)
-    client.db.query_raw = AsyncMock(
-        side_effect=(
-            [
-                {source.id_column: "a", "budget_limits": "{" if failure == "invalid-json" else windows},
-                {source.id_column: "b", "budget_limits": windows},
-            ],
-            [{source.id_column: "c", "budget_limits": windows}],
-        )
-    )
+    client.db.query_raw = AsyncMock(side_effect=(
+        [
+            {source.id_column: "a", "budget_limits": "{" if failure == "invalid-json" else windows},
+            {source.id_column: "b", "budget_limits": windows},
+        ],
+        [{source.id_column: "c", "budget_limits": windows}],
+    ))
 
     async def execute(query: str, *args: object) -> int:
         if args[0] == "a":
@@ -4560,7 +4535,6 @@ def ticking_reset_clock(monkeypatch: pytest.MonkeyPatch) -> types.SimpleNamespac
     monkeypatch.setattr(timezone_utils, "datetime", _TickingClock)
     return clock
 
-
 _Cell = float | str | datetime | dict[str, "_Cell"] | None
 
 
@@ -4953,9 +4927,7 @@ def test_a_reset_forced_on_the_default_end_user_tier_resets_end_users_without_a_
     ledger.add_spend("unlinked", 17.0)
 
     asyncio.run(
-        _post_budget_update(
-            monkeypatch, ledger, BudgetNewRequest(budget_id="default-tier", budget_reset_at=_CLOSED_WINDOW)
-        )
+        _post_budget_update(monkeypatch, ledger, BudgetNewRequest(budget_id="default-tier", budget_reset_at=_CLOSED_WINDOW))
     )
     asyncio.run(job.reset_budget_for_litellm_budget_table())
 
@@ -5297,9 +5269,7 @@ def test_reset_deletes_spend_counter_instead_of_seeding(reset_budget_job, mock_p
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "source", tuple(source for source in _WINDOW_SOURCES if source.counters), ids=("user", "key", "team")
-)
+@pytest.mark.parametrize("source", tuple(source for source in _WINDOW_SOURCES if source.counters), ids=("user", "key", "team"))
 async def test_a_budget_window_write_renders_a_postgres_update_span_for_its_table(
     postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
     source: _WindowSource,
@@ -5310,11 +5280,8 @@ async def test_a_budget_window_write_renders_a_postgres_update_span_for_its_tabl
     job: Final = ResetBudgetJob(proxy_logging_obj=MagicMock(), prisma_client=client)
 
     await job._reset_window_row(
-        source,
-        "row-1",
-        ({"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z"},),
-        frozen_reset_clock,
-        FakeSpendCounters(redis=None).store(),
+        source, "row-1", ({"budget_duration": "1h", "reset_at": "2024-06-15T09:00:00Z"},),
+        frozen_reset_clock, FakeSpendCounters(redis=None).store(),
     )
 
     assert await postgres_span_names() == (
@@ -6388,7 +6355,9 @@ async def test_scheduled_rollover_never_reopens_a_manually_cleared_period(
         ("45s", "2026-07-15T10:18:30Z", "2026-07-15T10:19:15Z"),
     ),
 )
-async def test_scalar_and_inline_elapsed_resets_keep_a_full_interval(duration: str, saved: str, expected: str) -> None:
+async def test_scalar_and_inline_elapsed_resets_keep_a_full_interval(
+    duration: str, saved: str, expected: str
+) -> None:
     boundary: Final = datetime.fromisoformat(saved)
     now: Final = boundary + timedelta(seconds=1)
     settings: Final = BudgetResetSettings()
@@ -6397,7 +6366,9 @@ async def test_scalar_and_inline_elapsed_resets_keep_a_full_interval(duration: s
     )
 
     scalar: Final = await ResetBudgetJob._reset_budget_for_key(key, now, settings)
-    inline: Final = ResetBudgetJob._next_window_reset({"budget_duration": duration, "reset_at": saved}, now, settings)
+    inline: Final = ResetBudgetJob._next_window_reset(
+        {"budget_duration": duration, "reset_at": saved}, now, settings
+    )
 
     assert scalar is not None
     assert scalar.spend == 0
@@ -6430,10 +6401,7 @@ async def test_scalar_and_inline_hourly_resets_follow_both_occurrences_of_the_ho
     instant: Final = datetime.fromisoformat(now)
     settings: Final = BudgetResetSettings(timezone="America/New_York")
     key: Final = LiteLLM_VerificationToken(
-        token="hourly-key",
-        spend=10.0,
-        max_budget=10.0,
-        budget_duration="1h",
+        token="hourly-key", spend=10.0, max_budget=10.0, budget_duration="1h",
         budget_reset_at=datetime.fromisoformat(previous_reset),
     )
     window: Final = {"budget_duration": "1h", "max_budget": 10.0, "reset_at": previous_reset}
@@ -6457,11 +6425,7 @@ async def test_existing_daily_budgets_stay_on_local_midnight_after_fall_back(dur
     zone: Final = ZoneInfo("America/New_York")
     first: Final = datetime(2026, 11, 1, tzinfo=zone).astimezone(timezone.utc)
     key: Final = LiteLLM_VerificationToken(
-        token="daily-key",
-        spend=10.0,
-        max_budget=10.0,
-        budget_duration=duration,
-        budget_reset_at=first,
+        token="daily-key", spend=10.0, max_budget=10.0, budget_duration=duration, budget_reset_at=first,
     )
     window: Final = {"budget_duration": duration, "max_budget": 10.0, "reset_at": first.isoformat()}
     client: Final = MagicMock(spec=PrismaClient)
@@ -6471,9 +6435,7 @@ async def test_existing_daily_budgets_stay_on_local_midnight_after_fall_back(dur
         boundary: Final = datetime(2026, 11, 1 + offset, tzinfo=zone).astimezone(timezone.utc)
         expected: Final = datetime(2026, 11, 2 + offset, tzinfo=zone).astimezone(timezone.utc)
         scalar: Final = await ResetBudgetJob._reset_budget_for_key(key, boundary, settings)
-        changed: Final = await _reset_inline_window(
-            window, "daily-key", FakeSpendCounters().store(), boundary, settings
-        )
+        changed: Final = await _reset_inline_window(window, "daily-key", FakeSpendCounters().store(), boundary, settings)
         assert scalar is not None and scalar.budget_reset_at is not None
         assert scalar.budget_reset_at.astimezone(timezone.utc) == expected
         assert datetime.fromisoformat(str(changed["reset_at"])) == expected

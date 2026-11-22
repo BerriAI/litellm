@@ -1,3 +1,4 @@
+
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -7,7 +8,9 @@ from litellm.types.utils import ModelResponse
 
 def test_lemonade_config_initialization():
     """Test that LemonadeChatConfig can be initialized with various parameters"""
-    config = LemonadeChatConfig(temperature=0.7, max_tokens=100, top_p=0.9, top_k=50, repeat_penalty=1.1)
+    config = LemonadeChatConfig(
+        temperature=0.7, max_tokens=100, top_p=0.9, top_k=50, repeat_penalty=1.1
+    )
 
     assert config.custom_llm_provider == "lemonade"
     assert config.temperature == 0.7
@@ -131,7 +134,9 @@ def test_get_models_does_not_leak_lemonade_key_to_custom_base(monkeypatch):
     response.status_code = 200
     response.json.return_value = {"data": []}
 
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         models = config.get_models(api_base="https://attacker.example/v1")
 
     assert models == []
@@ -149,7 +154,9 @@ def test_get_model_info_uses_loaded_context_size():
         "max_context_window": 262144,
     }
 
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         model_info = config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
@@ -172,7 +179,9 @@ def test_get_model_info_falls_back_when_server_unavailable():
     """Test that Lemonade metadata lookup failures return safe defaults."""
     config = LemonadeChatConfig()
 
-    with patch.object(litellm.module_level_client, "get", side_effect=Exception("boom")):
+    with patch.object(
+        litellm.module_level_client, "get", side_effect=Exception("boom")
+    ):
         model_info = config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
@@ -231,7 +240,9 @@ def test_get_model_info_sends_lemonade_api_key_for_configured_base(monkeypatch):
         "recipe_options": {"ctx_size": 65536},
     }
 
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
         )
@@ -252,14 +263,18 @@ def test_get_model_info_sends_explicit_lemonade_api_key_for_custom_base(monkeypa
         "recipe_options": {"ctx_size": 65536},
     }
 
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         config.get_model_info(
             model="lemonade/Qwen3.6-35B-A3B-GGUF",
             api_base="http://lemonade.test/v1",
             api_key="explicit-test-key",
         )
 
-    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer explicit-test-key"}
+    assert mock_get.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer explicit-test-key"
+    }
 
 
 def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
@@ -278,7 +293,9 @@ def test_litellm_get_model_info_does_not_leak_lemonade_key_to_custom_base(
     }
 
     litellm.get_model_info.cache_clear()
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         try:
             model_info = litellm.get_model_info(
                 model="lemonade/Qwen3.6-35B-A3B-GGUF",
@@ -306,7 +323,9 @@ def test_litellm_get_model_info_forwards_explicit_lemonade_key_to_custom_base(
     }
 
     litellm.get_model_info.cache_clear()
-    with patch.object(litellm.module_level_client, "get", return_value=response) as mock_get:
+    with patch.object(
+        litellm.module_level_client, "get", return_value=response
+    ) as mock_get:
         try:
             model_info = litellm.get_model_info(
                 model="lemonade/Qwen3.6-35B-A3B-GGUF",
@@ -317,7 +336,9 @@ def test_litellm_get_model_info_forwards_explicit_lemonade_key_to_custom_base(
             litellm.get_model_info.cache_clear()
 
     assert model_info["max_input_tokens"] == 65536
-    assert mock_get.call_args.kwargs["headers"] == {"Authorization": "Bearer explicit-lemonade-key"}
+    assert mock_get.call_args.kwargs["headers"] == {
+        "Authorization": "Bearer explicit-lemonade-key"
+    }
 
 
 def test_litellm_get_model_info_uses_lemonade_api_base():

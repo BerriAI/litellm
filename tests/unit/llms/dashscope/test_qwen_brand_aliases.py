@@ -56,6 +56,7 @@ DASHSCOPE_FAMILY_ENV_VARS = [
 ]
 
 
+
 class BrandCase(TypedDict):
     provider: ReadOnly[str]
     display_name: ReadOnly[str]
@@ -230,9 +231,7 @@ class TestQwenBrandDefaultUrls:
         assert url == f"{brand['default_base']}/embeddings"
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
-    @pytest.mark.parametrize(
-        ("config_key", "route"), [("chat_config", "chat/completions"), ("embedding_config", "embeddings")]
-    )
+    @pytest.mark.parametrize(("config_key", "route"), [("chat_config", "chat/completions"), ("embedding_config", "embeddings")])
     def test_openai_routes_derive_from_a_domain_root(
         self, brand: BrandCase, config_key: Literal["chat_config", "embedding_config"], route: str
     ) -> None:
@@ -284,9 +283,7 @@ class TestQwenBrandDefaultUrls:
         assert url == brand["default_image_base"]
 
     @pytest.mark.parametrize("brand", BRAND_CASES)
-    def test_image_generation_uses_its_own_configured_base(
-        self, monkeypatch: pytest.MonkeyPatch, brand: BrandCase
-    ) -> None:
+    def test_image_generation_uses_its_own_configured_base(self, monkeypatch: pytest.MonkeyPatch, brand: BrandCase) -> None:
         monkeypatch.setenv("DASHSCOPE_API_BASE", "https://legacy.example.com/images")
         monkeypatch.setenv(brand["base_env"], "https://gateway.example.com/qwen/images")
         url: Final = brand["image_config"]().get_complete_url(
@@ -354,9 +351,7 @@ class TestQwenBrandUserFacingNames:
     )
     def test_supported_endpoints_matrix_display_name(self, brand, matrix_path):
         matrix = json.loads(matrix_path.read_text())
-        assert (
-            matrix["providers"][brand["provider"]]["display_name"] == f"{brand['display_name']} (`{brand['provider']}`)"
-        )
+        assert matrix["providers"][brand["provider"]]["display_name"] == f"{brand['display_name']} (`{brand['provider']}`)"
 
 
 class TestQwenBrandCostParity:

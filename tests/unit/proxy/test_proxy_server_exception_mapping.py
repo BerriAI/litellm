@@ -11,10 +11,16 @@ from fastapi.testclient import TestClient
 
 CONFIG_DIR: Final = Path(__file__).resolve().parent / "test_configs"
 OPENAI_CHAT_COMPLETIONS: Final = "https://api.openai.com/v1/chat/completions"
-AZURE_CHAT_COMPLETIONS: Final = "https://azure-unit.example.com/openai/deployments/gpt-4.1-mini/chat/completions"
-AZURE_EMBEDDINGS: Final = "https://azure-unit.example.com/openai/deployments/text-embedding-ada-002/embeddings"
+AZURE_CHAT_COMPLETIONS: Final = (
+    "https://azure-unit.example.com/openai/deployments/gpt-4.1-mini/chat/completions"
+)
+AZURE_EMBEDDINGS: Final = (
+    "https://azure-unit.example.com/openai/deployments/text-embedding-ada-002/embeddings"
+)
 
-AZURE_401_BODY: Final = {"error": {"code": "401", "message": "Access denied due to invalid subscription key."}}
+AZURE_401_BODY: Final = {
+    "error": {"code": "401", "message": "Access denied due to invalid subscription key."}
+}
 CONTEXT_LENGTH_EXCEEDED_BODY: Final = {
     "error": {
         "message": "This model's maximum context length is 4096 tokens. However, your messages resulted in 10007 tokens. Please reduce the length of the messages.",
@@ -40,10 +46,14 @@ def client(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> TestClient
 
 
 def _openai_exception(response: httpx.Response) -> openai.APIStatusError:
-    return openai.OpenAI(api_key="anything")._make_status_error_from_response(response=response)
+    return openai.OpenAI(api_key="anything")._make_status_error_from_response(
+        response=response
+    )
 
 
-def test_chat_completion_exception(client: TestClient, respx_mock: respx.MockRouter) -> None:
+def test_chat_completion_exception(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
     respx_mock.post(OPENAI_CHAT_COMPLETIONS).mock(
         return_value=httpx.Response(
             401,
@@ -74,7 +84,9 @@ def test_chat_completion_exception(client: TestClient, respx_mock: respx.MockRou
     assert isinstance(_openai_exception(response), openai.AuthenticationError)
 
 
-def test_chat_completion_exception_azure(client: TestClient, respx_mock: respx.MockRouter) -> None:
+def test_chat_completion_exception_azure(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
     upstream: Final = respx_mock.post(AZURE_CHAT_COMPLETIONS).mock(
         return_value=httpx.Response(401, json=AZURE_401_BODY)
     )
@@ -94,13 +106,19 @@ def test_chat_completion_exception_azure(client: TestClient, respx_mock: respx.M
     assert "litellm.AuthenticationError" in json_response["error"]["message"]
     assert upstream.call_count == 1
     outbound: Final = upstream.calls[0].request
-    assert json.loads(outbound.content)["messages"] == [{"role": "user", "content": "hi"}]
+    assert json.loads(outbound.content)["messages"] == [
+        {"role": "user", "content": "hi"}
+    ]
     assert outbound.headers["api-key"] == "bad-key"
     assert isinstance(_openai_exception(response), openai.AuthenticationError)
 
 
-def test_embedding_auth_exception_azure(client: TestClient, respx_mock: respx.MockRouter) -> None:
-    upstream: Final = respx_mock.post(AZURE_EMBEDDINGS).mock(return_value=httpx.Response(401, json=AZURE_401_BODY))
+def test_embedding_auth_exception_azure(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post(AZURE_EMBEDDINGS).mock(
+        return_value=httpx.Response(401, json=AZURE_401_BODY)
+    )
 
     response: Final = client.post(
         "/embeddings",
@@ -146,7 +164,9 @@ def test_chat_completion_exception_any_model(client: TestClient) -> None:
     assert json_response.keys() == {"error"}
     openai_exception: Final = _openai_exception(response)
     assert isinstance(openai_exception, openai.BadRequestError)
-    assert "/chat/completions: Invalid model name passed in model=Lite-GPT-12" in str(openai_exception.message)
+    assert "/chat/completions: Invalid model name passed in model=Lite-GPT-12" in str(
+        openai_exception.message
+    )
 
 
 def test_embedding_exception_any_model(client: TestClient) -> None:
@@ -159,10 +179,14 @@ def test_embedding_exception_any_model(client: TestClient) -> None:
     assert json_response.keys() == {"error"}
     openai_exception: Final = _openai_exception(response)
     assert isinstance(openai_exception, openai.BadRequestError)
-    assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(openai_exception.message)
+    assert "/embeddings: Invalid model name passed in model=Lite-GPT-12" in str(
+        openai_exception.message
+    )
 
 
-def test_chat_completion_exception_azure_context_window(client: TestClient, respx_mock: respx.MockRouter) -> None:
+def test_chat_completion_exception_azure_context_window(
+    client: TestClient, respx_mock: respx.MockRouter
+) -> None:
     upstream: Final = respx_mock.post(AZURE_CHAT_COMPLETIONS).mock(
         return_value=httpx.Response(400, json=CONTEXT_LENGTH_EXCEEDED_BODY)
     )

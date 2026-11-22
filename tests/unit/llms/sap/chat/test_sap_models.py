@@ -41,12 +41,10 @@ class TestSAPMessage:
         assert msg.content.text == "Hello"
 
     def test_list_of_text_content_blocks_accepted(self):
-        msg = SAPMessage.model_validate(
-            {
-                "role": "system",
-                "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
-            }
-        )
+        msg = SAPMessage.model_validate({
+            "role": "system",
+            "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
+        })
         assert isinstance(msg.content, list)
         assert len(msg.content) == 2
         assert isinstance(msg.content[0], TextContent)
@@ -56,12 +54,10 @@ class TestSAPMessage:
             SAPMessage.model_validate({"role": "system", "content": 123})
 
     def test_cache_control_on_content_block(self):
-        msg = SAPMessage.model_validate(
-            {
-                "role": "system",
-                "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
-            }
-        )
+        msg = SAPMessage.model_validate({
+            "role": "system",
+            "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
+        })
         assert isinstance(msg.content, TextContent)
         assert msg.content.cache_control is not None
         assert msg.content.cache_control.type == "ephemeral"
@@ -91,20 +87,18 @@ class TestSAPUserMessage:
     def test_image_content_accepted(self):
         from litellm.llms.sap.chat.models import ImageContent
 
-        msg = SAPUserMessage.model_validate(
-            {"content": {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}}
-        )
+        msg = SAPUserMessage.model_validate({
+            "content": {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}}
+        })
         assert isinstance(msg.content, ImageContent)
 
     def test_mixed_list_of_text_and_image_accepted(self):
-        msg = SAPUserMessage.model_validate(
-            {
-                "content": [
-                    {"type": "text", "text": "Look at this:"},
-                    {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
-                ]
-            }
-        )
+        msg = SAPUserMessage.model_validate({
+            "content": [
+                {"type": "text", "text": "Look at this:"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+            ]
+        })
         assert isinstance(msg.content, list)
         assert len(msg.content) == 2
 
@@ -113,11 +107,9 @@ class TestSAPUserMessage:
             SAPUserMessage.model_validate({"content": 123})
 
     def test_cache_control_on_content_block(self):
-        msg = SAPUserMessage.model_validate(
-            {
-                "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
-            }
-        )
+        msg = SAPUserMessage.model_validate({
+            "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
+        })
         assert isinstance(msg.content, TextContent)
         assert msg.content.cache_control is not None
         assert msg.content.cache_control.type == "ephemeral"
@@ -157,9 +149,9 @@ class TestSAPAssistantMessage:
         assert isinstance(msg.content, TextContent)
 
     def test_list_of_text_blocks_accepted(self):
-        msg = SAPAssistantMessage.model_validate(
-            {"content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}]}
-        )
+        msg = SAPAssistantMessage.model_validate({
+            "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}]
+        })
         assert isinstance(msg.content, list)
         assert len(msg.content) == 2
 
@@ -168,11 +160,9 @@ class TestSAPAssistantMessage:
             SAPAssistantMessage.model_validate({"content": {"type": "image_url", "image_url": {"url": "x"}}})
 
     def test_cache_control_on_content_block(self):
-        msg = SAPAssistantMessage.model_validate(
-            {
-                "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
-            }
-        )
+        msg = SAPAssistantMessage.model_validate({
+            "content": {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}},
+        })
         assert isinstance(msg.content, TextContent)
         assert msg.content.cache_control is not None
         assert msg.content.cache_control.type == "ephemeral"
@@ -200,18 +190,16 @@ class TestSAPToolChatMessage:
         assert msg.content == "result"
 
     def test_text_content_block_accepted(self):
-        msg = SAPToolChatMessage.model_validate(
-            {"tool_call_id": "call_1", "content": {"type": "text", "text": "result"}}
-        )
+        msg = SAPToolChatMessage.model_validate({
+            "tool_call_id": "call_1", "content": {"type": "text", "text": "result"}
+        })
         assert isinstance(msg.content, TextContent)
 
     def test_list_of_text_blocks_accepted(self):
-        msg = SAPToolChatMessage.model_validate(
-            {
-                "tool_call_id": "call_1",
-                "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
-            }
-        )
+        msg = SAPToolChatMessage.model_validate({
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "A"}, {"type": "text", "text": "B"}],
+        })
         assert isinstance(msg.content, list)
         assert len(msg.content) == 2
 
@@ -224,12 +212,10 @@ class TestSAPToolChatMessage:
             SAPToolChatMessage.model_validate({"tool_call_id": "call_1", "content": 99})
 
     def test_cache_control_on_content_block(self):
-        msg = SAPToolChatMessage.model_validate(
-            {
-                "tool_call_id": "call_1",
-                "content": {"type": "text", "text": "result", "cache_control": {"type": "ephemeral"}},
-            }
-        )
+        msg = SAPToolChatMessage.model_validate({
+            "tool_call_id": "call_1",
+            "content": {"type": "text", "text": "result", "cache_control": {"type": "ephemeral"}},
+        })
         assert isinstance(msg.content, TextContent)
         assert msg.content.cache_control is not None
         assert msg.content.cache_control.type == "ephemeral"

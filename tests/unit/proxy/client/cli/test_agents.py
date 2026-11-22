@@ -503,10 +503,9 @@ http_headers = { "x-team" = "qa" }
         assert "env_key" not in launched
         assert launched["requires_openai_auth"] is True
         assert launched["base_url"] == "http://localhost:4000/v1"
-        assert (
-            config["model_providers"]["litellm_subscription"]
-            == tomllib.loads(user_config)["model_providers"]["litellm_subscription"]
-        )
+        assert config["model_providers"]["litellm_subscription"] == tomllib.loads(user_config)["model_providers"][
+            "litellm_subscription"
+        ]
 
     @pytest.mark.parametrize("agent", ["claude", "opencode", "pi", "mytool"])
     def test_subscription_adds_no_args_for_agents_without_a_proxy_provider(self, agent):
@@ -1082,7 +1081,9 @@ class TestCodexModelSync:
                 self._deployment(**deployment, service_tiers=["flex"], display_name="Configured"),
                 self._deployment("plain"),
             ),
-            served=self._served((listed, "Served", served_tiers), ("plain", "Served Plain", [_generic_tier("flex")])),
+            served=self._served(
+                (listed, "Served", served_tiers), ("plain", "Served Plain", [_generic_tier("flex")])
+            ),
         )
 
         entries = self._entries(tmp_path)
@@ -1354,16 +1355,7 @@ class TestCodexModelSync:
             (OSError("codex vanished"), ["low", "high"]),
             (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), ["low", "high"]),
         ],
-        ids=[
-            "current",
-            "first-custom",
-            "pre-custom",
-            "pre-release",
-            "no-number",
-            "failed",
-            "unrunnable",
-            "undecodable",
-        ],
+        ids=["current", "first-custom", "pre-custom", "pre-release", "no-number", "failed", "unrunnable", "undecodable"],
     )
     def test_unknown_model_offers_the_group_efforts_the_installed_codex_parses(self, tmp_path, version, levels):
         _, result = self._sync(
@@ -2021,12 +2013,7 @@ class TestRunAgent:
     @pytest.mark.parametrize(
         ("args", "user", "key_from_stored_login", "expected_overlay"),
         [
-            (
-                (),
-                {"apiKeyHelper": LITE_HELPER},
-                False,
-                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
-            ),
+            ((), {"apiKeyHelper": LITE_HELPER}, False, {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}}),
             ((), {"apiKeyHelper": LITE_HELPER.replace("/usr/local/bin/lite", "/opt/other-venv/bin/lite")}, True, None),
             (
                 (),
@@ -2043,29 +2030,19 @@ class TestRunAgent:
                 ("--settings", '{"model":"opus"}'),
                 {"apiKeyHelper": LITE_HELPER},
                 False,
-                {
-                    "apiKeyHelper": "",
-                    "model": "opus",
-                    "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY},
-                },
+                {"apiKeyHelper": "", "model": "opus", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY}},
             ),
             (
                 ("--settings", '{"apiKeyHelper":"","env":{"FOO":"1"}}'),
                 {"apiKeyHelper": LITE_HELPER},
                 True,
-                {
-                    "apiKeyHelper": "",
-                    "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY, "FOO": "1"},
-                },
+                {"apiKeyHelper": "", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-key", "ANTHROPIC_BASE_URL": PROXY, "FOO": "1"}},
             ),
             (
                 ("--settings", '{"apiKeyHelper":"/opt/mine/helper","env":{"ANTHROPIC_AUTH_TOKEN":"sk-mine"}}'),
                 {"apiKeyHelper": LITE_HELPER},
                 False,
-                {
-                    "apiKeyHelper": "/opt/mine/helper",
-                    "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine", "ANTHROPIC_BASE_URL": PROXY},
-                },
+                {"apiKeyHelper": "/opt/mine/helper", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-mine", "ANTHROPIC_BASE_URL": PROXY}},
             ),
         ],
         ids=[
@@ -2182,7 +2159,7 @@ class TestRunAgent:
                 read_settings=lambda path: {"apiKeyHelper": LITE_HELPER},
                 write_overlay=_overlay_writer(tmp_path),
                 project_dir=tmp_path / "repo",
-            )
+                )
         assert launched == {}
 
     def test_a_malformed_settings_file_still_launches_claude_with_the_key(self, tmp_path):
@@ -2291,7 +2268,9 @@ class TestRunAgent:
         assert launched["env"]["ANTHROPIC_CUSTOM_HEADERS"] == "x-litellm-api-key: Bearer sk-key"
         assert "ANTHROPIC_AUTH_TOKEN" not in launched["env"]
 
-    def test_subscription_launch_blanks_the_credentials_and_helper_claude_code_would_load_from_settings(self, tmp_path):
+    def test_subscription_launch_blanks_the_credentials_and_helper_claude_code_would_load_from_settings(
+        self, tmp_path
+    ):
         launched = {}
         run_agent(
             "http://localhost:4000",
@@ -2990,7 +2969,9 @@ class TestAgentCommands:
             f"{AGENTS_MODULE}.run_agent",
             side_effect=lambda b, k, c, **kw: captured.update(api_key=k, stored=kw.get("key_from_stored_login")),
         ):
-            result = self.runner.invoke(_agent_command("claude"), [], obj={"base_url": "http://localhost:4000", **obj})
+            result = self.runner.invoke(
+                _agent_command("claude"), [], obj={"base_url": "http://localhost:4000", **obj}
+            )
 
         assert result.exit_code == 0, result.output
         assert captured == {"api_key": obj["api_key"], "stored": key_from_stored_login}

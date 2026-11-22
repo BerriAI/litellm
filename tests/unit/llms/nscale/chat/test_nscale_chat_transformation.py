@@ -32,7 +32,10 @@ class TestNscaleConfig:
     def test_get_api_base(self):
         """Test that get_api_base returns the correct API base URL"""
         # Test with provided API base
-        assert self.config.get_api_base("https://custom-base.com") == "https://custom-base.com"
+        assert (
+            self.config.get_api_base("https://custom-base.com")
+            == "https://custom-base.com"
+        )
 
         # Test with environment variable
         with patch(
@@ -42,5 +45,7 @@ class TestNscaleConfig:
             assert self.config.get_api_base() == "https://env-base.com"
 
         # Test with default API base
-        with patch("litellm.llms.nscale.chat.transformation.get_secret_str", return_value=None):
+        with patch(
+            "litellm.llms.nscale.chat.transformation.get_secret_str", return_value=None
+        ):
             assert self.config.get_api_base() == NscaleConfig.API_BASE_URL

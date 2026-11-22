@@ -24,6 +24,7 @@ class TestMetaProviderConfig:
         assert meta.api_key_env == "META_API_KEY"
         assert meta.api_base_env == "META_API_BASE"
 
+
     def test_meta_in_openai_compatible_providers(self):
         from litellm.constants import openai_compatible_providers
 
@@ -90,7 +91,9 @@ class TestMetaProviderConfig:
 
 class TestMetaReasoningParams:
     def test_muse_spark_supports_reasoning_effort(self):
-        params = litellm.get_supported_openai_params(model="muse-spark-1.1", custom_llm_provider="meta")
+        params = litellm.get_supported_openai_params(
+            model="muse-spark-1.1", custom_llm_provider="meta"
+        )
         assert params is not None
         assert "reasoning_effort" in params
 
@@ -109,7 +112,9 @@ class TestMetaReasoningParams:
 
     def test_reasoning_effort_gated_on_capability(self):
         """A meta model without reasoning metadata must not advertise reasoning_effort."""
-        params = litellm.get_supported_openai_params(model="some-non-reasoning-model", custom_llm_provider="meta")
+        params = litellm.get_supported_openai_params(
+            model="some-non-reasoning-model", custom_llm_provider="meta"
+        )
         assert params is not None
         assert "reasoning_effort" not in params
 
@@ -181,3 +186,5 @@ class TestMetaAnthropicMessages:
         )
         assert headers["authorization"] == "Bearer sk-env-key"
         assert headers["anthropic-version"] == "2023-06-01"
+
+

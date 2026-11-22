@@ -2,7 +2,9 @@ import json
 import os
 import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
+sys.path.insert(
+    0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
+)
 
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -34,7 +36,9 @@ class TestAzureAnthropicConfig:
         litellm_params = {"api_key": "test-api-key"}
         api_key = "test-api-key"
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result = config.validate_environment(
                 headers=headers,
@@ -61,7 +65,9 @@ class TestAzureAnthropicConfig:
         litellm_params = GenericLiteLLMParams(api_key="test-api-key")
         api_key = "test-api-key"
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             result = config.validate_environment(
                 headers=headers,
@@ -87,7 +93,9 @@ class TestAzureAnthropicConfig:
         litellm_params = {}  # Empty dict, no api_key
         api_key = "provided-api-key"
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "provided-api-key"}
             config.validate_environment(
                 headers=headers,
@@ -111,7 +119,9 @@ class TestAzureAnthropicConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             with patch.object(config, "get_anthropic_headers", return_value={}):
                 result = config.validate_environment(
@@ -135,7 +145,9 @@ class TestAzureAnthropicConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-api-key"}
             with patch.object(config, "get_anthropic_headers", return_value={}):
                 result = config.validate_environment(
@@ -157,7 +169,9 @@ class TestAzureAnthropicConfig:
         optional_params = {}
         litellm_params = {"api_key": "test-api-key"}
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {
                 "api-key": "test-api-key",
                 "anthropic-version": "2024-01-01",
@@ -208,7 +222,9 @@ class TestAzureAnthropicConfig:
             "transform_request",
             return_value={
                 "model": "claude-sonnet-4-5",
-                "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+                ],
                 "max_tokens": 100,
                 "max_retries": 3,  # Should be removed
                 "stream_options": {"include_usage": True},  # Should be removed
@@ -245,7 +261,9 @@ class TestAzureAnthropicConfig:
         litellm_params = {"api_key": "test-key"}
         headers = {"api-key": "test-key"}
 
-        with patch("litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment") as mock_validate:
+        with patch(
+            "litellm.llms.azure.common_utils.BaseAzureLLM.base_validate_azure_environment"
+        ) as mock_validate:
             mock_validate.return_value = {"api-key": "test-key"}
             result = config.transform_request(
                 model="claude-opus-4-6",
@@ -272,7 +290,9 @@ class TestAzureAnthropicConfig:
         # Test that the parent's update_headers_with_optional_anthropic_beta is called
         # which should add the compact beta header
         headers = {}
-        headers = config.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
+        headers = config.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params
+        )
 
         # Verify compact beta header is present
         assert "anthropic-beta" in headers
@@ -460,7 +480,9 @@ class TestAzureAnthropicConfig:
         }
 
         headers = {}
-        headers = config.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
+        headers = config.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params
+        )
 
         # Verify both beta headers are present
         assert "anthropic-beta" in headers
@@ -470,10 +492,7 @@ class TestAzureAnthropicConfig:
 
 def _mid_conversation_system_conversation() -> list[dict]:
     return [
-        {
-            "role": "system",
-            "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}],
-        },
+        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Second question"},
@@ -580,9 +599,7 @@ def test_chat_preserves_thinking_display_and_beta(thinking_type: str, display: s
 
     assert result["thinking"]["type"] == "adaptive"
     assert result["thinking"]["display"] == display
-    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (
-        display == "updates"
-    )
+    assert (ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in headers["anthropic-beta"].split(",")) == (display == "updates")
     assert "existing-beta" in headers["anthropic-beta"].split(",")
 
 
@@ -594,12 +611,8 @@ def test_beta_detection_preserves_unrecognized_thinking(thinking: object) -> Non
 
     params: Final = {"thinking": thinking}
     headers: Final = AzureAnthropicConfig().validate_environment(
-        headers={},
-        model="claude-fable-5-1",
-        messages=[],
-        optional_params=params,
-        litellm_params={},
-        api_key="test-key",
+        headers={}, model="claude-fable-5-1", messages=[], optional_params=params,
+        litellm_params={}, api_key="test-key",
     )
 
     assert params["thinking"] == thinking

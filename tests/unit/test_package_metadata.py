@@ -56,9 +56,7 @@ def _requirement_names(requirements: list[str]) -> frozenset[NormalizedName]:
     return frozenset(canonicalize_name(Requirement(requirement).name) for requirement in requirements)
 
 
-def _proxy_requirements_installed_on(
-    sys_platform: str, platform_system: str, os_name: str
-) -> frozenset[NormalizedName]:
+def _proxy_requirements_installed_on(sys_platform: str, platform_system: str, os_name: str) -> frozenset[NormalizedName]:
     environment: Final = {
         "sys_platform": sys_platform,
         "platform_system": platform_system,

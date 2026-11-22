@@ -43,7 +43,9 @@ async def test_agenerate_content_stream():
         base_llm_http_handler,
     )
 
-    with patch.object(base_llm_http_handler, "generate_content_handler", new=AsyncMock()) as mock_post:
+    with patch.object(
+        base_llm_http_handler, "generate_content_handler", new=AsyncMock()
+    ) as mock_post:
         result = await agenerate_content_stream(
             model="gemini/gemini-2.0-flash-001",
             contents="Hello, world!",
@@ -98,7 +100,9 @@ def test_native_top_level_field_forwarded_to_request_body(field_name, field_valu
     from litellm.google_genai.main import generate_content
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
+    with patch.object(
+        HTTPHandler, "post", return_value=_mock_gemini_post_response()
+    ) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -109,9 +113,12 @@ def test_native_top_level_field_forwarded_to_request_body(field_name, field_valu
 
     assert mock_post.called, "expected the request to reach the HTTP client"
     body = mock_post.call_args.kwargs["json"]
-    assert body[field_name] == field_value, f"{field_name} should be forwarded to Google at the top level"
+    assert (
+        body[field_name] == field_value
+    ), f"{field_name} should be forwarded to Google at the top level"
     assert field_name not in body.get("generationConfig", {}), (
-        f"{field_name} must be a top-level sibling of generationConfig, not nested inside it"
+        f"{field_name} must be a top-level sibling of generationConfig, "
+        "not nested inside it"
     )
 
 
@@ -124,7 +131,9 @@ async def test_native_safety_settings_forwarded_async():
     from litellm.google_genai.main import agenerate_content
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
+    ]
 
     with patch.object(
         AsyncHTTPHandler,
@@ -154,9 +163,13 @@ def test_native_fields_coexist_with_generation_config():
     from litellm.google_genai.main import generate_content
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
+    ]
 
-    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
+    with patch.object(
+        HTTPHandler, "post", return_value=_mock_gemini_post_response()
+    ) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -181,9 +194,13 @@ def test_explicit_extra_body_overrides_native_top_level_field():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     native = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
-    override = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}]
+    override = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}
+    ]
 
-    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
+    with patch.object(
+        HTTPHandler, "post", return_value=_mock_gemini_post_response()
+    ) as mock_post:
         generate_content(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -206,10 +223,14 @@ def test_native_fields_and_system_instruction_forwarded_on_sync_stream():
     from litellm.google_genai.main import generate_content_stream
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
+    ]
     system_instruction = {"parts": [{"text": "Be terse"}]}
 
-    with patch.object(HTTPHandler, "post", return_value=_mock_gemini_post_response()) as mock_post:
+    with patch.object(
+        HTTPHandler, "post", return_value=_mock_gemini_post_response()
+    ) as mock_post:
         generate_content_stream(
             model="gemini/gemini-2.0-flash",
             contents=[{"role": "user", "parts": [{"text": "Say hi"}]}],
@@ -235,7 +256,9 @@ async def test_native_fields_forwarded_on_async_stream():
     from litellm.google_genai.main import agenerate_content_stream
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-    safety_settings = [{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}]
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}
+    ]
 
     with patch.object(
         AsyncHTTPHandler,
@@ -695,9 +718,7 @@ class ContentFailureRecorder(CustomLogger):
         self.asynchronous_calls: tuple[str, ...] = ()
         self.logged: Final = Event()
 
-    def log_failure_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
+    def log_failure_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
         self.calls = (*self.calls, str(kwargs["call_type"]))
         self.logged.set()
 
@@ -712,15 +733,11 @@ class ContentFailureRecorder(CustomLogger):
 @pytest.mark.parametrize("use_logging_context", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_delivers_per_request_failure_callbacks_once(
-    native_content_handler: NativeContentLLM,
-    monkeypatch: pytest.MonkeyPatch,
-    is_async: bool,
-    use_logging_context: bool,
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, use_logging_context: bool,
 ) -> None:
     monkeypatch.setattr(
-        litellm,
-        "custom_provider_map",
-        [{"provider": "native_image_test", "custom_handler": FailingCompletionContentLLM()}],
+        litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": FailingCompletionContentLLM()}]
     )
     global_recorder: Final = ContentFailureRecorder()
     request_recorder: Final = ContentFailureRecorder()
@@ -728,25 +745,16 @@ async def test_custom_content_adapter_delivers_per_request_failure_callbacks_onc
     monkeypatch.setattr(litellm, "failure_callback", [global_recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [global_recorder])
     callback_args: Final = (
-        {
-            "litellm_logging_obj": Logging(
-                model="native_image_test/chat-model",
-                messages=[],
-                stream=False,
-                call_type="agenerate_content" if is_async else "generate_content",
-                start_time=datetime(2026, 1, 1),
-                litellm_call_id="failure-test",
-                function_id="failure-test",
-                dynamic_failure_callbacks=[request_recorder],
-                dynamic_async_failure_callbacks=[request_recorder],
-            )
-        }
-        if use_logging_context
-        else {"failure_callback": [request_recorder.log_failure_event]}
+        {"litellm_logging_obj": Logging(
+            model="native_image_test/chat-model", messages=[], stream=False,
+            call_type="agenerate_content" if is_async else "generate_content",
+            start_time=datetime(2026, 1, 1), litellm_call_id="failure-test", function_id="failure-test",
+            dynamic_failure_callbacks=[request_recorder], dynamic_async_failure_callbacks=[request_recorder],
+        )}
+        if use_logging_context else {"failure_callback": [request_recorder.log_failure_event]}
     )
     request: Final = dict(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "hello"}]}],
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
         **callback_args,
     )
     if is_async:
@@ -855,9 +863,7 @@ async def test_custom_native_config_cannot_overwrite_accounting_context(
 async def test_builtin_native_content_keeps_priority_over_colliding_custom_handler(
     native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch, is_async: bool
 ) -> None:
-    monkeypatch.setattr(
-        litellm, "custom_provider_map", [{"provider": "gemini", "custom_handler": native_content_handler}]
-    )
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "gemini", "custom_handler": native_content_handler}])
     litellm.utils.custom_llm_setup()
     request: Final = dict(
         model="gemini/test-model",
@@ -893,9 +899,7 @@ class ContentSuccessRecorder(CustomLogger):
         self.sync_logged = Event()
         self.async_logged = asyncio.Event()
 
-    def log_success_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
-    ) -> None:
+    def log_success_event(self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object) -> None:
         self.sync_calls = (*self.sync_calls, str(kwargs["call_type"]))
         self.call_ids = (*self.call_ids, str(kwargs["litellm_call_id"]))
         self.sync_logged.set()
@@ -921,17 +925,12 @@ async def test_custom_content_adapter_accounts_for_one_success(
     monkeypatch.setattr(litellm, "success_callback", [recorder])
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     outer_logging: Final = Logging(
-        model="native_image_test/chat-model",
-        messages=[],
-        stream=False,
+        model="native_image_test/chat-model", messages=[], stream=False,
         call_type="agenerate_content" if is_async else "generate_content",
-        start_time=datetime(2026, 1, 1),
-        litellm_call_id="adapter-accounting",
-        function_id="adapter-accounting",
+        start_time=datetime(2026, 1, 1), litellm_call_id="adapter-accounting", function_id="adapter-accounting",
     )
     request: Final = dict(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "hello"}]}],
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
         litellm_logging_obj=outer_logging,
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
@@ -961,8 +960,7 @@ async def test_custom_content_adapter_delivers_per_request_success_callbacks_onc
     monkeypatch.setattr(litellm, "success_callback", [global_recorder])
     monkeypatch.setattr(litellm, "_async_success_callback", [global_recorder])
     request: Final = dict(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "hello"}]}],
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
         success_callback=[request_recorder.async_log_success_event if is_async else request_recorder.log_success_event],
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
@@ -1093,10 +1091,7 @@ _HOOK_RESPONSE_SHAPES: Final = (
         GenerateContentResponse(
             candidates=[
                 {
-                    "content": {
-                        "role": "model",
-                        "parts": [{"inline_data": {"mime_type": "image/png", "data": b"image"}}],
-                    },
+                    "content": {"role": "model", "parts": [{"inline_data": {"mime_type": "image/png", "data": b"image"}}]},
                     "finish_reason": "STOP",
                     "index": 0,
                 }
@@ -1117,10 +1112,7 @@ _HOOK_RESPONSE_SHAPES: Final = (
         GenerateContentResponse(
             candidates=[
                 {
-                    "content": {
-                        "role": "model",
-                        "parts": [{"function_call": {"name": "book", "args": _NULL_TOOL_ARGS}}],
-                    },
+                    "content": {"role": "model", "parts": [{"function_call": {"name": "book", "args": _NULL_TOOL_ARGS}}]},
                     "index": 0,
                 }
             ],
@@ -1130,10 +1122,7 @@ _HOOK_RESPONSE_SHAPES: Final = (
         {
             "candidates": [
                 {
-                    "content": {
-                        "role": "model",
-                        "parts": [{"functionCall": {"name": "book", "args": _NULL_TOOL_ARGS}}],
-                    },
+                    "content": {"role": "model", "parts": [{"functionCall": {"name": "book", "args": _NULL_TOOL_ARGS}}]},
                     "index": 0,
                 }
             ],
@@ -1202,8 +1191,7 @@ async def test_custom_native_content_logs_each_hook_response_shape_once(
     native_content_handler.response = hook_response
     recorder: Final = ContentUsageRecorder()
     request: Final = dict(
-        model="native_image_test/image-model",
-        contents=[{"parts": [{"text": "draw"}]}],
+        model="native_image_test/image-model", contents=[{"parts": [{"text": "draw"}]}],
         success_callback=[recorder.alog if is_async else recorder.log],
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
@@ -1218,9 +1206,7 @@ async def test_custom_native_content_logs_each_hook_response_shape_once(
 async def test_router_tags_custom_native_content_objects_with_their_deployment(
     native_content_handler: NativeContentLLM,
 ) -> None:
-    native_content_handler.response = CamelCaseContentResponse(
-        candidates=(_IMAGE_CANDIDATE,), usageMetadata=_IMAGE_USAGE
-    )
+    native_content_handler.response = CamelCaseContentResponse(candidates=(_IMAGE_CANDIDATE,), usageMetadata=_IMAGE_USAGE)
     router: Final = litellm.Router(
         model_list=[
             {
@@ -1248,20 +1234,15 @@ class AdapterOnlyContentLLM(CompletionContentLLM):
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_rejects_generation_config_it_cannot_send(
-    native_content_handler: NativeContentLLM,
-    monkeypatch: pytest.MonkeyPatch,
-    is_async: bool,
-    stream: bool,
-    drop_params: bool,
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, stream: bool, drop_params: bool,
 ) -> None:
     monkeypatch.setattr(
         litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": AdapterOnlyContentLLM()}]
     )
     request: Final = dict(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "draw"}]}],
-        config={"temperature": 0.2, "imageConfig": {"aspectRatio": "16:9"}},
-        drop_params=drop_params,
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "draw"}]}],
+        config={"temperature": 0.2, "imageConfig": {"aspectRatio": "16:9"}}, drop_params=drop_params,
     )
 
     async def call() -> object:
@@ -1292,8 +1273,7 @@ async def test_custom_content_adapter_accepts_generation_config_it_already_satis
         litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": AdapterOnlyContentLLM()}]
     )
     request: Final = dict(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "hi"}]}],
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hi"}]}],
         config={"responseModalities": ["TEXT"], "candidateCount": 1},
     )
     result: Final = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
@@ -1313,10 +1293,8 @@ async def test_custom_content_adapter_accepts_generation_config_it_already_satis
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_rejects_generation_config_values_it_cannot_satisfy(
-    native_content_handler: NativeContentLLM,
-    monkeypatch: pytest.MonkeyPatch,
-    is_async: bool,
-    config: dict[str, object],
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, config: dict[str, object],
 ) -> None:
     monkeypatch.setattr(
         litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": AdapterOnlyContentLLM()}]
@@ -1395,11 +1373,8 @@ class ResponseFormatRecorderLLM(CompletionContentLLM):
 @pytest.mark.parametrize("is_async", [False, True])
 @pytest.mark.asyncio
 async def test_custom_content_adapter_sends_the_response_format_it_accepts(
-    native_content_handler: NativeContentLLM,
-    monkeypatch: pytest.MonkeyPatch,
-    is_async: bool,
-    config: dict[str, object],
-    response_format: object,
+    native_content_handler: NativeContentLLM, monkeypatch: pytest.MonkeyPatch,
+    is_async: bool, config: dict[str, object], response_format: object,
 ) -> None:
     handler: Final = ResponseFormatRecorderLLM()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "native_image_test", "custom_handler": handler}])
@@ -1415,10 +1390,8 @@ async def test_custom_native_content_bills_per_request_prices(
 ) -> None:
     recorder: Final = ContentUsageRecorder()
     request: Final = dict(
-        model="native_image_test/image-model",
-        contents=[{"parts": [{"text": "draw"}]}],
-        input_cost_per_token=0.5,
-        output_cost_per_token=2.0,
+        model="native_image_test/image-model", contents=[{"parts": [{"text": "draw"}]}],
+        input_cost_per_token=0.5, output_cost_per_token=2.0,
         success_callback=[recorder.alog if is_async else recorder.log],
     )
     _ = await litellm.agenerate_content(**request) if is_async else litellm.generate_content(**request)
@@ -1441,18 +1414,12 @@ async def test_custom_content_adapter_holds_success_logs_while_the_caller_defers
     monkeypatch.setattr(litellm, "success_callback", [recorder])
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     outer_logging: Final = Logging(
-        model="native_image_test/chat-model",
-        messages=[],
-        stream=False,
-        call_type="agenerate_content",
-        start_time=datetime(2026, 1, 1),
-        litellm_call_id="deferred-adapter",
-        function_id="deferred-adapter",
+        model="native_image_test/chat-model", messages=[], stream=False, call_type="agenerate_content",
+        start_time=datetime(2026, 1, 1), litellm_call_id="deferred-adapter", function_id="deferred-adapter",
     )
     outer_logging.defer_async_logging = True
     _ = await litellm.agenerate_content(
-        model="native_image_test/chat-model",
-        contents=[{"parts": [{"text": "hello"}]}],
+        model="native_image_test/chat-model", contents=[{"parts": [{"text": "hello"}]}],
         litellm_logging_obj=outer_logging,
     )
     await GLOBAL_LOGGING_WORKER.flush()

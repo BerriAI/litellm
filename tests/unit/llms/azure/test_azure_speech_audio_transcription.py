@@ -67,7 +67,11 @@ def test_azure_speech_audio_transcription_uses_dedicated_api_base_env(monkeypatc
 
     monkeypatch.setattr(
         "litellm.llms.azure.audio_transcription.transformation.get_secret_str",
-        lambda key: "https://centralus.api.cognitive.microsoft.com" if key == "AZURE_SPEECH_API_BASE" else None,
+        lambda key: (
+            "https://centralus.api.cognitive.microsoft.com"
+            if key == "AZURE_SPEECH_API_BASE"
+            else None
+        ),
     )
 
     url = config.get_complete_url(
@@ -237,6 +241,8 @@ def test_azure_speech_audio_transcription_response_keeps_the_raw_payload_as_hidd
 @pytest.mark.parametrize("payload", [7, "spoken secret", [{"DisplayText": "spoken secret"}]])
 def test_azure_speech_audio_transcription_response_rejects_non_object_bodies(payload: object):
     with pytest.raises(ValidationError) as exc_info:
-        AzureSpeechAudioTranscriptionConfig().transform_audio_transcription_response(httpx.Response(200, json=payload))
+        AzureSpeechAudioTranscriptionConfig().transform_audio_transcription_response(
+            httpx.Response(200, json=payload)
+        )
 
     assert "spoken secret" not in str(exc_info.value)

@@ -83,7 +83,9 @@ def _enum_values(model_group: str = "bedrock-claude-group"):
 
 class TestRouterFallbackEmitsForBedrock:
     @pytest.mark.asyncio
-    async def test_should_emit_both_gauges_for_bedrock_when_router_has_limits(self, prometheus_logger):
+    async def test_should_emit_both_gauges_for_bedrock_when_router_has_limits(
+        self, prometheus_logger
+    ):
         payload = _build_payload(custom_llm_provider="bedrock")
         enum_values = _enum_values()
 
@@ -108,14 +110,20 @@ class TestRouterFallbackEmitsForBedrock:
 
         fake_router.health.return_value.usage.assert_awaited_once_with("bedrock-claude-group", kind="remaining")
         prometheus_logger.litellm_remaining_tokens_metric.labels.assert_called_once()
-        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(75)
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            75
+        )
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_called_once()
-        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(9)
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            9
+        )
 
 
 class TestRouterFallbackEmitsForVertex:
     @pytest.mark.asyncio
-    async def test_should_emit_both_gauges_for_vertex_when_router_has_limits(self, prometheus_logger):
+    async def test_should_emit_both_gauges_for_vertex_when_router_has_limits(
+        self, prometheus_logger
+    ):
         payload = _build_payload(
             model_group="vertex-gemini-group",
             custom_llm_provider="vertex_ai",
@@ -140,13 +148,19 @@ class TestRouterFallbackEmitsForVertex:
             )
 
         fake_router.health.return_value.usage.assert_awaited_once_with("vertex-gemini-group", kind="remaining")
-        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(12345)
-        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(50)
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            12345
+        )
+        prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
+            50
+        )
 
 
 class TestExistingHeadersShortCircuit:
     @pytest.mark.asyncio
-    async def test_should_skip_router_lookup_when_both_headers_already_present(self, prometheus_logger):
+    async def test_should_skip_router_lookup_when_both_headers_already_present(
+        self, prometheus_logger
+    ):
         payload = _build_payload(
             additional_headers={
                 "x_ratelimit_remaining_tokens": 999,
@@ -171,7 +185,9 @@ class TestExistingHeadersShortCircuit:
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_should_only_fill_missing_dimension_when_one_header_present(self, prometheus_logger):
+    async def test_should_only_fill_missing_dimension_when_one_header_present(
+        self, prometheus_logger
+    ):
         payload = _build_payload(
             additional_headers={
                 "x_ratelimit_remaining_requests": 7,
@@ -195,7 +211,9 @@ class TestExistingHeadersShortCircuit:
                 enum_values=_enum_values(),
             )
 
-        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(555)
+        prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
+            555
+        )
         prometheus_logger.litellm_remaining_requests_metric.labels.assert_not_called()
 
 
@@ -260,7 +278,9 @@ class TestRouterFallbackDefensivePaths:
         payload = _build_payload()
 
         fake_router = MagicMock()
-        fake_router.health.return_value.usage = AsyncMock(side_effect=RuntimeError("router boom"))
+        fake_router.health.return_value.usage = AsyncMock(
+            side_effect=RuntimeError("router boom")
+        )
 
         prometheus_logger.litellm_remaining_tokens_metric = MagicMock()
         prometheus_logger.litellm_remaining_requests_metric = MagicMock()

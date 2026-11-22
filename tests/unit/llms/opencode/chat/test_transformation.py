@@ -32,7 +32,9 @@ def _messages_sse(
         else {"type": "text", "text": ""}
     )
     delta: Final = (
-        {"type": "input_json_delta", "partial_json": arguments} if tool else {"type": "text_delta", "text": "hello"}
+        {"type": "input_json_delta", "partial_json": arguments}
+        if tool
+        else {"type": "text_delta", "text": "hello"}
     )
     events: Final = (
         {
@@ -95,9 +97,7 @@ async def test_messages_stream_translates_deltas_and_finish_reason(sync: bool, t
 @pytest.mark.parametrize("valid_schema", (True, False, None), ids=("schema", "invalid-tools", "no-tools"))
 async def test_messages_json_stream_uses_request_schema(sync: bool, valid_schema: bool | None) -> None:
     answer: Final = {"city": "Paris"}
-    arguments: Final = (
-        json.dumps({"name": "json_tool_call", "parameters": answer}) if valid_schema else json.dumps(answer)
-    )
+    arguments: Final = json.dumps({"name": "json_tool_call", "parameters": answer}) if valid_schema else json.dumps(answer)
     lines: Final = _messages_sse(True, tool_name="json_tool_call", arguments=arguments)
     schema: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
     tools: Final = [{"name": "json_tool_call", "input_schema": schema}] if valid_schema else "invalid"
@@ -280,20 +280,14 @@ async def test_unknown_chat_reasoning_effort_guard(drop_params: bool) -> None:
         if not drop_params:
             with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
                 await litellm.acompletion(
-                    model="opencode_go/not-in-catalog-x",
-                    messages=[{"role": "user", "content": "hello"}],
-                    api_key="synthetic-go-key",
-                    reasoning_effort="high",
-                    drop_params=False,
+                    model="opencode_go/not-in-catalog-x", messages=[{"role": "user", "content": "hello"}],
+                    api_key="synthetic-go-key", reasoning_effort="high", drop_params=False,
                 )
             assert not route.called
             return
         response: Final = await litellm.acompletion(
-            model="opencode_go/not-in-catalog-x",
-            messages=[{"role": "user", "content": "hello"}],
-            api_key="synthetic-go-key",
-            reasoning_effort="high",
-            drop_params=True,
+            model="opencode_go/not-in-catalog-x", messages=[{"role": "user", "content": "hello"}],
+            api_key="synthetic-go-key", reasoning_effort="high", drop_params=True,
         )
         assert route.called
         assert response.choices[0].message.content == "hello"

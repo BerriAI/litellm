@@ -14,9 +14,7 @@ import litellm.proxy.proxy_server
 from litellm._uuid import uuid
 from litellm.secret_managers.cyberark_secret_manager import CyberArkSecretManager
 
-FIXTURE_PATH: Final = (
-    Path(__file__).resolve().parents[3] / "litellm/rust/crates/secrets-cyberark/tests/fixtures/parity.json"
-)
+FIXTURE_PATH: Final = Path(__file__).resolve().parents[3] / "litellm/rust/crates/secrets-cyberark/tests/fixtures/parity.json"
 
 
 class ParitySecret(TypedDict):
@@ -77,7 +75,10 @@ def test_sync_read_matches_parity_fixture(monkeypatch: pytest.MonkeyPatch) -> No
         respx.post(endpoint + fixture["authenticate_path"]),
         content=token_json.encode(),
     )
-    routes: Final = [_respond(respx.get(endpoint + secret["path"]), text="value") for secret in fixture["secrets"]]
+    routes: Final = [
+        _respond(respx.get(endpoint + secret["path"]), text="value")
+        for secret in fixture["secrets"]
+    ]
 
     for secret in fixture["secrets"]:
         assert manager.sync_read_secret(secret["name"]) == "value"  # pyright: ignore[reportUnknownMemberType]  # legacy secret manager API is untyped

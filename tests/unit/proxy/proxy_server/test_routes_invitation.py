@@ -68,7 +68,9 @@ def test_invitation_new_admin_happy(client, auth_as, monkeypatch, mock_prisma):
         return invitation
 
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
-    monkeypatch.setattr(user_invitation, "create_invitation_for_user", _fake_create_invitation)
+    monkeypatch.setattr(
+        user_invitation, "create_invitation_for_user", _fake_create_invitation
+    )
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.post("/invitation/new", json={"user_id": "user-target"})
@@ -203,10 +205,14 @@ def test_invitation_info_not_found_400(client, auth_as, monkeypatch, mock_prisma
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.get("/invitation/info", params={"invitation_id": "does-not-exist"})
+        response = client.get(
+            "/invitation/info", params={"invitation_id": "does-not-exist"}
+        )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": {"error": "Invitation id does not exist in the database."}}
+    assert response.json() == {
+        "detail": {"error": "Invitation id does not exist in the database."}
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +271,9 @@ def test_invitation_update_unknown_id_400(client, auth_as, monkeypatch, mock_pri
         )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": {"error": "Invitation id does not exist in the database."}}
+    assert response.json() == {
+        "detail": {"error": "Invitation id does not exist in the database."}
+    }
 
 
 def test_invitation_update_no_user_id_500(client, auth_as, monkeypatch, mock_prisma):
@@ -301,7 +309,9 @@ def test_invitation_delete_admin_happy(client, auth_as, monkeypatch, mock_prisma
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
+        response = client.post(
+            "/invitation/delete", json={"invitation_id": "inv-del"}
+        )
 
     assert response.status_code == 200
     assert normalize(response.json()) == {
@@ -317,7 +327,9 @@ def test_invitation_delete_admin_happy(client, auth_as, monkeypatch, mock_prisma
     }
 
 
-def test_invitation_delete_non_admin_forbidden(client, auth_as, monkeypatch, mock_prisma):
+def test_invitation_delete_non_admin_forbidden(
+    client, auth_as, monkeypatch, mock_prisma
+):
     """Non-admin user without elevated privileges → 400 not-allowed."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -330,7 +342,9 @@ def test_invitation_delete_non_admin_forbidden(client, auth_as, monkeypatch, moc
     monkeypatch.setattr(ps, "user_has_admin_privileges", _no_privileges)
 
     with auth_as(LitellmUserRoles.INTERNAL_USER):
-        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
+        response = client.post(
+            "/invitation/delete", json={"invitation_id": "inv-del"}
+        )
 
     assert response.status_code == 400
     err_text = str(response.json())
@@ -346,10 +360,14 @@ def test_invitation_delete_unknown_id_400(client, auth_as, monkeypatch, mock_pri
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/invitation/delete", json={"invitation_id": "ghost"})
+        response = client.post(
+            "/invitation/delete", json={"invitation_id": "ghost"}
+        )
 
     assert response.status_code == 400
-    assert response.json() == {"detail": {"error": "Invitation id does not exist in the database."}}
+    assert response.json() == {
+        "detail": {"error": "Invitation id does not exist in the database."}
+    }
 
 
 def test_invitation_delete_db_not_connected_400(client, auth_as, monkeypatch):
@@ -360,7 +378,9 @@ def test_invitation_delete_db_not_connected_400(client, auth_as, monkeypatch):
     monkeypatch.setattr(ps, "prisma_client", None)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
-        response = client.post("/invitation/delete", json={"invitation_id": "inv-del"})
+        response = client.post(
+            "/invitation/delete", json={"invitation_id": "inv-del"}
+        )
 
     assert response.status_code == 400
     err_text = str(response.json())

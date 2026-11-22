@@ -9,7 +9,6 @@ import pytest
 import litellm
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS
 from litellm.router_api import RoutingContext
-
 if sys.version_info >= (3, 14):
     pytest.skip("The semantic-router extra excludes Python 3.14", allow_module_level=True)
 

@@ -1723,9 +1723,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
 
     def test_g711_input_audio_format_sets_the_input_sample_rate(self):
         config: Final = BedrockRealtimeConfig()
-        config.transform_session_update_event(
-            {"type": "session.update", "session": {"input_audio_format": "g711_ulaw"}}
-        )
+        config.transform_session_update_event({"type": "session.update", "session": {"input_audio_format": "g711_ulaw"}})
         assert config.input_sample_rate_hertz == 8000
 
     @staticmethod

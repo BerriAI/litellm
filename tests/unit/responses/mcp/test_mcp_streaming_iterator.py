@@ -154,10 +154,7 @@ async def test_second_round_tool_call_is_executed_and_reaches_final_text(monkeyp
 
     # Both rounds' tool calls were actually executed, not just streamed unexecuted.
     assert call_tool.call_count == 2
-    assert all(
-        call.kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",)
-        for call in call_tool.call_args_list
-    )
+    assert all(call.kwargs["guardrail_context"]["metadata"]["guardrails"] == ("block-all",) for call in call_tool.call_args_list)
     assert iterator.tool_call_round == 2
 
     # The stream reached round 3 and produced the final text response instead
@@ -555,9 +552,7 @@ async def test_final_output_lists_executed_call_as_completed_mcp_call(monkeypatc
     assert executed_call["arguments"] == "{}"
 
     done_mcp_items = [
-        c.item
-        for c in chunks
-        if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
+        c.item for c in chunks if c.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE and _item_type(c.item) == "mcp_call"
     ]
     assert [item.status for item in done_mcp_items] == ["completed"]
 

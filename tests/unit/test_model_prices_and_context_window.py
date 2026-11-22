@@ -178,7 +178,9 @@ def test_regional_catalog_rows_price_the_requested_service_tier(
         service_tier=service_tier,
         prompt_tokens=1,
         completion_tokens=1,
-    ) == pytest.approx((row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"]))
+    ) == pytest.approx(
+        (row[f"input_cost_per_token_{service_tier}"], row[f"output_cost_per_token_{service_tier}"])
+    )
 
 
 @pytest.mark.parametrize("tokens", (0, 1))

@@ -76,10 +76,7 @@ def test_native_file_references_preserve_mime_or_defer_resolution(
                 "role": "user",
                 "parts": [
                     {"text": "Inspect this"},
-                    *[
-                        {data_key: {uri_key: reference, **({mime_key: mime} if mime else {})}}
-                        for reference, mime in references
-                    ],
+                    *[{data_key: {uri_key: reference, **({mime_key: mime} if mime else {})}} for reference, mime in references],
                 ],
             }
         ]
@@ -191,11 +188,7 @@ def test_native_function_call_preserves_arguments_and_matching_response(args: ob
             "role": "assistant",
             "content": None,
             "tool_calls": [
-                {
-                    "id": "call_lookup",
-                    "type": "function",
-                    "function": {"name": "lookup", "arguments": expected_arguments},
-                }
+                {"id": "call_lookup", "type": "function", "function": {"name": "lookup", "arguments": expected_arguments}}
             ],
         },
         {"role": "tool", "tool_call_id": "call_lookup", "content": '{"ok": true}'},
@@ -224,7 +217,9 @@ def test_single_content_transformation():
     config = {"temperature": 0.7, "maxOutputTokens": 100}
 
     # Transform to completion format
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents, config=config)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents, config=config
+    )
 
     # Verify the transformation
     assert completion_request["model"] == "gpt-3.5-turbo"
@@ -250,7 +245,9 @@ def test_list_contents_transformation():
     ]
 
     # Transform to completion format
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     assert completion_request["model"] == "gpt-3.5-turbo"
@@ -286,7 +283,9 @@ def test_config_parameter_mapping(config: Mapping[str, object]):
     model = "gpt-3.5-turbo"
     contents = {"role": "user", "parts": [{"text": "Test"}]}
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents, config=config)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents, config=config
+    )
 
     # Verify parameter mapping
     assert completion_request["temperature"] == 0.8
@@ -337,7 +336,9 @@ def test_tools_transformation():
         }
     ]
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents, tools=tools)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents, tools=tools
+    )
 
     # Verify tools transformation
     assert "tools" in completion_request
@@ -408,7 +409,9 @@ def test_function_call_message_transformation():
         },
     ]
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     messages = completion_request["messages"]
@@ -460,7 +463,9 @@ def test_function_response_message_transformation():
         }
     ]
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     messages = completion_request["messages"]
@@ -499,7 +504,9 @@ def test_completion_to_generate_content_with_tool_calls():
     mock_tool_call = ChatCompletionAssistantToolCall(
         id="call_123",
         type="function",
-        function=ChatCompletionToolCallFunctionChunk(name="get_weather", arguments='{"location": "San Francisco"}'),
+        function=ChatCompletionToolCallFunctionChunk(
+            name="get_weather", arguments='{"location": "San Francisco"}'
+        ),
     )
 
     # Create mock assistant message with tool call
@@ -523,7 +530,9 @@ def test_completion_to_generate_content_with_tool_calls():
     )
 
     # Transform back to generate_content format
-    generate_content_response = adapter.translate_completion_to_generate_content(mock_response)
+    generate_content_response = adapter.translate_completion_to_generate_content(
+        mock_response
+    )
 
     # Verify the transformation
     assert "candidates" in generate_content_response
@@ -568,7 +577,9 @@ def test_streaming_tool_calls_transformation():
     mock_function = Function(name="get_weather", arguments='{"location": "SF"}')
 
     # Create mock streaming tool call delta
-    mock_tool_call_delta = ChatCompletionDeltaToolCall(id="call_123", type="function", function=mock_function, index=0)
+    mock_tool_call_delta = ChatCompletionDeltaToolCall(
+        id="call_123", type="function", function=mock_function, index=0
+    )
 
     # Create mock delta with tool call
     mock_delta = Delta(content=None, tool_calls=[mock_tool_call_delta])
@@ -587,7 +598,9 @@ def test_streaming_tool_calls_transformation():
     mock_wrapper = GoogleGenAIStreamWrapper(completion_stream=None)
 
     # Transform streaming chunk
-    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
+    streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+        mock_response, mock_wrapper
+    )
 
     # Verify the transformation
     assert "candidates" in streaming_chunk
@@ -641,8 +654,7 @@ def test_streaming_partial_tool_calls_accumulation():
     for function_name, chunk_args in partial_chunks:
         # Create mock function for tool call with partial arguments
         mock_function = Function(
-            name=function_name,
-            arguments=chunk_args,  # Only set in first chunk
+            name=function_name, arguments=chunk_args  # Only set in first chunk
         )
 
         # Create mock streaming tool call delta
@@ -667,7 +679,9 @@ def test_streaming_partial_tool_calls_accumulation():
         )
 
         # Transform streaming chunk with accumulation
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
+        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+            mock_response, mock_wrapper
+        )
         accumulated_results.append(streaming_chunk)
 
     # Verify accumulation behavior
@@ -676,10 +690,14 @@ def test_streaming_partial_tool_calls_accumulation():
     non_empty_chunks = [chunk for chunk in accumulated_results if chunk]
 
     # Should have several empty chunks while accumulating
-    assert len(empty_chunks) > 0, "Should have empty chunks while accumulating partial JSON"
+    assert (
+        len(empty_chunks) > 0
+    ), "Should have empty chunks while accumulating partial JSON"
 
     # Should have exactly one non-empty chunk when JSON becomes complete
-    assert len(non_empty_chunks) == 1, f"Should have exactly one complete chunk, got {len(non_empty_chunks)}"
+    assert (
+        len(non_empty_chunks) == 1
+    ), f"Should have exactly one complete chunk, got {len(non_empty_chunks)}"
 
     # Verify the final complete chunk
     final_chunk = non_empty_chunks[0]
@@ -692,15 +710,21 @@ def test_streaming_partial_tool_calls_accumulation():
 
     # Check function call part
     function_part = parts[0]
-    assert "functionCall" in function_part, "Should have functionCall in the final chunk"
+    assert (
+        "functionCall" in function_part
+    ), "Should have functionCall in the final chunk"
     function_call = function_part["functionCall"]
-    assert function_call["name"] == "read_file", f"Expected function name 'read_file', got {function_call['name']}"
-    assert function_call["args"]["path"] == "/Users/ishaanjaffer/Github/litellm/README.md", (
-        f"Expected complete path, got {function_call['args']}"
-    )
+    assert (
+        function_call["name"] == "read_file"
+    ), f"Expected function name 'read_file', got {function_call['name']}"
+    assert (
+        function_call["args"]["path"] == "/Users/ishaanjaffer/Github/litellm/README.md"
+    ), f"Expected complete path, got {function_call['args']}"
 
     # Verify that accumulated_tool_calls is cleaned up after completion
-    assert len(mock_wrapper.accumulated_tool_calls) == 0, "Should clean up completed tool calls from accumulator"
+    assert (
+        len(mock_wrapper.accumulated_tool_calls) == 0
+    ), "Should clean up completed tool calls from accumulator"
 
 
 def test_streaming_multiple_partial_tool_calls():
@@ -756,12 +780,16 @@ def test_streaming_multiple_partial_tool_calls():
         )
 
         # Transform streaming chunk with accumulation
-        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(mock_response, mock_wrapper)
+        streaming_chunk = adapter.translate_streaming_completion_to_generate_content(
+            mock_response, mock_wrapper
+        )
         if streaming_chunk:  # Only collect non-empty chunks
             completed_chunks.append(streaming_chunk)
 
     # Should have exactly 2 completed chunks (one for each tool call)
-    assert len(completed_chunks) == 2, f"Expected 2 completed chunks, got {len(completed_chunks)}"
+    assert (
+        len(completed_chunks) == 2
+    ), f"Expected 2 completed chunks, got {len(completed_chunks)}"
 
     # Extract function calls from completed chunks
     function_calls = []
@@ -772,7 +800,9 @@ def test_streaming_multiple_partial_tool_calls():
                 function_calls.append(part["functionCall"])
 
     # Should have 2 function calls
-    assert len(function_calls) == 2, f"Expected 2 function calls, got {len(function_calls)}"
+    assert (
+        len(function_calls) == 2
+    ), f"Expected 2 function calls, got {len(function_calls)}"
 
     # Verify both function calls are complete and correct
     function_names = [fc["name"] for fc in function_calls]
@@ -782,12 +812,18 @@ def test_streaming_multiple_partial_tool_calls():
     # Verify arguments are correctly assembled
     for fc in function_calls:
         if fc["name"] == "read_file":
-            assert fc["args"]["file1"] == "test1.txt", f"Expected file1: test1.txt, got {fc['args']}"
+            assert (
+                fc["args"]["file1"] == "test1.txt"
+            ), f"Expected file1: test1.txt, got {fc['args']}"
         elif fc["name"] == "write_file":
-            assert fc["args"]["file2"] == "test2.txt", f"Expected file2: test2.txt, got {fc['args']}"
+            assert (
+                fc["args"]["file2"] == "test2.txt"
+            ), f"Expected file2: test2.txt, got {fc['args']}"
 
     # Verify cleanup
-    assert len(mock_wrapper.accumulated_tool_calls) == 0, "Should clean up all completed tool calls"
+    assert (
+        len(mock_wrapper.accumulated_tool_calls) == 0
+    ), "Should clean up all completed tool calls"
 
 
 def test_mixed_content_transformation():
@@ -801,7 +837,9 @@ def test_mixed_content_transformation():
         {
             "role": "model",
             "parts": [
-                {"text": "I'll help you with that. Let me check the weather and also get the forecast."},
+                {
+                    "text": "I'll help you with that. Let me check the weather and also get the forecast."
+                },
                 {
                     "functionCall": {
                         "name": "get_weather",
@@ -818,7 +856,9 @@ def test_mixed_content_transformation():
         }
     ]
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     messages = completion_request["messages"]
@@ -826,7 +866,10 @@ def test_mixed_content_transformation():
 
     assistant_msg = messages[0]
     assert assistant_msg["role"] == "assistant"
-    assert assistant_msg["content"] == "I'll help you with that. Let me check the weather and also get the forecast."
+    assert (
+        assistant_msg["content"]
+        == "I'll help you with that. Let me check the weather and also get the forecast."
+    )
     assert "tool_calls" in assistant_msg
     assert len(assistant_msg["tool_calls"]) == 2
 
@@ -872,7 +915,9 @@ def test_completion_to_generate_content_transformation():
     )
 
     # Transform back to generate_content format
-    generate_content_response = adapter.translate_completion_to_generate_content(mock_response)
+    generate_content_response = adapter.translate_completion_to_generate_content(
+        mock_response
+    )
 
     assert "text" not in generate_content_response
 
@@ -884,7 +929,10 @@ def test_completion_to_generate_content_transformation():
     assert candidate["index"] == 0
     assert candidate["content"]["role"] == "model"
     assert len(candidate["content"]["parts"]) == 1
-    assert candidate["content"]["parts"][0]["text"] == "Hello! I'm doing well, thank you for asking."
+    assert (
+        candidate["content"]["parts"][0]["text"]
+        == "Hello! I'm doing well, thank you for asking."
+    )
 
     assert "usageMetadata" in generate_content_response
     usage = generate_content_response["usageMetadata"]
@@ -924,7 +972,9 @@ def test_empty_content_handling():
     model = "gpt-3.5-turbo"
     contents = {"role": "user", "parts": []}
 
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Should still create a valid request but with empty messages
     assert completion_request["model"] == "gpt-3.5-turbo"
@@ -1044,13 +1094,19 @@ def test_api_base_and_api_key_passthrough(function_name, is_async, is_stream):
         call_args, call_kwargs = mock_completion.call_args
 
         # Verify that api_base and api_key were passed through
-        assert "api_base" in call_kwargs, f"api_base not found in completion kwargs: {call_kwargs.keys()}"
-        assert call_kwargs["api_base"] == test_api_base, (
-            f"Expected api_base {test_api_base}, got {call_kwargs['api_base']}"
-        )
+        assert (
+            "api_base" in call_kwargs
+        ), f"api_base not found in completion kwargs: {call_kwargs.keys()}"
+        assert (
+            call_kwargs["api_base"] == test_api_base
+        ), f"Expected api_base {test_api_base}, got {call_kwargs['api_base']}"
 
-        assert "api_key" in call_kwargs, f"api_key not found in completion kwargs: {call_kwargs.keys()}"
-        assert call_kwargs["api_key"] == test_api_key, f"Expected api_key {test_api_key}, got {call_kwargs['api_key']}"
+        assert (
+            "api_key" in call_kwargs
+        ), f"api_key not found in completion kwargs: {call_kwargs.keys()}"
+        assert (
+            call_kwargs["api_key"] == test_api_key
+        ), f"Expected api_key {test_api_key}, got {call_kwargs['api_key']}"
 
         # Verify other expected parameters
         assert call_kwargs["model"] == model
@@ -1064,7 +1120,9 @@ def test_api_base_and_api_key_passthrough(function_name, is_async, is_stream):
             pass
         else:
             # For non-streaming, stream should be False or not present
-            assert call_kwargs.get("stream") is not True, f"Expected stream not True for {function_name}"
+            assert (
+                call_kwargs.get("stream") is not True
+            ), f"Expected stream not True for {function_name}"
 
 
 def test_shared_schema_normalization_utilities():
@@ -1153,7 +1211,9 @@ async def test_google_generate_content_with_openai():
     from litellm.types.utils import Choices, ModelResponse, Usage
 
     # Create a proper mock response object with expected attributes
-    mock_message = ChatCompletionAssistantMessage(role="assistant", content="Hello! How can I help you today?")
+    mock_message = ChatCompletionAssistantMessage(
+        role="assistant", content="Hello! How can I help you today?"
+    )
 
     mock_choice = Choices(finish_reason="stop", index=0, message=mock_message)
 
@@ -1180,7 +1240,9 @@ async def test_google_generate_content_with_openai():
             model="openai/gpt-4o-mini",
             contents=[{"role": "user", "parts": [{"text": "Hello, world!"}]}],
             systemInstruction={"parts": [{"text": "You are a helpful assistant."}]},
-            safetySettings=[{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"}],
+            safetySettings=[
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"}
+            ],
         )
 
         # Print the request args sent to litellm.completion
@@ -1200,9 +1262,9 @@ async def test_google_generate_content_with_openai():
         # remove any GenericLiteLLMParams fields
         passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
         # extra_headers is now explicitly passed through for providers that need custom headers
-        assert passed_fields == set(["model", "messages", "extra_headers"]), (
-            f"Expected model, messages, and extra_headers to be passed through, got {passed_fields}"
-        )
+        assert passed_fields == set(
+            ["model", "messages", "extra_headers"]
+        ), f"Expected model, messages, and extra_headers to be passed through, got {passed_fields}"
 
 
 def test_validate_environment_sets_x_goog_api_key():
@@ -1281,7 +1343,9 @@ def test_inline_data_base64_image_transformation():
     }
 
     # Transform to completion format
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     assert completion_request["model"] == model
@@ -1331,7 +1395,9 @@ def test_inline_data_image_only_transformation():
     }
 
     # Transform to completion format
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     assert completion_request["model"] == model
@@ -1362,7 +1428,9 @@ def test_inline_data_backward_compatibility_text_only():
     contents = {"role": "user", "parts": [{"text": "Hello, how are you?"}]}
 
     # Transform to completion format
-    completion_request = adapter.translate_generate_content_to_completion(model=model, contents=contents)
+    completion_request = adapter.translate_generate_content_to_completion(
+        model=model, contents=contents
+    )
 
     # Verify the transformation
     assert completion_request["model"] == model
@@ -1371,7 +1439,9 @@ def test_inline_data_backward_compatibility_text_only():
 
     # Verify content is a simple string (not an array) for backward compatibility
     content = completion_request["messages"][0]["content"]
-    assert isinstance(content, str), "Content should be a string for text-only messages (backward compatibility)"
+    assert isinstance(
+        content, str
+    ), "Content should be a string for text-only messages (backward compatibility)"
     assert content == "Hello, how are you?"
 
 

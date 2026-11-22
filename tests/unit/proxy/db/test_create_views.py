@@ -16,7 +16,9 @@ async def test_create_views_reraises_connection_error():
     from litellm.proxy.db.create_views import create_missing_views
 
     mock_db = MagicMock()
-    mock_db.query_raw = AsyncMock(side_effect=Exception("connection refused: unable to connect to database"))
+    mock_db.query_raw = AsyncMock(
+        side_effect=Exception("connection refused: unable to connect to database")
+    )
     mock_db.execute_raw = AsyncMock()
 
     with pytest.raises(Exception, match="connection refused"):
@@ -31,7 +33,11 @@ async def test_create_views_reraises_permission_error():
     from litellm.proxy.db.create_views import create_missing_views
 
     mock_db = MagicMock()
-    mock_db.query_raw = AsyncMock(side_effect=Exception("permission denied for table LiteLLM_VerificationTokenView"))
+    mock_db.query_raw = AsyncMock(
+        side_effect=Exception(
+            "permission denied for table LiteLLM_VerificationTokenView"
+        )
+    )
     mock_db.execute_raw = AsyncMock()
 
     with pytest.raises(Exception, match="permission denied"):
@@ -114,7 +120,9 @@ async def test_create_views_reraises_undefined_function_error():
     from litellm.proxy.db.create_views import create_missing_views
 
     mock_db = MagicMock()
-    mock_db.query_raw = AsyncMock(side_effect=Exception("ERROR: undefined function pg_get_viewdef()"))
+    mock_db.query_raw = AsyncMock(
+        side_effect=Exception("ERROR: undefined function pg_get_viewdef()")
+    )
     mock_db.execute_raw = AsyncMock()
 
     with pytest.raises(Exception, match="undefined function"):
@@ -208,7 +216,9 @@ async def test_create_views_tolerates_a_concurrent_creator_on_every_view():
 
     mock_db = MagicMock()
     mock_db.query_raw = AsyncMock(side_effect=Exception("relation does not exist"))
-    mock_db.execute_raw = AsyncMock(side_effect=Exception('relation "some_view" already exists'))
+    mock_db.execute_raw = AsyncMock(
+        side_effect=Exception('relation "some_view" already exists')
+    )
 
     await create_missing_views(mock_db)
 

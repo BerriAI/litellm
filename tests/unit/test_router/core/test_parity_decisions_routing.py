@@ -123,7 +123,9 @@ _T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "team-e"}
 _T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "team-e"}
 
 
-def test_adecisions_walks_the_order_tiers_of_the_litellm_metadata_team(make_core: MakeCore, host: EndpointHost) -> None:
+def test_adecisions_walks_the_order_tiers_of_the_litellm_metadata_team(
+    make_core: MakeCore, host: EndpointHost
+) -> None:
     host.answer("openai/t1-first", rate_limit())
     core: Final = make_core(
         model_list=[
@@ -319,7 +321,9 @@ def test_drop_params_skips_the_deployment_refusing_json_input_only_when_dropping
 
 
 _GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
-_PNG_RECEIPT: Final = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
 
 
 @pytest.mark.parametrize(
@@ -344,10 +348,7 @@ def test_drop_params_counts_only_the_image_types_a_deployment_keeps(
             model="j",
             drop_params=True,
             extra_headers={"typesafe-danger-zone-images": "true"},
-            **{
-                **QUESTION,
-                "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE]}],
-            },
+            **{**QUESTION, "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE]}]},
         )
 
     assert host.deployments_called("adecisions") == expected

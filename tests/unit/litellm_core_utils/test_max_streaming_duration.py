@@ -110,8 +110,7 @@ class TestResponsesStreamingIteratorMaxDuration:
     def test_should_not_raise_when_duration_is_none(self):
         it = self._make_base_iterator()
         with patch.object(
-            import_module("litellm.responses.streaming_iterator"),
-            "LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             None,
         ):
             it._check_max_streaming_duration()
@@ -119,8 +118,7 @@ class TestResponsesStreamingIteratorMaxDuration:
     def test_should_not_raise_when_under_limit(self):
         it = self._make_base_iterator()
         with patch.object(
-            import_module("litellm.responses.streaming_iterator"),
-            "LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             60.0,
         ):
             it._check_max_streaming_duration()
@@ -129,8 +127,7 @@ class TestResponsesStreamingIteratorMaxDuration:
         it = self._make_base_iterator()
         it._stream_created_time = time.time() - 20
         with patch.object(
-            import_module("litellm.responses.streaming_iterator"),
-            "LITELLM_MAX_STREAMING_DURATION_SECONDS",
+            import_module("litellm.responses.streaming_iterator"), "LITELLM_MAX_STREAMING_DURATION_SECONDS",
             10.0,
         ):
             with pytest.raises(litellm.Timeout, match="max streaming duration"):

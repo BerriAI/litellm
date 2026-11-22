@@ -1417,13 +1417,7 @@ def test_plain_log_format_survives_hostile_streams(stdout, stderr):
 
 def _router_success_record() -> logging.LogRecord:
     return logging.LogRecord(
-        "LiteLLM Router",
-        logging.INFO,
-        "router.py",
-        1,
-        "litellm.acompletion(model=%s)\033[32m 200 OK\033[0m",
-        ("gpt-5.6",),
-        None,
+        "LiteLLM Router", logging.INFO, "router.py", 1, "litellm.acompletion(model=%s)\033[32m 200 OK\033[0m", ("gpt-5.6",), None
     )
 
 
@@ -1919,9 +1913,7 @@ def test_print_startup_message_writes_nothing_when_suppressed(
     if json_logs:
         turn_on_json()
 
-    print_startup_message(
-        "\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m\n\033[32m    web-search (tavily)\033[0m"
-    )
+    print_startup_message("\033[32mLiteLLM: Proxy initialized with Search Tools:\033[0m\n\033[32m    web-search (tavily)\033[0m")
 
     assert capfd.readouterr() == ("", "")
 

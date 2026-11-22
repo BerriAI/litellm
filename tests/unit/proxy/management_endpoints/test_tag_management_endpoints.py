@@ -246,7 +246,9 @@ async def test_update_tag_changes_spend_and_counter_only_when_provided(
     spend: Final = FakeSpendCounters(redis=None)
     mock_prisma: Final = SimpleNamespace(
         db=SimpleNamespace(
-            litellm_tagtable=SimpleNamespace(find_unique=AsyncMock(return_value=updated_tag), update=update_row),
+            litellm_tagtable=SimpleNamespace(
+                find_unique=AsyncMock(return_value=updated_tag), update=update_row
+            ),
             litellm_proxymodeltable=SimpleNamespace(find_many=AsyncMock(return_value=[])),
         )
     )
@@ -288,7 +290,9 @@ async def test_update_tag_rejects_non_finite_spend_before_writing(spend: float) 
     from litellm.types.tag_management import TagUpdateRequest
 
     update_row: Final = AsyncMock()
-    mock_prisma: Final = SimpleNamespace(db=SimpleNamespace(litellm_tagtable=SimpleNamespace(update=update_row)))
+    mock_prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_tagtable=SimpleNamespace(update=update_row))
+    )
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch("litellm.proxy.proxy_server.invalidate_spend_counter", new_callable=AsyncMock) as invalidate,
@@ -336,8 +340,7 @@ async def test_update_tag_overwrites_stale_counter_repopulated_during_tag_cache_
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.proxy_server.spend_counter_store",
-            spend.store(),
+            "litellm.proxy.proxy_server.spend_counter_store", spend.store(),
         ),
         patch(
             "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys",

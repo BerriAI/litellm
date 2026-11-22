@@ -178,6 +178,7 @@ def test_iter_message_text_inspects_reasoning_content_and_summary():
     assert list(iter_message_text(data)) == ["content secret", "summary secret"]
 
 
+
 def test_iter_message_text_inspects_compaction_summary():
     data = {
         "input": [
@@ -372,6 +373,7 @@ def test_walk_user_text_redacts_reasoning_content_and_summary():
     assert item["id"] == "rs_1"
 
 
+
 def test_walk_user_text_redacts_compaction_summary_and_keeps_the_block():
     data = {
         "input": [
@@ -433,10 +435,7 @@ def _decisions_json_input(data: JsonValue) -> dict[str, object]:
             {
                 "type": "message",
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": "Evaluate the ticket."},
-                    {"type": "input_json", "data": data},
-                ],
+                "content": [{"type": "input_text", "text": "Evaluate the ticket."}, {"type": "input_json", "data": data}],
             }
         ]
     }
@@ -1191,3 +1190,4 @@ def test_tool_visitor_that_changes_more_than_strings_writes_its_payload_as_argum
     }
     assert walk_user_text(data, lambda text: text, lambda payload: rewritten) == 1
     assert data["messages"][0]["tool_calls"][0]["function"]["arguments"] == json.dumps(rewritten)
+

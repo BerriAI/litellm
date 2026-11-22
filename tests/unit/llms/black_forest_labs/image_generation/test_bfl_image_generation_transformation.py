@@ -46,7 +46,9 @@ class TestBlackForestLabsImageGenerationTransformation:
         non_default_params = {}
         optional_params = {}
 
-        result = self.config.map_openai_params(non_default_params, optional_params, self.model, drop_params=False)
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, self.model, drop_params=False
+        )
 
         # Empty input should return empty output
         assert result == {}
@@ -56,7 +58,9 @@ class TestBlackForestLabsImageGenerationTransformation:
         non_default_params = {"size": "1024x1024"}
         optional_params = {}
 
-        result = self.config.map_openai_params(non_default_params, optional_params, self.model, drop_params=False)
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, self.model, drop_params=False
+        )
 
         assert result["width"] == 1024
         assert result["height"] == 1024
@@ -66,7 +70,9 @@ class TestBlackForestLabsImageGenerationTransformation:
         non_default_params = {"size": "800x600"}
         optional_params = {}
 
-        result = self.config.map_openai_params(non_default_params, optional_params, self.model, drop_params=False)
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, self.model, drop_params=False
+        )
 
         assert result["width"] == 800
         assert result["height"] == 600
@@ -99,14 +105,18 @@ class TestBlackForestLabsImageGenerationTransformation:
         optional_params = {}
 
         with pytest.raises(ValueError, match="not supported"):
-            self.config.map_openai_params(non_default_params, optional_params, self.model, drop_params=False)
+            self.config.map_openai_params(
+                non_default_params, optional_params, self.model, drop_params=False
+            )
 
     def test_map_openai_params_unsupported_dropped(self):
         """Test that unsupported params are dropped when drop_params=True."""
         non_default_params = {"unsupported_param": "value"}
         optional_params = {}
 
-        result = self.config.map_openai_params(non_default_params, optional_params, self.model, drop_params=True)
+        result = self.config.map_openai_params(
+            non_default_params, optional_params, self.model, drop_params=True
+        )
 
         assert "unsupported_param" not in result
 

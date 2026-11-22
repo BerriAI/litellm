@@ -78,7 +78,9 @@ class TestOllamaConfig:
         # Create mock response with JSON function call format
         raw_response = MagicMock()
         raw_response.json.return_value = {
-            "response": json.dumps({"name": "get_weather", "arguments": {"location": "San Francisco"}})
+            "response": json.dumps(
+                {"name": "get_weather", "arguments": {"location": "San Francisco"}}
+            )
         }
 
         # Create properly structured model response object
@@ -109,10 +111,13 @@ class TestOllamaConfig:
         assert result.choices[0]["finish_reason"] == "tool_calls"
         assert len(result.choices[0]["message"].tool_calls) == 1
         assert result.choices[0]["message"].tool_calls[0]["id"].startswith("call_")
-        assert result.choices[0]["message"].tool_calls[0]["function"]["name"] == "get_weather"
-        assert json.loads(result.choices[0]["message"].tool_calls[0]["function"]["arguments"]) == {
-            "location": "San Francisco"
-        }
+        assert (
+            result.choices[0]["message"].tool_calls[0]["function"]["name"]
+            == "get_weather"
+        )
+        assert json.loads(
+            result.choices[0]["message"].tool_calls[0]["function"]["arguments"]
+        ) == {"location": "San Francisco"}
         # No usage assertions here as we don't need to test them in every case
 
     def test_transform_response_json_function_call_in_code_fence(self):
@@ -144,7 +149,9 @@ class TestOllamaConfig:
         # Create mock response with regular JSON (not function call)
         raw_response = MagicMock()
         raw_response.json.return_value = {
-            "response": json.dumps({"result": "success", "data": {"temperature": 72, "unit": "F"}})
+            "response": json.dumps(
+                {"result": "success", "data": {"temperature": 72, "unit": "F"}}
+            )
         }
 
         # Create properly structured model response object
@@ -171,7 +178,9 @@ class TestOllamaConfig:
         )
 
         # Verify result has JSON content
-        expected_content = json.dumps({"result": "success", "data": {"temperature": 72, "unit": "F"}})
+        expected_content = json.dumps(
+            {"result": "success", "data": {"temperature": 72, "unit": "F"}}
+        )
         assert result.choices[0]["message"].content == expected_content
         assert result.choices[0]["finish_reason"] == "stop"
         # No usage assertions here as we don't need to test them in every case
@@ -213,7 +222,10 @@ class TestOllamaConfig:
         )
 
         # Verify reasoning content is extracted
-        assert result.choices[0]["message"].reasoning_content == "I need to think about this problem step by step"
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "I need to think about this problem step by step"
+        )
         assert result.choices[0]["message"].content == "Here is my answer"
         assert result.choices[0]["finish_reason"] == "stop"
 
@@ -252,7 +264,10 @@ class TestOllamaConfig:
         )
 
         # Verify reasoning content is extracted
-        assert result.choices[0]["message"].reasoning_content == "Let me analyze this carefully"
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Let me analyze this carefully"
+        )
         assert result.choices[0]["message"].content == "The solution is X"
         assert result.choices[0]["finish_reason"] == "stop"
 
@@ -293,7 +308,10 @@ class TestOllamaConfig:
         # Verify multiline reasoning content is extracted
         expected_reasoning = "\nThis is a complex problem.\nI need to break it down:\n1. First step\n2. Second step\n"
         assert result.choices[0]["message"].reasoning_content == expected_reasoning
-        assert result.choices[0]["message"].content == "Based on my analysis, the answer is Y"
+        assert (
+            result.choices[0]["message"].content
+            == "Based on my analysis, the answer is Y"
+        )
         assert result.choices[0]["finish_reason"] == "stop"
 
     def test_transform_response_thinking_only(self):
@@ -331,7 +349,10 @@ class TestOllamaConfig:
         )
 
         # Verify reasoning content is extracted and content is empty
-        assert result.choices[0]["message"].reasoning_content == "Just internal thoughts, no response"
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Just internal thoughts, no response"
+        )
         assert result.choices[0]["message"].content == ""
         assert result.choices[0]["finish_reason"] == "stop"
 
@@ -370,7 +391,10 @@ class TestOllamaConfig:
         )
 
         # Verify reasoning content is extracted even in JSON mode when JSON parsing fails
-        assert result.choices[0]["message"].reasoning_content == "Planning my JSON response"
+        assert (
+            result.choices[0]["message"].reasoning_content
+            == "Planning my JSON response"
+        )
         assert result.choices[0]["message"].content == "This is not valid JSON"
         assert result.choices[0]["finish_reason"] == "stop"
 
@@ -410,7 +434,10 @@ class TestOllamaConfig:
 
         # Verify no reasoning content is extracted
         assert result.choices[0]["message"].reasoning_content is None
-        assert result.choices[0]["message"].content == "Regular response without any thinking tags"
+        assert (
+            result.choices[0]["message"].content
+            == "Regular response without any thinking tags"
+        )
         assert result.choices[0]["finish_reason"] == "stop"
 
     def _transform(
@@ -578,13 +605,7 @@ class TestOllamaTextCompletionResponseIterator:
         )
         ollama_chunks: Final = (
             {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "done": False},
-            {
-                "model": "qwen3:0.6b",
-                "created_at": "2026-10-07T00:00:00Z",
-                "response": "",
-                "thinking": "Hm",
-                "done": False,
-            },
+            {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "", "thinking": "Hm", "done": False},
             {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "Hel", "done": False},
             {"model": "qwen3:0.6b", "created_at": "2026-10-07T00:00:00Z", "response": "lo", "done": False},
         )
@@ -602,7 +623,9 @@ class TestOllamaTextCompletionResponseIterator:
 
     def test_chunk_parser_with_thinking_field(self):
         """Test that chunks with 'thinking' field and empty 'response' are handled correctly."""
-        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
 
         # Test chunk with thinking field - this is the problematic case from the issue
         chunk_with_thinking = {
@@ -622,7 +645,9 @@ class TestOllamaTextCompletionResponseIterator:
 
     def test_chunk_parser_normal_response(self):
         """Test that normal response chunks still work."""
-        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
 
         # Test normal chunk with response
         normal_chunk = {
@@ -642,7 +667,9 @@ class TestOllamaTextCompletionResponseIterator:
 
     def test_chunk_parser_empty_response_without_thinking(self):
         """Test that empty response chunks without thinking still work."""
-        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
 
         # Test empty response chunk without thinking
         empty_response_chunk = {
@@ -662,7 +689,9 @@ class TestOllamaTextCompletionResponseIterator:
 
     def test_chunk_parser_done_chunk(self):
         """Test that done chunks work correctly."""
-        iterator = OllamaTextCompletionResponseIterator(streaming_response=iter([]), sync_stream=True, json_mode=False)
+        iterator = OllamaTextCompletionResponseIterator(
+            streaming_response=iter([]), sync_stream=True, json_mode=False
+        )
 
         # Test done chunk
         done_chunk = {

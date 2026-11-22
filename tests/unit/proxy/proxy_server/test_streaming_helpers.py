@@ -186,9 +186,7 @@ async def test_responses_stream_sends_no_failure_event_after_an_upstream_error_e
     async def upstream() -> AsyncIterator[BaseModel | Mapping[str, object]]:
         yield created
         yield as_chunk(error_event)
-        raise litellm.APIError(
-            status_code=500, message="Stream close failed", llm_provider="openai", model="local-model"
-        )
+        raise litellm.APIError(status_code=500, message="Stream close failed", llm_provider="openai", model="local-model")
 
     frames: Final = tuple(
         [
@@ -299,9 +297,7 @@ def _self_referencing_chunk() -> Mapping[str, object]:
 
 def _chunk_holding_itself_twice() -> Mapping[str, object]:
     chunk: Final[dict[str, object]] = {"type": "response.output_text.delta"}
-    chunk.update(
-        left=chunk, right=chunk
-    )  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
+    chunk.update(left=chunk, right=chunk)  # mutable-ok: a self-reference needs the dict to exist before it can hold itself
     return chunk
 
 
@@ -337,9 +333,7 @@ _REDACTED_HEADERS: Final = RedactedDict({"authorization": "Bearer hook-canary"})
         "holds_itself_twice",
     ],
 )
-def test_responses_sse_chunk_that_json_cannot_show_as_printed_keeps_the_base_frame(
-    chunk: Mapping[object, object],
-) -> None:
+def test_responses_sse_chunk_that_json_cannot_show_as_printed_keeps_the_base_frame(chunk: Mapping[object, object]) -> None:
     assert _format_responses_sse_chunk(chunk=chunk) == _format_streaming_sse_chunk(chunk=chunk)
 
 
@@ -1191,9 +1185,7 @@ async def test_async_data_generator_yields_sse_chunks_and_done(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"]
-)
+@pytest.mark.parametrize(("provider_chunks", "released"), [(0, True), (1, False)], ids=["before_output", "after_output"])
 async def test_async_data_generator_refunds_the_reservation_only_when_the_client_leaves_before_provider_output(
     monkeypatch: pytest.MonkeyPatch, provider_chunks: int, released: bool
 ) -> None:
@@ -1210,9 +1202,7 @@ async def test_async_data_generator_refunds_the_reservation_only_when_the_client
     auth: Final = UserAPIKeyAuth(
         api_key="sk-test-key", budget_reservation={"reserved_cost": 0.01, "input_cost": 0.0, "entries": []}
     )
-    generator: Final = async_data_generator(
-        response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"}
-    )
+    generator: Final = async_data_generator(response=provider(), user_api_key_dict=auth, request_data={"model": "gpt-4"})
     for _ in range(provider_chunks):
         await generator.__anext__()
     next_frame: Final = asyncio.ensure_future(generator.__anext__())
@@ -1337,9 +1327,7 @@ def _azure_chunk(choice_fields: dict[str, object], chunk_fields: dict[str, objec
                 choices=[
                     StreamingChoices(
                         index=0,
-                        delta=Delta(
-                            content="Red", reasoning_items=[{"type": "reasoning", "id": "rs_1", "summary": []}]
-                        ),
+                        delta=Delta(content="Red", reasoning_items=[{"type": "reasoning", "id": "rs_1", "summary": []}]),
                     )
                 ],
                 created=0,
@@ -1415,10 +1403,7 @@ def test_serialize_streaming_chunk_keeps_lone_surrogates_a_provider_split_across
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     tool_call: Final = ChatCompletionDeltaToolCall(
-        id="call_1",
-        index=0,
-        type="function",
-        function=Function(name="get_weather", arguments='{"city": "Par\udc00is"}'),
+        id="call_1", index=0, type="function", function=Function(name="get_weather", arguments='{"city": "Par\udc00is"}')
     )
     chunk: Final = ModelResponseStream(
         id="chatcmpl-split",
@@ -2035,9 +2020,7 @@ async def test_responses_stream_failure_sends_the_failure_hook_replacement(monke
     response: Final = ResponsesAPIResponse(id="resp_visible", created_at=1, model="gpt-6-astra", output=[])
 
     async def upstream() -> AsyncIterator[BaseModel]:
-        yield ResponseCreatedEvent.model_validate(
-            {"type": "response.created", "sequence_number": 0, "response": response}
-        )
+        yield ResponseCreatedEvent.model_validate({"type": "response.created", "sequence_number": 0, "response": response})
         raise HTTPException(status_code=400, detail={"error": _BLOCK_MESSAGE})
 
     frames: Final = tuple(
@@ -2106,7 +2089,6 @@ def test_guardrail_block_after_a_keepalive_ping_ends_the_stream_with_an_error_ev
     assert _error_of(frames[-2]) == _BLOCK_ERROR
     assert frames[-1] == "data: [DONE]"
 
-
 class _BlocksKeeperPerChunk(CustomLogger):
     async def async_post_call_streaming_hook(self, user_api_key_dict: UserAPIKeyAuth, response: str) -> None:
         if "keeper" in response:
@@ -2158,8 +2140,7 @@ _UPSTREAM_BODY: Final = {
             litellm.AuthenticationError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra"
             ),
-            "authentication_error",
-            id="authentication_error",
+            "authentication_error", id="authentication_error",
         ),
         pytest.param(
             "upstream_failure",
@@ -2168,35 +2149,26 @@ _UPSTREAM_BODY: Final = {
                 request=httpx.Request("POST", "https://streaming.example/v1/responses"),
                 body={"code": {"reason": "overloaded"}, "type": {"unexpected": "object"}},
             ),
-            "server_error",
-            id="structured_provider_error_fields",
+            "server_error", id="structured_provider_error_fields",
         ),
         pytest.param(
             "upstream_failure",
             litellm.InternalServerError(
                 message="Upstream rejected request", llm_provider="openai", model="gpt-6-astra", body=_UPSTREAM_BODY
             ),
-            "cyber_policy",
-            id="upstream_body_code_and_message",
+            "cyber_policy", id="upstream_body_code_and_message",
         ),
         pytest.param(
             "upstream_failure", RuntimeError("Upstream rejected request"), "server_error", id="builtin_exception"
         ),
         *(
             pytest.param(
-                "upstream_failure",
-                HTTPException(status_code=status, detail="Upstream rejected request"),
-                code,
-                id=f"http_{status}",
+                "upstream_failure", HTTPException(status_code=status, detail="Upstream rejected request"),
+                code, id=f"http_{status}",
             )
             for status, code in (
-                (400, "invalid_request_error"),
-                (403, "permission_error"),
-                (404, "not_found_error"),
-                (408, "request_timeout"),
-                (422, "invalid_request_error"),
-                (500, "server_error"),
-                (503, "server_error"),
+                (400, "invalid_request_error"), (403, "permission_error"), (404, "not_found_error"),
+                (408, "request_timeout"), (422, "invalid_request_error"), (500, "server_error"), (503, "server_error"),
             )
         ),
     ],
@@ -2227,11 +2199,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
         {"type": "response.completed", "sequence_number": 2, "response": response}
     )
     tool_delta: Final = ToolDelta(
-        type="response.function_call_arguments.delta",
-        sequence_number=1,
-        item_id="fc_stream_error",
-        output_index=0,
-        delta='{"path":"partial',
+        type="response.function_call_arguments.delta", sequence_number=1, item_id="fc_stream_error",
+        output_index=0, delta='{"path":"partial',
     )
     original_status: Final = (
         upstream_error.status_code if isinstance(upstream_error, (HTTPException, litellm.AuthenticationError)) else None
@@ -2244,8 +2213,7 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
             raise upstream_error
         yield (
             UnserializableTerminal(type="response.completed", sequence_number=2, response=response, invalid=object())
-            if terminal == "serialization_failure"
-            else completed
+            if terminal == "serialization_failure" else completed
         )
         if terminal == "failure_after_completed":
             raise litellm.APIError(
@@ -2264,7 +2232,8 @@ async def test_responses_stream_keeps_tool_deltas_and_only_emits_a_valid_termina
     decoded: Final = tuple(frame.decode() if isinstance(frame, bytes) else frame for frame in frames)
     event_frames: Final = tuple(frame for frame in decoded if frame != "data: [DONE]\n\n")
     payloads: Final = tuple(
-        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: "))) for frame in event_frames
+        json.loads(next(line[6:] for line in frame.splitlines() if line.startswith("data: ")))
+        for frame in event_frames
     )
 
     assert len(decoded) == len(event_frames)

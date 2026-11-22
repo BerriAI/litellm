@@ -65,7 +65,9 @@ def test_model_params(fake_token_creator, fake_deployment_url):
             optional_params={"parameters": {"truncate": "END"}},
             headers={},
         )
-        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {"truncate": "END"}
+        assert body["config"]["modules"]["embeddings"]["model"]["params"] == {
+            "truncate": "END"
+        }
 
 
 def test_embed_with_masking(fake_token_creator, fake_deployment_url):

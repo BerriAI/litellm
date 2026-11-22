@@ -193,7 +193,9 @@ async def test_generate_content_stream_returns_text_and_usage(
     assert frames == (
         {
             "responseId": "scripted-stream",
-            "candidates": [{"content": {"role": "model", "parts": [{"text": "Scientists trust "}]}}],
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Scientists trust "}]}}
+            ],
         },
         {
             "responseId": "scripted-stream",
@@ -294,5 +296,7 @@ def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
     GoogleGenAIConfig._normalize_response_schema(config_dict, "gemini-flash-latest")
 
     assert config_dict["responseSchema"]["properties"]["level"] == (
-        {"type": "integer", "enum": [str(value) for value in values]} if integer_enum_sent else {"type": "integer"}
+        {"type": "integer", "enum": [str(value) for value in values]}
+        if integer_enum_sent
+        else {"type": "integer"}
     )

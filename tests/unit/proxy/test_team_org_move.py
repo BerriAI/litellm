@@ -6,7 +6,6 @@ Covers the SSO/Entra scenario where:
 - Non-proxy-admins (team admins) must have all team members pre-added to the org,
   preserving the original security model (no privilege escalation via team move).
 """
-
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -48,7 +47,9 @@ def _make_org(organization_id="org-1", members=None, models=None):
 
 
 def _make_team(team_id="team-1", member_ids=None, organization_id=None):
-    members = [Member(user_id=uid, role="user") for uid in (member_ids or [])]
+    members = [
+        Member(user_id=uid, role="user") for uid in (member_ids or [])
+    ]
     members.append(Member(user_id=SpecialProxyStrings.default_user_id.value, role="admin"))
     return LiteLLM_TeamTable(
         team_id=team_id,
@@ -85,7 +86,9 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["sso-user-001", "sso-user-002"])
         org = _make_org(members=[])
 
-        result = validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=True)
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=True
+        )
         assert result is True
 
     def test_non_admin_blocked_when_members_not_in_org(self):
@@ -94,8 +97,10 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["sso-user-001"])
         org = _make_org(members=[])
 
-        with pytest.raises(Exception, match="Cannot move team to organization\\. Team has user_id") as exc_info:
-            validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=False)
+        with pytest.raises(Exception, match='Cannot move team to organization\\. Team has user_id') as exc_info:
+            validate_team_org_change(
+                team=team, organization=org, llm_router=router, is_proxy_admin=False
+            )
         assert "403" in str(exc_info.value) or "not a member" in str(exc_info.value)
 
     def test_non_admin_passes_when_all_members_in_org(self):
@@ -104,7 +109,9 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["u1"])
         org = _make_org(members=[_make_org_membership("u1")])
 
-        result = validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=False)
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        )
         assert result is True
 
     def test_same_org_short_circuits(self):
@@ -113,8 +120,12 @@ class TestValidateTeamOrgChange:
         team = _make_team(member_ids=["u1"], organization_id="org-1")
         org = _make_org(organization_id="org-1")
 
-        assert validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=False) is True
-        assert validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=True) is True
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        ) is True
+        assert validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=True
+        ) is True
 
     def test_default_user_excluded_from_membership_check(self):
         """default_user_id is never checked for org membership."""
@@ -124,7 +135,9 @@ class TestValidateTeamOrgChange:
         org = _make_org(members=[])
 
         # Should not raise even for non-proxy-admin
-        result = validate_team_org_change(team=team, organization=org, llm_router=router, is_proxy_admin=False)
+        result = validate_team_org_change(
+            team=team, organization=org, llm_router=router, is_proxy_admin=False
+        )
         assert result is True
 
 
@@ -136,7 +149,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -150,7 +162,9 @@ class TestAutoAddTeamMembersToOrg:
             te.add_member_to_organization = original
 
         assert mock_add.call_count == 2
-        called_user_ids = {call.kwargs["member"].user_id for call in mock_add.call_args_list}
+        called_user_ids = {
+            call.kwargs["member"].user_id for call in mock_add.call_args_list
+        }
         assert called_user_ids == {"sso-user-001", "sso-user-002"}
 
     @pytest.mark.asyncio
@@ -160,7 +174,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -184,7 +197,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock()
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 
@@ -207,7 +219,6 @@ class TestAutoAddTeamMembersToOrg:
 
         mock_add = AsyncMock(side_effect=Exception("duplicate key"))
         import litellm.proxy.management_endpoints.team_endpoints as te
-
         original = te.add_member_to_organization
         te.add_member_to_organization = mock_add
 

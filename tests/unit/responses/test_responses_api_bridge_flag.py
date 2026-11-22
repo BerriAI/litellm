@@ -332,11 +332,7 @@ class TestUseResponsesApiBridgeFlag:
                 {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
                 for name in ("get_time", "get_weather")
             ],
-            tool_choice={
-                "type": "allowed_tools",
-                "mode": "required",
-                "tools": [{"type": "function", "name": "get_time"}],
-            },
+            tool_choice={"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
             api_key="fake-provider-api-key",
             num_retries=0,
         )
@@ -878,7 +874,9 @@ def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
 @pytest.mark.parametrize("region", ("us", "eu"))
 @pytest.mark.parametrize("model", ("gpt-5.4-mini", "gpt-5.4-nano"))
 def test_regional_azure_default_none_function_tools_stay_on_chat(region: str, model: str) -> None:
-    info, _ = responses_api_bridge_check(model=f"{region}/{model}", custom_llm_provider="azure", tools=[_FUNCTION_TOOL])
+    info, _ = responses_api_bridge_check(
+        model=f"{region}/{model}", custom_llm_provider="azure", tools=[_FUNCTION_TOOL]
+    )
     assert info.get("mode") == "chat"
     assert info.get("default_reasoning_effort") == litellm.model_cost[f"azure/{model}"]["default_reasoning_effort"]
 

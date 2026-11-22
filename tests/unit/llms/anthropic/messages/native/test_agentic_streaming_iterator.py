@@ -1002,9 +1002,7 @@ class TestAgenticStreamingIteratorHoldBack:
         async for chunk in iterator:
             collected.append(chunk)
 
-        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [
-            SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES
-        ]
+        assert [c for c in collected if c != STREAM_SSE_KEEPALIVE_PING_BYTES] == [SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES]
 
     @pytest.mark.asyncio
     async def test_should_replay_client_owned_tool_use_verbatim(self):

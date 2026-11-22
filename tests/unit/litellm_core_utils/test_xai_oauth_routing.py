@@ -1,3 +1,5 @@
+
+
 from litellm import LlmProviders
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -28,11 +30,13 @@ def test_xai_provider_config_routing():
 
 
 def test_xai_openai_compatible_provider_info():
-    model, custom_llm_provider, dynamic_api_key, api_base = _get_openai_compatible_provider_info(
-        model="xai/grok-3-mini",
-        api_base="https://api.x.ai/v1",
-        api_key="api-key",
-        dynamic_api_key=None,
+    model, custom_llm_provider, dynamic_api_key, api_base = (
+        _get_openai_compatible_provider_info(
+            model="xai/grok-3-mini",
+            api_base="https://api.x.ai/v1",
+            api_key="api-key",
+            dynamic_api_key=None,
+        )
     )
 
     assert model == "grok-3-mini"

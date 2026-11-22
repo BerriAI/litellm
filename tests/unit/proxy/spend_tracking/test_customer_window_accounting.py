@@ -116,14 +116,10 @@ def test_shared_template_reset_is_not_advanced_by_a_member():
 @pytest.mark.parametrize("duration", ("daily", "weekly", "1w", "01h", "1mo", "12mo", "2d"))
 async def test_accounting_snapshot_keeps_the_admitted_window_key(duration: str) -> None:
     now: Final = datetime(2026, 11, 2, 1, 30, tzinfo=timezone.utc)
-    scope: Final = CustomerScopeAuth(
-        key="app",
-        entity_id="app",
-        budget_limits=(
-            AppDurationLimit(budget_duration=duration, max_budget=10),
-            BudgetLimit(budget_duration="15m", max_budget=1, reset_at=now),
-        ),
-    )
+    scope: Final = CustomerScopeAuth(key="app", entity_id="app", budget_limits=(
+        AppDurationLimit(budget_duration=duration, max_budget=10),
+        BudgetLimit(budget_duration="15m", max_budget=1, reset_at=now),
+    ))
     restored: Final = CustomerScopeAuth.model_validate_json(scope.model_dump_json())
     assert restored.model_dump() == scope.model_dump()
     assert customer_window_counters("app", "app", restored.budget_limits, now=now) == customer_window_counters(

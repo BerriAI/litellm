@@ -118,3 +118,5 @@ class TestCognitionCostTracking:
         assert endpoints["messages"] is True
         assert endpoints["responses"] is True
         assert endpoints["embeddings"] is False
+
+

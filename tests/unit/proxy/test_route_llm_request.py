@@ -1505,9 +1505,7 @@ async def test_route_request_pass_through_never_falls_back_to_the_global_model_f
     with respx.mock(assert_all_called=False) as respx_mock:
         requested: Final = respx_mock.post(
             "https://api.openai.com/v1/chat/completions", json__model="gpt-pass-through"
-        ).mock(
-            return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}})
-        )
+        ).mock(return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}}))
         not_granted: Final = respx_mock.post(
             "https://api.openai.com/v1/chat/completions", json__model="gpt-not-granted"
         ).mock(return_value=_chat_completion_response("gpt-not-granted"))
@@ -2741,9 +2739,7 @@ async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
 
     with respx.mock(assert_all_called=True) as respx_mock:
         file_route: Final = respx_mock.route(method=method, url=f"{_TEAM_OPENAI_BASE}{path}").mock(
-            return_value=httpx.Response(
-                404, json={"error": {"message": "No file found", "type": "invalid_request_error"}}
-            )
+            return_value=httpx.Response(404, json={"error": {"message": "No file found", "type": "invalid_request_error"}})
         )
         chat_route: Final = respx_mock.post(f"{_TEAM_OPENAI_BASE}/chat/completions").mock(
             return_value=_chat_completion_response("gpt-5.4-mini")
@@ -2972,6 +2968,7 @@ async def test_registered_store_credential_wins_over_the_team_deployment_on_a_mo
     assert route.calls.last.request.headers["Authorization"] == "Bearer store-credential-key"
 
 
+
 @pytest.mark.asyncio
 async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_for_later_file_uploads(
     monkeypatch: pytest.MonkeyPatch,
@@ -3034,7 +3031,6 @@ async def test_a_model_less_file_call_leaves_the_team_credential_headers_intact_
     assert upload.calls.last.request.headers["Content-Type"].startswith("multipart/form-data")
     assert upload.calls.last.request.headers["X-Team"] == "team-a"
 
-
 @pytest.fixture(autouse=True)
 def discard_cached_user_config_routers() -> Iterator[None]:
     yield
@@ -3085,9 +3081,7 @@ async def _settle_router_accounting() -> None:
             await GLOBAL_LOGGING_WORKER.flush()
         finally:
             await GLOBAL_LOGGING_WORKER.stop()
-        while pending := {
-            task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)
-        }:
+        while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
             _, still_running = await asyncio.wait(pending, timeout=5)
             assert not still_running, still_running
         if GLOBAL_LOGGING_WORKER.pending_count == 0:

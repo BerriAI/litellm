@@ -36,8 +36,12 @@ def test_list_tools():
     registry = MCPToolRegistry()
 
     # Register multiple tools
-    registry.register_tool(name="tool1", description="Tool 1", input_schema={}, handler=example_handler)
-    registry.register_tool(name="tool2", description="Tool 2", input_schema={}, handler=example_handler)
+    registry.register_tool(
+        name="tool1", description="Tool 1", input_schema={}, handler=example_handler
+    )
+    registry.register_tool(
+        name="tool2", description="Tool 2", input_schema={}, handler=example_handler
+    )
 
     # Test listing tools
     tools = registry.list_tools()

@@ -47,9 +47,7 @@ def test_calculate_usage_counts_input_tokens_from_request_object():
 
 def test_calculate_usage_counts_input_tokens_from_a_message_that_forwards_its_fields():
     request: Final = _request("count these input tokens please")
-    forwarded_request: Final = SimpleNamespace(
-        params=SimpleNamespace(message=AttributeForwarder(request.params.message))
-    )
+    forwarded_request: Final = SimpleNamespace(params=SimpleNamespace(message=AttributeForwarder(request.params.message)))
     response_dict: Final = {"result": {"kind": "message", "parts": [{"kind": "text", "text": "ok"}]}}
 
     assert A2ARequestUtils.calculate_usage_from_request_response(

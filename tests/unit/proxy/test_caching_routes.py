@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 
+
 import litellm
 from litellm.caching import RedisCache
 from litellm.caching.caching import Cache
@@ -135,13 +136,17 @@ def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
     raw_body = json.dumps(data)
 
     # The word "traceback" (case-insensitive) must not appear anywhere in the response
-    assert "traceback" not in raw_body.lower(), "CWE-209: Python traceback exposed in HTTP 503 response body"
+    assert (
+        "traceback" not in raw_body.lower()
+    ), "CWE-209: Python traceback exposed in HTTP 503 response body"
     # Internal frame paths should not leak either
-    assert 'File "' not in raw_body, "CWE-209: Python stack frame paths exposed in HTTP 503 response body"
+    assert (
+        'File "' not in raw_body
+    ), "CWE-209: Python stack frame paths exposed in HTTP 503 response body"
     # Exception text (e.g. Redis hostnames/IPs) must not leak either
-    assert "invalid username-password pair" not in raw_body, (
-        "CWE-209: Exception message text exposed in HTTP 503 response body"
-    )
+    assert (
+        "invalid username-password pair" not in raw_body
+    ), "CWE-209: Exception message text exposed in HTTP 503 response body"
 
     # The error message should be the safe static string
     error_details = json.loads(error["message"])
@@ -159,7 +164,9 @@ def test_cache_ping_no_cache_initialized():
     litellm.cache = None
 
     try:
-        response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
+        )
         assert response.status_code == 503
 
         data = response.json()
@@ -167,7 +174,9 @@ def test_cache_ping_no_cache_initialized():
         # ProxyException is serialised as {"error": {"message": "...", "type": ..., ...}}
         assert "error" in data
         error_details = json.loads(data["error"]["message"])
-        assert error_details["message"] == "Cache not initialized. litellm.cache is None"
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
+        )
     finally:
         litellm.cache = original_cache
 
@@ -183,19 +192,27 @@ def test_cache_ping_no_cache_does_not_expose_internals():
     litellm.cache = None
 
     try:
-        response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
+        )
         assert response.status_code == 503
 
         raw_body = response.text
         # No Python traceback or source-file paths must appear in the response
-        assert "traceback" not in raw_body.lower(), "CWE-209: Python traceback exposed in /cache/ping no-cache response"
-        assert 'File "' not in raw_body, "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
+        assert "traceback" not in raw_body.lower(), (
+            "CWE-209: Python traceback exposed in /cache/ping no-cache response"
+        )
+        assert 'File "' not in raw_body, (
+            "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
+        )
 
         data = response.json()
         # Response must use the ProxyException envelope
         assert "error" in data, f"Expected ProxyException envelope, got: {data}"
         error_details = json.loads(data["error"]["message"])
-        assert error_details["message"] == "Cache not initialized. litellm.cache is None"
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
+        )
     finally:
         litellm.cache = original_cache
 
@@ -212,20 +229,22 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
     mock_redis_success.cache.redis_kwargs = {"host": "localhost", "port": 6379}
 
     response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
-    assert response.status_code == 200, f"Unexpected status code: {response.status_code}"
+    assert (
+        response.status_code == 200
+    ), f"Unexpected status code: {response.status_code}"
 
     data = response.json()
     print("/cache/ping response data=", json.dumps(data, indent=4))
     health_check_cache_params = data.get("health_check_cache_params", {})
     # The unrelated field we attached at the top-level of litellm.cache should *not* be present
-    assert "some_unrelated_field" not in health_check_cache_params, (
-        "Found an unexpected field from the mock_redis_success object in health_check_cache_params"
-    )
+    assert (
+        "some_unrelated_field" not in health_check_cache_params
+    ), "Found an unexpected field from the mock_redis_success object in health_check_cache_params"
 
     # The field we attached to 'mock_redis_success.cache' should be present and correctly reported
-    assert "redis_kwargs" in health_check_cache_params, (
-        "Expected field on `litellm.cache.cache` was not found in health_check_cache_params"
-    )
+    assert (
+        "redis_kwargs" in health_check_cache_params
+    ), "Expected field on `litellm.cache.cache` was not found in health_check_cache_params"
     assert health_check_cache_params["redis_kwargs"] == {
         "host": "localhost",
         "port": 6379,
@@ -308,7 +327,9 @@ def test_cache_redis_info_no_cache():
     original_cache = litellm.cache
     litellm.cache = None
 
-    response = client.get("/cache/redis/info", headers={"Authorization": "Bearer sk-9876"})
+    response = client.get(
+        "/cache/redis/info", headers={"Authorization": "Bearer sk-9876"}
+    )
     assert response.status_code == 503
 
     data = response.json()

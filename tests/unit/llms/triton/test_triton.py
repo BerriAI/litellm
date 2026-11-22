@@ -173,7 +173,9 @@ def test_completion_triton_infer_api():
             assert request_data["inputs"][0]["name"] == "text_input"
             assert request_data["inputs"][0]["shape"] == [1]
             assert request_data["inputs"][0]["datatype"] == "BYTES"
-            assert request_data["inputs"][0]["data"] == ["0004900005025 0004900005026 0004900005027"]
+            assert request_data["inputs"][0]["data"] == [
+                "0004900005025 0004900005026 0004900005027"
+            ]
 
             assert request_data["inputs"][1]["shape"] == [1]
             assert request_data["inputs"][1]["datatype"] == "INT32"

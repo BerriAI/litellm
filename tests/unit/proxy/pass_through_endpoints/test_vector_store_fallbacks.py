@@ -49,11 +49,7 @@ def route_builder(provider: NativeSearchProvider, endpoint: str) -> TargetReques
             return partial(builder, config, endpoint)
         case "opensearch":
             return partial(
-                _opensearch_fallback_request,
-                ("_search",),
-                index_operation("POST", ("_search",)),
-                "physical-index",
-                True,
+                _opensearch_fallback_request, ("_search",), index_operation("POST", ("_search",)), "physical-index", True
             )
         case "vertex_ai":
             matched: Final = VERTEX_SEARCH_PATH.fullmatch(endpoint)
@@ -468,6 +464,7 @@ async def test_malformed_gzip_keeps_received_status_retryability(status: int) ->
     assert [request.url.host for request in seen] == (
         ["primary.example"] if status == 400 else ["primary.example", "backup.example"]
     )
+
 
 
 @pytest.mark.asyncio

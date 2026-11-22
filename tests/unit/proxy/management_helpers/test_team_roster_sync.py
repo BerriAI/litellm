@@ -228,7 +228,9 @@ class _FakePrisma:
     ) -> None:
         """``db`` is the routed client, which a read replica may serve; ``writer_db`` is the writer."""
         self.ledger = _Ledger()
-        self.writer_db = _Db(self.ledger, users, teams, memberships, tokens, budgets, team_deleted_before_update)
+        self.writer_db = _Db(
+            self.ledger, users, teams, memberships, tokens, budgets, team_deleted_before_update
+        )
         self.db = (
             _Db(self.ledger, users, replica_teams, memberships, tokens, budgets)
             if replica_teams is not None

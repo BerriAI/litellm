@@ -11,6 +11,7 @@ from litellm.proxy.common_utils.get_routes import GetRoutes
 
 
 class TestGetRoutes:
+
     def test_get_app_routes_regular_route(self):
         """Test getting routes for a regular route with endpoint."""
         # Mock a regular route

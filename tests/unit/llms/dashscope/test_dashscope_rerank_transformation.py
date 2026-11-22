@@ -66,7 +66,9 @@ class TestDashScopeRerankURL:
         assert url == "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
 
     def test_rerank_env_var_wins_over_chat_shaped_base(self, monkeypatch):
-        monkeypatch.setenv("DASHSCOPE_API_BASE_RERANK", "https://rerank.example.com/v1/reranks")
+        monkeypatch.setenv(
+            "DASHSCOPE_API_BASE_RERANK", "https://rerank.example.com/v1/reranks"
+        )
         url = self.config.get_complete_url(
             api_base="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             model="qwen3-rerank",
@@ -86,10 +88,14 @@ class TestDashScopeRerankURL:
 
     def test_trailing_slash_stripped(self):
         full = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks/"
-        assert self.config.get_complete_url(api_base=full, model="qwen3-rerank") == full.rstrip("/")
+        assert self.config.get_complete_url(
+            api_base=full, model="qwen3-rerank"
+        ) == full.rstrip("/")
 
     def test_custom_v1_base_appends_reranks(self):
-        url = self.config.get_complete_url(api_base="https://my-proxy.example.com/v1", model="qwen3-rerank")
+        url = self.config.get_complete_url(
+            api_base="https://my-proxy.example.com/v1", model="qwen3-rerank"
+        )
         assert url == "https://my-proxy.example.com/v1/reranks"
 
 
@@ -98,18 +104,24 @@ class TestDashScopeRerankRequest:
         self.config = DashScopeRerankConfig()
 
     def test_validate_environment_with_explicit_key(self):
-        headers = self.config.validate_environment(headers={}, model="qwen3-rerank", api_key="sk-test")
+        headers = self.config.validate_environment(
+            headers={}, model="qwen3-rerank", api_key="sk-test"
+        )
         assert headers["Authorization"] == "Bearer sk-test"
         assert headers["content-type"] == "application/json"
 
     def test_validate_environment_missing_key(self, monkeypatch):
         monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
         with pytest.raises(ValueError, match="DASHSCOPE_API_KEY"):
-            self.config.validate_environment(headers={}, model="qwen3-rerank", api_key=None)
+            self.config.validate_environment(
+                headers={}, model="qwen3-rerank", api_key=None
+            )
 
     def test_validate_environment_falls_back_to_env(self, monkeypatch):
         monkeypatch.setenv("DASHSCOPE_API_KEY", "env-key")
-        headers = self.config.validate_environment(headers={}, model="qwen3-rerank", api_key=None)
+        headers = self.config.validate_environment(
+            headers={}, model="qwen3-rerank", api_key=None
+        )
         assert headers["Authorization"] == "Bearer env-key"
 
     def test_supported_params(self):
@@ -234,12 +246,16 @@ class TestDashScopeRerankResponse:
             "object": "list",
             "results": [
                 {
-                    "document": {"text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"},
+                    "document": {
+                        "text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"
+                    },
                     "index": 1,
                     "relevance_score": 0.8304247466067356,
                 },
                 {
-                    "document": {"text": "制作苹果派时，预先煮软苹果可以缩短烘烤时间。"},
+                    "document": {
+                        "text": "制作苹果派时，预先煮软苹果可以缩短烘烤时间。"
+                    },
                     "index": 3,
                     "relevance_score": 0.7142660211908354,
                 },
@@ -260,7 +276,9 @@ class TestDashScopeRerankResponse:
             {
                 "index": 1,
                 "relevance_score": 0.8304247466067356,
-                "document": {"text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"},
+                "document": {
+                    "text": "苹果派的制作步骤包括准备面团、切苹果、调制馅料、组装和烘烤。"
+                },
             },
             {
                 "index": 3,
@@ -329,7 +347,9 @@ class TestDashScopeRerankResponse:
             )
 
     def test_get_error_class(self):
-        err = self.config.get_error_class(error_message="boom", status_code=500, headers={})
+        err = self.config.get_error_class(
+            error_message="boom", status_code=500, headers={}
+        )
         assert isinstance(err, DashScopeError)
         assert err.status_code == 500
 

@@ -1299,9 +1299,7 @@ async def test_bedrock_converse_lets_modify_params_continue_an_empty_trailing_us
 @pytest.mark.asyncio
 @pytest.mark.parametrize("use_async", [False, True])
 @pytest.mark.parametrize(
-    "content",
-    ["", "   ", [{"type": "text", "text": ""}]],
-    ids=["empty-string", "whitespace-string", "empty-text-block"],
+    "content", ["", "   ", [{"type": "text", "text": ""}]], ids=["empty-string", "whitespace-string", "empty-text-block"]
 )
 async def test_bedrock_converse_fills_a_blank_trailing_user_turn_under_a_guardrail(
     use_async: bool, content: object

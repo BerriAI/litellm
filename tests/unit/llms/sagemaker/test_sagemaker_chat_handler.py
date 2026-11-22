@@ -128,7 +128,10 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                     print(e)
                 mock_post.assert_called_once()
                 json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert json_data["model"] == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
                 assert json_data["messages"] == [{"role": "user", "content": "hi"}]
                 assert json_data["temperature"] == 0.2
                 assert json_data["max_tokens"] == 80
@@ -151,7 +154,10 @@ async def test_completion_sagemaker_messages_api(sync_mode):
                     print(e)
                 mock_post.assert_called_once()
                 json_data = json.loads(mock_post.call_args.kwargs["data"])
-                assert json_data["model"] == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                assert (
+                    json_data["model"]
+                    == "huggingface-pytorch-tgi-inference-2024-08-23-15-48-59-245"
+                )
                 assert json_data["messages"] == [{"role": "user", "content": "hi"}]
                 assert json_data["temperature"] == 0.2
                 assert json_data["max_tokens"] == 80
@@ -172,11 +178,8 @@ def test_installed_botocore_signs_the_chat_request():
     from botocore.credentials import Credentials
 
     request = SagemakerChatHandler()._prepare_request(
-        credentials=Credentials("test-key", "test-secret"),
-        model="test-endpoint",
-        data={"inputs": "ping"},
-        optional_params={},
-        aws_region_name="us-west-2",
+        credentials=Credentials("test-key", "test-secret"), model="test-endpoint", data={"inputs": "ping"},
+        optional_params={}, aws_region_name="us-west-2",
     )
     assert request.body == b'{"inputs": "ping"}'
     assert "/us-west-2/sagemaker/aws4_request" in request.headers["Authorization"]

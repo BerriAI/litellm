@@ -28,7 +28,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with citations
         raw_response_dict = {
@@ -62,7 +64,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with search queries in usage
         raw_response_dict = {
@@ -81,9 +85,13 @@ class TestPerplexityChatTransformation:
         # Check that search queries were added to prompt_tokens_details
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        assert hasattr(model_response.usage.prompt_tokens_details, "web_search_requests")
+        assert hasattr(
+            model_response.usage.prompt_tokens_details, "web_search_requests"
+        )
 
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
         assert web_search_requests == 3
 
     def test_enhance_usage_with_search_queries_from_root(self):
@@ -92,7 +100,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with search queries at root level
         raw_response_dict = {
@@ -111,9 +121,13 @@ class TestPerplexityChatTransformation:
         # Check that search queries were added to prompt_tokens_details
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        assert hasattr(model_response.usage.prompt_tokens_details, "web_search_requests")
+        assert hasattr(
+            model_response.usage.prompt_tokens_details, "web_search_requests"
+        )
 
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
         assert web_search_requests == 2
 
     def test_enhance_usage_with_both_citations_and_search_queries(self):
@@ -122,7 +136,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with both citations and search queries
         raw_response_dict = {
@@ -146,10 +162,14 @@ class TestPerplexityChatTransformation:
         assert hasattr(model_response.usage, "citation_tokens")
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        assert hasattr(model_response.usage.prompt_tokens_details, "web_search_requests")
+        assert hasattr(
+            model_response.usage.prompt_tokens_details, "web_search_requests"
+        )
 
         citation_tokens = getattr(model_response.usage, "citation_tokens")
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
 
         assert citation_tokens > 0
         assert web_search_requests == 2
@@ -160,7 +180,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with empty citations
         raw_response_dict = {
@@ -186,7 +208,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response without citations or search queries
         raw_response_dict = {
@@ -206,8 +230,13 @@ class TestPerplexityChatTransformation:
         assert citation_tokens == 0
 
         # prompt_tokens_details might be None or have web_search_requests as 0
-        if hasattr(model_response.usage, "prompt_tokens_details") and model_response.usage.prompt_tokens_details:
-            web_search_requests = getattr(model_response.usage.prompt_tokens_details, "web_search_requests", 0)
+        if (
+            hasattr(model_response.usage, "prompt_tokens_details")
+            and model_response.usage.prompt_tokens_details
+        ):
+            web_search_requests = getattr(
+                model_response.usage.prompt_tokens_details, "web_search_requests", 0
+            )
             assert web_search_requests == 0
 
     def test_citation_token_estimation(self):
@@ -228,7 +257,9 @@ class TestPerplexityChatTransformation:
 
         for citation_text, min_tokens, max_tokens in test_cases:
             model_response = ModelResponse()
-            model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+            model_response.usage = Usage(
+                prompt_tokens=100, completion_tokens=50, total_tokens=150
+            )
 
             raw_response_dict = {
                 "usage": {
@@ -239,21 +270,25 @@ class TestPerplexityChatTransformation:
                 "citations": [citation_text],
             }
 
-            config._enhance_usage_with_perplexity_fields(model_response, raw_response_dict)
+            config._enhance_usage_with_perplexity_fields(
+                model_response, raw_response_dict
+            )
 
             citation_tokens = getattr(model_response.usage, "citation_tokens")
 
             # Should be within reasonable range
-            assert min_tokens <= citation_tokens <= max_tokens, (
-                f"Citation '{citation_text}' resulted in {citation_tokens} tokens, expected {min_tokens}-{max_tokens}"
-            )
+            assert (
+                min_tokens <= citation_tokens <= max_tokens
+            ), f"Citation '{citation_text}' resulted in {citation_tokens} tokens, expected {min_tokens}-{max_tokens}"
 
     def test_multiple_citations_aggregation(self):
         """Test that multiple citations are aggregated correctly."""
         config = PerplexityChatConfig()
 
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         raw_response_dict = {
             "usage": {
@@ -284,7 +319,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Mock raw response with search queries in both locations
         raw_response_dict = {
@@ -304,7 +341,9 @@ class TestPerplexityChatTransformation:
         # Check that usage field took priority
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
 
         assert web_search_requests == 5  # Should use the usage field value, not root
 
@@ -335,10 +374,14 @@ class TestPerplexityChatTransformation:
         assert hasattr(model_response.usage, "citation_tokens")
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        assert hasattr(model_response.usage.prompt_tokens_details, "web_search_requests")
+        assert hasattr(
+            model_response.usage.prompt_tokens_details, "web_search_requests"
+        )
 
         citation_tokens = getattr(model_response.usage, "citation_tokens")
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
 
         assert citation_tokens > 0
         assert web_search_requests == 2
@@ -350,7 +393,9 @@ class TestPerplexityChatTransformation:
 
         # Create a ModelResponse with basic usage
         model_response = ModelResponse()
-        model_response.usage = Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150)
+        model_response.usage = Usage(
+            prompt_tokens=100, completion_tokens=50, total_tokens=150
+        )
 
         # Create response dict based on parameter
         if search_query_location == "usage":
@@ -378,7 +423,9 @@ class TestPerplexityChatTransformation:
         # Should extract search queries from either location
         assert hasattr(model_response.usage, "prompt_tokens_details")
         assert model_response.usage.prompt_tokens_details is not None
-        web_search_requests = model_response.usage.prompt_tokens_details.web_search_requests
+        web_search_requests = (
+            model_response.usage.prompt_tokens_details.web_search_requests
+        )
 
         assert web_search_requests == 4
 
@@ -390,7 +437,9 @@ class TestPerplexityChatTransformation:
         # Create a ModelResponse with content
         from litellm.types.utils import Choices, Message
 
-        message = Message(content="This response has citations[1][2] in the text.", role="assistant")
+        message = Message(
+            content="This response has citations[1][2] in the text.", role="assistant"
+        )
         choice = Choices(finish_reason="stop", index=0, message=message)
         model_response = ModelResponse()
         model_response.choices = [choice]
@@ -422,7 +471,10 @@ class TestPerplexityChatTransformation:
         assert url_citation1["start_index"] >= 0
         assert url_citation1["end_index"] > url_citation1["start_index"]
         # Verify the positions correspond to [1] in the text
-        assert message.content[url_citation1["start_index"] : url_citation1["end_index"]] == "[1]"
+        assert (
+            message.content[url_citation1["start_index"] : url_citation1["end_index"]]
+            == "[1]"
+        )
 
         # Check second annotation
         annotation2 = annotations[1]
@@ -434,7 +486,10 @@ class TestPerplexityChatTransformation:
         assert url_citation2["start_index"] >= 0
         assert url_citation2["end_index"] > url_citation2["start_index"]
         # Verify the positions correspond to [2] in the text
-        assert message.content[url_citation2["start_index"] : url_citation2["end_index"]] == "[2]"
+        assert (
+            message.content[url_citation2["start_index"] : url_citation2["end_index"]]
+            == "[2]"
+        )
 
         # Check backward compatibility
         assert hasattr(model_response, "citations")
@@ -591,7 +646,9 @@ class TestPerplexityChatTransformation:
         # Create a ModelResponse with content containing non-numeric patterns
         from litellm.types.utils import Choices, Message
 
-        message = Message(content="This response has patterns: [a] [b] [1] [c] [2].", role="assistant")
+        message = Message(
+            content="This response has patterns: [a] [b] [1] [c] [2].", role="assistant"
+        )
         choice = Choices(finish_reason="stop", index=0, message=message)
         model_response = ModelResponse()
         model_response.choices = [choice]
@@ -633,7 +690,9 @@ class TestPerplexityChatTransformation:
         # Mock raw response with citations
         raw_response_json = {
             "citations": ["https://example.com/page1"],
-            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"}
+            ],
         }
 
         # Add citations as annotations
@@ -654,7 +713,9 @@ class TestPerplexityChatTransformation:
         # Mock raw response with citations
         raw_response_json = {
             "citations": ["https://example.com/page1"],
-            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"}
+            ],
         }
 
         # Should not raise an error
@@ -677,7 +738,9 @@ class TestPerplexityChatTransformation:
         # Mock raw response with citations
         raw_response_json = {
             "citations": ["https://example.com/page1"],
-            "search_results": [{"title": "Example Page 1", "url": "https://example.com/page1"}],
+            "search_results": [
+                {"title": "Example Page 1", "url": "https://example.com/page1"}
+            ],
         }
 
         # Should not raise an error
@@ -686,7 +749,10 @@ class TestPerplexityChatTransformation:
         # Check that no annotations were created (message content is None)
         assert choice.message.content is None
         # No annotations should be created since content is None
-        assert not hasattr(choice.message, "annotations") or choice.message.annotations is None
+        assert (
+            not hasattr(choice.message, "annotations")
+            or choice.message.annotations is None
+        )
 
 
 _PERPLEXITY_COMPLETION = {

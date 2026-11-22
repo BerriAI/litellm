@@ -26,7 +26,9 @@ class TestBraintrustLogger(unittest.TestCase):
 
     def test_init_with_explicit_params(self):
         """Test BraintrustLogger initialization with explicit parameters."""
-        logger = BraintrustLogger(api_key="explicit-key", api_base="https://custom-api.com/v1")
+        logger = BraintrustLogger(
+            api_key="explicit-key", api_base="https://custom-api.com/v1"
+        )
         self.assertEqual(logger.api_key, "explicit-key")
         self.assertEqual(logger.api_base, "https://custom-api.com/v1")
         self.assertEqual(logger.headers["Authorization"], "Bearer explicit-key")
@@ -79,7 +81,9 @@ class TestBraintrustLogger(unittest.TestCase):
         response_obj.choices = [choice_mock]
         # Mock the __getitem__ to support response_obj["choices"]
         response_obj.__getitem__ = Mock(return_value=[choice_mock])
-        response_obj.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
 
         kwargs = {
             "litellm_call_id": "test-call-id",
@@ -96,7 +100,9 @@ class TestBraintrustLogger(unittest.TestCase):
         call_args = mock_http_handler.post.call_args
         self.assertIsNotNone(call_args)
         json_data = call_args.kwargs["json"]
-        self.assertEqual(json_data["events"][0]["span_attributes"]["name"], "Chat Completion")
+        self.assertEqual(
+            json_data["events"][0]["span_attributes"]["name"], "Chat Completion"
+        )
 
     @patch("litellm.integrations.braintrust_logging.HTTPHandler")
     def test_log_success_event_with_custom_span_name(self, MockHTTPHandler):
@@ -124,7 +130,9 @@ class TestBraintrustLogger(unittest.TestCase):
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
         response_obj.__getitem__ = Mock(return_value=[choice_mock])
-        response_obj.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
 
         kwargs = {
             "litellm_call_id": "test-call-id",
@@ -141,10 +149,14 @@ class TestBraintrustLogger(unittest.TestCase):
         call_args = mock_http_handler.post.call_args
         self.assertIsNotNone(call_args)
         json_data = call_args.kwargs["json"]
-        self.assertEqual(json_data["events"][0]["span_attributes"]["name"], "Custom Operation")
+        self.assertEqual(
+            json_data["events"][0]["span_attributes"]["name"], "Custom Operation"
+        )
 
     @patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
-    async def test_async_log_success_event_with_default_span_name(self, mock_get_http_handler):
+    async def test_async_log_success_event_with_default_span_name(
+        self, mock_get_http_handler
+    ):
         """Test async_log_success_event uses default span name when not provided."""
         # Mock async HTTP response
         mock_response = Mock()
@@ -169,7 +181,9 @@ class TestBraintrustLogger(unittest.TestCase):
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
         response_obj.__getitem__ = Mock(return_value=[choice_mock])
-        response_obj.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
 
         kwargs = {
             "litellm_call_id": "test-call-id",
@@ -180,16 +194,22 @@ class TestBraintrustLogger(unittest.TestCase):
         }
 
         # Execute
-        await logger.async_log_success_event(kwargs, response_obj, datetime.now(), datetime.now())
+        await logger.async_log_success_event(
+            kwargs, response_obj, datetime.now(), datetime.now()
+        )
 
         # Verify
         call_args = mock_http_handler.post.call_args
         self.assertIsNotNone(call_args)
         json_data = call_args.kwargs["json"]
-        self.assertEqual(json_data["events"][0]["span_attributes"]["name"], "Chat Completion")
+        self.assertEqual(
+            json_data["events"][0]["span_attributes"]["name"], "Chat Completion"
+        )
 
     @patch("litellm.integrations.braintrust_logging.get_async_httpx_client")
-    async def test_async_log_success_event_with_custom_span_name(self, mock_get_http_handler):
+    async def test_async_log_success_event_with_custom_span_name(
+        self, mock_get_http_handler
+    ):
         """Test async_log_success_event uses custom span name when provided."""
         # Mock async HTTP response
         mock_response = Mock()
@@ -214,7 +234,9 @@ class TestBraintrustLogger(unittest.TestCase):
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
         response_obj.__getitem__ = Mock(return_value=[choice_mock])
-        response_obj.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
 
         kwargs = {
             "litellm_call_id": "test-call-id",
@@ -225,13 +247,17 @@ class TestBraintrustLogger(unittest.TestCase):
         }
 
         # Execute
-        await logger.async_log_success_event(kwargs, response_obj, datetime.now(), datetime.now())
+        await logger.async_log_success_event(
+            kwargs, response_obj, datetime.now(), datetime.now()
+        )
 
         # Verify
         call_args = mock_http_handler.post.call_args
         self.assertIsNotNone(call_args)
         json_data = call_args.kwargs["json"]
-        self.assertEqual(json_data["events"][0]["span_attributes"]["name"], "Async Custom Operation")
+        self.assertEqual(
+            json_data["events"][0]["span_attributes"]["name"], "Async Custom Operation"
+        )
 
     @patch("litellm.integrations.braintrust_logging.HTTPHandler")
     def test_span_name_with_multiple_metadata_fields(self, MockHTTPHandler):
@@ -259,7 +285,9 @@ class TestBraintrustLogger(unittest.TestCase):
         response_obj = Mock(spec=litellm.ModelResponse)
         response_obj.choices = [choice_mock]
         response_obj.__getitem__ = Mock(return_value=[choice_mock])
-        response_obj.usage = litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        response_obj.usage = litellm.Usage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30
+        )
 
         kwargs = {
             "litellm_call_id": "test-call-id",
@@ -285,7 +313,9 @@ class TestBraintrustLogger(unittest.TestCase):
         json_data = call_args.kwargs["json"]
 
         # Check span name
-        self.assertEqual(json_data["events"][0]["span_attributes"]["name"], "Multi Metadata Test")
+        self.assertEqual(
+            json_data["events"][0]["span_attributes"]["name"], "Multi Metadata Test"
+        )
 
         # Check that other metadata is preserved
         event_metadata = json_data["events"][0]["metadata"]
@@ -293,7 +323,9 @@ class TestBraintrustLogger(unittest.TestCase):
         self.assertEqual(event_metadata["session_id"], "session456")
 
 
-async def _assert_completion_is_logged_by_braintrust(project_id: str, metadata: dict[str, object]) -> None:
+async def _assert_completion_is_logged_by_braintrust(
+    project_id: str, metadata: dict[str, object]
+) -> None:
     logger: Final = BraintrustLogger(
         api_key="test-key",
         api_base="https://api.braintrustdata.com/v1",
@@ -326,9 +358,9 @@ async def _assert_completion_is_logged_by_braintrust(project_id: str, metadata: 
     }
 
     with respx.mock(assert_all_called=True) as router:
-        insert: Final = router.post(f"https://api.braintrustdata.com/v1/project_logs/{project_id}/insert").mock(
-            return_value=httpx.Response(200, json={"ok": True})
-        )
+        insert: Final = router.post(
+            f"https://api.braintrustdata.com/v1/project_logs/{project_id}/insert"
+        ).mock(return_value=httpx.Response(200, json={"ok": True}))
         fixed_time: Final = datetime(2024, 1, 1)
         logger.log_success_event(kwargs, response, fixed_time, fixed_time)
 

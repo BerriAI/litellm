@@ -31,7 +31,9 @@ def msg(kind: str, **fields: Any) -> SimpleNamespace:
 def test_blocked_tools_modes() -> None:
     assert da.blocked_tools("full", []) == frozenset()
     assert da.blocked_tools("edit", []) == frozenset({"execute"})
-    assert {"write_file", "edit_file", "delete", "execute"} <= da.blocked_tools("read-only", [])
+    assert {"write_file", "edit_file", "delete", "execute"} <= da.blocked_tools(
+        "read-only", []
+    )
     assert da.blocked_tools("full", ["read", "ls"]) == frozenset({"read_file", "ls"})
     assert da.blocked_tools("full", ["bash", "grep"]) == frozenset({"execute", "grep"})
 
@@ -40,7 +42,9 @@ def test_interrupt_config_only_for_ask() -> None:
     assert da.interrupt_config("full", frozenset()) is None
     config = da.interrupt_config("ask", frozenset({"execute"}))
     assert set(config) == {"write_file", "edit_file", "delete"}
-    assert all(v == {"allowed_decisions": ["approve", "reject"]} for v in config.values())
+    assert all(
+        v == {"allowed_decisions": ["approve", "reject"]} for v in config.values()
+    )
 
 
 def test_normalized_tool_name() -> None:
@@ -70,7 +74,9 @@ def test_chat_model_kwargs_gateway_and_sdk(tmp_path: Path) -> None:
 
 
 def test_recursion_limit(tmp_path: Path) -> None:
-    assert da.recursion_limit(make_ctx(tmp_path)) == da.DEEPAGENTS_DEFAULT_RECURSION_LIMIT
+    assert (
+        da.recursion_limit(make_ctx(tmp_path)) == da.DEEPAGENTS_DEFAULT_RECURSION_LIMIT
+    )
     assert da.recursion_limit(make_ctx(tmp_path, max_turns=2)) == (
         da.DEEPAGENTS_BASE_RECURSION_LIMIT + 2 * da.DEEPAGENTS_STEPS_PER_TURN
     )
@@ -92,7 +98,9 @@ def test_stream_events_text_and_reasoning() -> None:
         )
     )
     assert events == [Reasoning(delta="hmm"), Text(delta="ab")]
-    extra = da.stream_events(msg("ai", content="x", additional_kwargs={"reasoning_content": "r"}))
+    extra = da.stream_events(
+        msg("ai", content="x", additional_kwargs={"reasoning_content": "r"})
+    )
     assert extra == [Reasoning(delta="r"), Text(delta="x")]
 
 
@@ -122,7 +130,9 @@ def test_update_events_tool_calls_results_and_skip() -> None:
             input={"file_path": "/a"},
             builtin=True,
         ),
-        ToolCall(id="c3", name="add", native_name="add", input={"args": None}, builtin=False),
+        ToolCall(
+            id="c3", name="add", native_name="add", input={"args": None}, builtin=False
+        ),
         ToolResult(id="c1", output="ok", is_error=False),
         ToolResult(id="c4", output="x", is_error=True),
     ]

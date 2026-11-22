@@ -22,7 +22,9 @@ def test_maybe_get_model_id_from_litellm_params():
 
     # Create a mock logging object with model_info in litellm_params
     mock_logging_obj = MagicMock()
-    mock_logging_obj.litellm_params = {"model_info": {"id": "test-model-id-from-litellm-params"}}
+    mock_logging_obj.litellm_params = {
+        "model_info": {"id": "test-model-id-from-litellm-params"}
+    }
 
     # Test extraction
     model_id = processor.maybe_get_model_id(mock_logging_obj)
@@ -38,7 +40,9 @@ def test_maybe_get_model_id_from_litellm_params_nested():
 
     # Create a mock logging object with model_info nested in metadata
     mock_logging_obj = MagicMock()
-    mock_logging_obj.litellm_params = {"metadata": {"model_info": {"id": "test-model-id-nested"}}}
+    mock_logging_obj.litellm_params = {
+        "metadata": {"model_info": {"id": "test-model-id-nested"}}
+    }
 
     # Test extraction
     model_id = processor.maybe_get_model_id(mock_logging_obj)
@@ -55,7 +59,9 @@ def test_maybe_get_model_id_from_kwargs():
     # Create a mock logging object with model_info in kwargs
     mock_logging_obj = MagicMock()
     mock_logging_obj.litellm_params = None
-    mock_logging_obj.kwargs = {"litellm_params": {"model_info": {"id": "test-model-id-from-kwargs"}}}
+    mock_logging_obj.kwargs = {
+        "litellm_params": {"model_info": {"id": "test-model-id-from-kwargs"}}
+    }
 
     # Test extraction
     model_id = processor.maybe_get_model_id(mock_logging_obj)
@@ -89,7 +95,9 @@ def test_maybe_get_model_id_no_logging_obj():
     """
     # Create a processor with model_info in data
     processor = ProxyBaseLLMRequestProcessing(
-        data={"litellm_metadata": {"model_info": {"id": "test-model-id-no-logging-obj"}}}
+        data={
+            "litellm_metadata": {"model_info": {"id": "test-model-id-no-logging-obj"}}
+        }
     )
 
     # Test extraction with None logging_obj
@@ -120,11 +128,15 @@ def test_maybe_get_model_id_priority_litellm_params_over_data():
     Test that model_id from logging_obj.litellm_params takes priority over self.data.
     """
     # Create a processor with model_info in both places
-    processor = ProxyBaseLLMRequestProcessing(data={"litellm_metadata": {"model_info": {"id": "model-id-from-data"}}})
+    processor = ProxyBaseLLMRequestProcessing(
+        data={"litellm_metadata": {"model_info": {"id": "model-id-from-data"}}}
+    )
 
     # Create a mock logging object with model_info
     mock_logging_obj = MagicMock()
-    mock_logging_obj.litellm_params = {"model_info": {"id": "model-id-from-litellm-params"}}
+    mock_logging_obj.litellm_params = {
+        "model_info": {"id": "model-id-from-litellm-params"}
+    }
 
     # Test extraction - should prefer litellm_params
     model_id = processor.maybe_get_model_id(mock_logging_obj)
@@ -204,7 +216,9 @@ def test_get_custom_headers_includes_deployment_model_name(metadata_key):
     mock_user_api_key_dict.tpm_limit = 1000
     mock_user_api_key_dict.rpm_limit = 100
 
-    logging_obj = _FakeLoggingObj(litellm_params={metadata_key: {"deployment": "azure/gpt-4o-2024-08-06"}})
+    logging_obj = _FakeLoggingObj(
+        litellm_params={metadata_key: {"deployment": "azure/gpt-4o-2024-08-06"}}
+    )
 
     headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
         user_api_key_dict=mock_user_api_key_dict,

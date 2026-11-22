@@ -41,7 +41,9 @@ class FakeHandler:
         self.calls: List[SimpleNamespace] = []
 
     async def post(self, *, url, headers, json, timeout=None):  # noqa: A002
-        self.calls.append(SimpleNamespace(url=url, headers=headers, json=json, timeout=timeout))
+        self.calls.append(
+            SimpleNamespace(url=url, headers=headers, json=json, timeout=timeout)
+        )
         if not self._items:
             raise AssertionError("FakeHandler ran out of programmed responses")
         item = self._items.pop(0)
@@ -92,7 +94,9 @@ def test_requires_api_base(monkeypatch):
 def test_requires_api_key(monkeypatch):
     monkeypatch.delenv("VIGIL_GUARD_API_KEY", raising=False)
     with pytest.raises(VigilGuardMissingConfig):
-        VigilGuardGuardrail(api_base="https://vigil.test", async_handler=FakeHandler([]))
+        VigilGuardGuardrail(
+            api_base="https://vigil.test", async_handler=FakeHandler([])
+        )
 
 
 def test_trailing_slash_stripped():
@@ -134,7 +138,9 @@ async def test_allowed_preserves_full_input_shape_and_logs_allow():
     structured = [{"role": "user", "content": "hello"}]
     inputs = {"texts": ["hello"], "structured_messages": structured, "model": "gpt-4o"}
     request_data = {"metadata": {}}
-    out = await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request", logging_obj=None)
+    out = await g.apply_guardrail(
+        inputs=inputs, request_data=request_data, input_type="request", logging_obj=None
+    )
     assert out["texts"] == ["hello"]
     assert out["structured_messages"] is structured
     assert out["model"] == "gpt-4o"
@@ -146,9 +152,13 @@ async def test_allowed_preserves_full_input_shape_and_logs_allow():
 
 
 async def test_sanitized_replaces_text():
-    handler = FakeHandler([_resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"})])
+    handler = FakeHandler(
+        [_resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"})]
+    )
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["my ssn is 123"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["my ssn is 123"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["[REDACTED]"]
 
 
@@ -172,7 +182,9 @@ async def test_sanitized_replaces_text():
 async def test_sanitized_precedence(body, expected):
     handler = FakeHandler([_resp(body)])
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["orig"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["orig"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == [expected]
 
 
@@ -180,7 +192,9 @@ async def test_blocked_raises_guardrail_exception_with_400():
     handler = FakeHandler([_resp({"decision": "BLOCKED", "blockMessage": "nope"})])
     g = _make_guardrail(handler)
     with pytest.raises(GuardrailRaisedException) as exc_info:
-        await g.apply_guardrail(inputs={"texts": ["bad"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["bad"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.status_code == 400
     assert exc_info.value.guardrail_name == "vigil-guard"
     assert exc_info.value.message == "nope"
@@ -211,7 +225,9 @@ async def test_block_reason_precedence(body, expected):
     handler = FakeHandler([_resp(body)])
     g = _make_guardrail(handler)
     with pytest.raises(GuardrailRaisedException) as exc_info:
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.message == expected
 
 
@@ -219,7 +235,9 @@ async def test_block_reason_is_clamped_to_500_chars():
     handler = FakeHandler([_resp({"decision": "BLOCKED", "blockMessage": "x" * 600})])
     g = _make_guardrail(handler)
     with pytest.raises(GuardrailRaisedException) as exc_info:
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert "x" * 500 in exc_info.value.message
     assert "x" * 501 not in exc_info.value.message
 
@@ -227,7 +245,9 @@ async def test_block_reason_is_clamped_to_500_chars():
 async def test_empty_and_whitespace_texts_skip_analyze():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["", "   ", "real"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["", "   ", "real"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["", "   ", "real"]
     assert len(handler.calls) == 1
     assert handler.calls[0].json["text"] == "real"
@@ -251,7 +271,9 @@ async def test_multi_text_preserves_length_and_order():
         ]
     )
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["A", "B", "C"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["A", "B", "C"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["A", "B-clean", "C"]
     assert len(handler.calls) == 3
 
@@ -265,25 +287,33 @@ async def test_one_blocked_text_blocks_the_whole_call():
     )
     g = _make_guardrail(handler)
     with pytest.raises(GuardrailRaisedException):
-        await g.apply_guardrail(inputs={"texts": ["ok", "bad"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["ok", "bad"]}, request_data={}, input_type="request"
+        )
 
 
 async def test_request_source_is_user_input():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert handler.calls[0].json["source"] == "user_input"
 
 
 async def test_response_source_is_model_output():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="response")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="response"
+    )
     assert handler.calls[0].json["source"] == "model_output"
 
 
 async def test_sanitized_returns_canonical_shape_and_logs_mask():
-    handler = FakeHandler([_resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"})])
+    handler = FakeHandler(
+        [_resp({"decision": "SANITIZED", "sanitizedText": "[REDACTED]"})]
+    )
     g = _make_guardrail(handler)
     tools = [{"type": "function", "function": {"name": "f"}}]
     inputs = {
@@ -295,7 +325,9 @@ async def test_sanitized_returns_canonical_shape_and_logs_mask():
         "model": "gpt-4o",
     }
     request_data = {"metadata": {}}
-    out = await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+    out = await g.apply_guardrail(
+        inputs=inputs, request_data=request_data, input_type="request"
+    )
     assert out["texts"] == ["[REDACTED]"]
     assert out["images"] == ["img1"]
     assert out["tools"] == tools
@@ -320,7 +352,9 @@ async def test_empty_images_and_tools_are_preserved_when_present():
 async def test_logging_obj_none_supported():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request", logging_obj=None)
+    out = await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request", logging_obj=None
+    )
     assert out["texts"] == ["x"]
 
 
@@ -328,7 +362,9 @@ async def test_standard_guardrail_logging_remains_active():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
     request_data = {"metadata": {}}
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
+    )
     entries = request_data["metadata"]["standard_logging_guardrail_information"]
     assert len(entries) == 1
     assert entries[0]["guardrail_name"] == "vigil-guard"
@@ -338,7 +374,9 @@ async def test_standard_guardrail_logging_remains_active():
 async def test_request_url_headers_and_body():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler, api_base="https://vigil.test", api_key="vg_secret")
-    await g.apply_guardrail(inputs={"texts": ["hello"]}, request_data={}, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["hello"]}, request_data={}, input_type="request"
+    )
     call = handler.calls[0]
     assert call.url == "https://vigil.test/v1/guard/analyze"
     assert call.headers["Authorization"] == "Bearer vg_secret"
@@ -353,7 +391,9 @@ async def test_default_timeout_forwarded_when_unset():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
     assert g.timeout == _DEFAULT_VIGIL_TIMEOUT
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert handler.calls[0].timeout == _DEFAULT_VIGIL_TIMEOUT
 
 
@@ -362,7 +402,9 @@ async def test_configured_timeout_forwarded_to_handler():
     g = _make_guardrail(handler, timeout=30)
     expected = httpx.Timeout(30, connect=5.0)
     assert g.timeout == expected
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert handler.calls[0].timeout == expected
 
 
@@ -400,7 +442,9 @@ async def test_api_key_only_in_header_never_in_payload():
 async def test_retry_once_on_transient_status(code):
     handler = FakeHandler([_resp({}, status_code=code), _resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["x"]
     assert len(handler.calls) == 2
 
@@ -409,7 +453,9 @@ async def test_retry_once_on_transient_status(code):
 async def test_retry_once_on_transient_exception(exc):
     handler = FakeHandler([exc, _resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
-    out = await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["x"]
     assert len(handler.calls) == 2
 
@@ -428,7 +474,9 @@ async def test_no_retry_on_non_transient_exception(exc, expected):
     handler = FakeHandler([exc])
     g = _make_guardrail(handler)
     with pytest.raises(expected):
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert len(handler.calls) == 1
 
 
@@ -437,7 +485,9 @@ async def test_no_retry_on_non_429_4xx(code):
     handler = FakeHandler([_resp({}, status_code=code)])
     g = _make_guardrail(handler)
     with pytest.raises(GuardrailRaisedException) as exc_info:
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.status_code == 400
     assert len(handler.calls) == 1
 
@@ -449,7 +499,9 @@ async def test_fail_closed_raises_after_exhausted_retry(caplog):
         caplog.at_level(logging.ERROR),
         pytest.raises(GuardrailRaisedException) as exc_info,
     ):
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.status_code == 400
     assert len(handler.calls) == 2
     assert any("fail_closed" in record.message for record in caplog.records)
@@ -464,7 +516,9 @@ async def test_fail_closed_raises_controlled_block_on_transport_error(exc, caplo
         caplog.at_level(logging.ERROR),
         pytest.raises(GuardrailRaisedException) as exc_info,
     ):
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.status_code == 400
     assert exc_info.value.guardrail_name == "vigil-guard"
     assert exc_info.value.__cause__ is exc
@@ -478,7 +532,9 @@ async def test_fail_open_returns_inputs_unchanged_on_backend_error(caplog):
     inputs = {"texts": ["x"], "structured_messages": structured}
     request_data = {"metadata": {}}
     with caplog.at_level(logging.ERROR):
-        out = await g.apply_guardrail(inputs=inputs, request_data=request_data, input_type="request")
+        out = await g.apply_guardrail(
+            inputs=inputs, request_data=request_data, input_type="request"
+        )
     assert out is not inputs
     assert out["texts"] == ["x"]
     assert out["structured_messages"] == structured
@@ -512,7 +568,9 @@ async def test_fail_open_does_not_swallow_programming_errors(exc):
     handler = FakeHandler([exc])
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
     with pytest.raises(type(exc)):
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert len(handler.calls) == 1
 
 
@@ -523,7 +581,9 @@ async def test_invalid_decision_fail_closed_raises(caplog):
         caplog.at_level(logging.ERROR),
         pytest.raises(GuardrailRaisedException) as exc_info,
     ):
-        await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
     assert exc_info.value.status_code == 400
     assert "MAYBE" not in exc_info.value.message
     assert any("MAYBE" in record.message for record in caplog.records)
@@ -532,7 +592,9 @@ async def test_invalid_decision_fail_closed_raises(caplog):
 async def test_invalid_decision_fail_open_returns_inputs():
     handler = FakeHandler([_resp({"decision": "MAYBE"})])
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
-    out = await g.apply_guardrail(inputs={"texts": ["x"]}, request_data={}, input_type="request")
+    out = await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data={}, input_type="request"
+    )
     assert out["texts"] == ["x"]
 
 
@@ -569,14 +631,18 @@ async def test_response_tool_call_arguments_allowed_unchanged():
     handler = FakeHandler([_resp({"decision": "ALLOWED"})])
     g = _make_guardrail(handler)
     tcs = [_tool_call('{"q": "weather"}')]
-    out = await g.apply_guardrail(inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response")
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
     assert handler.calls[0].json["text"] == '{"q": "weather"}'
     assert handler.calls[0].json["source"] == "model_output"
     assert out["tool_calls"] == tcs
 
 
 async def test_response_tool_call_arguments_sanitized_in_place():
-    handler = FakeHandler([_resp({"decision": "SANITIZED", "sanitizedText": '{"email": "[EMAIL]"}'})])
+    handler = FakeHandler(
+        [_resp({"decision": "SANITIZED", "sanitizedText": '{"email": "[EMAIL]"}'})]
+    )
     g = _make_guardrail(handler)
     tcs = [_tool_call('{"email": "john@example.com"}', name="send_mail")]
     inputs = {"texts": [], "tool_calls": tcs}
@@ -584,11 +650,15 @@ async def test_response_tool_call_arguments_sanitized_in_place():
     assert out["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL]"}'
     assert out["tool_calls"][0]["function"]["name"] == "send_mail"
     # original inputs are not mutated in place
-    assert inputs["tool_calls"][0]["function"]["arguments"] == ('{"email": "john@example.com"}')
+    assert inputs["tool_calls"][0]["function"]["arguments"] == (
+        '{"email": "john@example.com"}'
+    )
 
 
 async def test_response_tool_call_arguments_blocked_raises():
-    handler = FakeHandler([_resp({"decision": "BLOCKED", "blockMessage": "tool blocked"})])
+    handler = FakeHandler(
+        [_resp({"decision": "BLOCKED", "blockMessage": "tool blocked"})]
+    )
     g = _make_guardrail(handler)
     tcs = [_tool_call('{"x": "bad"}')]
     with pytest.raises(GuardrailRaisedException) as exc_info:
@@ -632,7 +702,9 @@ async def test_tool_call_scan_backend_failure_fail_open_passes_through():
     handler = FakeHandler([_resp({}, status_code=503), _resp({}, status_code=503)])
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
     tcs = [_tool_call('{"x": "y"}')]
-    out = await g.apply_guardrail(inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response")
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
     assert out["tool_calls"] == tcs
 
 
@@ -653,7 +725,9 @@ async def test_response_tool_call_unrecognized_decision_fail_open_passes_through
     handler = FakeHandler([_resp({"decision": "MAYBE"})])
     g = _make_guardrail(handler, unreachable_fallback="fail_open")
     tcs = [_tool_call('{"x": "y"}')]
-    out = await g.apply_guardrail(inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response")
+    out = await g.apply_guardrail(
+        inputs={"texts": [], "tool_calls": tcs}, request_data={}, input_type="response"
+    )
     assert out["tool_calls"] == tcs
 
 
@@ -672,7 +746,9 @@ async def test_metadata_allowlist_and_clamping():
             "conversation_id": 7,
         },
     }
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
+    )
     md = handler.calls[0].json["metadata"]
     assert md["model"] == "gpt-4o"
     assert md["user_id"] == "u1"
@@ -692,7 +768,9 @@ async def test_metadata_source_precedence_and_litellm_metadata_fallback():
         "metadata": {"user_id": "nested"},
         "litellm_metadata": {"tenant_id": "lm-tenant"},
     }
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
+    )
     md = handler.calls[0].json["metadata"]
     assert md["user_id"] == "top"
     assert md["tenant_id"] == "lm-tenant"
@@ -705,7 +783,9 @@ async def test_metadata_uses_later_source_when_earlier_value_is_unclampable():
         "user_id": {"drop": "dicts are not forwarded"},
         "metadata": {"user_id": "nested"},
     }
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
+    )
     assert handler.calls[0].json["metadata"]["user_id"] == "nested"
 
 
@@ -717,7 +797,9 @@ async def test_metadata_array_items_are_clamped_and_filtered():
             "org_id": ["z" * 600, 123, True, {"drop": 1}, None],
         },
     }
-    await g.apply_guardrail(inputs={"texts": ["x"]}, request_data=request_data, input_type="request")
+    await g.apply_guardrail(
+        inputs={"texts": ["x"]}, request_data=request_data, input_type="request"
+    )
     assert handler.calls[0].json["metadata"]["org_id"] == ["z" * 500, 123]
 
 

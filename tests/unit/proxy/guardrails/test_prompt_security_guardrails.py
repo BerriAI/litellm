@@ -90,7 +90,9 @@ async def test_apply_guardrail_block_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     request_data = {
         "messages": [
@@ -138,7 +140,9 @@ async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     request_data = {
         "messages": [
@@ -151,11 +155,17 @@ async def test_apply_guardrail_modify_request(monkeypatch: pytest.MonkeyPatch):
         "structured_messages": request_data["messages"],
     }
 
-    modified_messages = [{"role": "user", "content": "User prompt with PII: SSN [REDACTED]"}]
+    modified_messages = [
+        {"role": "user", "content": "User prompt with PII: SSN [REDACTED]"}
+    ]
 
     # Mock API response for modifying
     mock_response = Response(
-        json={"result": {"prompt": {"action": "modify", "modified_messages": modified_messages}}},
+        json={
+            "result": {
+                "prompt": {"action": "modify", "modified_messages": modified_messages}
+            }
+        },
         status_code=200,
         request=Request(method="POST", url="https://test.prompt.security/api/protect"),
     )
@@ -194,7 +204,9 @@ def _tool_replay_messages() -> list[AllMessageValues]:
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": '{"ssn": "123-45-6789"}'},
         {"role": "user", "content": "Summarize what you found."},
@@ -292,7 +304,9 @@ async def test_apply_guardrail_allow_request(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     request_data = {
         "messages": [
@@ -329,11 +343,15 @@ async def test_apply_guardrail_block_response(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="post_call", default_on=True
+    )
 
     request_data = {}
 
-    inputs = {"texts": ["Here is sensitive information: credit card 1234-5678-9012-3456"]}
+    inputs = {
+        "texts": ["Here is sensitive information: credit card 1234-5678-9012-3456"]
+    }
 
     # Mock API response for blocking
     mock_response = Response(
@@ -368,7 +386,9 @@ async def test_apply_guardrail_modify_response(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="post_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="post_call", default_on=True
+    )
 
     request_data = {}
 
@@ -599,7 +619,9 @@ async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     # Create a minimal valid 1x1 PNG image (red pixel)
     png_data = base64.b64decode(
@@ -628,7 +650,9 @@ async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
     mock_upload_response = Response(
         json={"jobId": "test-job-123"},
         status_code=200,
-        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+        request=Request(
+            method="POST", url="https://test.prompt.security/api/sanitizeFile"
+        ),
     )
     mock_upload_response.raise_for_status = lambda: None
 
@@ -640,7 +664,9 @@ async def test_file_sanitization(monkeypatch: pytest.MonkeyPatch):
             "metadata": {"action": "allow", "violations": []},
         },
         status_code=200,
-        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+        request=Request(
+            method="GET", url="https://test.prompt.security/api/sanitizeFile"
+        ),
     )
     mock_poll_response.raise_for_status = lambda: None
 
@@ -678,7 +704,9 @@ async def test_file_sanitization_modify_blocks_by_default(monkeypatch: pytest.Mo
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
     csv_data = b"name,email\nAlice,alice@example.com\n"
     item = {
         "type": "file",
@@ -716,7 +744,9 @@ async def test_standalone_image_sanitization_modify_blocks_by_default(monkeypatc
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
     guardrail.poll_interval = 0
     image_url = "data:image/png;base64," + base64.b64encode(b"image-content").decode()
     upload_response = Response(
@@ -962,7 +992,9 @@ async def test_file_sanitization_block(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     # Create a minimal valid 1x1 PNG image
     png_data = base64.b64decode(
@@ -991,7 +1023,9 @@ async def test_file_sanitization_block(monkeypatch: pytest.MonkeyPatch):
     mock_upload_response = Response(
         json={"jobId": "test-job-123"},
         status_code=200,
-        request=Request(method="POST", url="https://test.prompt.security/api/sanitizeFile"),
+        request=Request(
+            method="POST", url="https://test.prompt.security/api/sanitizeFile"
+        ),
     )
     mock_upload_response.raise_for_status = lambda: None
 
@@ -1006,7 +1040,9 @@ async def test_file_sanitization_block(monkeypatch: pytest.MonkeyPatch):
             },
         },
         status_code=200,
-        request=Request(method="GET", url="https://test.prompt.security/api/sanitizeFile"),
+        request=Request(
+            method="GET", url="https://test.prompt.security/api/sanitizeFile"
+        ),
     )
     mock_poll_response.raise_for_status = lambda: None
 
@@ -1036,7 +1072,9 @@ async def test_user_api_key_alias_forwarding(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     request_data = {
         "messages": [{"role": "user", "content": "Safe prompt"}],
@@ -1075,7 +1113,9 @@ async def test_role_filtering(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_KEY", "test-key")
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     messages = [
         {"role": "system", "content": "You are a helpful assistant"},
@@ -1135,7 +1175,9 @@ async def test_check_tool_results_enabled(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMPT_SECURITY_API_BASE", "https://test.prompt.security")
     monkeypatch.setenv("PROMPT_SECURITY_CHECK_TOOL_RESULTS", "true")
 
-    guardrail = PromptSecurityGuardrail(guardrail_name="test-guard", event_hook="pre_call", default_on=True)
+    guardrail = PromptSecurityGuardrail(
+        guardrail_name="test-guard", event_hook="pre_call", default_on=True
+    )
 
     assert guardrail.check_tool_results is True
 

@@ -67,8 +67,7 @@ async def test_google_embedding_applies_timeout_and_parses_vectors(
             "vertex_location": "us-central1",
             "vertex_credentials": "embedding-timeout-test-credentials",
         }
-        if is_vertex
-        else {}
+        if is_vertex else {}
     )
     monkeypatch.setitem(
         google_batch_embeddings._credentials_project_mapping,
@@ -79,15 +78,13 @@ async def test_google_embedding_applies_timeout_and_parses_vectors(
     url: Final = (
         "https://us-central1-aiplatform.googleapis.com/v1/projects/embedding-timeout-tests/"
         "locations/us-central1/publishers/google/models/gemini-embedding-2:embedContent"
-        if is_vertex
-        else GEMINI_BATCH_EMBEDDINGS_URL
+        if is_vertex else GEMINI_BATCH_EMBEDDINGS_URL
     )
     route: Final = respx_mock.post(url).mock(
         return_value=httpx.Response(
             200,
             json={"embedding": {"values": [0.1, 0.2, 0.3]}}
-            if is_vertex
-            else {"embeddings": [{"values": [0.1, 0.2, 0.3]}]},
+            if is_vertex else {"embeddings": [{"values": [0.1, 0.2, 0.3]}]},
         )
     )
 
@@ -104,11 +101,14 @@ async def test_google_embedding_applies_timeout_and_parses_vectors(
     assert route.call_count == 1
     content: Final = {"parts": [{"text": "good morning from litellm"}]}
     expected_body: Final = (
-        {"content": content} if is_vertex else {"requests": [{"model": f"models/{model_name}", "content": content}]}
+        {"content": content}
+        if is_vertex else {"requests": [{"model": f"models/{model_name}", "content": content}]}
     )
     assert json.loads(route.calls[0].request.content) == expected_body
     assert [item["embedding"] for item in response.data] == [[0.1, 0.2, 0.3]]
-    local_token_count: Final = litellm.token_counter(model=model_name, text="good morning from litellm")
+    local_token_count: Final = litellm.token_counter(
+        model=model_name, text="good morning from litellm"
+    )
     assert local_token_count > 0
     assert (response.usage.prompt_tokens, response.usage.total_tokens) == (
         local_token_count,
@@ -338,7 +338,9 @@ MEDIA_LOOKING_TEXTS: Final = (
 
 async def _embed(model: str, sync_mode: bool, embedding_input: list[object]) -> EmbeddingResponse:
     if sync_mode:
-        return litellm.embedding(model=model, input=embedding_input, api_key="gemini-test-key", **_vertex_params(model))
+        return litellm.embedding(
+            model=model, input=embedding_input, api_key="gemini-test-key", **_vertex_params(model)
+        )
     return await litellm.aembedding(
         model=model, input=embedding_input, api_key="gemini-test-key", **_vertex_params(model)
     )

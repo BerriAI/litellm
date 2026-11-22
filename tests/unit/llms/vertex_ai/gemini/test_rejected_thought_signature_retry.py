@@ -130,9 +130,7 @@ async def _complete(
     response: Final = (
         await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(backend)))
         if is_async
-        else litellm.completion(
-            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(backend)))
-        )
+        else litellm.completion(**kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(backend))))
     )
     if isinstance(response, ModelResponse):
         return _text_of(response)
@@ -186,9 +184,7 @@ async def test_placeholder_rejected_too_is_raised_after_the_second_post(is_async
 async def test_unrelated_400_is_raised_without_a_resend(is_async: bool, stream: bool):
     sent: Final[list[dict[str, object]]] = []
     with pytest.raises(litellm.BadRequestError, match="Unknown name"):
-        await _complete(
-            HISTORY_WITH_FOREIGN_SIGNATURES, _replay((_rejected(UNRELATED_REJECTION),), sent), is_async, stream
-        )
+        await _complete(HISTORY_WITH_FOREIGN_SIGNATURES, _replay((_rejected(UNRELATED_REJECTION),), sent), is_async, stream)
     assert len(sent) == 1
 
 
@@ -237,11 +233,7 @@ def _cached_history(
     tag: str, cached_signature: str = VERTEX_MINTED, later_signatures: tuple[str, ...] = ()
 ) -> tuple[Mapping[str, object], ...]:
     later_answer: Final = (
-        {
-            "role": "assistant",
-            "content": "Noted.",
-            "provider_specific_fields": {"thought_signatures": [*later_signatures]},
-        }
+        {"role": "assistant", "content": "Noted.", "provider_specific_fields": {"thought_signatures": [*later_signatures]}}
         if later_signatures
         else {"role": "assistant", "content": "Noted."}
     )
@@ -417,9 +409,7 @@ def _native_contents(signature_key: str) -> list[Mapping[str, object]]:
         NATIVE_QUESTION,
         {
             "role": "model",
-            "parts": [
-                {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}, signature_key: VERTEX_MINTED}
-            ],
+            "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}, signature_key: VERTEX_MINTED}],
         },
         NATIVE_TOOL_RESULT,
     ]

@@ -36,7 +36,10 @@ from litellm.proxy.mcp_server.outbound_credentials.types import (
     PrivateKeyJwtAuth,
 )
 
-_PATCH_TARGET = "litellm.proxy.mcp_server.outbound_credentials.token_endpoint.get_async_httpx_client"
+_PATCH_TARGET = (
+    "litellm.proxy.mcp_server.outbound_credentials."
+    "token_endpoint.get_async_httpx_client"
+)
 
 _ENDPOINT = "https://idp.example.com/oauth2/token"
 _CLIENT_ID = "litellm-client-id"

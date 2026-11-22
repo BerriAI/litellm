@@ -38,7 +38,9 @@ def _model_from_frame(frame: bytes | str) -> str:
 
 
 def test_restamps_sse_bytes_frame():
-    restamped = restamp_anthropic_stream_chunk_model(_message_start_frame("claude-haiku-4-5-20251001"), "claude-auto-1")
+    restamped = restamp_anthropic_stream_chunk_model(
+        _message_start_frame("claude-haiku-4-5-20251001"), "claude-auto-1"
+    )
 
     assert isinstance(restamped, bytes)
     assert _model_from_frame(restamped) == "claude-auto-1"

@@ -5,6 +5,7 @@ either a ``dict`` or a ``ServerToolUse`` pydantic instance.
 See https://github.com/BerriAI/litellm/issues/26153.
 """
 
+
 import pytest
 
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
@@ -58,8 +59,7 @@ def test_response_object_includes_web_search_call_with_dict_server_tool_use():
 
     # Must not raise — and must correctly detect the web search call.
     result = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-        response_object=response,
-        usage=usage,  # type: ignore[arg-type]
+        response_object=response, usage=usage  # type: ignore[arg-type]
     )
     assert result is True
 
@@ -69,8 +69,7 @@ def test_response_object_includes_web_search_call_with_pydantic_server_tool_use(
     usage = _UsageWithDictServerToolUse(ServerToolUse(web_search_requests=2))
 
     result = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-        response_object=response,
-        usage=usage,  # type: ignore[arg-type]
+        response_object=response, usage=usage  # type: ignore[arg-type]
     )
     assert result is True
 
@@ -80,7 +79,6 @@ def test_response_object_includes_web_search_call_with_none_server_tool_use():
     usage = _UsageWithDictServerToolUse(None)
 
     result = StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
-        response_object=response,
-        usage=usage,  # type: ignore[arg-type]
+        response_object=response, usage=usage  # type: ignore[arg-type]
     )
     assert result is False

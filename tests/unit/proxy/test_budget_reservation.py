@@ -445,9 +445,7 @@ async def _model_access_group_counters(stores: RustAuthStores, matched, **max_bu
 
 
 @pytest.mark.asyncio
-async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(
-    rust_auth_stores: RustAuthStores,
-):
+async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(rust_auth_stores: RustAuthStores):
     counters = await _model_access_group_counters(rust_auth_stores, ["premium"], premium=25.0)
 
     assert len(counters) == 1

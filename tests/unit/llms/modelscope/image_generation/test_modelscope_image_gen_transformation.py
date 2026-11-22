@@ -152,7 +152,7 @@ class TestModelScopeImageGenerationTransformation:
         mock_get_secret.return_value = None
         headers = {}
 
-        with pytest.raises(ValueError, match="MODELSCOPE_API_KEY is not set\\. Please set it via") as exc_info:
+        with pytest.raises(ValueError, match='MODELSCOPE_API_KEY is not set\\. Please set it via') as exc_info:
             self.config.validate_environment(
                 headers=headers,
                 model=self.model,
@@ -317,7 +317,10 @@ class TestModelScopeImageGenerationTransformation:
         )
 
         assert len(result.data) == 1
-        assert result.data[0].revised_prompt == "A detailed description of a beautiful sunset"
+        assert (
+            result.data[0].revised_prompt
+            == "A detailed description of a beautiful sunset"
+        )
 
     def test_transform_image_generation_response_empty_data(self):
         """Test that transform_image_generation_response handles empty data array."""
@@ -362,7 +365,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception, match="litellm\\.BadRequestError: ModelScope error: Invalid prompt") as exc_info:
+        with pytest.raises(Exception, match='litellm\\.BadRequestError: ModelScope error: Invalid prompt') as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,
@@ -388,7 +391,7 @@ class TestModelScopeImageGenerationTransformation:
 
         model_response = ImageResponse(data=[])
 
-        with pytest.raises(Exception, match="litellm\\.InternalServerError: Error parsing ModelScope") as exc_info:
+        with pytest.raises(Exception, match='litellm\\.InternalServerError: Error parsing ModelScope') as exc_info:
             self.config.transform_image_generation_response(
                 model=self.model,
                 raw_response=mock_response,

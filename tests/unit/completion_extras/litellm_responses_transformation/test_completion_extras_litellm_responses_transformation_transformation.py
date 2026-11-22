@@ -7711,7 +7711,9 @@ def test_transform_request_forwards_vertex_credentials_only_for_vertex_muse_mode
         litellm_logging_obj=Mock(),
     )
 
-    assert {key: request.get(key) for key in credentials} == (credentials if forwards else dict.fromkeys(credentials))
+    assert {key: request.get(key) for key in credentials} == (
+        credentials if forwards else dict.fromkeys(credentials)
+    )
 
 
 _USER_HI: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
