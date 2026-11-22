@@ -43937,6 +43937,73 @@
   "mcp_management": {
     "components": {
       "schemas": {
+        "EventType": {
+          "properties": {
+            "_meta": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "$ref": "#/components/schemas/JsonValue"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Meta"
+            },
+            "delivery": {
+              "items": {
+                "enum": [
+                  "poll",
+                  "push",
+                  "webhook"
+                ],
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "Delivery",
+              "type": "array"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Description"
+            },
+            "inputSchema": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Inputschema",
+              "type": "object"
+            },
+            "name": {
+              "minLength": 1,
+              "title": "Name",
+              "type": "string"
+            },
+            "payloadSchema": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Payloadschema",
+              "type": "object"
+            }
+          },
+          "required": [
+            "name",
+            "delivery"
+          ],
+          "title": "EventType",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -43950,6 +44017,7 @@
           "title": "HTTPValidationError",
           "type": "object"
         },
+        "JsonValue": {},
         "LiteLLM_MCPServerTable": {
           "description": "Represents a LiteLLM_MCPServerTable record",
           "properties": {
@@ -46449,6 +46517,176 @@
           "title": "RejectMCPServerRequest",
           "type": "object"
         },
+        "SubscriptionList": {
+          "properties": {
+            "next_offset": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Next Offset"
+            },
+            "subscriptions": {
+              "items": {
+                "$ref": "#/components/schemas/SubscriptionView"
+              },
+              "title": "Subscriptions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "subscriptions"
+          ],
+          "title": "SubscriptionList",
+          "type": "object"
+        },
+        "SubscriptionView": {
+          "properties": {
+            "arguments": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Arguments",
+              "type": "object"
+            },
+            "callback_host": {
+              "title": "Callback Host",
+              "type": "string"
+            },
+            "created_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Created At"
+            },
+            "event_name": {
+              "title": "Event Name",
+              "type": "string"
+            },
+            "failed_since": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Failed Since"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "last_delivery_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Delivery At"
+            },
+            "last_error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connection_refused",
+                    "timeout",
+                    "tls_error",
+                    "http_4xx",
+                    "http_5xx",
+                    "challenge_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Error"
+            },
+            "refresh_before": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Refresh Before"
+            },
+            "server_id": {
+              "title": "Server Id",
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "pending",
+                "active",
+                "suspended",
+                "terminated"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "team_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team Id"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "id",
+            "server_id",
+            "event_name",
+            "arguments",
+            "callback_host",
+            "status",
+            "user_id",
+            "team_id",
+            "refresh_before",
+            "last_delivery_at",
+            "last_error",
+            "failed_since",
+            "created_at"
+          ],
+          "title": "SubscriptionView",
+          "type": "object"
+        },
         "UpdateMCPServerRequest": {
           "properties": {
             "alias": {
@@ -47103,6 +47341,173 @@
             }
           ],
           "summary": "Discover Mcp Servers",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions": {
+        "get": {
+          "operationId": "list_subscriptions_v1_mcp_events_subscriptions_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "server_id",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Server Id"
+              }
+            },
+            {
+              "in": "query",
+              "name": "status",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "pending",
+                      "active",
+                      "suspended",
+                      "terminated"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Status"
+              }
+            },
+            {
+              "in": "query",
+              "name": "key_alias",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Key Alias"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 500,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SubscriptionList"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Subscriptions",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/types": {
+        "get": {
+          "description": "List the event types one events-enabled MCP server publishes to this caller, under their upstream names.",
+          "operationId": "list_event_types_v1_mcp_events_types_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "server_id",
+              "required": true,
+              "schema": {
+                "title": "Server Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "$ref": "#/components/schemas/EventType"
+                    },
+                    "title": "Response List Event Types V1 Mcp Events Types Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Event Types",
           "tags": [
             "mcp_management"
           ]
