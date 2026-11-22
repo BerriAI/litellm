@@ -129,6 +129,10 @@ from .long_decode import (
     with_initial_prompt_tokens,
     with_spans_shifted,
 )
+from .rejected_thought_signature_retry import (
+    post_with_accepted_thought_signatures_async,
+    post_with_accepted_thought_signatures_sync,
+)
 from .transformation import (
     async_transform_request_body,
     gemini_convert_messages_with_history,
@@ -2864,6 +2868,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return default_headers
 
 
+def _log_generate_request(
+    logging_obj: LoggingClass,
+    messages: Sequence[AllMessageValues],
+    api_base: str,
+    headers: Mapping[str, str],
+    body: RequestBody,
+) -> None:
+    logging_obj.pre_call(
+        input=messages,
+        api_key="",
+        additional_args={"complete_input_dict": body, "api_base": api_base, "headers": headers},
+    )
+
+
 async def make_call(
     client: AsyncHTTPHandler | None,  # module-level client
     gemini_client: AsyncHTTPHandler | None,  # if passed by user
@@ -3105,39 +3123,37 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
+
+        open_stream: Final = partial(
+            make_call,
+            gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+            api_base=api_base,
+            headers=headers,
+            model=model,
+            messages=messages,
+            logging_obj=logging_obj,
+            hop_headers=partial(
+                self._fresh_headers_async,
+                headers,
+                extra_headers,
+                vertex_credentials,
+                vertex_project,
+                custom_llm_provider,
+            ),
+            timeout=timeout,
         )
 
-        request_body_str: Final = json.dumps(request_body)
+        async def open_with_accepted_signatures(client: AsyncHTTPHandler | None) -> ModelResponseIterator:
+            async def post(body: RequestBody) -> ModelResponseIterator:
+                return await open_stream(client=client, data=json.dumps(body), request_body=body)
+
+            return (await post_with_accepted_thought_signatures_async(request_body, post, log_request))[1]
+
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=None,
-            make_call=partial(
-                make_call,
-                gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
-                api_base=api_base,
-                headers=headers,
-                data=request_body_str,
-                model=model,
-                messages=messages,
-                logging_obj=logging_obj,
-                request_body=request_body,
-                hop_headers=partial(
-                    self._fresh_headers_async,
-                    headers,
-                    extra_headers,
-                    vertex_credentials,
-                    vertex_project,
-                    custom_llm_provider,
-                ),
-                timeout=timeout,
-            ),
+            make_call=open_with_accepted_signatures,
             model=model,
             custom_llm_provider="vertex_ai_beta",
             logging_obj=logging_obj,
@@ -3215,15 +3231,8 @@ class VertexLLM(VertexBase):
         else:
             client = client
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, api_base, headers)
+        log_request(request_body)
 
         fresh_headers: Final = partial(
             self._fresh_headers_async, headers, extra_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3252,14 +3261,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = await post(request_body)
+        sent_body, first_response = await post_with_accepted_thought_signatures_async(request_body, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=await collect_hops_async(parse_body(first_response), request_body, post),
+            hops=await collect_hops_async(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=request_body,
+            request_body=sent_body,
             messages=messages,
         )
 
@@ -3397,15 +3406,8 @@ class VertexLLM(VertexBase):
         )
 
         ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
+        log_request: Final = partial(_log_generate_request, logging_obj, messages, url, headers)
+        log_request(data)
 
         fresh_headers: Final = partial(
             self._fresh_headers, headers, caller_headers, vertex_credentials, vertex_project, custom_llm_provider
@@ -3413,22 +3415,27 @@ class VertexLLM(VertexBase):
 
         ## SYNC STREAMING CALL ##
         if stream is True:
-            request_data_str: Final = json.dumps(data)
+            open_stream: Final = partial(
+                make_sync_call,
+                gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
+                api_base=url,
+                model=model,
+                messages=messages,
+                logging_obj=logging_obj,
+                headers=headers,
+                hop_headers=fresh_headers,
+                timeout=timeout,
+            )
+
+            def open_with_accepted_signatures(client: HTTPHandler | None) -> ModelResponseIterator:
+                def post(body: RequestBody) -> ModelResponseIterator:
+                    return open_stream(client=client, data=json.dumps(body), request_body=body)
+
+                return post_with_accepted_thought_signatures_sync(data, post, log_request)[1]
+
             streaming_response: Final = CustomStreamWrapper(
                 completion_stream=None,
-                make_call=partial(
-                    make_sync_call,
-                    gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                    api_base=url,
-                    data=request_data_str,
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                    request_body=data,
-                    hop_headers=fresh_headers,
-                    timeout=timeout,
-                ),
+                make_call=open_with_accepted_signatures,
                 model=model,
                 custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
@@ -3467,14 +3474,14 @@ class VertexLLM(VertexBase):
                 )
             return response
 
-        first_response: Final = post(data)
+        sent_body, first_response = post_with_accepted_thought_signatures_sync(data, post, log_request)
         return _transform_long_decode_hops(
             model=model,
-            hops=collect_hops_sync(parse_body(first_response), data, post),
+            hops=collect_hops_sync(parse_body(first_response), sent_body, post),
             first_response=first_response,
             model_response=model_response,
             logging_obj=logging_obj,
-            request_body=data,
+            request_body=sent_body,
             messages=messages,
         )
 
