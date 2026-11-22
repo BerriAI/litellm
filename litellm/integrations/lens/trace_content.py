@@ -337,14 +337,15 @@ class TraceContentSpool:
         object_key: Final = self.store.object_key(name)
         if object_key is None:
             return Unavailable.STORAGE_NOT_CONFIGURED
-        if not self._admit_upload(encoded.size):
+        held: Final = sys.getsizeof(encoded.body) + encoded.size
+        if not self._admit_upload(held):
             return Unavailable.OVERLOADED
         try:
             upload: Final = asyncio.ensure_future(self.store.upload(object_key, encoded.body))
         except Exception:  # noqa: BLE001  # a store that cannot start an upload leaves the content unavailable
-            self._uploaded_bytes(encoded.size)
+            self._uploaded_bytes(held)
             return Unavailable.UPLOAD_FAILED
-        upload.add_done_callback(partial(self._uploaded, encoded.size))
+        upload.add_done_callback(partial(self._uploaded, held))
         try:
             stored: Final = await asyncio.wait_for(asyncio.shield(upload), self.upload_timeout)
         except asyncio.CancelledError:
@@ -356,7 +357,8 @@ class TraceContentSpool:
         return Stored(object_key=object_key, size=encoded.size, sha256=encoded.sha256)
 
     def _admit_upload(self, size: int) -> bool:
-        """Reserves one native upload and its body, which the native client holds until it finishes."""
+        """Reserves one native upload and its body: the Python text and the UTF-8 copy the native client holds
+        until it finishes."""
         with self.lock:
             if self.native_uploads >= self.max_native_uploads or self.pending_bytes + size > self.max_pending_bytes:
                 return False

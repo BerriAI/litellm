@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Final
@@ -34,6 +35,7 @@ _KEY: Final = content_signing_key(_TOKEN)
 _IDENTITY: Final = RequestIdentity(team_id="team-a", key_hash="hash-a")
 _LIMITS: Final = ContentLimits(inline_bytes=1024, object_bytes=64 * 1024)
 _CONTENT: Final = {"gen_ai.input.messages": '[{"content": "' + "界" * 600 + '"}]'}
+_MIXED: Final = {"gen_ai.input.messages": "a" * 3000 + "\U0001f600"}
 
 
 class _Store:
@@ -195,13 +197,16 @@ async def test_an_upload_past_its_timeout_is_unavailable_and_keeps_its_bytes_unt
     store: _Store,
 ) -> None:
     async with _pipeline(store, upload_timeout=0) as pipeline:
-        span: Final = _capture(pipeline)
+        span: Final = _capture(pipeline, content=_MIXED)
         _, body, acked = await asyncio.wait_for(store.uploads.get(), timeout=5)
         await asyncio.gather(*pipeline.spool.tasks)
         assert _reference(pipeline.finished()["chat model"]) == dict(
             signed_reference(_KEY, _owner(span), Unavailable.UPLOAD_FAILED)
         )
-        assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (1, len(body.encode()))
+        assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (
+            1,
+            sys.getsizeof(body) + len(body.encode()),
+        )
         await _acknowledge(acked)
         assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (0, 0)
 
@@ -420,3 +425,14 @@ def test_a_provider_built_without_lens_wrappers_exports_spans_exactly_as_before(
     assert [dict(finished.attributes or {}) for finished in exported.get_finished_spans()] == [
         {"gen_ai.input.messages": "x" * 5000}
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_body_stored_four_bytes_a_character_is_charged_as_stored_not_as_its_utf8_size(store: _Store) -> None:
+    async with _pipeline(store, max_pending_bytes=20_000) as pipeline:
+        span: Final = _capture(pipeline, content=_MIXED)
+        await asyncio.gather(*pipeline.spool.tasks)
+        assert _reference(pipeline.finished()["chat model"]) == dict(
+            signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED)
+        )
+        assert (store.uploads.empty(), pipeline.spool.pending_bytes, pipeline.spool.native_uploads) == (True, 0, 0)
