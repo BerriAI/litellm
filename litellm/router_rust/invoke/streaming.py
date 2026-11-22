@@ -1745,6 +1745,7 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         return prepared
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
+        from litellm.responses.mcp.round_billing import billed_for_every_round
         from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
         current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
@@ -1753,9 +1754,9 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
         if current is None or primary is None:
             return current or primary
-        if primary.response.usage is not None:
-            _combine_responses_fallback_usage(current, primary.response.usage)
-        return current
+        return current.model_copy(
+            update={"response": billed_for_every_round(primary.response, None, current.response, None)}
+        )
 
     def __aiter__(self) -> "FallbackResponsesStreamWrapper":
         return self
