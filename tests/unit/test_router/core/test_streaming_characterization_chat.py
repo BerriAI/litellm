@@ -340,7 +340,9 @@ async def test_a_failover_stream_that_fails_before_content_does_not_fail_back_to
     host.answer("openai/a2", chat_stream(error=server_error(), leading_role_chunk=True))
     host.answer("openai/b", chat_stream("B"))
     core = build(
-        make_core, model_list=[deployment("a", "a1"), deployment("a", "a2"), deployment("b", "b")], enable_weighted_failover=True
+        make_core,
+        model_list=[deployment("a", "a1"), deployment("a", "a2"), deployment("b", "b")],
+        enable_weighted_failover=True,
     )
     stream = await open_stream(core)
     assert await collect_texts(stream) == "B"
