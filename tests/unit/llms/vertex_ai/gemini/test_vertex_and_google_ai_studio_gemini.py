@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mappin
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
@@ -5214,7 +5215,23 @@ def test_search_stays_next_to_functions_only_when_the_cost_map_flags_the_model(
     assert ("toolConfig" in body) is keeps_search
 
 
-_SERVER_SIDE_TOOLS_OFF: Final = MappingProxyType({"include_server_side_tool_invocations": False})
+_REPO_ROOT: Final = Path(__file__).parents[5]
+_MODEL_MAP_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
+
+
+def _bills_searches_per_query(row: Mapping[str, object]) -> bool:
+    return row.get("web_search_billing_unit") == "per_query" and bool(row.get("search_context_cost_per_query"))
+
+
+@pytest.mark.parametrize(
+    "cost_map", ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"]
+)
+def test_every_row_that_keeps_search_next_to_functions_bills_each_search_query(cost_map: str) -> None:
+    rows: Final = _MODEL_MAP_ADAPTER.validate_json((_REPO_ROOT / cost_map).read_bytes())
+    flagged: Final = {name: row for name, row in rows.items() if row.get(_SEARCH_WITH_FUNCTIONS) is True}
+
+    # Google bills Gemini 3+ grounding per search query, cloud.google.com/vertex-ai/generative-ai/pricing, 2026-11-21
+    assert [name for name, row in flagged.items() if not _bills_searches_per_query(row)] == []
 
 
 @pytest.fixture
@@ -5223,16 +5240,18 @@ def search_with_functions_model(monkeypatch: pytest.MonkeyPatch) -> str:
     return _SEARCH_WITH_FUNCTIONS_MODEL
 
 
+@pytest.mark.parametrize("opt_out_key", ["include_server_side_tool_invocations", "includeServerSideToolInvocations"])
 @pytest.mark.parametrize("opt_out_in", ["request", "optional_params"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
-    route: Literal["vertex", "studio"], opt_out_in: str, search_with_functions_model: str
+    route: Literal["vertex", "studio"], opt_out_in: str, opt_out_key: str, search_with_functions_model: str
 ) -> None:
     tools: Final = {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
+    opt_out: Final = MappingProxyType({opt_out_key: False})
     body: Final = (
-        _mapped_request_body(route, search_with_functions_model, {**tools, **_SERVER_SIDE_TOOLS_OFF})
+        _mapped_request_body(route, search_with_functions_model, {**tools, **opt_out})
         if opt_out_in == "request"
-        else _mapped_request_body(route, search_with_functions_model, tools, preset=_SERVER_SIDE_TOOLS_OFF)
+        else _mapped_request_body(route, search_with_functions_model, tools, preset=opt_out)
     )
 
     assert _tool_keys(body) == {"function_declarations"}
@@ -5252,9 +5271,9 @@ def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_si
     ids=["retrieval_and_search", "retrieval_only"],
 )
 @pytest.mark.parametrize("caller_flag", [False, True], ids=["no_caller_flag", "caller_flag_on"])
-@pytest.mark.parametrize("drop_params_set", ["per_call", "globally"])
+@pytest.mark.parametrize("drop_params_set", ["off", "per_call", "globally"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
-def test_gemini_3_drops_search_retrieval_next_to_functions_only_under_drop_params(
+def test_gemini_3_keeps_search_retrieval_next_to_functions_only_for_a_caller_flag_without_drop_params(
     route: Literal["vertex", "studio"],
     tools: tuple[object, ...],
     kept_keys: frozenset[str],
@@ -5265,17 +5284,15 @@ def test_gemini_3_drops_search_retrieval_next_to_functions_only_under_drop_param
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     params: Final = {"tools": list(tools), **({"include_server_side_tool_invocations": True} if caller_flag else {})}
-    sent_as_is: Final = _mapped_request_body(route, search_with_functions_model, params)
     if drop_params_set == "globally":
         monkeypatch.setattr(litellm, "drop_params", True)
-    dropped: Final = _mapped_request_body(
+    body: Final = _mapped_request_body(
         route, search_with_functions_model, params, drop_params=drop_params_set == "per_call"
     )
 
-    assert _tool_keys(dropped) == kept_keys
-    assert ("toolConfig" in dropped) is (flagged or caller_flag)
-    assert _tool_keys(sent_as_is) == kept_keys | {"googleSearchRetrieval"}
-    assert sent_as_is.get("toolConfig") == {"includeServerSideToolInvocations": True}
+    keeps_retrieval: Final = caller_flag and drop_params_set == "off"
+    assert _tool_keys(body) == kept_keys | ({"googleSearchRetrieval"} if keeps_retrieval else frozenset())
+    assert ("toolConfig" in body) is (flagged or caller_flag)
 
 
 def test_vertex_ai_openai_web_search_tool_transformation():

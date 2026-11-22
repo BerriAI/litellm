@@ -109,8 +109,15 @@ def _tool_call_id_of(tool_call: object) -> str:
 
 
 def _delta_carries_reasoning_and_answer(delta: ChatCompletionDelta) -> bool:
-    has_reasoning: Final = bool(getattr(delta, "reasoning_content", None)) or _delta_has_signed_thinking_block(delta)
-    return has_reasoning and bool(delta.content or delta.tool_calls)
+    return _delta_opens_reasoning(delta) and bool(delta.content or delta.tool_calls)
+
+
+def _delta_opens_reasoning(delta: object) -> bool:
+    return bool(getattr(delta, "reasoning_content", None)) or _delta_has_signed_thinking_block(delta)
+
+
+def _first_delta(chunk: ModelResponseStream) -> ChatCompletionDelta | None:
+    return chunk.choices[0].delta if chunk.choices else None
 
 
 def _delta_carries_output(delta: ChatCompletionDelta) -> bool:
@@ -545,8 +552,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _queue_web_search_events(self, call_id: str, web_search_call: object) -> None:
         self._pending_tool_events.extend(self._web_search_events(call_id, web_search_call))
 
+    def _reserve_the_reasoning_index_opening_the_output(self, chunk: ModelResponseStream) -> None:
+        if not self.sent_output_item_added_event and _delta_opens_reasoning(_first_delta(chunk)):
+            self._reasoning_index()
+
     def _queue_web_search_calls_opening_the_output(self, chunk: ModelResponseStream) -> None:
-        if not self.sent_output_item_added_event:
+        if not self.sent_output_item_added_event and not _delta_opens_reasoning(_first_delta(chunk)):
+            self._queue_arrived_web_search_calls(chunk)
+
+    def _queue_web_search_calls_once_reasoning_closes(self, chunk: ModelResponseStream) -> None:
+        if not self._reasoning_active or self._reasoning_done_emitted:
             self._queue_arrived_web_search_calls(chunk)
 
     def _queue_arrived_web_search_calls(self, chunk: ModelResponseStream) -> None:
@@ -1096,7 +1111,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self.sent_output_item_added_event = True
 
         # Reasoning-first
-        if (hasattr(delta, "reasoning_content") and delta.reasoning_content) or _delta_has_signed_thinking_block(delta):
+        if _delta_opens_reasoning(delta):
             self._reasoning_active = True
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = mint_reasoning_item_id()
@@ -1165,6 +1180,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = self._reasoning_part_first(cast(ModelResponseStream, chunk))
+                        self._reserve_the_reasoning_index_opening_the_output(chunk)
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1222,7 +1238,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                                 self._reasoning_done_emitted = True
                                 self._reasoning_active = False
 
-                        self._queue_arrived_web_search_calls(chunk)
+                        self._queue_web_search_calls_once_reasoning_closes(chunk)
                         response_api_chunk = self._transform_chat_completion_chunk_to_response_api_chunk(chunk)
                         if response_api_chunk:
                             self._pending_response_events.append(response_api_chunk)
@@ -1271,6 +1287,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         raise StopIteration
                     else:
                         chunk = self._reasoning_part_first(self.litellm_custom_stream_wrapper.__next__())
+                    self._reserve_the_reasoning_index_opening_the_output(chunk)
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(

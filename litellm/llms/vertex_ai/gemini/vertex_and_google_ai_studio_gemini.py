@@ -201,6 +201,13 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
     )
 
 
+_SERVER_SIDE_TOOL_INVOCATIONS_KEYS: Final = ("include_server_side_tool_invocations", "includeServerSideToolInvocations")
+
+
+def _turns_server_side_tools_off(params: Mapping[str, object]) -> bool:
+    return any(params.get(key) is False for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS)
+
+
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
@@ -479,7 +486,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return next((flag for flag in flags if isinstance(flag, bool)), False)
 
     def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
-        opted_out: Final = any(params.get("include_server_side_tool_invocations") is False for params in param_sources)
+        opted_out: Final = any(_turns_server_side_tools_off(params) for params in param_sources)
         return not opted_out and self._supports_search_tools_with_functions(model)
 
     def _supports_penalty_parameters(self, model: str) -> bool:
@@ -602,8 +609,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         Drop search tools from optional_params when mixed with function declarations
         and include_server_side_tool_invocations is not enabled. A model that keeps
         search tools next to function declarations (Gemini 3+) keeps both and gets
-        include_server_side_tool_invocations set instead, minus googleSearchRetrieval
-        under drop_params since Gemini 3+ rejects it.
+        include_server_side_tool_invocations set instead, minus googleSearchRetrieval,
+        which Gemini 3+ rejects. A caller who set include_server_side_tool_invocations
+        keeps googleSearchRetrieval unless drop_params is set, as before.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
@@ -613,7 +621,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         if not cls._mixes_search_tools_with_functions(tools):
             return
         if keeps_search_tools:
-            cls._keep_search_tools_next_to_functions(optional_params, tools, drops_search_retrieval)
+            caller_flag_on: Final = optional_params.get("include_server_side_tool_invocations") is True
+            cls._keep_search_tools_next_to_functions(
+                optional_params, tools, drops_search_retrieval or not caller_flag_on
+            )
             return
         if optional_params.get("include_server_side_tool_invocations"):
             return
@@ -639,7 +650,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         if len(kept) < len(tools):
             verbose_logger.warning(
-                "Gemini 3+ does not support googleSearchRetrieval. Dropping it because drop_params is set, "
+                "Gemini 3+ does not support googleSearchRetrieval next to function declarations. Dropping it, "
                 "use googleSearch instead."
             )
             optional_params["tools"] = kept  # rebind-ok: map_openai_params builds the request params in place
@@ -1365,10 +1376,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         appear before this flag, _resolve_search_tool_conflict would drop search
         tools before the flag is applied.
         """
-        for key in (
-            "include_server_side_tool_invocations",
-            "includeServerSideToolInvocations",
-        ):
+        for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS:
             if non_default_params.get(key) is True or optional_params.get(key) is True:
                 optional_params["include_server_side_tool_invocations"] = True
                 return

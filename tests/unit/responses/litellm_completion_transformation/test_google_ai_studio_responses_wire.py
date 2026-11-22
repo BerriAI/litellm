@@ -1,4 +1,5 @@
 import json
+from itertools import chain
 from collections.abc import AsyncIterable, Iterable, Mapping, Sequence
 from typing import Final
 
@@ -178,6 +179,7 @@ _SHELL_CALL_PART: Final = {
 }
 _TEXT_PART: Final = {"text": "Checking the release."}
 _THOUGHT_PART: Final = {"text": "The release is on PyPI.", "thought": True}
+_SIGNED_THOUGHT_PART: Final = {**_THOUGHT_PART, "thoughtSignature": "dGhvdWdodC1zaWduYXR1cmU="}
 _SEARCH_PARTS: Final = (
     {
         "toolCall": {
@@ -383,17 +385,27 @@ async def test_streamed_gemini_web_searches_arrive_in_order_with_the_non_streami
 
 
 _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT: Final = (
-    pytest.param(((*_SEARCH_PARTS, _TEXT_PART),), id="search_then_text"),
-    pytest.param(((_THOUGHT_PART, *_SEARCH_PARTS),), id="thought_then_search"),
-    pytest.param(((_THOUGHT_PART,), (*_SEARCH_PARTS, _TEXT_PART)), id="thought_chunk_then_search_chunk"),
+    pytest.param(((*_SEARCH_PARTS, _TEXT_PART), (_SHELL_CALL_PART,)), id="search_then_text"),
+    pytest.param(((_THOUGHT_PART, *_SEARCH_PARTS), (_SHELL_CALL_PART,)), id="thought_then_search"),
+    pytest.param(((_SIGNED_THOUGHT_PART, *_SEARCH_PARTS), (_SHELL_CALL_PART,)), id="signed_thought_then_search"),
+    pytest.param(
+        ((_THOUGHT_PART,), (*_SEARCH_PARTS, _TEXT_PART), (_SHELL_CALL_PART,)), id="thought_chunk_then_search_chunk"
+    ),
+    pytest.param(((_THOUGHT_PART, *_SEARCH_PARTS), (_THOUGHT_PART,)), id="stream_ends_while_thinking"),
 )
 
 
-def _searches_sharing_a_chunk(partial_chunks: Sequence[Sequence[Mapping[str, object]]]) -> httpx.Response:
-    return _sse(*(_partial_body(parts) for parts in partial_chunks), _searched_body([_SHELL_CALL_PART], _GROUNDING))
+def _searches_sharing_a_chunk(chunks: Sequence[Sequence[Mapping[str, object]]]) -> httpx.Response:
+    return _sse(*(_partial_body(parts) for parts in chunks[:-1]), _searched_body(chunks[-1], _GROUNDING))
 
 
-def _assert_items_open_and_close_in_output_order(events: Sequence[_StreamEvent]) -> None:
+def _the_same_reply_unstreamed(chunks: Sequence[Sequence[Mapping[str, object]]]) -> httpx.Response:
+    return httpx.Response(200, json=_searched_body([*chain.from_iterable(chunks)], _GROUNDING))
+
+
+def _assert_items_open_and_close_in_output_order(
+    events: Sequence[_StreamEvent], unstreamed_output: Sequence[_OutputItem]
+) -> None:
     completed_output: Final = next(
         event.response.output for event in events if event.response and event.type == "response.completed"
     )
@@ -407,16 +419,26 @@ def _assert_items_open_and_close_in_output_order(events: Sequence[_StreamEvent])
     assert tuple(event.item.id for event in added if event.item) == tuple(item.id for item in completed_output)
     assert tuple(event.output_index for event in added) == tuple(range(len(completed_output)))
     assert done_before_the_answer == tuple(sorted(done_before_the_answer))
+    assert tuple(item.type for item in completed_output) == tuple(item.type for item in unstreamed_output)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("partial_chunks", _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT)
+@pytest.mark.parametrize("chunks", _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT)
 async def test_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_open_in_output_order(
-    partial_chunks: tuple[tuple[Mapping[str, object], ...], ...],
+    chunks: tuple[tuple[Mapping[str, object], ...], ...],
 ) -> None:
     with respx.mock() as mock_router:
         mock_router.post(f"{_GEMINI_3_URL}:streamGenerateContent?alt=sse").mock(
-            return_value=_searches_sharing_a_chunk(partial_chunks)
+            return_value=_searches_sharing_a_chunk(chunks)
+        )
+        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(
+            return_value=_the_same_reply_unstreamed(chunks)
+        )
+        response: Final = await litellm.aresponses(
+            model="gemini/gemini-3-flash-preview",
+            api_key="test-key",
+            input=_SEARCH_PROMPT,
+            tools=_SEARCH_AND_SHELL_TOOLS,
         )
         stream: Final = await litellm.aresponses(
             model="gemini/gemini-3-flash-preview",
@@ -433,16 +455,25 @@ async def test_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_op
             [_STREAM_EVENT.validate_python(event, from_attributes=True) async for event in stream_events]
         )
 
-    _assert_items_open_and_close_in_output_order(events)
+    _assert_items_open_and_close_in_output_order(events, _output_items(response))
 
 
-@pytest.mark.parametrize("partial_chunks", _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT)
+@pytest.mark.parametrize("chunks", _CHUNKS_SHARING_SEARCHES_WITH_THE_FIRST_OUTPUT)
 def test_sync_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_open_in_output_order(
-    partial_chunks: tuple[tuple[Mapping[str, object], ...], ...],
+    chunks: tuple[tuple[Mapping[str, object], ...], ...],
 ) -> None:
     with respx.mock() as mock_router:
         mock_router.post(f"{_GEMINI_3_URL}:streamGenerateContent?alt=sse").mock(
-            return_value=_searches_sharing_a_chunk(partial_chunks)
+            return_value=_searches_sharing_a_chunk(chunks)
+        )
+        mock_router.post(f"{_GEMINI_3_URL}:generateContent").mock(
+            return_value=_the_same_reply_unstreamed(chunks)
+        )
+        response: Final = litellm.responses(
+            model="gemini/gemini-3-flash-preview",
+            api_key="test-key",
+            input=_SEARCH_PROMPT,
+            tools=_SEARCH_AND_SHELL_TOOLS,
         )
         stream: Final = litellm.responses(
             model="gemini/gemini-3-flash-preview",
@@ -457,7 +488,7 @@ def test_sync_streamed_gemini_searches_sharing_a_chunk_with_the_first_output_ope
         ).validate_python(stream)
         events: Final = tuple(_STREAM_EVENT.validate_python(event, from_attributes=True) for event in stream_events)
 
-    _assert_items_open_and_close_in_output_order(events)
+    _assert_items_open_and_close_in_output_order(events, _output_items(response))
 
 
 @pytest.mark.asyncio
