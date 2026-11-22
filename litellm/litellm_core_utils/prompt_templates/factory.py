@@ -1774,18 +1774,15 @@ def _skip_unfetched_tool_media(
     verbose_logger.warning("Failed to process media in tool response: %s", reason)
 
 
-def _function_response_media(part: VertexPartType) -> FunctionResponsePartType | None:
-    if "inline_data" in part:
-        return FunctionResponsePartType(inline_data=part["inline_data"])
-    if "file_data" in part:
-        return FunctionResponsePartType(file_data=part["file_data"])
-    return None
-
-
-def _function_response_part(part: VertexPartType) -> FunctionResponsePartType | None:
-    media: Final = _function_response_media(part)
-    if media is None:
-        return None
+def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:
+    inline: Final = (
+        FunctionResponsePartType(inline_data=part["inline_data"])
+        if "inline_data" in part
+        else FunctionResponsePartType()
+    )
+    file: Final = (
+        FunctionResponsePartType(file_data=part["file_data"]) if "file_data" in part else FunctionResponsePartType()
+    )
     resolution: Final = (
         FunctionResponsePartType(media_resolution=part["media_resolution"])
         if "media_resolution" in part
@@ -1796,7 +1793,7 @@ def _function_response_part(part: VertexPartType) -> FunctionResponsePartType | 
         if "video_metadata" in part
         else FunctionResponsePartType()
     )
-    return media | resolution | clip
+    return inline | file | resolution | clip
 
 
 def convert_to_gemini_tool_call_result(
@@ -1931,7 +1928,7 @@ def convert_to_gemini_tool_call_result(
         if not supports_multimodal_function_responses:
             return [_part, *media_parts]
         _function_response["parts"] = [
-            response_part for response_part in map(_function_response_part, media_parts) if response_part is not None
+            _function_response_part(part) for part in media_parts if "inline_data" in part or "file_data" in part
         ]
         return [_part]
 

@@ -2759,15 +2759,24 @@ def _tool_result_with(part: Mapping[str, object]) -> ChatCompletionToolMessage:
     )
 
 
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
 def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
-    custom_llm_provider: str,
+    custom_llm_provider: str, video_url: str
 ) -> None:
-    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
     message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": video_url}})
 
-    with respx.mock as router:
-        router.get(video_url).respond(404)
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
         with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
             convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
         dropped: Final = convert_to_gemini_tool_call_result(
@@ -2781,6 +2790,7 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
 _MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
 _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
 
 
 @pytest.mark.parametrize(
@@ -2789,6 +2799,7 @@ _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
         pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
         pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
         pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
         pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
     ],
 )
