@@ -11,7 +11,14 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm._logging import _ENABLE_SECRET_REDACTION, redact_string, verbose_logger
+from litellm._logging import (
+    _ENABLE_SECRET_REDACTION,
+    redact_internal_details_from_client_fields,
+    redact_internal_details_from_client_value,
+    redact_secrets,
+    redact_string,
+    verbose_logger,
+)
 from litellm.litellm_core_utils.agentic_followup_failure import carry_agentic_followup_mark
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
@@ -189,7 +196,7 @@ def get_error_message(error_obj: object) -> str | None:
                 if isinstance(top_level_message, str) and top_level_message:
                     return top_level_message
                 if top_level_message:
-                    return json.dumps(_error_obj_body, default=str)
+                    return json.dumps(redact_internal_details_from_client_fields(_error_obj_body), default=str)
 
                 # Azure-style: {"error": {"message": "...", ...}}
                 nested_error: Final = as_str_mapping(_error_obj_body.get("error"))
@@ -2405,7 +2412,7 @@ def _openrouter_upstream_reason(raw: object) -> str | None:
             upstream_error: Final = _decoded_openai_error(raw)
             return raw if upstream_error is None else str(upstream_error.get("message"))
         case _:
-            return json.dumps(raw, default=str)
+            return json.dumps(redact_internal_details_from_client_value(raw), default=str)
 
 
 def _openrouter_error_message(provider_message: str, body: Mapping[str, object] | None) -> str:
@@ -2430,7 +2437,7 @@ def _map_openrouter_exception(
         original_exception, "status_code_is_synthesized", False
     )
     provider_message, body = _openai_style_error_message_and_body(original_exception, error_str)
-    message: Final = _openrouter_error_message(provider_message, body)
+    message: Final = redact_secrets(_openrouter_error_message(provider_message, body))
     if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
