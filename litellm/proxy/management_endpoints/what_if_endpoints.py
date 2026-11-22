@@ -670,7 +670,12 @@ async def xray_limits(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)
         ("Organization", org.get("organization_alias"), org, team_rpm, "/organization/update"),
         ("Proxy", "global", {"max_budget": litellm.max_budget or None, "spend": 0.0}, 0.0, "litellm_settings"),
     )
-    layers: Final = tuple(chain.from_iterable(_layers(*scope) for scope in scopes))
+    layers: Final = tuple(
+        chain.from_iterable(
+            _layers(scope, name, row, used_rpm, avg_usd, change_with)
+            for scope, name, row, used_rpm, change_with in scopes
+        )
+    )
     limited: Final = frozenset(layer.scope for layer in layers)
     return LimitXray(
         key_alias=alias,
