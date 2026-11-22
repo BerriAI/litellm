@@ -435,12 +435,13 @@ describe("useAuthorized", () => {
       const userId = "abc301ea-49c0-47c9-aee2-53b86a550582";
       getUiConfigMock.mockResolvedValue(uiConfig);
       setSessionCookie({ key: "sso-key", login_method: "sso" });
-      serveCurrentUser({
+      const currentUser = {
         user_id: userId,
         user_email: null,
         user_role: "internal_user",
         user_alias: "Acme Developer",
-      });
+      };
+      serveCurrentUser(currentUser);
 
       const { result } = renderHook(() => useAuthorized(), { wrapper });
 
