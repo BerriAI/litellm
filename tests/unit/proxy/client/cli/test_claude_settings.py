@@ -486,6 +486,20 @@ class TestMergeClaudeSettings:
             "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "2048",
         }
 
+    @pytest.mark.parametrize(
+        ("existing", "raw_bodies"),
+        [
+            ({}, "1"),
+            ({"OTEL_LOG_USER_PROMPTS": "0"}, "0"),
+            ({"OTEL_LOG_TOOL_CONTENT": "false"}, "0"),
+            ({"OTEL_LOG_USER_PROMPTS": "1"}, "1"),
+            ({"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_RAW_API_BODIES": "1"}, "1"),
+        ],
+    )
+    def test_raw_bodies_stay_off_when_the_user_turned_another_content_setting_off(self, existing, raw_bodies):
+        merged = merge_claude_settings({"env": existing}, "http://127.0.0.1:4000/", StaticToken("token-abc"))
+        assert merged["env"]["OTEL_LOG_RAW_API_BODIES"] == raw_bodies
+
     def test_a_static_token_replaces_an_earlier_logins_headers_helper(self):
         merged = merge_claude_settings(
             {"otelHeadersHelper": f"{HELPER.command} --otel-headers"},
