@@ -315,27 +315,23 @@ async def reserve_budget_for_request(
     if not counters:
         return None
 
-    body_fields: Final = _WINDOW_OBJECT.validate_python(request_body)
-    extra_body_sent_fields: Final = _sent_generate_content_body(body_fields, route)
-    sent_body: Final = dict(body_fields if extra_body_sent_fields is None else extra_body_sent_fields)
-    input_token_counts: Final = await count_request_input_tokens(
-        request_body=sent_body,
-        route=route,
-        llm_router=llm_router,
-        team_id=valid_token.team_id,
-        raw_body=raw_body if extra_body_sent_fields is None else None,
-        path_params=path_params,
+    sent_bodies: Final = _sent_generate_content_bodies(_WINDOW_OBJECT.validate_python(request_body), route)
+    estimates: Final = await asyncio.gather(
+        *(
+            _estimate_hold(
+                sent_body=sent_body,
+                route=route,
+                llm_router=llm_router,
+                team_id=valid_token.team_id,
+                raw_body=raw_body if len(sent_bodies) == 1 else None,
+                path_params=path_params,
+            )
+            for sent_body in sent_bodies
+        )
     )
-
+    hold: Final = _largest_hold(estimates)
     reservation_cost: Final = apply_customer_cost_margin_to_estimate(
-        estimate_request_max_cost(
-            request_body=sent_body,
-            route=route,
-            llm_router=llm_router,
-            input_token_counts=input_token_counts,
-            path_params=path_params,
-        ),
-        key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
+        hold.reservation_cost, key_customer_cost_margin(valid_token, valid_token.customer_hierarchy)
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -346,30 +342,82 @@ async def reserve_budget_for_request(
         counters=counters,
         valid_token=valid_token,
         reservation_cost=reservation_cost,
-        input_token_counts=input_token_counts,
+        input_token_counts=hold.input_token_counts,
         input_cost=apply_customer_cost_margin_to_estimate(
-            estimate_request_input_cost(
-                request_body=sent_body,
-                route=route,
-                llm_router=llm_router,
-                input_token_counts=input_token_counts,
-                path_params=path_params,
-            ),
-            key_customer_cost_margin(valid_token, valid_token.customer_hierarchy),
+            hold.input_cost, key_customer_cost_margin(valid_token, valid_token.customer_hierarchy)
         ),
         fail_closed_budget_enforcement=fail_closed_budget_enforcement,
     )
 
 
-def _sent_generate_content_body(request_body: Mapping[str, object], route: str) -> Mapping[str, object] | None:
-    """The generateContent body as the provider receives it when `extra_body` replaces the top-level fields it
-    names, a config under any of its names included, else None."""
+def _sent_generate_content_bodies(request_body: Mapping[str, object], route: str) -> tuple[Mapping[str, object], ...]:
+    """Every body a generateContent request with `extra_body` can reach the provider as. A Gemini deployment merges
+    it over the top-level fields it names, a config under any of its names included, while the completion adapter
+    other providers go through drops it."""
     extra_body: Final = as_str_mapping(request_body.get("extra_body"))
     if extra_body is None or not route.endswith(_GENERATE_CONTENT_ROUTE_SUFFIXES):
-        return None
+        return (request_body,)
     replaces_config: Final = any(field in extra_body for field in GOOGLE_GENAI_CONFIG_FIELDS)
     replaced: Final = frozenset(("extra_body", *(GOOGLE_GENAI_CONFIG_FIELDS if replaces_config else ())))
-    return {**{key: value for key, value in request_body.items() if key not in replaced}, **extra_body}
+    return (
+        {key: value for key, value in request_body.items() if key != "extra_body"},
+        {**{key: value for key, value in request_body.items() if key not in replaced}, **extra_body},
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _HoldEstimate:
+    input_token_counts: Mapping[str, int]
+    reservation_cost: float | None
+    input_cost: float | None
+
+
+async def _estimate_hold(
+    sent_body: Mapping[str, object],
+    route: str,
+    llm_router: Router | None,
+    team_id: str | None,
+    raw_body: bytes | None,
+    path_params: Mapping[str, object] | None,
+) -> _HoldEstimate:
+    request_body: Final = dict(sent_body)
+    input_token_counts: Final = await count_request_input_tokens(
+        request_body=request_body,
+        route=route,
+        llm_router=llm_router,
+        team_id=team_id,
+        raw_body=raw_body,
+        path_params=path_params,
+    )
+    return _HoldEstimate(
+        input_token_counts=input_token_counts,
+        reservation_cost=estimate_request_max_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+        input_cost=estimate_request_input_cost(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            input_token_counts=input_token_counts,
+            path_params=path_params,
+        ),
+    )
+
+
+def _largest_hold(estimates: Sequence[_HoldEstimate]) -> _HoldEstimate:
+    """The costliest body's hold with the highest cancel floor any body has, since the hold cannot tell which
+    deployment the request reaches."""
+    largest: Final = max(estimates, key=lambda estimate: estimate.reservation_cost or 0.0)
+    input_costs: Final = tuple(estimate.input_cost for estimate in estimates if estimate.input_cost is not None)
+    return _HoldEstimate(
+        input_token_counts=largest.input_token_counts,
+        reservation_cost=largest.reservation_cost,
+        input_cost=max(input_costs, default=None),
+    )
 
 
 async def _forwards_subscription_oauth(

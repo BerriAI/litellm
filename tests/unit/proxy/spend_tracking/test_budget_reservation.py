@@ -1143,6 +1143,45 @@ async def test_an_extra_body_generation_config_replaces_an_output_cap_sent_as_co
     await reconcile_budget_reservation(reservation, actual_cost=0.0)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"generationConfig": {"maxOutputTokens": 1}},
+        {"contents": [{"role": "user", "parts": [{"text": "Hi"}]}]},
+    ],
+    ids=["output-cap", "contents"],
+)
+async def test_an_extra_body_that_shrinks_a_gemini_body_keeps_the_hold_of_the_body_an_adapter_sends(
+    spend_counter_store, overrides: dict[str, object]
+) -> None:
+    requested: Final = {
+        "contents": [{"role": "user", "parts": [{"text": "Summarize the history of Paris. " * 400}]}],
+        "generationConfig": {"maxOutputTokens": 4096},
+    }
+
+    reservation: Final = await reserve_budget_for_request(
+        request_body=requested | {"extra_body": overrides},
+        route=GEMINI_ROUTES[2],
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="extra-body-shrink-key", max_budget=10000),
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+    )
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(
+        estimate_request_max_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    assert reservation["input_cost"] == pytest.approx(
+        estimate_request_input_cost(request_body=requested, route=GEMINI_ROUTES[2], llm_router=None)
+    )
+    await reconcile_budget_reservation(reservation, actual_cost=0.0)
+
+
 @pytest.mark.parametrize(("small", "large"), [("generationConfig", "generation_config"), ("config", "generationConfig")])
 def test_a_gemini_body_sending_its_config_under_two_names_is_held_at_the_larger_output_cap(
     small: str, large: str
