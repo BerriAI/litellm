@@ -4251,6 +4251,7 @@ dependencies = [
  "litellm-license",
  "litellm-llms-types",
  "litellm-model-catalog",
+ "litellm-model-catalog-refresh",
  "litellm-python-compat",
  "litellm-redaction",
  "litellm-redis-client",

@@ -70,6 +70,11 @@
 - With a coordination Redis, the same Redis and namespace Python's `redis_usage_cache` resolves to, `src/config_sync.rs` also listens on `litellm_proxy.config_change`, where Python's writers announce each config write, and reads again 1s plus up to 5s of jitter after a change, at most once per 10s, as `ConfigSyncSubscriber` paces it. A subscription that was lost reads once when it is back. Every read, polled or announced, goes through the one `Reloader` and its locked `Reading`, so two never run at once or disagree on what is served. The poll keeps running as the fallback, and a spawned task awaits a reload only boxed (`boxed_reload`), since its future is too deep to lay out inline in a release build
 - Python's guards against a database blip hold in the poller. A model or credential read that fails changes nothing, a settings read that fails keeps the settings last served and removes no model, and a config that does not build keeps the current one. Never let a failed read reach the router as an empty model list
 
+## Cost map
+- The native app boots on the bundled cost map, as Python's import does, and `CostMapRefresh` (`src/cost_map.rs`) fetches the remote one once in the background with `refresh` from `model-catalog-refresh`. The URL, the local and offline switches and the integrity limits are the `Environment` fields Python reads from the same variables. A map that is unavailable or refused keeps the one in use
+- A good map is installed with `Gateway::install`, the one place the native app holds its cost map. Every reader asks it per request, so nothing is rebuilt on an install and a new reader needs no line here
+- Only the first refresh after boot runs. Python's reload schedule in `LiteLLM_Config` (an interval, and the revision a manual reload bumps) is not read yet
+
 ## Host
 - `src/host/` is the native host, the counterpart of python-bridge's `PythonRouterHost`. `NativeBootHost` answers router-core's deployment build at boot, and `NativeHost` builds a `NativeRouterHost` for each inference call and answers the call's callback hooks from the `Callbacks` it holds. `Gateway` is gateway-inference's `Gateway<NativeHost>`, so the routes are served through it without depending on it
 - A hostcall answered from the gateway's own state belongs here, not in gateway-inference. Only running the route's attempt stays with the routes
