@@ -714,6 +714,42 @@ def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the
     assert planted == {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
 
 
+def test_a_planted_litellm_metadata_keeps_the_fields_the_proxy_filled() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "requester_ip_address": "10.0.0.1",
+                "session_id": "session-1",
+                "applied_guardrails": [],
+            },
+            "litellm_metadata": {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]},
+        }
+    }
+
+    spend_metadata: Final = get_spend_log_metadata_from_kwargs(kwargs)
+
+    assert spend_metadata["requester_ip_address"] == "10.0.0.1"
+    assert spend_metadata["session_id"] == "session-1"
+    assert spend_metadata["applied_guardrails"] == ["pre"]
+
+
+def test_a_callers_litellm_api_version_in_the_provider_body_metadata_never_reaches_the_spend_row() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {
+                "litellm_api_version": "forged",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "from-the-body"},
+            },
+            "litellm_metadata": {"litellm_api_version": "1.0.0", "user_api_key_hash": "hash"},
+        }
+    }
+
+    assert "spend_logs_metadata" not in get_spend_log_metadata_from_kwargs(kwargs)
+
+
 def test_a_provider_body_metadata_field_never_reaches_the_spend_row_metadata() -> None:
     kwargs: Final = {
         "litellm_params": {
