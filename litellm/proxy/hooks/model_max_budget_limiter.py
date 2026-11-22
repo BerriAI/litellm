@@ -916,15 +916,19 @@ def _budget_names_of(provider_model: str) -> tuple[str, ...]:
     deployments: Final = tuple(
         deployment for raw in router.registry().deployments() or () if (deployment := as_str_mapping(raw)) is not None
     )
-    serving_groups: Final = sorted(
-        {
-            str(deployment.get("model_name"))
-            for deployment in deployments
-            if _names_provider_model(
-                (as_str_mapping(deployment.get("litellm_params")) or {}).get("model"), provider_model
-            )
-        }
+    serving: Final = tuple(
+        deployment
+        for deployment in deployments
+        if _names_provider_model((as_str_mapping(deployment.get("litellm_params")) or {}).get("model"), provider_model)
     )
+    names: Final = itertools.chain.from_iterable(
+        (
+            deployment.get("model_name"),
+            (as_str_mapping(deployment.get("model_info")) or {}).get("team_public_model_name"),
+        )
+        for deployment in serving
+    )
+    serving_groups: Final = sorted({name for name in names if isinstance(name, str)})
     return (*serving_groups, provider_model)
 
 

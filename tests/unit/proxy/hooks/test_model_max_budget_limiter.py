@@ -1133,13 +1133,19 @@ async def test_a_live_session_charges_a_delegated_response_to_the_delegated_mode
 async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    groups: Final = ("a-shared", "z-capped")
+    groups: Final = ("a-shared", "z-capped", "team-capped")
+    calls_the_model: Final = {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.llm_router",
         Router(
             model_list=[
-                {"model_name": group, "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}}
-                for group in groups
+                {"model_name": "a-shared", "litellm_params": calls_the_model},
+                {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {
+                    "model_name": f"model_name_{TEAM_ID}_capped",
+                    "litellm_params": calls_the_model,
+                    "model_info": {"team_id": TEAM_ID, "team_public_model_name": "team-capped"},
+                },
             ]
         ),
     )
