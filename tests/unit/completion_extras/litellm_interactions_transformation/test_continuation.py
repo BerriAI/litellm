@@ -551,3 +551,139 @@ def test_streamed_citations_sent_in_a_later_step_with_no_text_point_at_the_answe
         for cite in getattr(delta, "annotations", None) or ()
     ]
     assert spans == [(5, 10)]
+
+
+@pytest.mark.parametrize(
+    "cited_events",
+    [
+        pytest.param(
+            (
+                {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+                {
+                    "event_type": "step.delta",
+                    "index": 0,
+                    "delta": {
+                        "type": "text",
+                        "text": "é Paris",
+                        "annotations": [{"type": "url_citation", "start_index": 3, "end_index": 8, "url": "https://p"}],
+                    },
+                },
+            ),
+            id="on the text delta",
+        ),
+        pytest.param(
+            (
+                {
+                    "event_type": "step.start",
+                    "index": 0,
+                    "step": {
+                        "type": "model_output",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "é Paris",
+                                "annotations": [
+                                    {"type": "url_citation", "start_index": 3, "end_index": 8, "url": "https://p"}
+                                ],
+                            }
+                        ],
+                    },
+                },
+            ),
+            id="on the step start",
+        ),
+        pytest.param(
+            (
+                {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+                {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "é Paris"}},
+                {"event_type": "step.start", "index": 1, "step": {"type": "model_output"}},
+                {
+                    "event_type": "step.delta",
+                    "index": 1,
+                    "delta": {
+                        "type": "text_annotation_delta",
+                        "annotations": [{"type": "url_citation", "start_index": 3, "end_index": 8, "url": "https://p"}],
+                    },
+                },
+            ),
+            id="in a later step",
+        ),
+    ],
+)
+def test_streamed_citations_given_as_byte_spans_select_the_cited_words_after_non_ascii_text(
+    cited_events: tuple[dict[str, object], ...],
+) -> None:
+    events: Final = (
+        *cited_events,
+        {"event_type": "interaction.completed", "interaction": {"id": "v1_second", "status": "completed"}},
+    )
+    _, responder = _scripted(
+        (
+            _sse(_interaction("né ", "requires_continuation", "tok-1")),
+            httpx.Response(
+                200,
+                text="".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n",
+                headers={"content-type": "text/event-stream"},
+            ),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        deltas: Final = [
+            chunk.choices[0].delta
+            for chunk in litellm.completion(
+                model=MODEL,
+                max_tokens=1000,
+                messages=list(MESSAGES),
+                stream=True,
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+        ]
+
+    answer: Final = "".join(delta.content or "" for delta in deltas)
+    cited_words: Final = [
+        answer[cite["url_citation"]["start_index"] : cite["url_citation"]["end_index"]]
+        for delta in deltas
+        for cite in getattr(delta, "annotations", None) or ()
+    ]
+    assert cited_words == ["Paris"]
+
+
+def test_unary_citations_given_as_byte_spans_select_the_cited_words_after_non_ascii_text() -> None:
+    cited: Final = {
+        "id": "v1_first",
+        "status": "completed",
+        "steps": [
+            {
+                "type": "model_output",
+                "content": [
+                    {"type": "text", "text": "né "},
+                    {
+                        "type": "text",
+                        "text": "é Paris",
+                        "annotations": [{"type": "url_citation", "start_index": 3, "end_index": 8, "url": "https://p"}],
+                    },
+                ],
+            }
+        ],
+    }
+    _, responder = _scripted((httpx.Response(200, json=cited),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        message: Final = (
+            litellm.completion(
+                model=MODEL,
+                max_tokens=1000,
+                messages=list(MESSAGES),
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+            .choices[0]
+            .message
+        )
+
+    assert [
+        message.content[cite["url_citation"]["start_index"] : cite["url_citation"]["end_index"]]
+        for cite in message.annotations
+    ] == ["Paris"]

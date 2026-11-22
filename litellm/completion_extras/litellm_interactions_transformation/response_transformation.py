@@ -79,15 +79,19 @@ def _summary_text(summary: JsonValue) -> str:
     return "".join(parts)
 
 
-def _convert_annotation(raw_anno: JsonMapping, char_offset: int) -> ChatCompletionAnnotation | None:
+def _chars_before(text: str, byte_index: int) -> int:
+    return len(text.encode()[: max(byte_index, 0)].decode(errors="ignore"))
+
+
+def _convert_annotation(raw_anno: JsonMapping, char_offset: int, text: str) -> ChatCompletionAnnotation | None:
     url_val: Final = raw_anno.get("url") or raw_anno.get("uri") or raw_anno.get("source")
     if not isinstance(url_val, str) or not url_val:
         return None
     raw_start: Final = raw_anno.get("start_index")
     raw_end: Final = raw_anno.get("end_index")
     raw_title: Final = raw_anno.get("title")
-    start_idx: Final = (raw_start + char_offset) if isinstance(raw_start, int) else char_offset
-    end_idx: Final = (raw_end + char_offset) if isinstance(raw_end, int) else start_idx
+    start_idx: Final = (_chars_before(text, raw_start) + char_offset) if isinstance(raw_start, int) else char_offset
+    end_idx: Final = (_chars_before(text, raw_end) + char_offset) if isinstance(raw_end, int) else start_idx
     citation: Final = ChatCompletionAnnotationURLCitation(
         url=url_val,
         title=raw_title if isinstance(raw_title, str) else url_val,
@@ -97,16 +101,18 @@ def _convert_annotation(raw_anno: JsonMapping, char_offset: int) -> ChatCompleti
     return ChatCompletionAnnotation(type="url_citation", url_citation=citation)
 
 
-def annotations_for_block(raw_annotations: JsonValue, char_offset: int) -> tuple[ChatCompletionAnnotation, ...]:
+def annotations_for_block(
+    raw_annotations: JsonValue, char_offset: int, text: str
+) -> tuple[ChatCompletionAnnotation, ...]:
     if not isinstance(raw_annotations, list):
         return ()
     converted: Final = tuple(
-        _convert_annotation(anno, char_offset) for anno in raw_annotations if isinstance(anno, dict)
+        _convert_annotation(anno, char_offset, text) for anno in raw_annotations if isinstance(anno, dict)
     )
     return tuple(item for item in converted if item is not None)
 
 
-def _shifted(annotation: ChatCompletionAnnotation, by: int) -> ChatCompletionAnnotation:
+def shifted(annotation: ChatCompletionAnnotation, by: int) -> ChatCompletionAnnotation:
     citation: Final = annotation.get("url_citation")
     if by == 0 or citation is None:
         return annotation
@@ -148,7 +154,8 @@ def parse_output_content_blocks(blocks: Sequence[JsonValue]) -> _ParsedOutputBlo
     offsets: Final = (0, *accumulate(len(piece) for piece in pieces))
     annotations: Final = tuple(
         chain.from_iterable(
-            annotations_for_block(block.get("annotations"), offset) for block, offset in zip(text_blocks, offsets)
+            annotations_for_block(block.get("annotations"), offset, piece)
+            for block, offset, piece in zip(text_blocks, offsets, pieces)
         )
     )
     image_blocks: Final = tuple(block for block in dict_blocks if block.get("type") == "image")
@@ -281,7 +288,7 @@ def _extract_steps(steps: Sequence[JsonValue]) -> _ExtractedSteps:
         tool_calls=tool_calls,
         annotations=tuple(
             chain.from_iterable(
-                (_shifted(annotation, offset) for annotation in p.annotations)
+                (shifted(annotation, offset) for annotation in p.annotations)
                 for p, offset in zip(output_parsed, (0, *accumulate(len(p.text) for p in output_parsed)))
             )
         ),

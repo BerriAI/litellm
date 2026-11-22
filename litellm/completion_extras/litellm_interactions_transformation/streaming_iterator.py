@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.vertex_ai.gemini.long_decode import with_initial_prompt_tokens
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionAudioDelta,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
@@ -52,6 +53,7 @@ from .response_transformation import (
     annotations_for_block,
     map_interactions_status_to_finish_reason,
     parse_output_content_blocks,
+    shifted,
     transform_interactions_usage,
 )
 
@@ -248,7 +250,7 @@ class InteractionsChatStreamingIterator:
         self._pending_thought_signature: str | None = None
         self._segment_signed_tool_call: bool = False
         self._unsigned_tools: Final[dict[int, tuple[int, str]]] = {}  # mutable-ok: thought-step -> unsigned tool slot
-        self._text_length: int = 0
+        self._text: str = ""
         self._last_text_start: int = 0
         self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
@@ -390,6 +392,7 @@ class InteractionsChatStreamingIterator:
                     self._build_chunk(
                         Delta(role="assistant", content=initial_text or None, **(initial_media or _NO_MEDIA))
                     ),
+                    *self._cited_chunks(self._step_start_annotations(step_index, raw_step.get("content"))),
                 )
             case "text":
                 direct_text: Final = str(raw_step.get("text") or "")
@@ -399,8 +402,21 @@ class InteractionsChatStreamingIterator:
                 return ()
 
     def _count_text(self, step_index: int, text: str) -> None:
-        self._last_text_start = self._text_starts.setdefault(step_index, self._text_length)
-        self._text_length += len(text)
+        self._last_text_start = self._text_starts.setdefault(step_index, len(self._text))
+        self._text += text
+
+    def _delta_annotations(self, step_index: int, raw_delta: JsonMapping) -> tuple[ChatCompletionAnnotation, ...]:
+        cited_from: Final = self._text_starts.get(step_index, self._last_text_start)
+        return annotations_for_block(raw_delta.get("annotations"), cited_from, self._text[cited_from:])
+
+    def _step_start_annotations(self, step_index: int, raw_blocks: JsonValue) -> tuple[ChatCompletionAnnotation, ...]:
+        if not isinstance(raw_blocks, list):
+            return ()
+        cited_from: Final = self._text_starts.get(step_index, self._last_text_start)
+        return tuple(shifted(cited, cited_from) for cited in parse_output_content_blocks(raw_blocks).annotations)
+
+    def _cited_chunks(self, cited: tuple[ChatCompletionAnnotation, ...]) -> tuple[ModelResponseStream, ...]:
+        return (self._build_chunk(Delta(annotations=list(cited))),) if cited else ()
 
     def _media_delta(self, raw_blocks: JsonValue) -> _MediaDelta | None:
         if not isinstance(raw_blocks, list):
@@ -430,12 +446,12 @@ class InteractionsChatStreamingIterator:
                 if not text_piece:
                     return ()
                 self._count_text(step_index, text_piece)
-                return (self._build_chunk(Delta(content=text_piece)),)
-            case "text_annotation_delta" | "annotations":
-                cited: Final = annotations_for_block(
-                    raw_delta.get("annotations"), self._text_starts.get(step_index, self._last_text_start)
+                return (
+                    self._build_chunk(Delta(content=text_piece)),
+                    *self._cited_chunks(self._delta_annotations(step_index, raw_delta)),
                 )
-                return (self._build_chunk(Delta(annotations=list(cited))),) if cited else ()
+            case "text_annotation_delta" | "annotations":
+                return self._cited_chunks(self._delta_annotations(step_index, raw_delta))
             case "image" | "audio":
                 media: Final = self._media_delta([dict(raw_delta)])
                 return (self._build_chunk(Delta(**media)),) if media is not None else ()
