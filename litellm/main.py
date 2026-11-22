@@ -1578,7 +1578,10 @@ def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | Async
 
 
 def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
-    return supports_httpx_timeout(custom_llm_provider) or custom_llm_provider not in litellm._custom_providers
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
 
 
 def _dispatch_client_azure(
@@ -5925,7 +5928,6 @@ def completion(
     mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
     mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
     mock_timeout: Final = cast(bool | None, kwargs.get("mock_timeout", None))
-    mocks_dispatch: Final = mock_response is not None or bool(mock_tool_calls) or bool(mock_timeout)
     force_timeout: Final = kwargs.get("force_timeout", 600)  ## deprecated
     logger_fn: Final = kwargs.get("logger_fn", None)
     verbose: Final = kwargs.get("verbose", False)
@@ -6351,7 +6353,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout if mocks_dispatch else _completion_supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
@@ -6534,7 +6538,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mocks_dispatch:
+        if mock_response is not None or mock_tool_calls or mock_timeout:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
             return mock_completion(

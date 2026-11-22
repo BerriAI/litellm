@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
+from litellm.llms.custom_llm import CustomLLM
 from litellm.main import _completion_supports_httpx_timeout
 from litellm.utils import supports_httpx_timeout
 
@@ -217,7 +218,9 @@ def test_completion_keeps_every_httpx_timeout_field_for_providers_that_send_it_w
 def test_completion_sends_only_the_read_timeout_to_a_registered_custom_provider(
     timeout: httpx.Timeout, expected: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(litellm, "_custom_providers", ["timeout-recorder"])
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "timeout-recorder", "custom_handler": CustomLLM()}]
+    )
     resolved: Final = CompletionTimeout.resolve(
         timeout,
         {},
