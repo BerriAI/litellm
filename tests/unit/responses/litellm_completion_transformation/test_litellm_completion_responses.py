@@ -2,6 +2,7 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from itertools import chain
 from typing import Final, Literal, cast
 
 import pytest
@@ -6390,7 +6391,7 @@ async def _replayed_order_calls(
 async def test_calls_resent_after_the_assistants_words_stay_the_calls_the_client_sent(
     said_before_the_first_call: Mapping[str, object],
 ) -> None:
-    resent: Final = [item for call in _ORDER_CALLS for item in (_order_call(*call), _order_output(call[0]))]
+    resent: Final = chain.from_iterable((_order_call(*call), _order_output(call[0])) for call in _ORDER_CALLS)
 
     replayed: Final = await _replayed_order_calls(
         [said_before_the_first_call, *resent], model="house-model", provider="hosted_vllm"
@@ -6416,7 +6417,7 @@ async def test_calls_the_client_resends_with_their_outputs_are_made_once(
 ) -> None:
     calls: Final = [_order_call(*call) for call in _ORDER_CALLS]
     outputs: Final = [_order_output(call_id) for call_id, _ in _ORDER_CALLS]
-    one_by_one: Final = [item for pair in zip(calls, outputs) for item in pair]
+    one_by_one: Final = [*chain.from_iterable(zip(calls, outputs))]
 
     replayed: Final = await _replayed_order_calls(
         [*calls, *outputs] if together else one_by_one, model=model, provider=provider

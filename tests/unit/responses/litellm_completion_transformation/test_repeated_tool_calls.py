@@ -13,6 +13,7 @@ from litellm.types.utils import ChatCompletionMessageToolCall, Message
 _USER: Final = {"role": "user", "content": "Weather in Paris, Rome and Oslo?"}
 _ANSWER: Final = {"role": "assistant", "content": "14 everywhere."}
 _DEVELOPER: Final = {"role": "developer", "content": "Answer in French."}
+_SYSTEM: Final = {"role": "system", "content": "Answer in French."}
 _WHOLE: Final = f'{{"note": "{"Paris " * 500}"}}'
 _CUT: Final = truncated_for_db(_WHOLE, 2048)
 _OTHER_WHOLE: Final = f'{{"note": "{"Rome " * 600}"}}'
@@ -279,6 +280,7 @@ def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
         pytest.param([_USER, _asks("c1"), _USER, _asks("c1"), _output("c1")], id="id-reused-after-a-user-turn"),
         pytest.param([_USER, _asks("c1"), _ANSWER, _asks("c1"), _output("c1")], id="id-reused-after-an-answer"),
         pytest.param([_asks("c1", "c2"), _DEVELOPER, _asks("c1"), _output("c1")], id="id-reused-after-instructions"),
+        pytest.param([_asks("c1", "c2"), _SYSTEM, _asks("c1"), _output("c1")], id="id-reused-after-a-system-message"),
         pytest.param([_asks("c1", "c2"), _output("c1"), _stored(_asks("c2"))], id="id-reused-by-a-stored-turn"),
         pytest.param([_USER, _asks("c1"), _asks("c2"), _output("c1"), _output("c2")], id="call-made-nowhere-else"),
         pytest.param(
