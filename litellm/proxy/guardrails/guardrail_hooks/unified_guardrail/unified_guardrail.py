@@ -1325,7 +1325,6 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         try:
             async for item in response:
-                chunk_counter += 1
                 responses_so_far.append(item)
 
                 # Infer call type from first chunk if not already done
@@ -1359,6 +1358,7 @@ class UnifiedLLMGuardrails(CustomLogger):
                     continue
                 responses_so_far.append(whole_frames)
                 item = whole_frames  # the rest of this round reads the item in whole frames
+                chunk_counter += 1
 
                 # If end_of_stream_only mode, yield chunks without processing.
                 # When buffering, withhold them instead -- they are released (or
