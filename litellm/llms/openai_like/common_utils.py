@@ -22,9 +22,10 @@ def resolve_nousresearch_api_key(
     resolved: Final = api_key or get_secret_str("NOUSRESEARCH_API_KEY")
     if resolved:
         return resolved
-    if isinstance(client, AsyncOpenAI if is_async else OpenAI):
-        if client.api_key or client._api_key_provider is not None:  # pyright: ignore[reportPrivateUsage]  # SDK has no public credential-provider getter
-            return None
+    if isinstance(client, AsyncOpenAI if is_async else OpenAI) and (
+        client.api_key or client._api_key_provider is not None  # pyright: ignore[reportPrivateUsage]  # SDK has no public credential-provider getter
+    ):
+        return None
     if headers and any(
         isinstance(value, str) and bool(value.strip())
         for name, value in headers.items()
