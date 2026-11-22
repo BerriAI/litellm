@@ -10,7 +10,7 @@ from typing import Final
 
 from pydantic import ConfigDict, Field, model_validator
 
-from litellm.models.budget import active_rollover_credit
+from litellm.models.budget import active_rollover_credit as calculate_rollover_credit
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
@@ -67,7 +67,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
         return values
 
     def active_rollover_credit(self) -> float | None:
-        return active_rollover_credit(
+        return calculate_rollover_credit(
             self.max_budget, self.rollover_max_budget, self.budget_duration, self.rollover_credit
         )
 

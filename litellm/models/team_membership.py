@@ -12,7 +12,8 @@ from typing import Final
 
 from pydantic import Field
 
-from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull, active_rollover_credit
+from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
+from litellm.models.budget import active_rollover_credit as calculate_rollover_credit
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -29,7 +30,7 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
         budget: Final = self.litellm_budget_table
         if budget is None:
             return None
-        return active_rollover_credit(
+        return calculate_rollover_credit(
             budget.max_budget, budget.rollover_max_budget, budget.budget_duration, self.rollover_credit
         )
 
