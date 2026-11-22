@@ -998,6 +998,27 @@ def test_a_gemini_body_whose_input_google_sizes_on_its_side_reserves_the_whole_w
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("group", ["gpt-4o", "claude-sonnet-5-5"])
+async def test_a_gemini_tool_a_gpt_or_claude_named_gemini_group_cannot_count_holds_the_whole_window(
+    group: str,
+) -> None:
+    router: Final = _router_with_groups((group, f"gemini/{GEMINI_MODEL}"))
+    body: Final = GEMINI_QUESTION | {"tools": [{"urlContext": {}}], "generationConfig": {"maxOutputTokens": 64}}
+    route: Final = f"/v1beta/models/{group}:generateContent"
+    counts: Final = await count_request_input_tokens(request_body=body, route=route, llm_router=router, team_id=None)
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=body, route=route, llm_router=router, input_token_counts=counts
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=body, route=route, llm_router=router, input_token_counts=counts
+    )
+
+    assert floor == pytest.approx(_gemini_window() * _gemini_rate("input_cost_per_token"))
+    assert reserved == pytest.approx(floor + 64 * _gemini_output_rate())
+
+
 _CACHED_BODY: Final = GEMINI_QUESTION | {
     "cachedContent": "cachedContents/ctx-1",
     "generationConfig": {"maxOutputTokens": 100},
@@ -1075,7 +1096,6 @@ def test_cached_content_reservation_prices_the_rest_of_the_window(
     reserved: Final = _max_cost_for_cost_info(
         request_body=_CACHED_BODY,
         route=GEMINI_ROUTES[0],
-        model="custom-gemini",
         model_info=model_info,
         requested_output_tokens=100,
         output_multiplier=1,
@@ -1089,7 +1109,6 @@ def test_a_gemini_prompt_past_a_price_threshold_is_held_at_the_higher_rates() ->
     reserved: Final = _max_cost_for_cost_info(
         request_body=GEMINI_QUESTION | {"generationConfig": {"maxOutputTokens": 100}},
         route=GEMINI_ROUTES[0],
-        model="custom-gemini",
         model_info=_THRESHOLD_PRICED,
         requested_output_tokens=100,
         output_multiplier=1,
@@ -1105,7 +1124,7 @@ def test_a_gemini_body_held_at_the_whole_window_it_could_not_count_keeps_the_bas
         "generationConfig": {"maxOutputTokens": 100},
     }
     model_info: Final = _THRESHOLD_PRICED | {"max_input_tokens": 300_000}
-    cost_inputs: Final = {"request_body": image_body, "route": GEMINI_ROUTES[0], "model": "custom-gemini"}
+    cost_inputs: Final = {"request_body": image_body, "route": GEMINI_ROUTES[0], "input_tokens": None}
 
     reserved: Final = _max_cost_for_cost_info(
         **cost_inputs, model_info=model_info, requested_output_tokens=100, output_multiplier=1
@@ -1278,7 +1297,6 @@ def test_the_input_floor_prices_a_gemini_prompt_at_the_rates_its_size_bills_at(
     floor: Final = _input_cost_for_cost_info(
         request_body=request_body,
         route=GEMINI_ROUTES[0],
-        model="custom-gemini",
         model_info=_THRESHOLD_PRICED | {"max_input_tokens": 300_000},
         input_tokens=input_tokens,
     )
@@ -1313,7 +1331,6 @@ def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved(
     reserved: Final = _max_cost_for_cost_info(
         request_body=_CACHED_BODY,
         route=GEMINI_ROUTES[0],
-        model="custom-gemini",
         model_info={"output_cost_per_token": 4e-06, "max_input_tokens": 10_000},
         requested_output_tokens=100,
         output_multiplier=1,
@@ -1444,7 +1461,7 @@ def test_a_gemini_body_with_inline_audio_holds_its_input_at_the_higher_of_the_te
 ) -> None:
     def held(parts: list[object]) -> tuple[float | None, float | None]:
         body: Final = {"contents": [{"role": "user", "parts": parts}], "generationConfig": {"maxOutputTokens": 100}}
-        pricing: Final = {"request_body": body, "route": GEMINI_ROUTES[0], "model": "custom-gemini"}
+        pricing: Final = {"request_body": body, "route": GEMINI_ROUTES[0]}
         return (
             _max_cost_for_cost_info(
                 **pricing, model_info=model_info, requested_output_tokens=100, output_multiplier=1, input_tokens=200
