@@ -75,9 +75,10 @@ from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterat
 from litellm.router_rust.invoke.slots import hold_slot_until_closed
 from litellm.router_rust.surface.health import failure_already_logged, logged_call
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
-from litellm.types.utils import ModelResponseStream, Usage
+from litellm.types.utils import CostBreakdown, ModelResponseStream, Usage
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuationOutput, ContinuedPartial
@@ -1691,6 +1692,18 @@ def _combine_responses_fallback_usage(fallback_item: object, partial_usage: "Res
     )
 
 
+def _stream_logging(stream: object) -> "LiteLLMLogging | None":
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+
+    logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
+    return logging_obj if isinstance(logging_obj, LiteLLMLogging) else None
+
+
+def _cost_breakdown_of(stream: object) -> CostBreakdown | None:
+    logging_obj: Final = _stream_logging(stream)
+    return None if logging_obj is None else logging_obj.cost_breakdown
+
+
 def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) -> Mapping[str, object]:
     """The request as the deployment received it, merged in the order the attempt applies."""
     return attempt.core.params_sent_to_deployment(attempt.request, deployment_id)
@@ -1745,17 +1758,28 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         return prepared
 
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-        from litellm.responses.mcp.round_billing import billed_for_every_round
+        from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
         from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
         current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
         if self._billing_source is self._source_iterator:
             return current
+        current_breakdown: Final = _cost_breakdown_of(self._billing_source)
         primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
         if current is None or primary is None:
             return current or primary
+        primary_breakdown: Final = _cost_breakdown_of(self._source_iterator)
+        billing_logging: Final = _stream_logging(self)
+        if billing_logging is not None:
+            billing_logging.cost_breakdown = summed_cost_breakdown(
+                primary.response, primary_breakdown, current.response, current_breakdown
+            )
         return current.model_copy(
-            update={"response": billed_for_every_round(primary.response, None, current.response, None)}
+            update={
+                "response": billed_for_every_round(
+                    primary.response, primary_breakdown, current.response, current_breakdown
+                )
+            }
         )
 
     def __aiter__(self) -> "FallbackResponsesStreamWrapper":
