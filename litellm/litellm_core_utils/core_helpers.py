@@ -612,19 +612,16 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     Helper to get litellm metadata for spend tracking
 
     PATCH for issue where both `litellm_metadata` and `metadata` are present in the kwargs
-    and user_api_key values are in 'metadata'. The proxy receive stamp and the caller's spend_logs_metadata
-    ride along for the same reason: a guardrail hook can plant `litellm_metadata` on a chat request after the
-    proxy filled `metadata`, and the response timing headers and the spend row read them from there. The
-    spend_logs_metadata goes only into the returned copy, since guardrail vendors receive the planted dict.
+    and user_api_key values are in 'metadata'. The proxy receive stamp rides along for the same
+    reason: a guardrail hook can plant `litellm_metadata` on a chat request after the proxy stamped
+    `metadata`, and the response timing headers anchor on that stamp.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
     for key, value in dict(metadata).items():
         carry_receive_stamp = key == "litellm_received_at" and key not in litellm_metadata
         if potential_spend_tracking_metadata_substring in key or carry_receive_stamp:
             litellm_metadata[key] = value
-    if "spend_logs_metadata" in litellm_metadata or "spend_logs_metadata" not in metadata:
-        return litellm_metadata
-    return {**litellm_metadata, "spend_logs_metadata": metadata["spend_logs_metadata"]}
+    return litellm_metadata
 
 
 def get_metadata_variable_name_from_kwargs(
@@ -783,6 +780,26 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
             return metadata
 
     return {}
+
+
+def get_spend_log_metadata_from_kwargs(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    The request metadata a spend row records. A guardrail hook can plant `litellm_metadata` on a chat request
+    after the proxy filled `metadata`, so the caller's spend_logs_metadata comes from `metadata` when the planted
+    dict lacks it, in a new dict, since guardrail vendors receive the planted one. Only a `metadata` the proxy
+    stamped with the key hash counts, since on /v1/messages and /v1/responses it is the provider's body field.
+    """
+    litellm_metadata: Final = as_str_mapping(get_litellm_metadata_from_kwargs(dict(kwargs))) or {}  # pyright: ignore[reportUnknownArgumentType]  # the metadata helper returns an untyped dict
+    litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    carries: Final = (
+        "user_api_key_hash" in metadata
+        and "spend_logs_metadata" in metadata
+        and "spend_logs_metadata" not in litellm_metadata
+    )
+    if not carries:
+        return litellm_metadata
+    return {**litellm_metadata, "spend_logs_metadata": metadata["spend_logs_metadata"]}
 
 
 def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:

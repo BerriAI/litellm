@@ -45,6 +45,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     claude_subscription_usage,
     get_litellm_metadata_from_kwargs,
+    get_spend_log_metadata_from_kwargs,
     proxy_stamped_kubernetes_pod_routing,
     proxy_stamped_used_client_oauth_token,
     reconstruct_model_name,
@@ -731,7 +732,9 @@ def logging_payload(
         response_obj = {"result": str(response_obj)}
     # standardize this function to be used across, s3, dynamoDB, langfuse logging
     litellm_params: Final = kwargs.get("litellm_params", {})
-    metadata: Final = get_litellm_metadata_from_kwargs(kwargs)
+    metadata: Final[dict[str, Any]] = dict(  # mutable-ok: the frozen helpers below take it as an untyped dict
+        get_spend_log_metadata_from_kwargs(kwargs)
+    )
     routing_litellm_params: Final[Mapping[str, object] | None] = (
         litellm_params if isinstance(litellm_params, Mapping) else None
     )
@@ -947,7 +950,7 @@ def logging_payload(
         guardrail_information=(
             standard_logging_payload.get("guardrail_information", None)
             if standard_logging_payload is not None
-            else (metadata.get("standard_logging_guardrail_information", None) if metadata is not None else None)
+            else metadata.get("standard_logging_guardrail_information", None)
         ),
         cold_storage_object_key=(
             standard_logging_payload["metadata"].get("cold_storage_object_key", None)
