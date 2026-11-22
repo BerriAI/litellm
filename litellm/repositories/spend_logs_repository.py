@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.repositories import rust_database
 from litellm.repositories.accounting_delivery_repository import LedgerDatabase, LedgerTransaction
+from litellm.repositories.spend_log_commits import committed_summary, report_ledger_commit
 from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.rust_bridge._native import RustSpendLogRepository
 
@@ -52,6 +53,18 @@ def _settles_once(row: Mapping[str, object]) -> bool:
 
 def _delivery_id(row: Mapping[str, object]) -> str:
     return str(row["accounting_delivery_id"]) if not _settles_once(row) else str(row["request_id"])
+
+
+def _committed_summaries(
+    rows: Sequence[Mapping[str, object]], accepted: frozenset[str]
+) -> tuple[Mapping[str, object], ...]:
+    if not accepted:
+        return ()
+    return tuple(
+        committed_summary(_delivery_id(row), _accounting_payload(row["accounting_payload"]), row.get("request_id"))
+        for row in rows
+        if _delivery_id(row) in accepted
+    )
 
 
 class SpendLogOwner(str, Enum):
@@ -97,12 +110,13 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
         database: Final = require_attributes(self._connected_client(), _LedgerWriterClientView, "writer_db").writer_db
         async with database.tx(timeout=timedelta(seconds=60)) as transaction:
             accepted: Final = await self._insert_ledger(transaction, ledger, write_spend_logs=write_spend_logs)
-        return legacy_count + accepted
+        report_ledger_commit(lambda: _committed_summaries(ledger, accepted))
+        return legacy_count + len(accepted)
 
     @staticmethod
     async def _insert_ledger(
         transaction: LedgerTransaction, rows: Sequence[Mapping[str, object]], *, write_spend_logs: bool
-    ) -> int:
+    ) -> frozenset[str]:
         from litellm.proxy.db.db_span import db_span
         from litellm.repositories.spend_log_insert import spend_log_insert_statement
 
@@ -147,7 +161,7 @@ class SpendLogsRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogs
             async with db_span("insert_spend_logs", "LiteLLM_SpendLogs"):
                 for group in groups:
                     await transaction.query_raw(*spend_log_insert_statement(group))
-        return len(accepted)
+        return accepted
 
     @staticmethod
     async def _jobs_charged_by_legacy(transaction: LedgerTransaction, cost_row_ids: Sequence[str]) -> frozenset[str]:

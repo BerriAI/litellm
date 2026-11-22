@@ -2,14 +2,20 @@
 //! as the Python `update_spend_logs` does them. Database failures are classified by
 //! `litellm_db::Error::kind`, as every other Rust database caller does.
 
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Duration,
+};
 
 use litellm_db::{Error, ErrorKind};
 use litellm_error::Report;
-use litellm_repositories::SpendLogWrite;
+use litellm_repositories::{LedgerCommit, SpendLogWrite};
 
 use crate::{
     QueuedSpendLog, Retention, WriterSettings,
+    committed::{CommitObserver, committed_rows},
     statement::{delivery, spend_log_write},
 };
 
@@ -20,6 +26,20 @@ const ROW_SEPARATOR_BYTES: usize = 2;
 pub trait LedgerStore: Send + Sync {
     fn insert(&self, writes: &[SpendLogWrite])
     -> impl Future<Output = Result<usize, Error>> + Send;
+
+    /// Like `insert`, also naming the deliveries its committed transaction accepted. A store
+    /// that cannot prove which deliveries it accepted confirms none.
+    fn insert_committed(
+        &self,
+        writes: &[SpendLogWrite],
+    ) -> impl Future<Output = Result<LedgerCommit, Error>> + Send {
+        async move {
+            Ok(LedgerCommit {
+                count: self.insert(writes).await?,
+                accepted: Vec::new(),
+            })
+        }
+    }
 }
 
 /// Worth retrying in the same flush: the database dropped or refused the connection, is
@@ -80,13 +100,55 @@ fn request_id(write: &SpendLogWrite) -> &str {
 pub struct SpendLogFlusher<S> {
     store: S,
     settings: WriterSettings,
+    observer: Option<CommitObserver>,
+    reporting: AtomicBool,
 }
 
 type Isolation<'a> = Pin<Box<dyn Future<Output = Result<usize, Error>> + Send + 'a>>;
 
 impl<S: LedgerStore> SpendLogFlusher<S> {
     pub fn new(store: S, settings: WriterSettings) -> Self {
-        Self { store, settings }
+        Self {
+            store,
+            settings,
+            observer: None,
+            reporting: AtomicBool::new(false),
+        }
+    }
+
+    /// Turns commit reports on or off. Reports start off, so a writer whose observer has no
+    /// listener builds no summaries.
+    pub fn set_reporting(&self, enabled: bool) {
+        self.reporting.store(enabled, Ordering::Release);
+    }
+
+    pub fn reporting(&self) -> bool {
+        self.reporting.load(Ordering::Acquire)
+    }
+
+    /// Tells `observer` about each committed statement's accepted deliveries, after the commit.
+    pub fn with_commit_observer(mut self, observer: CommitObserver) -> Self {
+        self.observer = Some(observer);
+        self
+    }
+
+    /// Commits `writes` as one statement and reports what it accepted. Returns the store count.
+    pub async fn commit(&self, writes: &[SpendLogWrite]) -> Result<usize, Error> {
+        let committed = self.store.insert_committed(writes).await?;
+        if let Some(observer) = &self.observer
+            && !committed.accepted.is_empty()
+            && self.reporting()
+        {
+            let report = std::panic::AssertUnwindSafe(|| {
+                observer(committed_rows(writes, &committed.accepted));
+            });
+            if std::panic::catch_unwind(report).is_err() {
+                tracing::warn!(
+                    "Spend tracking - the commit observer panicked; accounting is unaffected"
+                );
+            }
+        }
+        Ok(committed.count)
     }
 
     pub fn settings(&self) -> &WriterSettings {
@@ -196,7 +258,7 @@ impl<S: LedgerStore> SpendLogFlusher<S> {
         if charges.is_empty() {
             return Ok(());
         }
-        match self.store.insert(&charges).await {
+        match self.commit(&charges).await {
             Ok(_) => Ok(()),
             Err(error) if is_rejected_row(&error) => {
                 tracing::error!(
@@ -212,7 +274,7 @@ impl<S: LedgerStore> SpendLogFlusher<S> {
 
     fn isolate<'a>(&'a self, writes: &'a [SpendLogWrite], failure_budget: usize) -> Isolation<'a> {
         Box::pin(async move {
-            let error = match self.store.insert(writes).await {
+            let error = match self.commit(writes).await {
                 Ok(_) => return Ok(failure_budget),
                 Err(error) => error,
             };
@@ -395,6 +457,108 @@ mod tests {
         let calls = flusher.store.calls();
         assert_eq!(calls.written, ["0", "good"]);
         assert_eq!(calls.charges_kept, ["rejected"]);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn the_commit_observer_hears_the_accepted_accounting_of_kept_and_isolated_rows() {
+        let reported: Arc<Mutex<Vec<serde_json::Value>>> = Arc::default();
+        let sink = Arc::clone(&reported);
+        let flusher = SpendLogFlusher::new(
+            FakeStore::new(Box::new(move |writes, _| {
+                (!charges_only(writes) && request_ids(writes).iter().any(|id| id == "rejected"))
+                    .then(|| sqlstate("22P02"))
+            })),
+            WriterSettings::default(),
+        )
+        .with_commit_observer(Arc::new(move |rows: Vec<String>| {
+            sink.lock().expect("reported lock").extend(
+                rows.iter()
+                    .map(|text| serde_json::from_str::<serde_json::Value>(text).expect("json")),
+            );
+        }));
+        flusher.set_reporting(true);
+
+        flusher
+            .write(&[charged("accepted"), charged("rejected")], None)
+            .await
+            .expect("writes the rest");
+
+        let mut reported = reported.lock().expect("reported lock").clone();
+        reported.sort_by_key(|row| row["delivery_id"].to_string());
+        assert_eq!(
+            reported
+                .iter()
+                .map(|row| (row["delivery_id"].clone(), row["spend"].clone()))
+                .collect::<Vec<_>>(),
+            [
+                (serde_json::json!("accepted-d"), serde_json::json!(1.0)),
+                (serde_json::json!("rejected-d"), serde_json::json!(1.0)),
+            ]
+        );
+        assert_eq!(
+            reported
+                .iter()
+                .map(|row| [row.get("endTime"), row.get("model_id"), row.get("messages")])
+                .collect::<Vec<_>>(),
+            [[None, None, None]; 2]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_store_that_cannot_prove_acceptance_reports_nothing() {
+        struct CountOnly;
+        impl crate::LedgerStore for CountOnly {
+            async fn insert(
+                &self,
+                writes: &[litellm_repositories::SpendLogWrite],
+            ) -> Result<usize, Error> {
+                Ok(writes.len())
+            }
+        }
+        let reported: Arc<Mutex<usize>> = Arc::default();
+        let sink = Arc::clone(&reported);
+        let flusher = SpendLogFlusher::new(CountOnly, WriterSettings::default())
+            .with_commit_observer(Arc::new(move |_| *sink.lock().expect("lock") += 1));
+        flusher.set_reporting(true);
+
+        flusher.write(&[charged("a")], None).await.expect("writes");
+
+        assert_eq!(*reported.lock().expect("lock"), 0);
+    }
+
+    fn write_of(row: &QueuedSpendLog) -> litellm_repositories::SpendLogWrite {
+        crate::statement::spend_log_write(row, None, chrono::Utc::now().naive_utc())
+            .expect("row writes")
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn reports_start_off_and_follow_the_reporting_switch() {
+        let reported: Arc<Mutex<usize>> = Arc::default();
+        let sink = Arc::clone(&reported);
+        let flusher = flusher(FakeStore::writing()).with_commit_observer(Arc::new(move |rows| {
+            *sink.lock().expect("lock") += rows.len();
+        }));
+
+        assert!(!flusher.reporting());
+        let off = flusher.commit(&[write_of(&charged("off"))]).await;
+        flusher.set_reporting(true);
+        let on = flusher.commit(&[write_of(&charged("on"))]).await;
+        flusher.set_reporting(false);
+        let off_again = flusher.commit(&[write_of(&charged("off-again"))]).await;
+        assert_eq!(
+            [
+                off.expect("commits"),
+                on.expect("commits"),
+                off_again.expect("commits")
+            ],
+            [1, 1, 1]
+        );
+
+        assert_eq!(*reported.lock().expect("lock"), 1);
+        assert_eq!(flusher.store.calls().written, ["off", "on", "off-again"]);
     }
 
     #[rstest]

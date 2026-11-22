@@ -24,6 +24,7 @@
 //!
 //! [`SpendLogRow`]: litellm_callbacks_spend_log::SpendLogRow
 
+mod committed;
 mod entry;
 mod flusher;
 mod queue;
@@ -36,6 +37,7 @@ use std::time::Duration;
 
 use tokio::sync::Mutex;
 
+pub use committed::CommitObserver;
 pub use entry::{Charge, EntryError, QueuedSpendLog, RejectedRow};
 pub use flusher::{LedgerStore, SpendLogFlusher};
 pub use queue::SpendLogQueue;
@@ -141,7 +143,7 @@ impl<S: LedgerStore> SpendLogWriter<S> {
         retention: Option<&Retention>,
     ) -> Result<bool, ClaimError> {
         let write = statement::spend_log_write(entry, retention, chrono::Utc::now().naive_utc())?;
-        Ok(self.flusher.store().insert(&[write]).await? == 1)
+        Ok(self.flusher.commit(&[write]).await? == 1)
     }
 
     /// Asks for a pass now rather than at the next poll, for a row a following request reads back

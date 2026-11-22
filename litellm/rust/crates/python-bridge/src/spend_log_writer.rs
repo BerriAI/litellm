@@ -79,15 +79,18 @@ impl RustSpendLogWriter {
 #[pymethods]
 impl RustSpendLogWriter {
     /// `on_flush_request` is called, with the GIL, whenever a row asks to be written at once; the
-    /// proxy passes a callable that wakes its spend log monitor from any thread.
+    /// proxy passes a callable that wakes its spend log monitor from any thread. `on_committed`,
+    /// when given, is called the same way after each committed statement with one JSON summary
+    /// per accepted delivery.
     #[new]
-    #[pyo3(signature = (database, *, queue_max_bytes, write_batch_max_bytes, write_batch_max_rows, on_flush_request))]
+    #[pyo3(signature = (database, *, queue_max_bytes, write_batch_max_bytes, write_batch_max_rows, on_flush_request, on_committed=None))]
     fn new(
         database: PyRef<'_, NativeDatabase>,
         queue_max_bytes: usize,
         write_batch_max_bytes: usize,
         write_batch_max_rows: usize,
         on_flush_request: Py<PyAny>,
+        on_committed: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let settings = WriterSettings {
             queue_max_bytes,
@@ -109,12 +112,36 @@ impl RustSpendLogWriter {
                 }
             });
         };
+        let flusher = SpendLogFlusher::new(store, settings);
+        let flusher = match on_committed {
+            Some(on_committed) => {
+                flusher.with_commit_observer(Arc::new(move |rows: Vec<String>| {
+                    Python::attach(|py| {
+                        if let Err(error) = on_committed.call1(py, (rows,)) {
+                            tracing::warn!(
+                                "Spend tracking - could not report committed spend logs: {}",
+                                error
+                            );
+                        }
+                    });
+                }))
+            }
+            None => flusher,
+        };
         Ok(Self {
-            writer: Arc::new(SpendLogWriter::new(
-                SpendLogFlusher::new(store, settings),
-                wake,
-            )),
+            writer: Arc::new(SpendLogWriter::new(flusher, wake)),
         })
+    }
+
+    /// Turns `on_committed` reports on or off; the proxy turns them on only while a commit
+    /// observer is registered.
+    fn set_commit_reporting(&self, enabled: bool) {
+        self.writer.flusher().set_reporting(enabled);
+    }
+
+    #[getter]
+    fn commit_reporting(&self) -> bool {
+        self.writer.flusher().reporting()
     }
 
     /// Queues rows Python built, each as its `json.dumps` text, within `max_bytes`. A row the

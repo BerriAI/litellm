@@ -4,13 +4,18 @@
 
 #![recursion_limit = "256"]
 
-use std::{error::Error as StdError, str::FromStr, sync::Arc, time::SystemTime};
+use std::{
+    error::Error as StdError,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::SystemTime,
+};
 
 use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
-use litellm_repositories::SpendLogRepository;
+use litellm_repositories::{SpendLogDelivery, SpendLogRepository, SpendLogWrite};
 use litellm_secret_value::SecretValue;
 use litellm_spend_log_writer::{
-    PgLedgerStore, QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings,
+    LedgerStore, PgLedgerStore, QueuedSpendLog, SpendLogFlusher, SpendLogWriter, WriterSettings,
 };
 use rstest::{fixture, rstest};
 use serde::Deserialize;
@@ -52,8 +57,10 @@ fn endpoint() -> Result<Endpoint, Box<dyn StdError>> {
 
 struct Database {
     writer: SpendLogWriter<PgLedgerStore>,
+    store: PgLedgerStore,
     pool: PgPool,
     prefix: String,
+    reported: Arc<Mutex<Vec<Value>>>,
 }
 
 #[fixture]
@@ -62,25 +69,42 @@ fn database() -> Result<Database, Box<dyn StdError>> {
     let pools = Pools::new(&endpoint, None)?;
     let pool = pools.writer().clone();
     let settings = WriterSettings::default();
-    let store = PgLedgerStore::new(
-        SpendLogRepository::new(litellm_repositories::Database::new(
-            pools,
-            Arc::new(Ignored),
-            None,
-            true,
-        )),
-        settings.transaction_timeout,
-    );
+    let ledger_store = |pools: Pools| {
+        PgLedgerStore::new(
+            SpendLogRepository::new(litellm_repositories::Database::new(
+                pools,
+                Arc::new(Ignored),
+                None,
+                true,
+            )),
+            settings.transaction_timeout,
+        )
+    };
+    let direct = ledger_store(Pools::new(&endpoint, None)?);
+    let store = ledger_store(pools);
     let prefix = format!(
         "spend-log-writer-{}",
         SystemTime::now()
             .duration_since(SystemTime::UNIX_EPOCH)?
             .as_nanos()
     );
+    let reported: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let sink = Arc::clone(&reported);
+    let flusher = SpendLogFlusher::new(store, settings).with_commit_observer(Arc::new(
+        move |rows: Vec<String>| {
+            sink.lock().expect("reported lock").extend(
+                rows.iter()
+                    .filter_map(|text| serde_json::from_str::<Value>(text).ok()),
+            );
+        },
+    ));
+    flusher.set_reporting(true);
     Ok(Database {
-        writer: SpendLogWriter::new(SpendLogFlusher::new(store, settings), || {}),
+        writer: SpendLogWriter::new(flusher, || {}),
+        store: direct,
         pool,
         prefix,
+        reported,
     })
 }
 
@@ -212,6 +236,37 @@ async fn a_replayed_flush_stores_what_python_stores(
 #[rstest]
 #[tokio::test]
 #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+async fn only_the_first_commit_of_each_delivery_is_reported(
+    database: Result<Database, Box<dyn StdError>>,
+) -> Result<(), Box<dyn StdError>> {
+    let database = database?;
+    let golden = database.golden()?;
+    database
+        .writer
+        .enqueue(database.queued(&golden.rows)?, false);
+    database.writer.flush(usize::MAX, None).await?;
+    let first = database.reported.lock().expect("reported lock").len();
+    database
+        .writer
+        .enqueue(database.queued(&golden.rows)?, false);
+    database.writer.flush(usize::MAX, None).await?;
+
+    let reported = database.reported.lock().expect("reported lock").clone();
+    assert_eq!(first, golden.deliveries.len());
+    assert_eq!(reported.len(), first);
+    assert_eq!(
+        reported
+            .iter()
+            .map(|row| (row.get("spend").is_some(), row.get("messages").is_some()))
+            .collect::<Vec<_>>(),
+        vec![(true, false); first]
+    );
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
 async fn a_poison_row_is_dropped_but_keeps_its_charge(
     database: Result<Database, Box<dyn StdError>>,
 ) -> Result<(), Box<dyn StdError>> {
@@ -233,5 +288,35 @@ async fn a_poison_row_is_dropped_but_keeps_its_charge(
         [&json!(database.id("good-1")), &json!(database.id("good-2"))]
     );
     assert_eq!(deliveries.len(), 3);
+    Ok(())
+}
+
+#[rstest]
+#[tokio::test]
+#[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+async fn the_count_api_counts_each_new_delivery_once_and_an_empty_batch_writes_nothing(
+    database: Result<Database, Box<dyn StdError>>,
+) -> Result<(), Box<dyn StdError>> {
+    let database = database?;
+    let charge = |name: &str| SpendLogWrite {
+        log: None,
+        delivery: Some(SpendLogDelivery {
+            delivery_id: database.id(&format!("{name}-delivery")),
+            request_id: database.id(name),
+            accounting_payload: json!({"request_id": database.id(name), "spend": 0.25})
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            is_batch: false,
+        }),
+    };
+    let writes = [charge("a"), charge("b"), charge("a")];
+    let first = database.store.insert(&writes).await;
+    let replayed = database.store.insert(&writes).await;
+    let empty = database.store.insert(&[]).await;
+    let deliveries = database.stored(DELIVERIES).await;
+    database.clean().await?;
+    assert_eq!((first?, replayed?, empty?), (2, 0, 0));
+    assert_eq!(deliveries?.len(), 2);
     Ok(())
 }
