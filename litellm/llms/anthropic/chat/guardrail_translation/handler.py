@@ -662,7 +662,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     @staticmethod
     def _build_streaming_usage_response(
         responses_so_far: Sequence[object],
-        request_data: dict | None,
+        request_data: Mapping[str, object] | None,
     ) -> ModelResponse | None:
         chunks: Final = tuple(response for response in responses_so_far if isinstance(response, (str, bytes)))
         if not chunks:
@@ -749,7 +749,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             blocked_response_usage,
         )
 
-        def _sse(event_type: str, payload: dict) -> bytes:
+        def _sse(event_type: str, payload: Mapping[str, object]) -> bytes:
             return f"event: {event_type}\ndata: {json.dumps(payload)}\n\n".encode()
 
         output_tokens: Final = blocked_response_usage(getattr(exc, "original_response", None)).get("output_tokens", 0)
@@ -1788,11 +1788,11 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     def _prepare_request_data(
         self,
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         response: object,
         user_api_key_dict: "UserAPIKeyAuth | None",
         key: str,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Ensure request_data has the response/responses_so_far key and metadata."""
         if request_data is None:
             request_data = {key: response}

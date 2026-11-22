@@ -1166,7 +1166,7 @@ def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatC
 
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
-    def get_supported_openai_params(model: str) -> list:
+    def get_supported_openai_params(model: str) -> list[str]:
         """
         LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
         """
@@ -1512,7 +1512,7 @@ class LiteLLMCompletionResponsesConfig:
         if malformed_field_error is not None:
             raise malformed_field_error
 
-        litellm_completion_request: dict = {
+        litellm_completion_request: dict[str, object] = {
             "messages": (
                 list(
                     _request_messages_for_cache_points(
@@ -4183,7 +4183,7 @@ class LiteLLMCompletionResponsesConfig:
         messages: Final[list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall]] = []
         output_items: Final = responses_api_output.output
         for _output_item in output_items:
-            output_item: dict = dict(_output_item)
+            output_item: dict[str, object] = dict(_output_item)
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(

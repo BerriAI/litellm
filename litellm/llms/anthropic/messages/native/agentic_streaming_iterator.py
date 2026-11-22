@@ -223,9 +223,9 @@ class AgenticAnthropicStreamingIterator:
         self._stream_exhausted = False
         self._hook_processing_done = False
         self._follow_up_iterator: AsyncIterator | None = None
-        self._drain_task: asyncio.Task | None = None
-        self._hook_task: asyncio.Task | None = None
-        self._follow_up_chunk_task: asyncio.Task | None = None
+        self._drain_task: asyncio.Task[None] | None = None
+        self._hook_task: asyncio.Task[None] | None = None
+        self._follow_up_chunk_task: asyncio.Task[bytes | None] | None = None
         self._replay_index = 0
         self._error_emitted = False
         self._loop_limit_reached = False
@@ -267,7 +267,7 @@ class AgenticAnthropicStreamingIterator:
         except StopAsyncIteration:
             return
 
-    async def _completed_within_ping_interval(self, task: asyncio.Task) -> bool:
+    async def _completed_within_ping_interval(self, task: asyncio.Task[object]) -> bool:
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=self._ping_interval_seconds)
         except asyncio.TimeoutError:
@@ -339,7 +339,7 @@ class AgenticAnthropicStreamingIterator:
         )
 
     @staticmethod
-    async def _settle_task(task: asyncio.Task | None) -> None:
+    async def _settle_task(task: asyncio.Task[object] | None) -> None:
         if task is None:
             return
         if task.done():
