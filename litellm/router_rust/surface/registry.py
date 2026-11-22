@@ -61,8 +61,9 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
-from litellm.cost_calculator import bedrock_profile_pricing, cost_map_key_declared_prices
+from litellm.cost_calculator import base_model_for_pricing, bedrock_profile_pricing, cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -403,12 +404,12 @@ def _search_tool_support(deployment: Mapping[str, object]) -> bool | None:
 
 def cost_map_backend_model(deployment: Deployment) -> str:
     """The model a deployment's prices are inherited from (``_cost_map_backend_model``)."""
-    model_info_base_model: Final = deployment.model_info.base_model
-    if isinstance(model_info_base_model, str) and model_info_base_model:
+    model_info_base_model: Final = base_model_for_pricing(deployment.model_info.base_model)
+    if model_info_base_model:
         return model_info_base_model
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
-    params_base_model: Final = params.get("base_model")
-    if isinstance(params_base_model, str) and params_base_model:
+    params_base_model: Final = base_model_for_pricing(params.get("base_model"))
+    if params_base_model:
         return params_base_model
     model: Final = deployment.litellm_params.model
     invoked_model: Final = params.get("model_id")
@@ -435,22 +436,26 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
     provider: Final = deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
     priced: Final = {**declared, **custom_pricing}
-    profile_pricing: Final[Mapping[str, object]] = (
-        _bedrock_profile_pricing(backend_model, priced)
-        if params.get("model_id")
+    profile_backend: Final = bool(
+        params.get("model_id")
         and backend_model != deployment.litellm_params.model
         and _bedrock_profile(params, deployment.litellm_params.model)
-        else {}
+    )
+    profile_pricing: Final[Mapping[str, object]] = (
+        _bedrock_profile_pricing(backend_model, priced) if profile_backend else {}
+    )
+    rates_model: Final = (
+        deployment.litellm_params.model if profile_backend and contains_bedrock_arn(backend_model) else backend_model
     )
     with_profile: Final = {**priced, **profile_pricing}
-    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, backend_model, provider)}
+    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, rates_model, provider)}
     cached: Final = (
-        {**off_peak, **_inherited_cache_pricing(host, off_peak, backend_model, provider)}
+        {**off_peak, **_inherited_cache_pricing(host, off_peak, rates_model, provider)}
         if off_peak.get("input_cost_per_token") is not None
         else off_peak
     )
-    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
+    return {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
