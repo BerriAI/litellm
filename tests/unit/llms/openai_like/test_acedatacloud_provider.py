@@ -195,7 +195,8 @@ def test_public_discovery_includes_new_chat_ids_without_sending_the_key() -> Non
     assert "authorization" not in route.calls.last.request.headers
 
 
-def test_messages_model_uses_native_transport_and_bearer_auth() -> None:
+@pytest.mark.parametrize("api_base", [None, "https://api.acedata.cloud/v1", "https://api.acedata.cloud/openai"])
+def test_messages_model_uses_native_transport_and_bearer_auth(api_base: str | None) -> None:
     # Published contract, 2026-11-23: https://platform.acedata.cloud/api/v1/apis/a43a98fc-f833-4cfb-8596-8066faad2c42/
     model: Final = "claude-sonnet-5-5"
     with respx.mock() as upstream:
@@ -214,6 +215,7 @@ def test_messages_model_uses_native_transport_and_bearer_auth() -> None:
         response: Final = completion(
             model=f"acedatacloud/{model}",
             api_key="private-key",
+            api_base=api_base,
             messages=[{"role": "user", "content": "Hello"}],
             max_tokens=16,
             num_retries=0,

@@ -2932,6 +2932,8 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
+    if ctx.custom_llm_provider == "acedatacloud" and acedatacloud_uses_messages(ctx.model):
+        return _complete_acedatacloud_messages(ctx)
     acompletion: Final = ctx.acompletion
     api_base = ctx.api_base
     api_key = ctx.api_key
@@ -3253,6 +3255,30 @@ def _complete_anthropic_text(
         encoding=_get_encoding(),
         api_key=api_key,
         logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+    )
+
+
+def _complete_acedatacloud_messages(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    ace_key: Final = acedatacloud_api_key(
+        ctx.api_key, _FORWARDED_HEADERS_ADAPTER.validate_python(ctx.headers or litellm.headers)
+    )
+    if not ace_key:
+        raise AuthenticationError(
+            message="Set ACEDATACLOUD_API_KEY or pass api_key", llm_provider="acedatacloud", model=ctx.model
+        )
+    configured_base: Final = (ctx.api_base or "https://api.acedata.cloud").rstrip("/")
+    messages_base: Final = (
+        "https://api.acedata.cloud"
+        if configured_base == "https://api.acedata.cloud/openai"
+        else configured_base.removesuffix("/v1")
+    )
+    return _complete_anthropic(
+        replace(
+            ctx,
+            api_key=ace_key,
+            api_base=messages_base,
+            litellm_params={**ctx.litellm_params, "use_bearer_for_custom_base": True},
+        )
     )
 
 
@@ -6692,23 +6718,6 @@ def completion(
 
         elif custom_llm_provider == "azure_ai":
             response = _complete_azure_ai(_dispatch_ctx)
-        elif custom_llm_provider == "acedatacloud" and acedatacloud_uses_messages(model):
-            ace_key: Final = acedatacloud_api_key(
-                _dispatch_ctx.api_key,
-                _FORWARDED_HEADERS_ADAPTER.validate_python(_dispatch_ctx.headers or litellm.headers),
-            )
-            if not ace_key:
-                raise AuthenticationError(
-                    message="Set ACEDATACLOUD_API_KEY or pass api_key", llm_provider="acedatacloud", model=model
-                )
-            response = _complete_anthropic(  # rebind-ok: common dispatcher finalizes the selected provider result
-                replace(
-                    _dispatch_ctx,
-                    api_key=ace_key,
-                    api_base=(_dispatch_ctx.api_base or "https://api.acedata.cloud").rstrip("/").removesuffix("/v1"),
-                    litellm_params={**_dispatch_ctx.litellm_params, "use_bearer_for_custom_base": True},
-                )
-            )
         elif (
             custom_llm_provider == "text-completion-openai"
             or "ft:babbage-002" in model
