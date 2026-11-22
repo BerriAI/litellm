@@ -1,8 +1,8 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
+from typing import Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
 from pydantic import ConfigDict, Field, SerializerFunctionWrapHandler, TypeAdapter, model_serializer, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import Buffer, Protocol, ReadOnly, SupportsIndex, SupportsInt, TypedDict, runtime_checkable
 
 from litellm.types.guardrails import GuardrailNumRetries
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -166,7 +166,15 @@ class GenericGuardrailAPIRequest(LiteLLMBaseModel):
     model: str | None = None  # the model being used for the LLM call
 
 
-def coerce_stream_holdback_value(value: Any) -> int:
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+_INT_CONVERTIBLE: Final = (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)
+
+
+def coerce_stream_holdback_value(value: object) -> int:
     """Coerce a single ``stream_holdback_chars`` entry to a non-negative int.
 
     A guardrail returning a null, non-numeric, or negative holdback element must
@@ -174,6 +182,8 @@ def coerce_stream_holdback_value(value: Any) -> int:
     rather than raising. Shared by response parsing (``from_dict``) and the
     handler that applies holdback to in-process guardrail return values.
     """
+    if not isinstance(value, _INT_CONVERTIBLE):
+        return 0
     try:
         return max(0, int(value))
     except (TypeError, ValueError):
@@ -271,7 +281,12 @@ class GenericGuardrailAPIResponse:
     def from_dict(cls, data: dict) -> "GenericGuardrailAPIResponse":
         raw_holdback: Final = data.get("stream_holdback_chars")
         stream_holdback_chars: Final = (
-            [coerce_stream_holdback_value(value) for value in raw_holdback] if isinstance(raw_holdback, list) else None
+            [
+                coerce_stream_holdback_value(value) if isinstance(value, _INT_CONVERTIBLE) else 0
+                for value in raw_holdback
+            ]
+            if isinstance(raw_holdback, list)
+            else None
         )
         fields: Final = _RESPONSE_FIELDS.validate_python(data)
         return cls(

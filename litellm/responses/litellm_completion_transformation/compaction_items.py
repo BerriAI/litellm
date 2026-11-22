@@ -17,7 +17,7 @@ from .tool_search import chat_config_builds_anthropic_request, provider_chat_con
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
-_Item: Final = TypeVar("_Item")
+_Item = TypeVar("_Item")
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
@@ -160,8 +160,24 @@ def compaction_summary(item: object) -> str | None:
     return None if block is None else block.summary
 
 
+def summary_only_compaction_block(summary: str) -> Mapping[str, object]:
+    return MappingProxyType({"type": "compaction", "content": summary})
+
+
+def _item_field(item: object, field: str) -> object:
+    fields: Final = _json_object(item)
+    return getattr(item, field, None) if fields is None else fields.get(field)
+
+
+def output_compaction_summary(item: object) -> str | None:
+    if _item_field(item, "type") != "compaction":
+        return None
+    block: Final = decode_compaction_item(_item_field(item, "encrypted_content"))
+    return None if block is None else block.summary
+
+
 def summary_only_compaction_content(summary: str) -> str:
-    return json.dumps({"type": "compaction", "content": summary}, separators=(",", ":"))
+    return json.dumps(dict(summary_only_compaction_block(summary)), separators=(",", ":"))
 
 
 def with_compaction_summary(encrypted_content: str, summary: str) -> str:

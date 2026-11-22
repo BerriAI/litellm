@@ -72,7 +72,7 @@ from litellm.constants import (
     MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_get
 from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.mcp_client.client import (
@@ -477,19 +477,6 @@ class MCPServerConfig(TypedDict, total=False):
     timeout: float
     max_concurrent_requests: int
     rpm: ReadOnly[int | None]
-
-
-class _AuthorizationServerMetadataPayload(TypedDict, total=False):
-    """The RFC 8414 / OpenID Discovery authorization-server metadata fields this gateway reads."""
-
-    issuer: str
-    authorization_endpoint: str
-    token_endpoint: str
-    registration_endpoint: str
-    client_id_metadata_document_supported: ReadOnly[object]
-    scopes_supported: Sequence[str]
-    grant_types_supported: Sequence[str]
-    token_endpoint_auth_methods_supported: Sequence[str]
 
 
 def _mapping_value(source: Mapping[str, object], key: str, default: object) -> object:
@@ -1863,7 +1850,7 @@ def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | No
         return data
 
 
-def _deserialize_json_list(data: object) -> list[dict[str, Any]] | None:
+def _deserialize_json_list(data: object) -> _EnvVarList | None:
     """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
 
     Returns ``None`` for empty / null / unparseable input. Accepts strings
@@ -2019,7 +2006,7 @@ class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
 
 
-_Gathered: Final = TypeVar("_Gathered")
+_Gathered = TypeVar("_Gathered")
 
 
 async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
@@ -5759,7 +5746,7 @@ class MCPServerManager:
             try:
                 response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
-                data: _AuthorizationServerMetadataPayload = response.json()
+                decoded = _UNTYPED_VALUE.validate_python(response.json())
             except SSRFError as exc:
                 verbose_logger.warning(
                     "MCP OAuth discovery: refusing to fetch authorization-server "
@@ -5777,6 +5764,7 @@ class MCPServerManager:
                 )
                 continue
 
+            data = require_get(decoded)
             claimed_issuer = data.get("issuer")
             verbose_logger.debug(
                 "Authorization server metadata from %s: issuer=%s grant_types_supported=%s "
@@ -5802,22 +5790,24 @@ class MCPServerManager:
                 authorization_metadata = OAuthMetadata.model_validate(data)
             except ValidationError:
                 authorization_metadata = None
-            metadata = MCPOAuthMetadata(
-                authorization_server_metadata=(
-                    TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
-                    if authorization_metadata is not None
-                    else None
-                ),
-                scopes=scopes,
-                authorization_url=data.get("authorization_endpoint"),
-                token_url=data.get("token_endpoint"),
-                registration_url=data.get("registration_endpoint"),
-                client_id_metadata_document_supported=data.get("client_id_metadata_document_supported") is True,
-                discovered_issuer=claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
-                authorization_response_iss_parameter_supported=data.get(
-                    "authorization_response_iss_parameter_supported"
-                )
-                is True,
+            metadata = MCPOAuthMetadata.model_validate(
+                {
+                    "authorization_server_metadata": (
+                        TypeAdapter(dict[str, object]).validate_python(authorization_metadata.model_dump(mode="json"))
+                        if authorization_metadata is not None
+                        else None
+                    ),
+                    "scopes": scopes,
+                    "authorization_url": data.get("authorization_endpoint"),
+                    "token_url": data.get("token_endpoint"),
+                    "registration_url": data.get("registration_endpoint"),
+                    "client_id_metadata_document_supported": data.get("client_id_metadata_document_supported") is True,
+                    "discovered_issuer": claimed_issuer if isinstance(claimed_issuer, str) and claimed_issuer else None,
+                    "authorization_response_iss_parameter_supported": data.get(
+                        "authorization_response_iss_parameter_supported"
+                    )
+                    is True,
+                }
             )
 
             if any(
@@ -7406,7 +7396,7 @@ class MCPServerManager:
         # Allow validation and modification of tool calls before execution
         # Using standard pre_call_hook
         #########################################################
-        hook_result: Final[dict[str, Any]] = await self.pre_call_tool_check(
+        hook_result: Final = await self.pre_call_tool_check(
             name=name,
             arguments=arguments,
             server_name=server_name,

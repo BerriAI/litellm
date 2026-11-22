@@ -31,10 +31,10 @@ def _logfmt_value(value: str | None) -> str:
     return json.dumps(value).translate(_JSON_ESCAPED_BRACES)
 
 
-_Counted: Final = TypeVar("_Counted")
-_Rejection: Final = TypeVar("_Rejection")
-_ProviderCount: Final = TypeVar("_ProviderCount", bound=Mapping[str, object])
-_Answer: Final = TypeVar("_Answer")
+_Counted = TypeVar("_Counted")
+_Rejection = TypeVar("_Rejection")
+_ProviderCount = TypeVar("_ProviderCount", bound=Mapping[str, object])
+_Answer = TypeVar("_Answer")
 
 
 @dataclass(frozen=True, slots=True)

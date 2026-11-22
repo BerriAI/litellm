@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::field::Field;
+use crate::field::{Field, FieldSet};
 
 // Respond and Reroute are left out: the five ports (budgets, both limiters, prometheus, s3_v2) only patch or abort.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -31,7 +31,21 @@ pub enum PatchOp {
     },
 }
 
+impl PatchOp {
+    pub const fn field(&self) -> Field {
+        match self {
+            Self::Set { field, .. } | Self::Merge { field, .. } => *field,
+        }
+    }
+}
+
 impl Patch {
+    pub fn fields(&self) -> FieldSet {
+        self.ops.iter().fold(FieldSet::EMPTY, |fields, op| {
+            fields | FieldSet::of(&[op.field()])
+        })
+    }
+
     #[must_use]
     pub fn set(mut self, field: Field, value: Value) -> Self {
         self.ops.push(PatchOp::Set { field, value });

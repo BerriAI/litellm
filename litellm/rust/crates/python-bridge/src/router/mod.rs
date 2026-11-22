@@ -18,8 +18,8 @@ use litellm_host_python::{from_py_argument, json_loads, to_py};
 use litellm_router_core::lookup::{ListScope, Lookup, Row};
 use litellm_router_core::{
     AttemptError, Blocked, BuildPath, Built, Deployment, DeploymentSpec, Error, FailureKind,
-    FailureReport, HostFacts, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router,
-    RouterEvent, SecretAt, SuccessReport, UsageWindow,
+    FailureReport, Op, OutcomeCallbacks, PreRouted, Provided, RetryCause, Router, RouterEvent,
+    SecretAt, SuccessReport, UsageWindow,
     build::Install,
     registry::{DeploymentFilter, ResolveKind, ResolveScope},
     strategy::routing_context,
@@ -178,7 +178,7 @@ impl RouterCoreHandle {
         let build = || {
             let config = config::parse_router_config(config)?;
             let dynamic = config::parse_dynamic_config(dynamic)?;
-            Ok(Router::builder(config, dynamic, HostFacts::everything())
+            Ok(Router::builder(config, dynamic)
                 .randomness(Arc::new(PythonRandomness))
                 .build()?)
         };

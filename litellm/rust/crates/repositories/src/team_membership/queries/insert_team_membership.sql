@@ -5,6 +5,7 @@ RETURNING tm.user_id,
           tm.team_id,
           tm.budget_id,
           tm.spend,
+          tm.rollover_credit,
           tm.total_spend,
           (SELECT to_jsonb(b) FROM "LiteLLM_BudgetTable" AS b WHERE b.budget_id = tm.budget_id)
               AS "litellm_budget_table?: Json<Budget>"

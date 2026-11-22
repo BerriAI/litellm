@@ -1,11 +1,14 @@
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { focusManager } from "@tanstack/react-query";
+import { downloadBlob } from "@/components/EntityUsageExport/utils";
 import userEvent from "@testing-library/user-event";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getProxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
 import SkillDetail, { skillHubDetail } from "./skill_detail";
 import type { Plugin, PluginDownloadEvent, PluginDownloadsResponse, SkillHubSkill } from "./types";
+
+vi.mock("@/components/EntityUsageExport/utils", () => ({ downloadBlob: vi.fn() }));
 
 const digest = "a".repeat(64);
 const archivePath = `/claude-code/plugins/my-skill/archive/${digest}.zip`;
@@ -81,11 +84,68 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("downloads the backend CSV in one authenticated request without changing the table", async () => {
+  setGlobalLitellmHeaderName("X-LiteLLM-Key");
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page([event], 2, event.id)));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByRole("cell", { name: event.user_email });
+  const pending = Promise.withResolvers<Response>();
+  skillRequestMock.mockReturnValueOnce(pending.promise);
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("button", { name: "Exporting..." })).toBeDisabled();
+  const csv = "download_id,user_email\r\n1,reader@example.test\r\n2,second@example.test\r\n";
+  pending.resolve(new Response(csv, { headers: { "Content-Type": "text/csv;charset=utf-8" } }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+  expect(skillRequestMock).toHaveBeenCalledTimes(2);
+  expect(skillRequestMock).toHaveBeenLastCalledWith(
+    `${getProxyBaseUrl()}/skill-hub/skills/my-skill/downloads/export`,
+    expect.objectContaining({
+      method: "GET",
+      headers: expect.objectContaining({ "X-LiteLLM-Key": "Bearer dashboard-token" }),
+    }),
+  );
+  expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.csv");
+  const blob = vi.mocked(downloadBlob).mock.calls[0][0];
+  const content = await new Promise<string>((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.readAsText(blob);
+  });
+  expect(content).toBe(csv);
+  expect(screen.queryByRole("cell", { name: "second@example.test" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Load more" })).toBeEnabled();
+});
+
+it.each(["server", "stream"])("does not save a CSV after a %s failure and allows retry", async (failure) => {
+  renderHub();
+  skillRequestMock.mockResolvedValueOnce(Response.json(page()));
+  fireEvent.click(screen.getByRole("tab", { name: "Downloads" }));
+  await screen.findByText("No authenticated download history yet.");
+  const brokenStream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("download_id\r\n"));
+      controller.error(new TypeError("Download interrupted"));
+    },
+  });
+  skillRequestMock.mockResolvedValueOnce(
+    failure === "server"
+      ? Response.json({ detail: "Unavailable" }, { status: 500 })
+      : new Response(brokenStream, { headers: { "Content-Type": "text/csv" } }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Could not export download history. Try again.");
+  expect(downloadBlob).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: "Download CSV" })).toBeEnabled();
+  skillRequestMock.mockResolvedValueOnce(new Response("download_id\r\n", { headers: { "Content-Type": "text/csv" } }));
+  fireEvent.click(screen.getByRole("button", { name: "Download CSV" }));
+  await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it.each(["legacy", "portable"])(
   "retries a private %s ZIP download through the configured auth header and local route",
   async (kind) => {
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
-    URL.createObjectURL = vi.fn(() => "blob:skill-download");
     setGlobalLitellmHeaderName("X-LiteLLM-Key");
     const expectedUrl = kind === "portable" ? `${getProxyBaseUrl()}/skill-hub/skills/my-skill/archive` : url;
     renderHub(kind === "legacy" ? { download_url: url, content_url: null } : {});
@@ -97,13 +157,13 @@ it.each(["legacy", "portable"])(
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
     expect(screen.getByRole("button", { name: "Downloading…" })).toBeDisabled();
     expect(await screen.findByRole("alert")).toHaveTextContent("Archive not found");
-    expect(click).not.toHaveBeenCalled();
+    expect(downloadBlob).not.toHaveBeenCalled();
     skillRequestMock.mockResolvedValueOnce(
       new Response("zip-bytes", { headers: { "Content-Type": "application/zip" } }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Download ZIP" }));
-    await waitFor(() => expect(click).toHaveBeenCalledOnce());
-    expect((click.mock.contexts[0] as HTMLAnchorElement).download).toBe("my-skill.zip");
+    await waitFor(() => expect(downloadBlob).toHaveBeenCalledOnce());
+    expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "my-skill.zip");
     expect(skillRequestMock).toHaveBeenLastCalledWith(
       expectedUrl,
       expect.objectContaining({

@@ -28,7 +28,8 @@ from litellm.interactions.background_cost_polling import (
     fetch_background_interaction,
     resume_unsettled_background_interactions,
 )
-from litellm.repositories.table_repositories import BackgroundInteractionSettlementRepository, SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
+from litellm.repositories.table_repositories import BackgroundInteractionSettlementRepository
 from litellm.types.interactions import InteractionsAPIResponse
 from litellm.types.router import CredentialLiteLLMParams
 
