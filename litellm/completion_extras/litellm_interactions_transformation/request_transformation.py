@@ -211,7 +211,11 @@ def _validate_request_params(
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if params.get("safety_settings") is not None or params.get("safetySettings") is not None:
+    if (
+        params.get("safety_settings") is not None
+        or params.get("safetySettings") is not None
+        or litellm.vertex_ai_safety_settings is not None
+    ):
         raise litellm.BadRequestError(
             message="'safety_settings' cannot be sent to the Gemini Interactions API. "
             "Send this request with use_interactions=false.",

@@ -781,3 +781,17 @@ def test_empty_continuation_token_is_dropped_so_google_does_not_reject_the_reque
     )
 
     assert prepared.optional_params.get("continuation_token") == sent
+
+
+def test_forced_bridge_is_rejected_while_global_safety_settings_are_configured_so_they_are_not_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_ai_safety_settings", [{"category": "HARM_CATEGORY_HARASSMENT"}])
+
+    with pytest.raises(litellm.BadRequestError, match="safety_settings"):
+        transform_chat_to_interactions_request(
+            messages=[{"role": "user", "content": "hi"}],
+            model="gemini-4-neon",
+            optional_params={},
+            litellm_params={"drop_params": True},
+        )

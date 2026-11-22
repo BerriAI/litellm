@@ -296,7 +296,6 @@ def test_completion_streams_completed_model_response(
     )
 
 
-
 class _CostRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
@@ -336,6 +335,7 @@ async def test_acompletion_streamed_completed_response_bills_the_cost_it_carries
         await asyncio.wait_for(recorder.logged.wait(), timeout=30)
 
     assert recorder.response_costs == [pytest.approx(summed_cost)]
+
 
 _PROVIDER_NATIVE_MODEL_CASES = [
     ("perplexity", "perplexity/kimi-k3", "perplexity/kimi-k3"),
