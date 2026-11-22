@@ -73,7 +73,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
-    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -120,7 +119,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-from litellm.litellm_core_utils.tool_fields import hosted_mcp_servers_to_drop
+from litellm.litellm_core_utils.tool_fields import tool_params_without_forced_hosted_mcp
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
@@ -5707,17 +5706,6 @@ def completion(
             model=model,
             drop_params=drops_unsupported,
         )
-        raise_if_hosted_tool_choice_unsupported(
-            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
-                object, tool_choice
-            ),
-            custom_llm_provider=custom_llm_provider,
-            model=model,
-            mcp_servers_to_drop=hosted_mcp_servers_to_drop(
-                cast(object, tools),  # cast-ok: widening an untyped list to object is always sound
-                drops_unsupported,
-            ),
-        )
 
         if provider_specific_header is not None:
             headers.update(
@@ -5796,6 +5784,21 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        routed_tool_params: Final = tool_params_without_forced_hosted_mcp(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {
+                    "tools": tools,
+                    "tool_choice": tool_choice,
+                    "parallel_tool_calls": parallel_tool_calls,
+                    "functions": functions,
+                },
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drops_unsupported,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
@@ -5847,13 +5850,13 @@ def completion(
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
-            "tools": tools,
-            "tool_choice": None if drops_tool_choice else tool_choice,
+            "tools": routed_tool_params.get("tools"),
+            "tool_choice": None if drops_tool_choice else routed_tool_params.get("tool_choice"),
             "max_retries": max_retries,
             "logprobs": logprobs,
             "top_logprobs": top_logprobs,
             "api_version": api_version,
-            "parallel_tool_calls": parallel_tool_calls,
+            "parallel_tool_calls": routed_tool_params.get("parallel_tool_calls"),
             "messages": messages,
             "reasoning_effort": reasoning_effort,
             "verbosity": verbosity,

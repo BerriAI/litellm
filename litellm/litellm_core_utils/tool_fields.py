@@ -1,7 +1,8 @@
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import reduce
-from typing import Annotated, Final, TypeAlias, TypeVar
+from types import MappingProxyType
+from typing import Annotated, Final, Protocol, TypeAlias, TypeVar
 
 from pydantic import BeforeValidator, ConfigDict, Json, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -9,7 +10,10 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.allowed_tools_tool_choice import raise_if_hosted_tool_choice_unsupported
+from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS,
+    raise_if_hosted_tool_choice_unsupported,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 
 ROUTES_WITH_TOOLS: Final = frozenset(
@@ -224,8 +228,8 @@ def hosted_mcp_batch_row_remedy(row_drop_params: object) -> str:
         )
     return (
         "A batch row cannot reach the LiteLLM MCP gateway, so remove the tool from the row, or set `drop_params: true` "
-        "on the row, in `router_settings.default_litellm_params`, or on the row's deployment when the upload names a "
-        "model, to drop it."
+        "on the row, or, when the upload names a model, in `router_settings.default_litellm_params` or on the row's "
+        "deployment, to drop it."
     )
 
 
@@ -378,10 +382,57 @@ def _tool_params_narrowed_to_allowed_tools(
     )
 
 
-def hosted_mcp_servers_to_drop(tools: object, drop_params: object) -> frozenset[str]:
-    if not drops_unsupported_params(drop_params) or not isinstance(tools, list):
+def _hosted_mcp_servers_to_drop(sent_tools: Sequence[object], drop_params: bool) -> frozenset[str]:
+    if not drops_unsupported_params(drop_params):
         return frozenset()
-    return frozenset(label for label in map(_labeled_mcp_server, _TOOLS.validate_python(tools)) if label is not None)
+    return frozenset(label for label in map(_labeled_mcp_server, sent_tools) if label is not None)
+
+
+def _sent_tools(tools: object) -> Sequence[object]:
+    return _TOOLS.validate_python(tools) if isinstance(tools, list) else ()
+
+
+class HostedMcpRunner(Protocol):
+    def runs_hosted_mcp(self) -> bool: ...
+
+
+def tool_params_without_forced_hosted_mcp(
+    params: Mapping[str, object], model: str, route: str, drop_params: bool, provider_config: HostedMcpRunner | None
+) -> Mapping[str, object]:
+    sent_tools: Final = _sent_tools(params.get("tools"))
+    keeps_hosted_mcp: Final = route in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS or (
+        provider_config is not None and provider_config.runs_hosted_mcp()
+    )
+    servers_to_drop: Final = (
+        frozenset[str]() if keeps_hosted_mcp else _hosted_mcp_servers_to_drop(sent_tools, drop_params)
+    )
+    tool_choice: Final = params.get("tool_choice")
+    raise_if_hosted_tool_choice_unsupported(
+        tool_choice, custom_llm_provider=route, model=model, mcp_servers_to_drop=servers_to_drop
+    )
+    forced_server: Final = _labeled_mcp_server(tool_choice)
+    if forced_server is None or forced_server not in servers_to_drop:
+        return params
+    kept_tools: Final = [tool for tool in sent_tools if _labeled_mcp_server(tool) != forced_server]
+    verbose_logger.warning(
+        HOSTED_MCP_DROP_WARNING, _one_log_line(f"`{forced_server}`"), _one_log_line(model), _one_log_line(route)
+    )
+    removed: Final = _cleared_tool_selection_params(kept_tools, params.get("functions")) | {"tool_choice"}
+    return MappingProxyType(
+        {key: (kept_tools if key == "tools" else value) for key, value in params.items() if key not in removed}
+    )
+
+
+def _refuse_an_mcp_choice_drop_params_keeps(
+    tool_choice: object, sent_tools: Sequence[object], model: str, route: str, drop_params: bool
+) -> None:
+    if _hosted_mcp_server_label(tool_choice) is not None:
+        raise_if_hosted_tool_choice_unsupported(
+            tool_choice,
+            custom_llm_provider=route,
+            model=model,
+            mcp_servers_to_drop=_hosted_mcp_servers_to_drop(sent_tools, drop_params),
+        )
 
 
 def tool_params_without_hosted_mcp(
@@ -392,14 +443,13 @@ def tool_params_without_hosted_mcp(
     runs_hosted_mcp: Callable[[], bool] | None = None,
     remedy: str = _HOSTED_MCP_GATEWAY_REMEDY,
 ) -> _ParamsT:
-    tools: Final = params.get("tools")
-    if not isinstance(tools, list) or not tools:
-        return params
-    sent_tools: Final = _TOOLS.validate_python(tools)
-    if all(_hosted_mcp_server_label(tool) is None for tool in sent_tools):
-        return params
-    if runs_hosted_mcp is not None and runs_hosted_mcp():
+    sent_tools: Final = _sent_tools(params.get("tools"))
+    sends_hosted_mcp: Final = any(_hosted_mcp_server_label(tool) is not None for tool in sent_tools)
+    if sends_hosted_mcp and runs_hosted_mcp is not None and runs_hosted_mcp():
         raise_if_hosted_tool_choice_unsupported(params.get("tool_choice"), custom_llm_provider=route, model=model)
+        return params
+    _refuse_an_mcp_choice_drop_params_keeps(params.get("tool_choice"), sent_tools, model, route, drop_params)
+    if not sends_hosted_mcp:
         return params
     kept_tools: Final = tools_without_hosted_mcp(
         tools=sent_tools, model=model, route=route, drop_params=drop_params, remedy=remedy
