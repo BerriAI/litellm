@@ -30,9 +30,7 @@ def test_a_value_over_the_limit_keeps_its_ends_and_reads_as_cut_whatever_the_lim
 @pytest.mark.parametrize(("kept_start", "kept_end"), [(34, 64), (44, 81), (716, 1331)])
 def test_a_value_an_earlier_release_stored_cut_still_reads_as_cut(kept_start: int, kept_end: int, note: str):
     skipped: Final = len(_LONG) - kept_start - kept_end
-    stored: Final = (
-        f"{_LONG[:kept_start]}... (litellm_truncated skipped {skipped} chars{note}) ...{_LONG[-kept_end:]}"
-    )
+    stored: Final = f"{_LONG[:kept_start]}... (litellm_truncated skipped {skipped} chars{note}) ...{_LONG[-kept_end:]}"
 
     assert was_truncated_for_db(stored)
     assert is_truncation_of(stored, _LONG)
@@ -73,6 +71,13 @@ def test_a_marker_no_release_writes_reads_as_text(marker: str):
 def test_a_cut_value_is_no_truncation_of_another_value(whole: str):
     assert is_truncation_of(truncated_for_db(_LONG, 100), _LONG)
     assert not is_truncation_of(truncated_for_db(_LONG, 100), whole)
+
+
+@pytest.mark.parametrize("length", [101, 102, 1000])
+def test_a_value_shorter_than_its_cut_text_is_what_storage_cut(length: int):
+    whole: Final = "x" * length
+
+    assert is_truncation_of(truncated_for_db(whole, 100), whole)
 
 
 def test_a_value_shorter_than_what_storage_kept_is_not_what_storage_cut():

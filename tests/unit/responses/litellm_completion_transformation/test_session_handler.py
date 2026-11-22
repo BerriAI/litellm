@@ -1476,6 +1476,57 @@ async def test_a_tool_call_stored_with_a_cut_thought_signature_replays_unsigned(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("model", "provider"),
+    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+)
+async def test_a_custom_tool_call_resent_in_a_stored_turn_is_made_once_on_the_turn_after(
+    model: str, provider: str
+) -> None:
+    patch_text: Final = "*** Begin Patch " * 250
+    asked: Final = _stored_cut(
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "apply_patch", "arguments": json.dumps({"content": patch_text})},
+        }
+    )
+    resent: Final = _stored_cut(
+        {
+            "input": [
+                {"type": "custom_tool_call", "call_id": "call_1", "name": "apply_patch", "input": patch_text},
+                {"type": "custom_tool_call_output", "call_id": "call_1", "output": "Patched."},
+            ]
+        }
+    )
+    stored_turns: Final = (
+        {**_answered_turn({"content": None, "tool_calls": [asked]}), "request_id": "resp_asked"},
+        _answered_turn({"content": "Done."}, turn_input=resent["input"]),
+    )
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return await _history_from_stored_turns(stored_turns, previous_response_id)
+
+    request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+        previous_response_id="resp_signed",
+        litellm_completion_request={
+            "model": model,
+            "custom_llm_provider": provider,
+            "messages": [{"role": "user", "content": "Thanks."}],
+        },
+        instructions=None,
+        session_lookup=session_lookup,
+    )
+
+    roles: Final = [message_field(message, "role") for message in request["messages"]]
+    assert roles == ["user", "assistant", "tool", "assistant", "user"]
+    assert [
+        (message_field(call, "id"), message_field(message_field(call, "function"), "arguments"))
+        for call in message_field(request["messages"][1], "tool_calls")
+    ] == [("call_1", asked["function"]["arguments"])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "signature, replayed",
     [
         pytest.param("Eq0BCkYI==", True, id="whole-reasoning-item"),

@@ -7355,6 +7355,80 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
     ]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "model"), [("anthropic", "claude-sonnet-5-5"), ("gemini", "gemini-3.8-flash"), (None, "house-model")]
+)
+@pytest.mark.parametrize(
+    "stored_arguments",
+    ['{"city": "Oslo"}', truncated_for_db(_LONG_ARGUMENTS, 2048), "{}"],
+    ids=["arguments-stored-whole", "arguments-stored-cut", "arguments-redacted-in-storage"],
+)
+@pytest.mark.parametrize("output_is_stored", [True, False], ids=["stored-output", "new-output"])
+@pytest.mark.parametrize("marks", [{}, {"cache_control": {"type": "ephemeral"}}], ids=["bare", "marked"])
+async def test_a_call_another_conversation_made_under_the_same_id_is_not_replayed(
+    marks: Mapping[str, object], output_is_stored: bool, stored_arguments: str, provider: str | None, model: str
+) -> None:
+    call_id: Final = "functions.get_weather:0"
+    stored_turn: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": stored_arguments},
+            }
+        ],
+    }
+    output: Final = {"type": "function_call_output", "call_id": call_id, "output": "14", **marks}
+    thanks: Final = {"type": "message", "role": "user", "content": "Thanks"}
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        stored_output: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast(ResponseInputParam, [output]), responses_api_request={}
+        )
+        return ChatCompletionSession(
+            messages=[
+                {"role": "user", "content": "What is the weather?"},
+                stored_turn,
+                *(stored_output if output_is_stored else ()),
+            ],
+            litellm_session_id=None,
+        )
+
+    TOOL_CALLS_CACHE.set_cache(
+        key=call_id,
+        value={
+            "id": call_id,
+            "type": "function",
+            "function": {"name": "get_account", "arguments": '{"account": "of another conversation"}'},
+        },
+    )
+    try:
+        request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_weather",
+            litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+                model=model,
+                input=cast(ResponseInputParam, [thanks if output_is_stored else output]),
+                responses_api_request={"previous_response_id": "resp_weather"},
+                custom_llm_provider=provider,
+            ),
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    finally:
+        TOOL_CALLS_CACHE.delete_cache(key=call_id)
+
+    assert [message["role"] for message in request["messages"]] == [
+        "user",
+        "assistant",
+        "tool",
+        *(["user"] if output_is_stored else []),
+    ]
+    assert request["messages"][1] == stored_turn
+
+
 _ORDER_TOOLS: Final = [
     {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
     for name in ("cancel_order", "get_order", "get_invoice")
@@ -7450,6 +7524,26 @@ async def test_calls_the_client_resends_with_their_outputs_are_made_once(
     )
 
     assert replayed == ([(*call, replayed_arguments) for call in _ORDER_CALLS],)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [("claude-sonnet-5-5", "anthropic"), ("gemini-3.8-flash", "gemini"), ("house-model", "hosted_vllm")],
+)
+@pytest.mark.parametrize(
+    "edit", [{"arguments": '{"city": "Rome"}'}, {"name": "cancel_order"}], ids=["other-arguments", "another-tool"]
+)
+async def test_a_call_the_client_edited_is_sent_as_edited(edit: Mapping[str, str], model: str, provider: str) -> None:
+    call_id, name = _ORDER_CALLS[0]
+    edited: Final = {**_order_call(call_id, name), **edit}
+
+    replayed: Final = await _replayed_order_calls([edited, _order_output(call_id)], model=model, provider=provider)
+
+    assert replayed == (
+        [(*call, _LONG_ARGUMENTS_AS_STORED) for call in _ORDER_CALLS],
+        [(call_id, edited["name"], edited["arguments"])],
+    )
 
 
 def test_cache_control_on_function_call_output():
