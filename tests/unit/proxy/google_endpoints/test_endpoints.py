@@ -150,10 +150,6 @@ _PART_METADATA: Final = (
         ({"systemInstruction": {"parts": {"text": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "inlineData": None}}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {"parts": {"text": None, "thought": False}}}, _NO_SYSTEM_PARTS),
-        *(
-            ({"systemInstruction": {"parts": {"text": None, field: metadata}}}, _NO_SYSTEM_PARTS)
-            for field, metadata in _PART_METADATA
-        ),
         ({"systemInstruction": {"parts": [{"thoughtSignature": "c2ln"}, {"text": "Follow these rules"}]}}, _SYSTEM),
         ({"systemInstruction": {"parts": [{}]}}, _NO_SYSTEM_PARTS),
         ({"systemInstruction": {}}, _NO_SYSTEM_PARTS),
@@ -222,6 +218,8 @@ _NON_TEXT_PART_DATA: Final[tuple[tuple[str, JsonValue], ...]] = (
     (
         *({field: data} for field, data in _NON_TEXT_PART_DATA),
         *({"text": None, field: data} for field, data in _NON_TEXT_PART_DATA),
+        *({field: metadata} for field, metadata in _PART_METADATA),
+        *({"text": None, field: metadata} for field, metadata in _PART_METADATA),
         [{"inlineData": {"mimeType": "image/png", "data": "aGVsbG8="}}],
         [{"text": "Follow these rules"}, {"text": None, "fileData": {"fileUri": "gs://bucket/rules.pdf"}}],
     ),

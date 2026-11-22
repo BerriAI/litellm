@@ -59,22 +59,7 @@ def _google_contents(value: JsonValue) -> JsonValue:
 
 
 _GOOGLE_PART_TEXT_AND_METADATA_FIELDS: Final = frozenset(
-    {
-        "text",
-        "thought",
-        "thoughtSignature",
-        "thought_signature",
-        "partMetadata",
-        "part_metadata",
-        "videoMetadata",
-        "video_metadata",
-        "mediaResolution",
-        "media_resolution",
-        "mediaProcessing",
-        "media_processing",
-        "speechMetadata",
-        "speech_metadata",
-    }
+    {"text", "thought", "thoughtSignature", "thought_signature", "partMetadata", "part_metadata"}
 )
 
 
