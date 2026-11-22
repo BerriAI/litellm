@@ -10637,6 +10637,8 @@ class ProviderConfigManager:
             )
 
             return get_dashscope_family_rerank_config(provider.value)
+        elif litellm.LlmProviders.BEDROCK == provider:
+            return litellm.BedrockRerankConfig()
         return litellm.CohereRerankConfig()
 
     @staticmethod
