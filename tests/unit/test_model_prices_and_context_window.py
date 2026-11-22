@@ -1409,7 +1409,7 @@ def _capabilities_missing_from_one_side(prices: CostMap, key: str, base: str) ->
     )
 
 
-def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(prices: dict) -> None:
+def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(prices: CostMap) -> None:
     rows: Final = tuple(_region_pinned_bedrock_converse_rows(prices))
     assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
 
