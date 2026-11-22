@@ -34,11 +34,16 @@ def _exceeds_output_limit(model: str, max_tokens: object) -> bool:
     return isinstance(max_tokens, int) and isinstance(limit, int) and max_tokens > limit
 
 
+def _requested_level(requested: object) -> object:
+    return _json_field(requested, "effort") if _is_json_object(requested) else requested
+
+
 def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
+    level: Final = _requested_level(requested)
     declared: Final = declared_reasoning_efforts_for_model(model, "zai")
-    if not isinstance(requested, str) or declared is None:
-        return requested
-    accepted: Final = nearest_declared_reasoning_effort(requested, declared)
+    if not isinstance(level, str) or declared is None:
+        return level
+    accepted: Final = nearest_declared_reasoning_effort(level, declared)
     return None if drop_params and accepted not in declared else accepted
 
 
