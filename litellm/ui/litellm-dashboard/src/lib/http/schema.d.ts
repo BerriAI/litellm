@@ -27914,6 +27914,7 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            /** Identity */
             identity?: components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
@@ -44803,6 +44804,7 @@ export interface components {
             execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            /** Identity */
             identity?: components["schemas"]["EntraIdentityConfig"] | components["schemas"]["OktaIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */

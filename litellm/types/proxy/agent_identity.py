@@ -1,10 +1,8 @@
-from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Final, Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import ConfigDict, Field, GetCoreSchemaHandler, TypeAdapter, field_validator
-from pydantic_core import core_schema
+from pydantic import BeforeValidator, ConfigDict, Field, TypeAdapter, field_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -55,23 +53,11 @@ def identity_config_model(value: object) -> type[EntraIdentityConfig] | type[Okt
             return EntraIdentityConfig
 
 
-class _RouteByProvider:
-    def __get_pydantic_core_schema__(self, source: object, handler: GetCoreSchemaHandler) -> core_schema.CoreSchema:
-        okta: Final = TypeAdapter(OktaIdentityConfig)
-
-        def route(
-            value: object, entra: Callable[[object], EntraIdentityConfig]
-        ) -> EntraIdentityConfig | OktaIdentityConfig:
-            if identity_config_model(value) is OktaIdentityConfig:
-                return okta.validate_python(value)
-            return entra(value)
-
-        return core_schema.no_info_wrap_validator_function(
-            route, handler.generate_schema(EntraIdentityConfig), json_schema_input_schema=handler(source)
-        )
+def _parse_identity(value: object) -> EntraIdentityConfig | OktaIdentityConfig:
+    return identity_config_model(value).model_validate(value)
 
 
-AgentIdentityConfig: TypeAlias = Annotated[EntraIdentityConfig | OktaIdentityConfig, _RouteByProvider()]
+AgentIdentityConfig: TypeAlias = Annotated[EntraIdentityConfig | OktaIdentityConfig, BeforeValidator(_parse_identity)]
 AGENT_IDENTITY_CONFIG: Final[TypeAdapter[EntraIdentityConfig | OktaIdentityConfig]] = TypeAdapter(AgentIdentityConfig)
 
 
