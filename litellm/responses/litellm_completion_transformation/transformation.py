@@ -1009,6 +1009,10 @@ def target_refuses_blank_text(model: str, custom_llm_provider: str | None) -> bo
     return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
 
 
+def _target_may_bind_reasoning_to_earlier_turns(model: str, custom_llm_provider: str | None) -> bool:
+    return "claude" in model.lower() or target_refuses_blank_text(model, custom_llm_provider)
+
+
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
     return requests_compaction(context_management) and holds_compaction_summary(input)
 
@@ -1837,7 +1841,9 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=combined_messages, tools=request_tools
+            messages=combined_messages,
+            tools=request_tools,
+            keep_stored_arguments=_target_may_bind_reasoning_to_earlier_turns(model, provider),
         )
 
         # Safety check: Ensure we don't end up with empty messages
@@ -2519,6 +2525,7 @@ class LiteLLMCompletionResponsesConfig:
             | Message
         ],
         tools: Sequence[object] | None = None,
+        keep_stored_arguments: bool = False,
     ) -> list[
         AllMessageValues
         | GenericChatCompletionMessage
@@ -2535,6 +2542,7 @@ class LiteLLMCompletionResponsesConfig:
         Args:
             messages: List of messages that may include tool_result messages
             tools: Optional list of tools that can be used to reconstruct tool_calls if not in cache
+            keep_stored_arguments: Whether a repeated call leaves the arguments storage holds unchanged
 
         Returns:
             List of messages with tool_calls added to assistant messages when needed
@@ -2551,7 +2559,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionResponseMessage
             | ChatCompletionMessageToolCall
             | Message
-        ] = list(copy.deepcopy(without_repeated_tool_calls(messages)))
+        ] = list(copy.deepcopy(without_repeated_tool_calls(messages, keep_stored_arguments=keep_stored_arguments)))
         messages_to_remove: Final = []
 
         # Count non-tool messages to avoid removing all messages

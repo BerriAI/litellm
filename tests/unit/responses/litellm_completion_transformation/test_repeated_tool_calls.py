@@ -34,6 +34,10 @@ def _arguments(message: dict[str, object] | Message) -> list[str]:
     return [call["function"]["arguments"] for call in message["tool_calls"]]
 
 
+def _replayed(messages: list[object]) -> list[object]:
+    return list(without_repeated_tool_calls(messages, keep_stored_arguments=False))
+
+
 @pytest.mark.parametrize("as_stored", [dict, _stored], ids=["message-dict", "stored-message"])
 @pytest.mark.parametrize("output_order", [("c1", "c2", "c3"), ("c3", "c1", "c2"), ("c1",)], ids="-".join)
 def test_calls_a_turn_already_made_are_not_made_again_before_their_outputs(as_stored, output_order: tuple[str, ...]):
@@ -45,17 +49,15 @@ def test_calls_a_turn_already_made_are_not_made_again_before_their_outputs(as_st
     once: Final = [_output(call_id) for call_id in output_order]
     repeated: Final = [message for pair in zip(repeats, once) for message in pair]
 
-    replayed: Final = without_repeated_tool_calls([_USER, asked, *repeated, _ANSWER, _USER])
-
-    assert list(replayed) == [_USER, asked, *once, _ANSWER, _USER]
+    assert _replayed([_USER, asked, *repeated, _ANSWER, _USER]) == [_USER, asked, *once, _ANSWER, _USER]
 
 
 def test_a_call_repeated_twice_before_its_output_is_made_once():
     asked: Final = _asks("c1", "c2")
 
-    replayed: Final = without_repeated_tool_calls([asked, _asks("c1"), _asks("c1"), _output("c1"), _output("c2")])
+    replayed: Final = _replayed([asked, _asks("c1"), _asks("c1"), _output("c1"), _output("c2")])
 
-    assert list(replayed) == [asked, _output("c1"), _output("c2")]
+    assert replayed == [asked, _output("c1"), _output("c2")]
 
 
 @pytest.mark.parametrize("signed", [0, 1], ids=["stored-id-lost-its-signature", "stored-id-kept-its-signature"])
@@ -63,9 +65,9 @@ def test_a_call_whose_id_lost_its_signature_is_the_same_call(signed: int):
     ids: Final = ("call_1", f"call_1{THOUGHT_SIGNATURE_SEPARATOR}EmwKAhgB==")
     asked: Final = _asks(ids[signed], "call_2")
 
-    replayed: Final = without_repeated_tool_calls([asked, _asks(ids[1 - signed]), _output(ids[1 - signed])])
+    replayed: Final = _replayed([asked, _asks(ids[1 - signed]), _output(ids[1 - signed])])
 
-    assert list(replayed) == [asked, _output(ids[1 - signed])]
+    assert replayed == [asked, _output(ids[1 - signed])]
 
 
 @pytest.mark.parametrize("as_stored", [dict, _stored], ids=["message-dict", "stored-message"])
@@ -76,7 +78,7 @@ def test_a_repeated_call_gives_back_the_arguments_storage_lost(as_stored, stored
     asked: Final = _asks(*call_ids, arguments=stored_arguments)
     stored_turn: Final = as_stored({**asked, "tool_calls": [{**call, **signed} for call in asked["tool_calls"]]})
 
-    question, turn, *outputs = without_repeated_tool_calls(
+    question, turn, *outputs = _replayed(
         [_USER, stored_turn, *(m for i in call_ids for m in (_asks(i, arguments=_WHOLE), _output(i)))]
     )
 
@@ -91,31 +93,38 @@ def test_a_repeated_call_gives_back_the_arguments_storage_lost(as_stored, stored
 
 
 def test_only_the_call_that_was_repeated_gets_its_arguments_back():
-    turn, output = without_repeated_tool_calls(
-        [_asks("c1", "c2", arguments=_CUT), _asks("c1", arguments=_WHOLE), _output("c1")]
-    )
+    turn, output = _replayed([_asks("c1", "c2", arguments=_CUT), _asks("c1", arguments=_WHOLE), _output("c1")])
 
     assert _arguments(turn) == [_WHOLE, _CUT]
     assert output == _output("c1")
 
 
 @pytest.mark.parametrize(
-    ("stored_arguments", "repeated_arguments", "extra"),
+    ("stored_arguments", "repeated_arguments"),
     [
-        pytest.param('{"city": "Paris"}', '{"city": "Rome"}', {}, id="whole-arguments"),
-        pytest.param(_CUT, '{"city": "Rome"}', {}, id="arguments-of-another-call"),
-        pytest.param(_CUT, None, {}, id="nothing-repeated"),
-        pytest.param(_CUT, _WHOLE, {"thinking_blocks": [{"type": "thinking", "signature": "EmwKA"}]}, id="signed-turn"),
+        pytest.param('{"city": "Paris"}', '{"city": "Rome"}', id="whole-arguments"),
+        pytest.param(_CUT, '{"city": "Rome"}', id="arguments-of-another-call"),
+        pytest.param(_CUT, None, id="nothing-repeated"),
     ],
 )
 def test_the_stored_arguments_stay_unless_the_repeat_is_what_storage_cut(
-    stored_arguments: str, repeated_arguments: str | None, extra: dict[str, object]
+    stored_arguments: str, repeated_arguments: str | None
 ):
-    asked: Final = {**_asks("c1", "c2", arguments=stored_arguments), **extra}
+    asked: Final = _asks("c1", "c2", arguments=stored_arguments)
 
-    replayed: Final = without_repeated_tool_calls([asked, _asks("c1", arguments=repeated_arguments), _output("c1")])
+    replayed: Final = _replayed([asked, _asks("c1", arguments=repeated_arguments), _output("c1")])
 
-    assert list(replayed) == [asked, _output("c1")]
+    assert replayed == [asked, _output("c1")]
+
+
+@pytest.mark.parametrize("stored_arguments", [_CUT, "{}"], ids=["cut", "redacted"])
+def test_the_stored_arguments_stay_when_asked_to_keep_them(stored_arguments: str):
+    asked: Final = _asks("c1", "c2", arguments=stored_arguments)
+    repeated: Final = [m for i in ("c1", "c2") for m in (_asks(i, arguments=_WHOLE), _output(i))]
+
+    replayed: Final = without_repeated_tool_calls([asked, *repeated], keep_stored_arguments=True)
+
+    assert list(replayed) == [asked, _output("c1"), _output("c2")]
 
 
 @pytest.mark.parametrize(
@@ -148,4 +157,4 @@ def test_the_stored_arguments_stay_unless_the_repeat_is_what_storage_cut(
     ],
 )
 def test_every_other_message_stays(messages: list[dict[str, object]]):
-    assert list(without_repeated_tool_calls(messages)) == messages
+    assert _replayed(messages) == messages

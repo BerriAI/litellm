@@ -7264,11 +7264,28 @@ def test_callers_that_only_read_the_input_see_no_turn_for_a_user_item_without_co
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("provider", "model", "target_gets_whole_arguments"),
+    [
+        ("anthropic", "anthropic/claude-sonnet-5-5", False),
+        ("anthropic", "anthropic/house-model", False),
+        ("vertex_ai", "vertex_ai/claude-sonnet-5-5", False),
+        ("bedrock", "bedrock/converse/house-model", False),
+        ("snowflake", "snowflake/Claude-Sonnet-5-5", False),
+        ("gemini", "gemini/gemini-3.8-flash", True),
+        ("hosted_vllm", "hosted_vllm/house-model", True),
+        (None, "house-model", True),
+    ],
+)
+@pytest.mark.parametrize(
     "stored_arguments", ['{"city": "Paris"}', "{}"], ids=["arguments-stored-whole", "arguments-redacted-in-storage"]
 )
 @pytest.mark.parametrize("call_ids", [("toolu_1",), ("toolu_1", "toolu_2", "toolu_3")], ids=["one-call", "parallel"])
 async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this_process_remembers_them(
-    call_ids: tuple[str, ...], stored_arguments: str
+    call_ids: tuple[str, ...],
+    stored_arguments: str,
+    provider: str | None,
+    model: str,
+    target_gets_whole_arguments: bool,
 ):
     def calls(arguments: str) -> list[dict[str, object]]:
         return [
@@ -7295,10 +7312,10 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
         request: Final = await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
             previous_response_id="resp_parallel",
             litellm_completion_request=LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
-                model="anthropic/claude-sonnet-5-5",
+                model=model,
                 input=outputs,
                 responses_api_request={"previous_response_id": "resp_parallel"},
-                custom_llm_provider="anthropic",
+                custom_llm_provider=provider,
             ),
             instructions=None,
             session_lookup=session_lookup,
@@ -7307,7 +7324,8 @@ async def test_tool_outputs_follow_the_stored_turn_that_made_the_calls_when_this
         for call_id in call_ids:
             TOOL_CALLS_CACHE.delete_cache(key=call_id)
 
-    assert request["messages"][:2] == [question, {"role": "assistant", "content": None, "tool_calls": remembered_calls}]
+    replayed_calls: Final = remembered_calls if target_gets_whole_arguments else calls(stored_arguments)
+    assert request["messages"][:2] == [question, {"role": "assistant", "content": None, "tool_calls": replayed_calls}]
     assert [(message["role"], message["tool_call_id"]) for message in request["messages"][2:]] == [
         ("tool", call_id) for call_id in call_ids
     ]

@@ -93,7 +93,7 @@ def _with_arguments_storage_lost(call: object, remembered: object) -> object:
 def _with_calls_whole(message: _MessageT, index: int, remembered: Mapping[tuple[int, str], object]) -> _MessageT:
     calls: Final = _calls(message)
     made: Final = tuple((index, _call_key(message_field(call, "id")) or "") for call in calls)
-    if message_field(message, "thinking_blocks") or remembered.keys().isdisjoint(made):
+    if remembered.keys().isdisjoint(made):
         return message
     return _with_field(
         message,
@@ -102,11 +102,15 @@ def _with_calls_whole(message: _MessageT, index: int, remembered: Mapping[tuple[
     )
 
 
-def without_repeated_tool_calls(messages: Sequence[_MessageT]) -> tuple[_MessageT, ...]:
+def without_repeated_tool_calls(messages: Sequence[_MessageT], *, keep_stored_arguments: bool) -> tuple[_MessageT, ...]:
     unanswered_before: Final = accumulate(enumerate(messages), _unanswered_after, initial=_NO_CALLS)
     repeated: Final = tuple(map(_repeated_call, messages, unanswered_before))
     remembered: Final = MappingProxyType(
-        {(call.made_by, call.key): call.arguments for call in repeated if call is not None}
+        {
+            (call.made_by, call.key): call.arguments
+            for call in repeated
+            if call is not None and not keep_stored_arguments
+        }
     )
     return tuple(
         _with_calls_whole(message, index, remembered)
