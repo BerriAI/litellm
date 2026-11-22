@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import random
 import threading
 import time
 import uuid
@@ -190,7 +191,9 @@ def _without_one_pick(picks: tuple[_Pick, ...], call_id: str | None) -> tuple[_P
 
 
 def _least_busy_index(counts: tuple[int, ...]) -> int:
-    return min(range(len(counts)), key=lambda index: counts[index])
+    lowest = min(counts)
+    tied = tuple(index for index, count in enumerate(counts) if count == lowest)
+    return random.choice(tied)
 
 
 def _warn_unreadable(model_group: str, error: Exception) -> None:
