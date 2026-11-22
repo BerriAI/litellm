@@ -22,7 +22,6 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
-    extract_nested_form_metadata,
     numeric_form_fields,
     resolve_inference_model,
 )
@@ -44,7 +43,6 @@ IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "i
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
 BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
-IMAGE_CONFIG_FORM_PREFIX: Final = "imageConfig["
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -303,15 +301,10 @@ async def image_edit_api(
         parsed_body=await read_request_body(request=request),
         numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
-    nested_image_config: Final = extract_nested_form_metadata(form_fields, prefix=IMAGE_CONFIG_FORM_PREFIX)
     data: Final = {
         key: value
-        for key, value in chain(
-            IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(),
-            form_fields.items(),
-            {"imageConfig": nested_image_config}.items() if nested_image_config else (),
-        )
-        if key not in BRACKETED_FILE_FIELDS and not key.startswith(IMAGE_CONFIG_FORM_PREFIX)
+        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
     }
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)

@@ -16,6 +16,7 @@ from litellm.llms.gemini.image_usage_transformation import transform_gemini_imag
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, vertex_top_level_request_fields
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.gemini_image_params import (
+    IMAGE_CONFIG_ALIASES,
     UnsupportedImageParam,
     map_vertex_gemini_image_params,
     raise_unsupported_image_param,
@@ -62,7 +63,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     SUPPORTED_PARAMS: list[str] = [
         "size",
-        "imageConfig",
+        *IMAGE_CONFIG_ALIASES,
         "aspectRatio",
         "aspect_ratio",
         "imageSize",

@@ -769,6 +769,16 @@ def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object
         ({"imageConfig": {"aspect_ratio": "9:16", "image_size": "4K"}}, {"aspectRatio": "9:16", "imageSize": "4K"}),
         ({"size": "3072x2048", "imageConfig": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16", "imageSize": "2K"}),
         ({"size": "1536x1024"}, {"aspectRatio": "3:2", "imageSize": "1K"}),
+        ({"image_config": {"aspect_ratio": "9:16"}}, {"aspectRatio": "9:16"}),
+        ({"imageConfig[aspectRatio]": "9:16", "imageConfig[imageSize]": "2K"}, {"aspectRatio": "9:16", "imageSize": "2K"}),
+        (
+            {"imageConfig": '{"aspectRatio": "1:1", "imageSize": "2K"}', "imageConfig[aspectRatio]": "9:16"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"imageConfig[imageOutputOptions][mimeType]": "image/jpeg", "imageConfig[aspectRatio]": "9:16"},
+            {"imageOutputOptions": {"mimeType": "image/jpeg"}, "aspectRatio": "9:16"},
+        ),
     ),
 )
 def test_vertex_gemini_edit_forwards_image_controls(
@@ -800,6 +810,11 @@ def test_vertex_gemini_edit_rejects_an_unmappable_control_unless_dropping_params
     assert _sent_gemini_edit_generation_config(**{param: value}, drop_params=drop_params) == {
         "responseModalities": ["IMAGE"]
     }
+
+
+@pytest.mark.parametrize("value", (100, "100"))
+def test_vertex_gemini_edit_sends_nothing_for_output_compression_at_its_no_op_default(value: object) -> None:
+    assert _sent_gemini_edit_generation_config(output_compression=value) == {"responseModalities": ["IMAGE"]}
 
 
 def test_vertex_gemini_edit_auto_size_keeps_the_input_image_shape() -> None:

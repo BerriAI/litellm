@@ -13,6 +13,10 @@ _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _FLAT_IMAGE_SETTINGS: Final = MappingProxyType(
     {"aspectRatio": ("aspectRatio", "aspect_ratio"), "imageSize": ("imageSize", "image_size")}
 )
+IMAGE_CONFIG_ALIASES: Final = ("imageConfig", "image_config")
+_OPENAI_NO_OP_VALUES: Final = MappingProxyType(
+    {"background": ("auto", "opaque"), "moderation": ("auto",), "output_compression": (100, "100")}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,13 +71,21 @@ def _flat_image_settings(params: Mapping[str, object]) -> Mapping[str, object]:
 def map_vertex_gemini_image_params(
     params: Mapping[str, object], model: str, drop_params: bool, unsupported_params: Collection[str]
 ) -> Mapping[str, object] | UnsupportedImageParam:
-    unsupported_param: Final = next((param for param in unsupported_params if param in params), None)
+    unsupported_param: Final = next(
+        (
+            param
+            for param in unsupported_params
+            if param in params and params[param] not in _OPENAI_NO_OP_VALUES.get(param, ())
+        ),
+        None,
+    )
     if unsupported_param is not None and not drop_params:
         return UnsupportedImageParam(unsupported_param, "is not supported")
-    image_config: Final = _image_config_object(params["imageConfig"]) if "imageConfig" in params else _EMPTY
+    image_config_alias: Final = next((alias for alias in IMAGE_CONFIG_ALIASES if alias in params), None)
+    image_config: Final = _EMPTY if image_config_alias is None else _image_config_object(params[image_config_alias])
     size_config: Final = _size_image_config(params["size"], model) if "size" in params else _EMPTY
     if image_config is None and not drop_params:
-        return UnsupportedImageParam("imageConfig", "must be a JSON object")
+        return UnsupportedImageParam(image_config_alias or "imageConfig", "must be a JSON object")
     if size_config is None and not drop_params:
         return UnsupportedImageParam("size", "must be 'auto' or '<width>x<height>'")
     explicit_config: Final = image_config or _EMPTY
