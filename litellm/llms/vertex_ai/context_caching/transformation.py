@@ -128,6 +128,7 @@ def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, bl
 
 def separate_cached_messages(
     messages: list[AllMessageValues],
+    supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
     Returns the messages that go into the cachedContent and the remaining messages.
@@ -137,7 +138,8 @@ def separate_cached_messages(
     system message comes back in the remaining messages already converted to a user turn in place, so a
     reminder added each turn changes neither the cached set nor its cache key. A system run that ends the
     cached block right before a tool result stays out of the cached set, since its user turn goes after
-    that tool result.
+    that tool result. A model without system message support gets its later system messages back as they
+    are, so the request renders them the way it does without a cache.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
@@ -154,7 +156,11 @@ def separate_cached_messages(
     remaining_messages: Final = tuple(message for message, cached in zip(messages, goes_in_cache) if not cached)
     return (
         [message for message, cached in zip(messages, goes_in_cache) if cached],
-        list(place_mid_conversation_system(remaining_messages, supports_mid_conversation_system=False)),
+        list(
+            place_mid_conversation_system(remaining_messages, supports_mid_conversation_system=False)
+            if supports_system_message
+            else remaining_messages
+        ),
     )
 
 

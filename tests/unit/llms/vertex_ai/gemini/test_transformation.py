@@ -1090,7 +1090,7 @@ def test_a_tool_call_forced_through_extra_body_keeps_a_bare_root_union_tool_as_t
     assert weather == forced_weather
 
 
-def _gemini_request_body(messages: list) -> RequestBody:
+def _gemini_request_body(messages: list[openai.AllMessageValues]) -> RequestBody:
     return transformation.transform_request_body(
         messages=messages,
         model="gemini-3.8-flash",
@@ -1101,17 +1101,16 @@ def _gemini_request_body(messages: list) -> RequestBody:
     )
 
 
-def _conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list:
-    exchanges: Final = tuple(
-        chain.from_iterable(
-            (
-                {"role": "user", "content": f"question {turn}"},
-                {"role": "system", "content": f"{turn} of 8 turns used"},
-                {"role": "assistant", "content": f"answer {turn}"},
-            )
-            for turn in range(1, user_turns + 1)
-        )
+def _exchange_with_a_reminder(turn: int) -> tuple[openai.AllMessageValues, ...]:
+    return (
+        {"role": "user", "content": f"question {turn}"},
+        {"role": "system", "content": f"{turn} of 8 turns used"},
+        {"role": "assistant", "content": f"answer {turn}"},
     )
+
+
+def _conversation_with_a_reminder_after_each_user_turn(user_turns: int) -> list[openai.AllMessageValues]:
+    exchanges: Final = tuple(chain.from_iterable(map(_exchange_with_a_reminder, range(1, user_turns + 1))))
     return [{"role": "system", "content": "You are terse."}, *exchanges[:-1]]
 
 
@@ -1172,7 +1171,7 @@ def test_a_system_message_between_a_tool_call_and_its_result_goes_after_the_func
 
 
 def test_reminders_between_parallel_tool_results_go_after_the_last_function_response():
-    def call(call_id: str, name: str) -> dict:
+    def call(call_id: str, name: str) -> openai.ChatCompletionAssistantToolCall:
         return {"id": call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
 
     body: Final = _gemini_request_body(

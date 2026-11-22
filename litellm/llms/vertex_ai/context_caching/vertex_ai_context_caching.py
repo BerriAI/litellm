@@ -19,7 +19,8 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
-from ..common_utils import VertexAIError, get_vertex_base_url
+from ..common_utils import VertexAIError, get_supports_system_message, get_vertex_base_url
+from ..gemini.transformation import reject_system_message_videos
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
 from .transformation import (
@@ -442,7 +443,10 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None or not context_caching:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages,
+            supports_system_message=get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider),
+        )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -457,6 +461,7 @@ class ContextCachingEndpoints(VertexBase):
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, target.model, custom_llm_provider, drop_params)
+        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -594,7 +599,10 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None or not context_caching:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages,
+            supports_system_message=get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider),
+        )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -609,6 +617,7 @@ class ContextCachingEndpoints(VertexBase):
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, target.model, custom_llm_provider, drop_params)
+        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
