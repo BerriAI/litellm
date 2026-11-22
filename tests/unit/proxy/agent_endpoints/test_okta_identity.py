@@ -622,6 +622,20 @@ def _with_user_fields(
 
 
 @pytest.mark.asyncio
+async def test_delegated_user_uses_the_configured_object_id_for_an_internal_user(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+    gateway.configure(object_id_jwt_field="local_id")
+    _with_user_fields(gateway, {"user_id_jwt_field": "uid"}, "email", okta=False)
+    claims = {**SIGN_IN, "local_id": "local-maria"}
+    gateway.stores.user.rows["local-maria"] = {**gateway.stores.user.rows[MARIA], "user_id": "local-maria"}
+    assert await gateway.outcome(claims) == ("admitted", None, None, "local-maria")
+    _with_user_fields(gateway, {"user_id_jwt_field": "uid"}, "email", okta=True)
+
+    assert await gateway.outcome(claims) == ("admitted", "invoice-bot", "delegated", "local-maria")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("issuer_fields", "global_email", "user_id"),
     [
