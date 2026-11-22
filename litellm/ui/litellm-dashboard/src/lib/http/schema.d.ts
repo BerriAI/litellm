@@ -22590,8 +22590,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Logs */
-        post: operations["ingest_otlp_logs_v1_logs_post"];
+        /**
+         * Forward Otlp Logs
+         * @description The agent's log events carry what its spans leave out, such as each reply; they go to Lens the same way.
+         */
+        post: operations["forward_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -89662,7 +89665,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_logs_v1_logs_post: {
+    forward_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
