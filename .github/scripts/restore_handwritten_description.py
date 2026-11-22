@@ -2,8 +2,9 @@
 """Put a PR author's handwritten description back when a body edit reset it to the template placeholder.
 
 Reads the `pull_request` `edited` event at $GITHUB_EVENT_PATH. When the body before the edit had real text
-under the handwritten heading and the body after it has only the placeholder there, patches the PR so the
-new body carries the earlier text again. A section the author emptied on purpose is left alone.
+under the handwritten heading and the body after it has only the placeholder there, patches the PR's live
+body so it carries the earlier text again, keeping any edit made since the event. A section the author
+emptied on purpose is left alone.
 
 Usage
 -----
@@ -47,7 +48,13 @@ def main() -> int:
     event: Final = json.loads(pathlib.Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
     before: Final = event.get("changes", {}).get("body", {}).get("from")
     pull_request: Final = event["pull_request"]
-    body: Final = restored_body(before or "", pull_request.get("body") or "")
+    if restored_body(before or "", pull_request.get("body") or "") is None:
+        sys.stdout.write("Handwritten description is intact, nothing to restore\n")
+        return 0
+    live: Final = subprocess.run(
+        ("gh", "api", pull_request["url"], "--jq", ".body"), capture_output=True, text=True, check=True
+    ).stdout.removesuffix("\n")
+    body: Final = restored_body(before or "", live)
     if body is None:
         sys.stdout.write("Handwritten description is intact, nothing to restore\n")
         return 0

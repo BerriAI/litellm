@@ -23,12 +23,12 @@ def _body(handwritten: str, tldr: str = "- old bullet") -> str:
 
 
 def test_placeholder_written_over_the_authors_text_is_replaced_and_the_rest_of_the_edit_kept():
-    edited = _body(restore.PLACEHOLDER, tldr="- new bullet")
+    edited: Final = _body(restore.PLACEHOLDER, tldr="- new bullet")
     assert restore.restored_body(_body(_AUTHOR_TEXT), edited) == _body(_AUTHOR_TEXT, tldr="- new bullet")
 
 
 def test_template_comment_around_the_placeholder_does_not_hide_the_reset():
-    edited = _body(f"<!-- agents never write here -->\n\n{restore.PLACEHOLDER}")
+    edited: Final = _body(f"<!-- agents never write here -->\n\n{restore.PLACEHOLDER}")
     assert restore.restored_body(_body(_AUTHOR_TEXT), edited) == _body(
         f"<!-- agents never write here -->\n\n{_AUTHOR_TEXT}"
     )
