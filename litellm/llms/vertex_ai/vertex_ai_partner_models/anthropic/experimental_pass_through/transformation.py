@@ -4,6 +4,7 @@ from typing import Any, Final
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.pass_through.messages.api_versions import requested_api_version
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
     messages_carry_output_config,
@@ -31,20 +32,17 @@ _VERSIONS_SERVED_AS_VERTEX_DEFAULT: Final = frozenset({"", "2023-01-01", "2023-0
 _VERSIONS_VERTEX_ACCEPTS_IN_BODY: Final = frozenset({_VERTEX_DEFAULT_VERSION, "2026-10-21"})
 
 
-def _requested_version(headers: Mapping[str, object]) -> str:
-    requested: Final = next(
-        (value for name, value in headers.items() if name.lower() == _VERSION_HEADER_VERTEX_READS_FROM_BODY),
-        "",
-    )
-    return requested.strip() if isinstance(requested, str) else ""
+def _body_version(requested: str) -> str | None:
+    if requested in _VERSIONS_SERVED_AS_VERTEX_DEFAULT:
+        return _VERTEX_DEFAULT_VERSION
+    return requested if requested in _VERSIONS_VERTEX_ACCEPTS_IN_BODY else None
 
 
 def _vertex_version(headers: Mapping[str, object], model: str, drop_params: bool) -> str | UnsupportedParamsError:
-    requested: Final = _requested_version(headers)
-    if requested in _VERSIONS_SERVED_AS_VERTEX_DEFAULT:
-        return _VERTEX_DEFAULT_VERSION
-    if requested in _VERSIONS_VERTEX_ACCEPTS_IN_BODY:
-        return requested
+    requested: Final = requested_api_version(headers) or ""
+    body_version: Final = _body_version(requested)
+    if body_version is not None:
+        return body_version
     if drop_params:
         return _VERTEX_DEFAULT_VERSION
     return UnsupportedParamsError(
@@ -80,6 +78,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
 
     def should_strip_billing_metadata(self) -> bool:
         return True
+
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        return _body_version(requested_api_version(headers) or "")
 
     def validate_anthropic_messages_environment(
         self,
