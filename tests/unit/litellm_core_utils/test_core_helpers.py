@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
+    get_spend_log_metadata_from_kwargs,
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
@@ -689,17 +690,28 @@ def test_a_planted_litellm_metadata_keeps_the_callers_spend_logs_metadata(
         }
     }
 
-    assert get_litellm_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == logged
+    assert get_spend_log_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == logged
 
 
 def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the_hook_set_it() -> None:
-    planted: Final = {"applied_guardrails": ["pre"]}
+    planted: Final = {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
     kwargs: Final = {
         "litellm_params": {
-            "metadata": {"spend_logs_metadata": {"team": "search"}},
+            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
             "litellm_metadata": planted,
         }
     }
 
-    assert get_litellm_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == {"team": "search"}
-    assert planted == {"applied_guardrails": ["pre"]}
+    assert get_spend_log_metadata_from_kwargs(kwargs)["spend_logs_metadata"] == {"team": "search"}
+    assert planted == {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
+
+
+def test_a_provider_body_metadata_field_never_reaches_the_spend_row_metadata() -> None:
+    kwargs: Final = {
+        "litellm_params": {
+            "metadata": {"spend_logs_metadata": {"team": "from-the-body"}},
+            "litellm_metadata": {"user_api_key_hash": "hash"},
+        }
+    }
+
+    assert "spend_logs_metadata" not in get_spend_log_metadata_from_kwargs(kwargs)
