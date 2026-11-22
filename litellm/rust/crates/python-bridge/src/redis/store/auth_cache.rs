@@ -212,8 +212,9 @@ impl PyAuthObject {
     }
 
     #[staticmethod]
-    fn agent_identity(tenant_id: String, client_id: String) -> Self {
+    fn agent_identity(provider: String, tenant_id: String, client_id: String) -> Self {
         Self(AuthObject::AgentIdentity {
+            provider,
             tenant_id,
             client_id,
         })
