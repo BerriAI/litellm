@@ -2,6 +2,7 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from functools import partial
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
@@ -18,9 +19,11 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_urls_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    has_json_input,
     image_media_type,
     image_param,
     input_images,
@@ -29,9 +32,14 @@ from litellm.llms.base_llm.decisions.transformation import (
     systemone_request_to_ir,
     with_images_where,
     with_inlined_images,
+    without_json_input,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
+from litellm.llms.openai.decisions.transformation import (
+    ir_to_openai_response,
+    openai_input_to_ir,
+    openai_request_to_ir,
+)
 from litellm.types.decisions import (
     DecisionQuestion,
     DecisionsAsset,
@@ -53,12 +61,14 @@ from litellm.types.decisions import (
     DecisionsResponse,
     DecisionsVideo,
     OpenAIDecisionInput,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
     OpenAIDecisionResponse,
     UnsupportedDecisionsRequest,
 )
 from litellm.types.llms.openai import ChatCompletionUserMessage
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 from litellm.utils import ProviderConfigManager
 
@@ -72,6 +82,8 @@ DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequest
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_REQUEST_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(OpenAIDecisionRequestBody)
+_OPENAI_INPUT_ADAPTER: Final[TypeAdapter[OpenAIDecisionInput]] = TypeAdapter(OpenAIDecisionInput)
+_EXTRA_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(Mapping[str, str] | None)
 _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
     str | None, config=ConfigDict(title="safety_identifier")
 )
@@ -231,18 +243,65 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
     return provider_config
 
 
-def _ir_request(request: DecisionsRequestFormat, safety_identifier: str | None) -> DecisionsIRRequest:
+def _ir_request(
+    request: DecisionsRequestFormat, safety_identifier: str | None, drop_params: bool
+) -> DecisionsIRRequest:
     match request:
         case DecisionsRequestBody():
-            return replace(systemone_request_to_ir(request), safety_identifier=safety_identifier)
+            return replace(
+                systemone_request_to_ir(request), safety_identifier=safety_identifier, drop_params=drop_params
+            )
         case OpenAIDecisionRequestBody():
-            return openai_request_to_ir(request)
+            return replace(openai_request_to_ir(request), drop_params=drop_params)
         case _:
             assert_never(request)
 
 
+def _caller_drops_params(kwargs: Mapping[str, object]) -> bool:
+    return normalize_drop_params(kwargs.get("drop_params")) is True
+
+
 def _drops_params(kwargs: Mapping[str, object]) -> bool:
-    return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
+    return litellm.drop_params is True or _caller_drops_params(kwargs)
+
+
+def _is_json_input_part(part: object) -> bool:
+    match part:
+        case {"type": "input_json"} | OpenAIDecisionInputJSON():
+            return True
+        case _:
+            return False
+
+
+def request_carries_json_input(request_input: object) -> bool:
+    """A Decisions ``input`` holding an ``input_json`` part, as sent or as validated messages."""
+    contents: Final = (parts_of(message_field(message, "content")) for message in parts_of(request_input))
+    return any(map(_is_json_input_part, chain.from_iterable(contents)))
+
+
+def routed_decision_input(request_input: object) -> DecisionsIRState | DecisionsIRMessages | None:
+    try:
+        return openai_input_to_ir(_OPENAI_INPUT_ADAPTER.validate_python(request_input))
+    except ValidationError:
+        return None
+
+
+def deployment_refuses_json_input(
+    model: str,
+    custom_llm_provider: str,
+    call_kwargs: Mapping[str, object],
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+) -> bool:
+    if not has_json_input(decision_input):
+        return False
+    provider_config: Final = _provider_config(model, custom_llm_provider)
+    if not _drops_params(call_kwargs):
+        return not provider_config.supports_json_input
+    extra_headers: Final = _EXTRA_HEADERS_ADAPTER.validate_python(call_kwargs.get("extra_headers"))
+    headers: Final = _outbound_headers(extra_headers, custom_llm_provider, call_kwargs)
+    return _leaves_no_input(
+        _with_images_surely_kept(_supported_input(decision_input, provider_config, headers), provider_config)
+    )
 
 
 def _request_safety_identifier(
@@ -309,6 +368,7 @@ def _unsupported_params(
     refuses_videos: Final = bool(ir_request.videos) and not provider_config.supports_video_input(
         model, custom_llm_provider
     )
+    refuses_json_input: Final = has_json_input(ir_request.input) and not provider_config.supports_json_input
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
@@ -316,6 +376,7 @@ def _unsupported_params(
         *(("box questions",) if refuses_box_questions else ()),
         *(("audio",) if refuses_audio else ()),
         *(("videos",) if refuses_videos else ()),
+        *(("input_json",) if refuses_json_input else ()),
     )
 
 
@@ -327,6 +388,19 @@ def _is_not_box_question(question: DecisionsIRQuestion) -> bool:
     return not isinstance(question, DecisionsIRBoxQuestion)
 
 
+def _supported_input(
+    decision_input: DecisionsIRState | DecisionsIRMessages,
+    provider_config: BaseDecisionsConfig,
+    headers: Mapping[str, str],
+) -> DecisionsIRState | DecisionsIRMessages:
+    supported_images: Final = (
+        decision_input
+        if provider_config.supports_images_in(decision_input, headers)
+        else with_images_where(decision_input, _no_image)
+    )
+    return supported_images if provider_config.supports_json_input else without_json_input(supported_images)
+
+
 def _without_unsupported_params(
     ir_request: DecisionsIRRequest,
     provider_config: BaseDecisionsConfig,
@@ -335,11 +409,7 @@ def _without_unsupported_params(
 ) -> DecisionsIRRequest:
     return replace(
         ir_request,
-        input=(
-            ir_request.input
-            if provider_config.supports_images_in(ir_request.input, headers)
-            else with_images_where(ir_request.input, _no_image)
-        ),
+        input=_supported_input(ir_request.input, provider_config, headers),
         safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
         assets=ir_request.assets if provider_config.supports_assets(headers) else MappingProxyType({}),
         questions=(
@@ -442,6 +512,16 @@ def log_caller_request(kwargs: Mapping[str, object], caller_request: object) -> 
         logging_obj.update_messages([_logged_request_message(caller_request)])
 
 
+def _config_for_shape(provider_config: BaseDecisionsConfig, fields: RequestFields) -> BaseDecisionsConfig:
+    match fields:
+        case SystemOneRequestFields():
+            return provider_config.systemone_config()
+        case OpenAIDecisionRequestFields():
+            return provider_config
+        case _:
+            assert_never(fields)
+
+
 def prepare_call(
     *,
     model: str,
@@ -459,8 +539,9 @@ def prepare_call(
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
+        litellm_params=GenericLiteLLMParams(use_litellm_proxy=kwargs.get("use_litellm_proxy") is True),
     )
-    provider_config: Final = _provider_config(upstream_model, provider)
+    provider_config: Final = _config_for_shape(_provider_config(upstream_model, provider), fields)
     if not upstream_model:
         raise litellm.BadRequestError(
             message="A model name is required for the Decisions API",
@@ -499,13 +580,13 @@ def prepare_call(
     resolved_api_key: Final = provider_config.resolve_credential(static_api_key, resolved_api_base, kwargs)
     if resolved_api_key is None and provider_config.api_key_required:
         raise litellm.AuthenticationError(
-            message=f"Missing API key for Decisions provider '{provider}'",
+            message=provider_config.missing_api_key_message(provider),
             model=model,
             llm_provider=provider,
         )
 
     caller_ir_request: Final = _without_malformed_images(
-        _ir_request(request, request_safety_identifier), _drops_params(kwargs)
+        _ir_request(request, request_safety_identifier, _caller_drops_params(kwargs)), _drops_params(kwargs)
     )
     if isinstance(caller_ir_request, _MalformedImages):
         raise litellm.BadRequestError(
@@ -603,6 +684,21 @@ async def _async_with_remote_images_inlined(call: DecisionsCall) -> DecisionsCal
 def _has_media_type_in(media_types: frozenset[str], image: DecisionsImage) -> bool:
     media_type: Final = image_media_type(image)
     return media_type is None or media_type in media_types
+
+
+def _is_surely_kept_image(media_types: frozenset[str] | None, image: DecisionsImage) -> bool:
+    if not _is_well_formed_image(image):
+        return False
+    if media_types is None:
+        return True
+    media_type: Final = image_media_type(image)
+    return media_type is not None and media_type in media_types
+
+
+def _with_images_surely_kept(
+    decision_input: DecisionsIRState | DecisionsIRMessages, provider_config: BaseDecisionsConfig
+) -> DecisionsIRState | DecisionsIRMessages:
+    return with_images_where(decision_input, partial(_is_surely_kept_image, provider_config.image_media_types))
 
 
 def _checked_image_types(call: DecisionsCall) -> DecisionsCall:

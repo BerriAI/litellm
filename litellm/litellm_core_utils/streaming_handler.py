@@ -7,10 +7,10 @@ import logging
 import threading
 import time
 import traceback
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
+from typing import Any, Final, NoReturn, Protocol, TypeVar, cast, runtime_checkable
 
 import anyio
 import httpx
@@ -47,7 +47,7 @@ from litellm.types.utils import (
 from litellm.types.utils import GenericStreamingChunk as GChunk
 
 from ..exceptions import OpenAIError
-from .core_helpers import map_finish_reason, process_response_headers
+from .core_helpers import as_str_mapping, map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
@@ -60,7 +60,14 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
 
-_GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_GCHUNK_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__annotations__)
+_GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
+_GCHUNK_VALUE_FIELDS: Final[tuple[str, ...]] = (
+    *sorted(_GCHUNK_REQUIRED_FIELDS),
+    "tool_use",
+    "provider_specific_fields",
+)
+_ABSENT_FIELD: Final = object()
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
@@ -127,6 +134,11 @@ class _ProviderChunkEarlyReturn:
 
 
 _ProviderChunkResult = _ProviderChunkParsed | _ProviderChunkEarlyReturn
+
+
+@runtime_checkable
+class _SubscriptableChunk(Protocol):
+    def __getitem__(self, key: str, /) -> object: ...
 
 
 class _PredibaseStreamData(TypedDict):
@@ -1192,33 +1204,48 @@ class CustomStreamWrapper:
                 chunk.choices[0].finish_reason = None
             return _ProviderChunkEarlyReturn(chunk)
 
-        if (
-            isinstance(chunk, dict)
-            and generic_chunk_has_all_required_fields(chunk=chunk)  # check if chunk is a generic streaming chunk
-        ) or (self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers):
+        chunk_fields: Final = as_str_mapping(chunk)
+        generic_chunk: Final = chunk_fields if isinstance(chunk_fields, dict) else None
+        has_only_generic_fields: Final = generic_chunk is not None and generic_chunk_has_all_required_fields(
+            chunk=generic_chunk
+        )
+        if has_only_generic_fields or (
+            self.custom_llm_provider and self.custom_llm_provider in litellm._custom_providers
+        ):
             if self.received_finish_reason is not None:
-                _chunk_has_content: Final = isinstance(chunk, dict) and (
-                    bool(chunk.get("text", ""))
-                    or chunk.get("tool_use") is not None
+                _chunk_has_content: Final = generic_chunk is not None and (
+                    bool(generic_chunk.get("text", ""))
+                    or generic_chunk.get("tool_use") is not None
                     # Usage-only final chunks are valid and needed to surface
                     # finish_reason/usage to downstream translators.
-                    or chunk.get("usage") is not None
+                    or generic_chunk.get("usage") is not None
                 )
-                if not _chunk_has_content and (not isinstance(chunk, dict) or "provider_specific_fields" not in chunk):
+                if not _chunk_has_content and (
+                    generic_chunk is None or "provider_specific_fields" not in generic_chunk
+                ):
                     raise StopIteration
-            anthropic_response_obj: Final[GChunk] = cast(GChunk, chunk)
-            completion_obj["content"] = anthropic_response_obj["text"]
-            if anthropic_response_obj["is_finished"]:
-                self.received_finish_reason = anthropic_response_obj["finish_reason"]
+            anthropic_response_obj: Final[GChunk] = cast(GChunk, _generic_chunk_fields(chunk))
+            shape_error: Final = (
+                None if has_only_generic_fields else generic_chunk_shape_error(chunk, anthropic_response_obj)
+            )
+            if shape_error is not None:
+                raise ValueError(
+                    f"Streaming chunk from {self.custom_llm_provider} is not a GenericStreamingChunk: {shape_error}"
+                )
+            generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
+            completion_obj["content"] = anthropic_response_obj.get("text", "")
+            if anthropic_response_obj.get("is_finished", False) and not _has_null_finish_reason(anthropic_response_obj):
+                self.received_finish_reason = generic_finish_reason or self.intermittent_finish_reason or "stop"
 
-            if anthropic_response_obj["finish_reason"]:
-                self.intermittent_finish_reason = anthropic_response_obj["finish_reason"]
+            if generic_finish_reason:
+                self.intermittent_finish_reason = generic_finish_reason
 
-            if anthropic_response_obj["usage"] is not None:
+            generic_usage: Final = anthropic_response_obj.get("usage")
+            if generic_usage is not None:
                 setattr(
                     model_response,
                     "usage",
-                    litellm.Usage(**anthropic_response_obj["usage"]),
+                    litellm.Usage(**generic_usage),
                 )
 
             if "tool_use" in anthropic_response_obj and anthropic_response_obj["tool_use"] is not None:
@@ -1230,7 +1257,7 @@ class CustomStreamWrapper:
             ):
                 _apply_provider_fields(model_response, anthropic_response_obj["provider_specific_fields"])
 
-            response_obj = cast(dict[str, object], anthropic_response_obj)
+            response_obj = cast(dict[str, object], chunk)
         elif self.model == "replicate" or self.custom_llm_provider == "replicate":
             response_obj = self.handle_replicate_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -2625,12 +2652,59 @@ def calculate_total_usage(chunks: Sequence[ModelResponse]) -> Usage:
 
 def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     """
-    Checks if the provided chunk dictionary contains all required fields for GenericStreamingChunk.
+    Checks if every key in the chunk dictionary is a GenericStreamingChunk field.
 
     :param chunk: The dictionary to check.
-    :return: True if all required fields are present, False otherwise.
+    :return: True if the chunk has no keys outside GenericStreamingChunk, False otherwise.
     """
     return all(key in _GCHUNK_FIELDS for key in chunk)
+
+
+def generic_chunk_shape_error(chunk: object, read_fields: Mapping[str, object]) -> str | None:
+    fields: Final = as_str_mapping(chunk)
+    if fields is None:
+        return _chunk_object_shape_error(chunk, read_fields)
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(read_fields))
+    has_text: Final = isinstance(read_fields.get("text"), str)
+    if not missing or has_text or any(read_fields.get(key) for key in _GCHUNK_VALUE_FIELDS):
+        return None
+    unexpected: Final = sorted((key for key in fields if key not in _GCHUNK_FIELDS), key=str)
+    if not unexpected:
+        return None
+    return f"missing {missing}, unexpected {unexpected}"
+
+
+def _has_null_finish_reason(fields: Mapping[str, object]) -> bool:
+    return fields.get("finish_reason", "") is None
+
+
+def _chunk_object_shape_error(chunk: object, read_fields: Mapping[str, object]) -> str | None:
+    if not isinstance(chunk, _SubscriptableChunk):
+        return f"expected a dict, got {type(chunk).__name__}"
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(read_fields))
+    return f"{type(chunk).__name__} is missing {missing}" if missing else None
+
+
+def _generic_chunk_fields(chunk: object) -> Mapping[str, object]:
+    fields: Final = as_str_mapping(chunk)
+    if fields is not None and type(chunk) is dict:
+        return fields
+    if not isinstance(chunk, _SubscriptableChunk):
+        return MappingProxyType({})
+    return MappingProxyType(
+        {key: value for key in _GCHUNK_VALUE_FIELDS if (value := _subscripted_field(chunk, key)) is not _ABSENT_FIELD}
+    )
+
+
+def _subscripted_field(chunk: _SubscriptableChunk, key: str) -> object:
+    try:
+        return chunk[key] if key in _GCHUNK_REQUIRED_FIELDS or _chunk_has_key(chunk, key) else _ABSENT_FIELD
+    except (LookupError, AttributeError, TypeError):
+        return _ABSENT_FIELD
+
+
+def _chunk_has_key(chunk: object, key: str) -> bool:
+    return isinstance(chunk, (Container, Iterable)) and key in chunk
 
 
 def convert_generic_chunk_to_model_response_stream(
@@ -2645,12 +2719,12 @@ def convert_generic_chunk_to_model_response_stream(
             StreamingChoices(
                 index=chunk.get("index", 0),
                 delta=Delta(
-                    content=chunk["text"],
+                    content=chunk.get("text", ""),
                     tool_calls=chunk.get("tool_use", None),
                 ),
             )
         ],
-        finish_reason=chunk["finish_reason"] if chunk["is_finished"] else None,
+        finish_reason=chunk.get("finish_reason", "") if chunk.get("is_finished", False) else None,
     )
 
     if "usage" in chunk and chunk["usage"] is not None:
