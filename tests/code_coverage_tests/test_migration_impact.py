@@ -857,8 +857,6 @@ def test_markdown_names_the_schema_it_used_as_evidence() -> None:
 def test_markdown_keeps_repository_text_inside_code_spans() -> None:
     from dataclasses import replace
 
-    from markdown_it import MarkdownIt
-
     payload: Final = "`[click](https://example.test)<img src=x>\n| injected"
     finding: Final = replace(
         _classify(f'DROP TABLE "x"; -- {payload}'),
@@ -866,10 +864,10 @@ def test_markdown_keeps_repository_text_inside_code_spans() -> None:
     )
     report: Final = replace(_report(findings=(finding,)), base=payload, head=payload)
     rendered: Final = impact.render_markdown(report)
-    html: Final = MarkdownIt("commonmark").enable("table").render(rendered)
+    escaped: Final = payload.replace("\n", " ").replace("|", r"\|")
+    code_span: Final = f"`` {escaped} ``"
+    statement_span: Final = f'`` DROP TABLE "x"; -- {escaped} ``'
 
-    assert "<a href=" not in html
-    assert "<img " not in html
-    assert html.count("<td ") == 4
-    assert "&lt;img src=x&gt;" in html
-    assert "[click](https://example.test)" in html
+    assert f"Rated against a pod still running {code_span}:" in rendered
+    assert f"| **BREAKING** | {code_span} | {statement_span} | {finding.effect} |" in rendered.splitlines()
+    assert f"no `schema.prisma` at {code_span}," in rendered

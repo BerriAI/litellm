@@ -222,7 +222,6 @@ dev = [
     "basedpyright==1.39.7",
     "mypy==1.20.1",
     "keyring==25.7.0",
-    "markdown-it-py==4.2.0",
     "pytest==9.0.3",
     "pytest-socket==0.8.1",
     "tomli==2.4.1; python_version < '3.11'",
