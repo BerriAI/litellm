@@ -1,6 +1,7 @@
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from typing import Final
 
 import pytest
@@ -59,8 +60,21 @@ async def _acknowledge(acked: "asyncio.Future[bool]") -> None:
     await settled.wait()
 
 
+class _Exported(InMemorySpanExporter):
+    """Keeps every exported span and announces each by name, so a test waits for the export it expects."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: Final = asyncio.Queue[str]()
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        for span in spans:
+            self.names.put_nowait(span.name)
+        return super().export(spans)
+
+
 class _Pipeline:
-    def __init__(self, spool: TraceContentSpool, provider: TracerProvider, exported: InMemorySpanExporter) -> None:
+    def __init__(self, spool: TraceContentSpool, provider: TracerProvider, exported: "_Exported") -> None:
         self.spool: Final = spool
         self.provider: Final = provider
         self.exported: Final = exported
@@ -79,10 +93,14 @@ def store() -> _Store:
     return _Store()
 
 
-@pytest.fixture
-async def pipeline(store: _Store) -> AsyncIterator[_Pipeline]:
-    spool: Final = TraceContentSpool(store, _KEY, asyncio.get_running_loop(), _LIMITS, upload_timeout=5)
-    exported: Final = InMemorySpanExporter()
+@asynccontextmanager
+async def _pipeline(
+    store: _Store, upload_timeout: float = 5, **bounds: int
+) -> AsyncGenerator[_Pipeline, None]:  # kwargs-ok: the spool's bounds
+    spool: Final = TraceContentSpool(
+        store, _KEY, asyncio.get_running_loop(), _LIMITS, upload_timeout=upload_timeout, **bounds
+    )
+    exported: Final = _Exported()
     provider: Final = build_tracer_provider(
         OpenTelemetryV2Config(exporter="in_memory"),
         exporter=exported,
@@ -94,6 +112,12 @@ async def pipeline(store: _Store) -> AsyncIterator[_Pipeline]:
     finally:
         await spool.aclose()
         provider.shutdown()
+
+
+@pytest.fixture
+async def pipeline(store: _Store) -> AsyncIterator[_Pipeline]:
+    async with _pipeline(store) as built:
+        yield built
 
 
 def _owner(span: ReadableSpan) -> Owner:
@@ -170,27 +194,16 @@ async def test_a_failed_upload_exports_the_span_as_unavailable_with_its_metadata
 async def test_an_upload_past_its_timeout_is_unavailable_and_keeps_its_bytes_until_the_native_upload_ends(
     store: _Store,
 ) -> None:
-    spool: Final = TraceContentSpool(store, _KEY, asyncio.get_running_loop(), _LIMITS, upload_timeout=0)
-    exported: Final = InMemorySpanExporter()
-    provider: Final = build_tracer_provider(
-        OpenTelemetryV2Config(exporter="in_memory"),
-        exporter=exported,
-        use_simple_processor=True,
-        wrap_processor=spool.processor,
-    )
-    try:
-        span: Final = _capture(_Pipeline(spool, provider, exported))
+    async with _pipeline(store, upload_timeout=0) as pipeline:
+        span: Final = _capture(pipeline)
         _, body, acked = await asyncio.wait_for(store.uploads.get(), timeout=5)
-        await asyncio.gather(*spool.tasks)
-        assert _reference(exported.get_finished_spans()[0]) == dict(
+        await asyncio.gather(*pipeline.spool.tasks)
+        assert _reference(pipeline.finished()["chat model"]) == dict(
             signed_reference(_KEY, _owner(span), Unavailable.UPLOAD_FAILED)
         )
-        assert spool.pending_bytes == len(body.encode())
+        assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (1, len(body.encode()))
         await _acknowledge(acked)
-        assert spool.pending_bytes == 0
-    finally:
-        await spool.aclose()
-        provider.shutdown()
+        assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (0, 0)
 
 
 @pytest.mark.asyncio
@@ -212,22 +225,21 @@ async def test_shutdown_exports_held_spans_as_cancelled_and_refuses_new_captures
 
 
 @pytest.mark.asyncio
-async def test_captures_past_the_job_limit_are_unavailable_without_growing_the_held_set(
-    pipeline: _Pipeline, store: _Store
-) -> None:
-    for index in range(MAX_CONTENT_JOBS):
-        _ = _capture(pipeline, f"call {index}")
-    overflow: Final = _capture(pipeline, "overflow")
-    assert len(pipeline.spool.captures) == MAX_CONTENT_JOBS
-    assert _reference(pipeline.finished()["overflow"]) == dict(
-        signed_reference(_KEY, _owner(overflow), Unavailable.OVERLOADED)
-    )
-    acks: Final = tuple([await asyncio.wait_for(store.uploads.get(), timeout=5) for _ in range(MAX_CONTENT_JOBS)])
-    for _, _, acked in acks:
-        acked.set_result(True)
-    await asyncio.gather(*pipeline.spool.tasks)
-    assert len(pipeline.finished()) == MAX_CONTENT_JOBS + 1
-    assert (pipeline.spool.pending_bytes, pipeline.spool.captures) == (0, {})
+async def test_captures_past_the_job_limit_are_unavailable_without_growing_the_held_set(store: _Store) -> None:
+    async with _pipeline(store, max_native_uploads=MAX_CONTENT_JOBS) as pipeline:
+        for index in range(MAX_CONTENT_JOBS):
+            _ = _capture(pipeline, f"call {index}")
+        overflow: Final = _capture(pipeline, "overflow")
+        assert (len(pipeline.spool.captures), pipeline.spool.jobs) == (MAX_CONTENT_JOBS, MAX_CONTENT_JOBS)
+        assert _reference(pipeline.finished()["overflow"]) == dict(
+            signed_reference(_KEY, _owner(overflow), Unavailable.OVERLOADED)
+        )
+        acks: Final = tuple([await asyncio.wait_for(store.uploads.get(), timeout=5) for _ in range(MAX_CONTENT_JOBS)])
+        for _, _, acked in acks:
+            acked.set_result(True)
+        await asyncio.gather(*pipeline.spool.tasks)
+        assert len(pipeline.finished()) == MAX_CONTENT_JOBS + 1
+        assert (pipeline.spool.pending_bytes, pipeline.spool.captures, pipeline.spool.jobs) == (0, {}, 0)
 
 
 @pytest.mark.asyncio
@@ -336,3 +348,75 @@ def test_batches_are_split_by_encoded_bytes_so_large_spans_never_take_small_ones
     failing: Final = _Recording(fail_after=1)
     assert BoundedBatchExporter(failing, limit=1000).export(spans) is SpanExportResult.FAILURE
     assert len(failing.batches) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_body_past_the_shared_budget_is_unavailable_and_keeps_the_span_metadata(store: _Store) -> None:
+    content: Final = {"gen_ai.input.messages": "界" * 3000}
+    async with _pipeline(store, max_pending_bytes=8000) as pipeline:
+        span: Final = _capture(pipeline, content=content)
+        await asyncio.gather(*pipeline.spool.tasks)
+        exported: Final = pipeline.finished()["chat model"]
+        assert _reference(exported) == dict(signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED))
+        assert (exported.attributes or {})["litellm.team.id"] == "team-a"
+        assert (store.uploads.empty(), pipeline.spool.pending_bytes, pipeline.spool.jobs) == (True, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_span_whose_metadata_would_pass_the_budget_is_exported_at_once_instead_of_held(store: _Store) -> None:
+    async with _pipeline(store, max_pending_bytes=3000) as pipeline:
+        span: Final = pipeline.start()
+        span.set_attribute("litellm.metadata.note", "x" * 5000)
+        admission: Final = pipeline.spool.text_admission(span, tuple(_CONTENT.values()))
+        assert isinstance(admission, int)
+        assert pipeline.spool.capture(span, _IDENTITY, admission, lambda limit: _CONTENT)
+        span.end()
+        assert _reference(pipeline.finished()["chat model"]) == dict(
+            signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED)
+        )
+        await asyncio.gather(*pipeline.spool.tasks)
+        assert len(pipeline.exported.get_finished_spans()) == 1
+        assert (pipeline.spool.captures, pipeline.spool.pending_bytes, pipeline.spool.jobs) == ({}, 0, 0)
+
+
+@pytest.mark.asyncio
+async def test_native_uploads_past_their_limit_are_unavailable_while_the_first_still_runs(store: _Store) -> None:
+    async with _pipeline(store, max_native_uploads=1) as pipeline:
+        first: Final = _capture(pipeline, "first")
+        _, _, acked = await asyncio.wait_for(store.uploads.get(), timeout=5)
+        second: Final = _capture(pipeline, "second")
+        assert await asyncio.wait_for(pipeline.exported.names.get(), timeout=5) == "second"
+        assert _reference(pipeline.finished()["second"]) == dict(
+            signed_reference(_KEY, _owner(second), Unavailable.OVERLOADED)
+        )
+        assert store.uploads.empty() and "first" not in pipeline.finished()
+        await _acknowledge(acked)
+        await asyncio.gather(*pipeline.spool.tasks)
+        stored: Final = StoredReference.model_validate(_reference(pipeline.finished()["first"]))
+        assert verified_stored(_KEY, _owner(first), stored) is not None
+        assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (0, 0)
+
+
+@pytest.mark.asyncio
+async def test_content_that_json_escaping_grows_past_the_inline_bytes_spills_without_an_sdk_limit(
+    pipeline: _Pipeline,
+) -> None:
+    span: Final = pipeline.start()
+    try:
+        assert pipeline.spool.model_admission(span, ({"content": "a" * 300},), ()) is None
+        assert isinstance(pipeline.spool.model_admission(span, ({"content": "\x01" * 300},), ()), int)
+    finally:
+        span.end()
+
+
+def test_a_provider_built_without_lens_wrappers_exports_spans_exactly_as_before() -> None:
+    exported: Final = InMemorySpanExporter()
+    provider: Final = build_tracer_provider(
+        OpenTelemetryV2Config(exporter="in_memory"), exporter=exported, use_simple_processor=True
+    )
+    span: Final = provider.get_tracer("other-otel").start_span("chat", attributes={"gen_ai.input.messages": "x" * 5000})
+    span.end()
+    provider.shutdown()
+    assert [dict(finished.attributes or {}) for finished in exported.get_finished_spans()] == [
+        {"gen_ai.input.messages": "x" * 5000}
+    ]

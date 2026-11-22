@@ -38,6 +38,7 @@ import litellm
 from litellm.integrations.lens.content import ContentLimits, ContentStore, Unavailable, content_signing_key
 from litellm.integrations.lens.remote import LensConnection
 from litellm.integrations.lens.trace_content import (
+    DEFAULT_CONTENT_LIMITS,
     BoundedBatchExporter,
     ContentAttributes,
     TraceContentSpool,
@@ -567,7 +568,9 @@ class _LensTraceLogger(OpenTelemetryV2):
             _AGENT_TRACE.reset(placed)
             _CALL_FACTS.reset(token)
         session_id: Final = call.session_id or made_by.derived_session
-        if span is not None and session_id and agent_trace is None and call.payload is not None:
+        if span is None or agent_trace is not None or call.payload is None:
+            return span
+        if session_id:
             self._emit_tool_steps(made_by, RequestIdentity.from_payload(call.payload), session_id, to_ns(start_time))
         return span
 
@@ -630,7 +633,7 @@ class _CallFactsProcessor(SpanProcessor):
 
 @asynccontextmanager
 async def export_traces(
-    connection: LensConnection, store: ContentStore | None = None, limits: ContentLimits = ContentLimits()
+    connection: LensConnection, store: ContentStore | None = None, limits: ContentLimits = DEFAULT_CONTENT_LIMITS
 ) -> AsyncGenerator[None, None]:
     config: Final = _LensTraceConfig(
         exporters=[
