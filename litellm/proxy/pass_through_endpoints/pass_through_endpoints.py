@@ -1239,6 +1239,34 @@ def _drop_unmergeable_guardrail_fields(
             parsed_body.pop(field)
 
 
+def _client_guardrail_names(parsed_body: Mapping[str, object] | None, *, inherit: bool) -> Mapping[str, object] | None:
+    """With ``reject_unregistered_guardrails`` on, the guardrail names a built-in route's request body asks for, as the
+    client sent them. The guardrail merge drops a ``guardrails`` that isn't a list or an object and replaces a guarded
+    key's ``metadata.guardrails`` before the pre-call hook checks them against the registered guardrails."""
+    from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_guardrails_enabled
+    from litellm.proxy.proxy_server import current_general_settings
+
+    if not inherit or not parsed_body or not reject_unregistered_guardrails_enabled(current_general_settings()):
+        return None
+    return {
+        **({"guardrails": copy.copy(parsed_body["guardrails"])} if "guardrails" in parsed_body else {}),
+        **{
+            key: {"guardrails": copy.copy(metadata["guardrails"])}
+            for key in sorted(_METADATA_KEYS)
+            if (metadata := as_str_mapping(parsed_body.get(key))) is not None and "guardrails" in metadata
+        },
+    }
+
+
+def _reject_unregistered_client_guardrails(client_guardrail_names: Mapping[str, object] | None) -> None:
+    """Reject a request whose body names a guardrail this proxy hasn't registered, checking the names the client
+    sent, as the pre-call hook does on routes that don't merge the key's guardrails into the body."""
+    from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_request_guardrails
+
+    if client_guardrail_names is not None:
+        reject_unregistered_request_guardrails(client_guardrail_names)
+
+
 async def _inherit_auth_guardrails(
     parsed_body: dict[str, object] | None,  # mutable-ok: merges the guardrails into the live request body
     user_api_key_dict: UserAPIKeyAuth,
@@ -2290,6 +2318,10 @@ async def pass_through_request(
             _parsed_body["metadata"]["guardrails"] = guardrails_to_run
             verbose_proxy_logger.debug("Added guardrails to passthrough request metadata: %s", guardrails_to_run)
 
+        client_guardrail_names: Final = _client_guardrail_names(
+            cast(Mapping[str, object] | None, _parsed_body),  # cast-ok: json
+            inherit=inherit_auth_guardrails and not guardrails_to_run,
+        )
         post_call_guardrails: Final = await _inherit_auth_guardrails(
             parsed_body=cast(dict[str, object] | None, _parsed_body),  # cast-ok: json
             user_api_key_dict=user_api_key_dict,
@@ -2341,6 +2373,7 @@ async def pass_through_request(
         _check_opaque_content(raw_response)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
+        _reject_unregistered_client_guardrails(client_guardrail_names)
         _parsed_body = await proxy_logging_obj.pre_call_hook(
             user_api_key_dict=user_api_key_dict,
             data=_parsed_body,
