@@ -28,7 +28,7 @@ test.describe("Second proxy admin", () => {
         await dialog.getByLabel("User Email").fill(email);
 
         await dialog.getByLabel(/Global Proxy Role/).click();
-        await adminPage.getByRole("option", { name: /Admin \(All Permissions\)/ }).click();
+        await adminPage.getByRole("option", { name: /^Admin\b/ }).click();
 
         const createdResponse = adminPage.waitForResponse(
           (res) => res.url().includes("/user/new") && res.request().method() === "POST",

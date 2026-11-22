@@ -131,8 +131,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
-        response_json: Final = raw_response.json()
-        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        payload: Final = _JSON_OBJECT.validate_python(raw_response.json())
         recognition_status: Final = payload.get("RecognitionStatus")
         if recognition_status is not None and recognition_status != "Success":
             raise AzureSpeechAudioTranscriptionException(
@@ -143,7 +142,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text: Final = self._extract_text(payload)
         response: Final = TranscriptionResponse(text=text)
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload)
         return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:

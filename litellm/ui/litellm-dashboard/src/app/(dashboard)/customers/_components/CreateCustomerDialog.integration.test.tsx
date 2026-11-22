@@ -141,7 +141,7 @@ describe("CreateCustomerDialog", () => {
       "Enter custom limits instead",
     );
     const limits = within(screen.getByRole("region", { name: "Customer organization limits" }));
-    fireEvent.change(limits.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "40" } });
+    fireEvent.change(limits.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "40" } });
     await userEvent.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledOnce());
     expect(creations[0]).toMatchObject({ budget: { max_budget: 40, budget_duration: "1mo" } });
@@ -163,7 +163,7 @@ describe("CreateCustomerDialog", () => {
     const user = renderCustomerForm();
     const limits = within(screen.getByRole("region", { name: "Customer organization limits" }));
     const group = within(screen.getByRole("row", { name: "default_user" }));
-    fireEvent.change(await limits.findByRole("spinbutton", { name: "Spend limit (USD)" }), {
+    fireEvent.change(await limits.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
       target: { value: "15000" },
     });
     fireEvent.change(limits.getByRole("spinbutton", { name: "Tokens per minute" }), { target: { value: "25000" } });
@@ -180,11 +180,11 @@ describe("CreateCustomerDialog", () => {
     expect(profile).toHaveTextContent("$12,000/yr");
     expect(profile).toHaveTextContent("50K TPM");
     expect(profile).toHaveTextContent("0 RPM");
-    expect(limits.queryByRole("spinbutton", { name: "Spend limit (USD)" })).not.toBeInTheDocument();
+    expect(limits.queryByRole("spinbutton", { name: "Max Budget (USD)" })).not.toBeInTheDocument();
     expect(limits.queryByRole("spinbutton", { name: "Tokens per minute" })).not.toBeInTheDocument();
     expect(limits.queryByRole("spinbutton", { name: "Requests per minute" })).not.toBeInTheDocument();
     await chooseSelectOption(user, profile, "Enter custom limits instead");
-    expect(limits.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(15000);
+    expect(limits.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(15000);
     expect(limits.getByRole("spinbutton", { name: "Tokens per minute" })).toHaveValue(25000);
     expect(limits.getByRole("spinbutton", { name: "Requests per minute" })).toHaveValue(120);
     await user.click(screen.getByRole("button", { name: "Create customer" }));
@@ -226,7 +226,7 @@ describe("CreateCustomerDialog", () => {
     await user.click(screen.getByRole("button", { name: "Add budget group" }));
     fireEvent.change(screen.getByLabelText("Group name 4"), { target: { value: "custom_user" } });
     const group = within(screen.getByRole("row", { name: "custom_user" }));
-    fireEvent.change(group.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "300" } });
+    fireEvent.change(group.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "300" } });
     await chooseSelectOption(user, group.getByRole("combobox", { name: "Reset period" }), "/ year");
     fireEvent.keyDown(screen.getByRole("combobox", { name: "New members join" }), {
       key: "ArrowDown",
@@ -260,12 +260,12 @@ describe("CreateCustomerDialog", () => {
     const user = renderCustomerForm();
     fireEvent.change(screen.getByLabelText("Organization ID (optional)"), { target: { value: "existing-id" } });
     const group = within(screen.getByRole("row", { name: "default_user" }));
-    fireEvent.change(group.getByRole("spinbutton", { name: "Spend limit (USD)" }), { target: { value: "450" } });
+    fireEvent.change(group.getByRole("spinbutton", { name: "Max Budget (USD)" }), { target: { value: "450" } });
     await chooseSelectOption(user, group.getByRole("combobox", { name: "Reset period" }), "/ year");
     await user.click(screen.getByRole("button", { name: "Create customer" }));
     await waitFor(() => expect(creations).toHaveLength(1));
     expect(await screen.findByRole("button", { name: "Create customer" })).toBeEnabled();
-    expect(group.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(450);
+    expect(group.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(450);
     expect(group.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ yr");
     expect(onCreated).not.toHaveBeenCalled();
     rejectCreation = false;
@@ -286,7 +286,7 @@ describe("CreateCustomerDialog", () => {
     await user.click(screen.getByRole("button", { name: "Open customer form" }));
     expect(screen.getByLabelText("Customer name")).toHaveValue("");
     const reopenedGroup = within(screen.getByRole("row", { name: "default_user" }));
-    expect(reopenedGroup.getByRole("spinbutton", { name: "Spend limit (USD)" })).toHaveValue(50);
+    expect(reopenedGroup.getByRole("spinbutton", { name: "Max Budget (USD)" })).toHaveValue(50);
     expect(reopenedGroup.getByRole("combobox", { name: "Reset period" })).toHaveTextContent("/ mo");
     expect(screen.getByRole("combobox", { name: "New members join" })).toHaveTextContent("default_user");
   });

@@ -1,11 +1,13 @@
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, TypeVar
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 
+import litellm
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret_str
 
 
@@ -83,3 +85,38 @@ class OpenAILikeBase:
             elif endpoint_type == "embeddings":
                 api_base = join_api_base(api_base, "embeddings")
         return api_base, headers
+
+
+_HeaderValue: Final = TypeVar("_HeaderValue")
+
+
+def with_canonical_authorization(
+    custom_llm_provider: str | None,
+    headers: dict[str, _HeaderValue] | None,  # mutable-ok: callers pass it on to handlers typed dict
+) -> dict[str, _HeaderValue] | None:  # mutable-ok: same
+    if headers is None or not JSONProviderRegistry.exists(custom_llm_provider or ""):
+        return headers
+    return {"Authorization" if name.lower() == "authorization" else name: value for name, value in headers.items()}
+
+
+def _sets_authorization(headers: Mapping[str, object] | None) -> bool:
+    return headers is not None and any(name.lower() == "authorization" for name in headers)
+
+
+def missing_json_provider_key_error(
+    custom_llm_provider: str | None,
+    model: str,
+    api_key: str | None,
+    uses_openai_client: bool,
+    forwarded_headers: Mapping[str, object] | None = None,
+) -> AuthenticationError | None:
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    if json_provider is None or uses_openai_client:
+        return None
+    if api_key or litellm.api_key or _sets_authorization(forwarded_headers):
+        return None
+    return AuthenticationError(
+        message=f"Set {json_provider.api_key_env} or pass api_key",
+        llm_provider=json_provider.slug,
+        model=model,
+    )

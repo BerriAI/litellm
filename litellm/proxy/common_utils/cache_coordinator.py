@@ -18,30 +18,16 @@ from typing import Final, Protocol, TypeVar
 from litellm._logging import verbose_proxy_logger
 
 T = TypeVar("T")
+K = TypeVar("K")
+K_contra = TypeVar("K_contra", contravariant=True)
 
 
-class AsyncCacheProtocol(Protocol[T]):
-    """Protocol for cache backends used by EventDrivenCacheCoordinator.
+class AsyncCacheProtocol(Protocol[K_contra, T]):
+    """Protocol for cache backends used by EventDrivenCacheCoordinator."""
 
-    Matches ``DualCache`` / ``UserApiKeyCache`` call shapes (explicit optional params
-    before ``**kwargs``), not only ``(key, **kwargs)``, so overloads validate.
-    """
+    async def async_get_cache(self, key: K_contra) -> T | None: ...
 
-    async def async_get_cache(
-        self,
-        key: str,
-        parent_otel_span: object = None,
-        local_only: bool = False,
-        **kwargs: object,
-    ) -> T | None: ...
-
-    async def async_set_cache(
-        self,
-        key: str,
-        value: T,
-        local_only: bool = False,
-        **kwargs: object,
-    ) -> object: ...
+    async def async_set_cache(self, key: K_contra, value: T) -> object: ...
 
 
 class EventDrivenCacheCoordinator:
@@ -64,7 +50,7 @@ class EventDrivenCacheCoordinator:
         self._query_in_progress = False
         self._log_prefix = log_prefix
 
-    async def _get_cached(self, cache_key: str, cache: AsyncCacheProtocol[T]) -> T | None:
+    async def _get_cached(self, cache_key: K, cache: AsyncCacheProtocol[K, T]) -> T | None:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
@@ -97,8 +83,8 @@ class EventDrivenCacheCoordinator:
     async def _wait_for_signal_and_get(
         self,
         event: asyncio.Event,
-        cache_key: str,
-        cache: AsyncCacheProtocol[T],
+        cache_key: K,
+        cache: AsyncCacheProtocol[K, T],
     ) -> T | None:
         """Wait for loader to finish, then read from cache."""
         await event.wait()
@@ -117,8 +103,8 @@ class EventDrivenCacheCoordinator:
 
     async def _load_and_cache(
         self,
-        cache_key: str,
-        cache: AsyncCacheProtocol[T],
+        cache_key: K,
+        cache: AsyncCacheProtocol[K, T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """Double-check cache, run load_fn, set cache, return value. Caller must call _signal_done in finally."""
@@ -162,8 +148,8 @@ class EventDrivenCacheCoordinator:
 
     async def get_or_load(
         self,
-        cache_key: str,
-        cache: AsyncCacheProtocol[T],
+        cache_key: K,
+        cache: AsyncCacheProtocol[K, T],
         load_fn: Callable[[], Awaitable[T]],
     ) -> T | None:
         """

@@ -109,7 +109,7 @@ from litellm.router_rust.invoke.endpoints import (
     is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
-    pinned_vector_store_file_deployment,
+    pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -152,6 +152,7 @@ from litellm.router_rust.steps.precall import (
     declares_no_vision,
     refuses_decisions_media,
     request_carries_image,
+    request_carries_json_input,
     serves_route_capability,
 )
 from litellm.router_rust.steps.prerouting import PreRouter, PreRoutingStrategies, picks_async
@@ -1050,12 +1051,14 @@ def unsupported_arguments(config: RouterConfig) -> frozenset[str]:
     return unserved
 
 
-def _listing_team_id(request: Mapping[str, object]) -> str | None:
-    """``(kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")``: the team
-    ``async_function_with_fallbacks_common_utils`` lists a group for reads this bucket alone."""
+def _listing_team_id(request: Mapping[str, object], team_id: str | None) -> str | None:
+    """The resolved team, else the ``metadata`` bucket's own string team id: an empty one keeps listing only
+    deployments no team owns."""
+    if team_id is not None:
+        return team_id
     metadata: Final = as_str_mapping(request.get("metadata"))
-    team_id: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
-    return team_id if isinstance(team_id, str) else None
+    written: Final = metadata.get("user_api_key_team_id") if metadata is not None else None
+    return written if isinstance(written, str) else None
 
 
 def _strings(value: object) -> "tuple[str, ...]":
@@ -1114,10 +1117,11 @@ class RequestStartFields(BaseModel):
 def _request_start_fields(request: Mapping[str, object]) -> RequestStartFields:
     strategy: Final = request.get("routing_strategy")
     override: Final = normalize_strategy(strategy) if isinstance(strategy, str | RoutingStrategy) else None
+    team_id: Final = get_request_team_id(request)
     fields: Final = {
         **request,
-        "team_id": get_request_team_id(request),
-        "listing_team_id": _listing_team_id(request),
+        "team_id": team_id,
+        "listing_team_id": _listing_team_id(request, team_id),
         "routing_strategy": override,
     }
     try:
@@ -1514,6 +1518,9 @@ class RustCore(
     RustOptionalChecks,
 ):
     """A ``RouterCore`` served by the Rust router core over a ``PythonHost``. It holds no Python core."""
+
+    if TYPE_CHECKING:
+        explicit_allowed_fails: object
 
     def __init__(self, config: RouterConfig, host: PythonHost, resolved: Resolved) -> None:
         from litellm._service_logger import ServiceLogging
@@ -2851,7 +2858,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
-        fields.update(pinned_vector_store_file_deployment(plan, request))
+        fields.update(pinned_request_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))
@@ -2889,7 +2896,7 @@ class RustCore(
         # drops the others, and a Decisions call carrying media skips the deployments refusing it.
         handler: Final = plan.handler
         decisions_media: Final = handler in DECISIONS_MEDIA_CALL_TYPES and bool(
-            request.get("audio") or request.get("videos")
+            request.get("audio") or request.get("videos") or request_carries_json_input(request.get("input"))
         )
         return {
             **_request_narrowing(request),
@@ -3503,17 +3510,25 @@ class RustCore(
     def _media_refusing(
         self, step: Mapping[str, object], request: Mapping[str, object]
     ) -> list[str]:  # mutable-ok: the step's answer
-        """The candidates that refuse the audio or videos a Decisions call carries."""
+        """The candidates that refuse the audio, videos or JSON input a Decisions call carries."""
+        from litellm.decisions.call import routed_decision_input
+
         group: Final = str(step.get("model_group"))
         defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
         sent: Final = {**defaults, **request}
         audio: Final = bool(request.get("audio"))
         videos: Final = bool(request.get("videos"))
+        decision_input: Final = routed_decision_input(request.get("input"))
         return [
             str(id)
             for id in _as_list(step.get("candidates"))
             if refuses_decisions_media(
-                as_str_mapping(self._handle.deployment(str(id))) or {}, group, sent, audio=audio, videos=videos
+                as_str_mapping(self._handle.deployment(str(id))) or {},
+                group,
+                sent,
+                audio=audio,
+                videos=videos,
+                decision_input=decision_input,
             )
         ]
 
@@ -4389,6 +4404,20 @@ def _with_live_params(core: "RustCore", deployment: Mapping[str, object]) -> Map
     }
 
 
+def _validate_deployment_guardrails(deployment: Mapping[str, object]) -> None:
+    params: Final = as_str_mapping(deployment.get("litellm_params"))
+    guardrails: Final = params.get("guardrails") if params is not None else None
+    if not guardrails:
+        return
+
+    from litellm.proxy.request_auth_context import REQUEST_AUTH
+
+    if REQUEST_AUTH.get() is not None:
+        from litellm.proxy.guardrails.guardrail_helpers import reject_unregistered_deployment_guardrails
+
+        reject_unregistered_deployment_guardrails(guardrails)
+
+
 def _custom_pick(picked: object) -> Mapping[str, object]:
     """A custom strategy's answer as the deployment document the Rust core serves."""
     document: Final = as_str_mapping(picked)
@@ -4989,6 +5018,8 @@ class _Driver:
                     self._level_errors.get(at + 1),
                     self._walk.hop_kwargs(event),
                 )
+                if event.get("succeeded") is not True:
+                    self._walk.log_failed_hop(event, self._level_errors.get(at + 1))
                 if (
                     event.get("succeeded") is not True
                     and id(self._level_errors.get(at + 1)) not in self._recorded_blocked
@@ -5143,13 +5174,11 @@ class _Driver:
             self._attempt_started,
         )
         model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
-        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"))
-        # A call under credentials the request supplied ran as a request-scoped deployment
+        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"), served)  # pyright: ignore[reportUnknownArgumentType]  # see above
+        # A call under an api_key or api_base the request supplied ran as a request-scoped deployment
         # (`_handle_clientside_credential`): its failure is never the shared deployment's.
         ran_as: Final = (as_str_mapping(as_str_mapping(served).get("model_info") if served else None) or {}).get("id")  # pyright: ignore[reportUnknownArgumentType]  # see above
-        request_scoped: Final = self._core.ran_as_request_deployment(
-            ran_as, model_info.get("id")
-        ) or self._caller_entra_failure(error, served, model_info.get("id"))  # pyright: ignore[reportUnknownArgumentType]  # see above
+        request_scoped: Final = self._core.ran_as_request_deployment(ran_as, model_info.get("id"))
         return {
             **attempt_failure(error),
             "detail": detail,
@@ -5182,23 +5211,6 @@ class _Driver:
             return False
         self._recorded_blocked.add(id(error))
         return True
-
-    def _caller_entra_failure(self, error: BaseException, sent: Mapping[str, object], deployment_id: object) -> bool:
-        """``is_caller_entra_credential_failure``: Entra ID rejected a credential the caller sent, not
-        the deployment's own, so the failure is the caller's."""
-        from litellm.router_utils.cooldown_handlers import is_caller_entra_credential_failure
-
-        if not isinstance(deployment_id, str):
-            return False
-        hosted: Final = self._core._hosted  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        defaults: Final = {k: v for k, v in self._core._resolved.default_litellm_params.items() if v is not None}  # pyright: ignore[reportPrivateUsage]  # see above
-        return is_caller_entra_credential_failure(
-            hosted._core_get_deployment(deployment_id),  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
-            defaults,
-            {"litellm_params": sent},
-            getattr(error, "status_code", ""),
-            error,
-        )
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
@@ -5450,6 +5462,8 @@ class _Driver:
     async def _routed_attempt(self, step: Mapping[str, object], attempt: RoutedAttempt) -> Mapping[str, object]:
         step = await self._resolve_pods(step)  # rebind-ok: the picked deployment, resolved to a pod
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: the picked one
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: built inside the try
         # Whether a failure raised now runs the failure callbacks: none raised before the litellm
         # call or after it answered does, nor any but the first on a shared logging object.
@@ -5552,6 +5566,8 @@ class _Driver:
     def attempt_sync(self, step: Mapping[str, object]) -> Mapping[str, object]:
         step = self._resolve_pods_sync(step)  # rebind-ok: see attempt
         deployment: Mapping[str, object] = as_str_mapping(step.get("deployment")) or {}  # rebind-ok: see attempt
+        # A guardrail configuration error is terminal and never a provider attempt failure.
+        _validate_deployment_guardrails(deployment)
         call: AttemptCall | None = None  # rebind-ok: see attempt
         logs_failure: bool = False  # rebind-ok: see attempt
         in_call: bool = False  # rebind-ok: see attempt
@@ -5758,7 +5774,9 @@ class _Driver:
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
         try:
-            return self._failure(step)
+            failure: Final = self._failure(step)
+            self._walk.log_client_seen(failure)
+            return failure
         finally:
             self.clear_errors()
 
