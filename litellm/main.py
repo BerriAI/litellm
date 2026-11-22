@@ -144,16 +144,14 @@ from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
 from litellm.llms.base_llm.chat.transformation import with_attribution_headers
-from litellm.llms.bedrock.chat.unresolved_arn_thinking_hint import with_unresolved_arn_thinking_hint
+from litellm.llms.bedrock.chat.unresolved_arn_thinking_hint import call_with_unresolved_arn_thinking_hint
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
-    bedrock_capability_model,
     bedrock_route_for_request,
     bedrock_strict_tools_fallback,
     deployment_model_info,
     for_bedrock_json_tool_retry,
-    is_bedrock_application_inference_profile_arn,
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
@@ -4571,31 +4569,33 @@ def _complete_bedrock(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
                 else None
             ),
         )
-        response = (
-            with_unresolved_arn_thinking_hint(converse_call)
-            if is_bedrock_application_inference_profile_arn(
-                bedrock_capability_model(converse_model, litellm_params.get("base_model"))
-            )
-            else converse_call()
+        response = call_with_unresolved_arn_thinking_hint(
+            converse_model, litellm_params.get("base_model"), converse_call
         )
     elif bedrock_route == "converse_like":
-        model = model.replace("converse_like/", "")
-        response = base_llm_http_handler.completion(
-            model=model,
-            stream=stream,
-            messages=messages,
-            acompletion=acompletion,
-            api_base=api_base,
-            model_response=model_response,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            custom_llm_provider="bedrock",
-            timeout=timeout,
-            headers=headers,
-            encoding=_get_encoding(),
-            api_key=api_key,
-            logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
-            client=client,
+        converse_like_model: Final = model.replace("converse_like/", "")
+
+        def converse_like_attempt() -> NativeOutputAttemptResult:
+            return base_llm_http_handler.completion(
+                model=converse_like_model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                custom_llm_provider="bedrock",
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
+                client=client,
+            )
+
+        response = call_with_unresolved_arn_thinking_hint(
+            converse_like_model, litellm_params.get("base_model"), converse_like_attempt
         )
     else:
 
