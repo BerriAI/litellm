@@ -951,7 +951,7 @@ def _call_id_candidates(call_id: str) -> Iterator[str]:
 
 
 def _call_id_replacements(items: Sequence[object], overlong: Sequence[str]) -> Mapping[str, str]:
-    taken: Final = {  # mutable-ok: one request-local set keeps each claim O(1) instead of copying every taken id
+    taken: Final = {
         call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
     }
 
