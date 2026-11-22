@@ -1041,6 +1041,7 @@ _EXPECTED_CUSTOMER = {
         "search_tools": [],
         "mcp_tool_search_enabled": None,
         "skills": None,
+        "apps": None,
     },
 }
 
@@ -1367,7 +1368,7 @@ def _end_user_cache_doubles():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             mock_publish,
         ),
     ):

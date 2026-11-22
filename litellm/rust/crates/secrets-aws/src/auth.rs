@@ -51,6 +51,7 @@ impl Credentials {
                 sts_endpoint: settings.aws_sts_endpoint.clone(),
                 session_tags: None,
                 session_policy: None,
+                require_session_attribution: false,
             },
             environment,
         }

@@ -10,6 +10,9 @@ on:
     branches:
       - main
       - "litellm_**"
+      - "rc/**"
+      - "stable/**"
+      - "lts/**"
     paths:
       - "litellm/rust/**"
       - "model_prices_and_context_window.json"
@@ -17,7 +20,7 @@ on:
       - "litellm/scripts/generate_trace_types.py"
       - "litellm/scripts/trace_codegen/**"
       - "litellm/scripts/lens_assets/**"
-      - "litellm/tracing/**"
+      - "litellm/integrations/lens/**"
       - "tests/test_litellm_rust/**"
       - "litellm/integrations/custom_logger.py"
       - "litellm/litellm_core_utils/litellm_logging.py"

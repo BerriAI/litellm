@@ -53,7 +53,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     delete_cache_team_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
@@ -1753,11 +1753,12 @@ async def get_service_provider_config(request: Request):
         request.url,
         safe_get_request_headers(request),
     )
-    meta: Final = {
-        "resourceType": "ServiceProviderConfig",
-        "location": str(request.url),
-    }
-    return SCIMServiceProviderConfig(meta=meta)
+    return SCIMServiceProviderConfig(
+        meta={
+            "resourceType": "ServiceProviderConfig",
+            "location": str(request.url),
+        }
+    )
 
 
 def _parse_scim_eq_filter(scim_filter: str) -> tuple[str, str] | None:

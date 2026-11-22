@@ -16,7 +16,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, iter_items, require_get
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 
@@ -153,7 +153,7 @@ CREDENTIAL_VALUES: Final[list[CredentialsValue]] = [
 ]
 
 
-def init_conf(profile: str | None = None) -> dict[str, object]:
+def init_conf(profile: str | None = None) -> object:
     """
     Loads config JSON from:
       1) $AICORE_CONFIG if set, otherwise
@@ -172,7 +172,7 @@ def init_conf(profile: str | None = None) -> dict[str, object]:
     if cfg_path and cfg_path.exists():
         try:
             with cfg_path.open(encoding="utf-8") as f:
-                return json.load(f)
+                return _DECODED_JSON.validate_python(json.load(f))
         except json.JSONDecodeError:
             raise KeyError(f"{cfg_path} is not valid JSON. Please fix or remove it!")
 
@@ -181,6 +181,12 @@ def init_conf(profile: str | None = None) -> dict[str, object]:
         raise FileNotFoundError(f"Unable to locate profile config file at '{cfg_path}' in AICORE_HOME '{home}'")
 
     return {}
+
+
+def _config_credential(config: object, name: str) -> str | None:
+    values: Final = require_get(config)
+    prefixed: Final = f"AICORE_{name.upper()}"
+    return _str_or_none(values.get(prefixed) if values.get(prefixed) is not None else values.get(name))
 
 
 def _env_name(name: str) -> str:
@@ -292,14 +298,7 @@ def fetch_credentials(
             "environment variables",
             lambda cv: _str_or_none(os.environ.get(f"AICORE_{cv.name.upper()}")),
         ),
-        Source(
-            "config file",
-            lambda cv: _str_or_none(
-                config.get(f"AICORE_{cv.name.upper()}")
-                if config.get(f"AICORE_{cv.name.upper()}") is not None
-                else config.get(cv.name)
-            ),
-        ),
+        Source("config file", lambda cv: _config_credential(config, cv.name)),
         Source(
             "VCAP service",
             lambda cv: (

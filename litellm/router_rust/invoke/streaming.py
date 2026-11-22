@@ -241,7 +241,9 @@ class StreamAttempt:
         failure log marks the same object before this runs."""
         if self._claim() and "async_failure" not in self.failure_logged_before:
             self.failure_recording = _record_in_background(
-                self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False))
+                self.core.report_stream_failure(
+                    self._failure_logged(error), self._callbacks(sync=False), sent=self.request
+                )
             )
 
     async def failure_recorded(self) -> None:
@@ -254,7 +256,9 @@ class StreamAttempt:
         """The stream failed before its attempt returned it. ``_dispatch_stream_failure`` logs that in
         a task of its own, so the record reads the error as the router left it by then, with its
         routing note when no real suspension came first. The attempt checked the logging object."""
-        _record_in_background(self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False)))
+        _record_in_background(
+            self.core.report_stream_failure(self._failure_logged(error), self._callbacks(sync=False), sent=self.request)
+        )
 
     def report_success_sync(self) -> None:
         """A sync stream ended: a sync call's success callback counts the success alone."""
@@ -265,7 +269,9 @@ class StreamAttempt:
         """A sync stream failed after it opened: counted and cooled down, with no request counted."""
         if self._claim() and "sync_failure" not in self.failure_logged_before:
             logged: Final = self._failure_logged(error)
-            _record_now(lambda: self.core.report_stream_failure_sync(logged, self._callbacks(sync=True)))
+            _record_now(
+                lambda: self.core.report_stream_failure_sync(logged, self._callbacks(sync=True), sent=self.request)
+            )
 
 
 # --- reporting a stream's outcome ---------------------------------------------------------------
@@ -1841,7 +1847,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
             ):
                 if not response_id_exposed and background_stream_can_release(item):
                     response_id_exposed = True
-                if not response_id_exposed and _responses_stream_holds_event(item, len(held)):
+                if not output_started and not response_id_exposed and _responses_stream_holds_event(item, len(held)):
                     held = (*held, item)
                     continue
                 for held_event in held:
