@@ -134,7 +134,6 @@ SAFE_BODY_FIELDS: Final[frozenset[str]] = frozenset(
         "presence_penalty",
         "reasoning",
         "reasoning_effort",
-        "response_format",
         "seed",
         "service_tier",
         "store",
@@ -204,6 +203,47 @@ _SAFE_ID_PREFIXES: Final[tuple[str, ...]] = (
 _HEX_OR_B64_SECRET_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\b(?=[A-Za-z0-9+/=_-]{28,}\b)(?=[A-Za-z0-9+/=_-]*[0-9])(?=[A-Za-z0-9+/=_-]*[A-Za-z])[A-Za-z0-9+/=_-]{28,}\b"
 )
+
+_SAFE_MODEL_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._:/@-]{1,128}$")
+_IPV4_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<![0-9.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![0-9.])"
+)
+_IPV6_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"(?<![0-9A-Fa-f:])(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}(?![0-9A-Fa-f:])"
+)
+
+
+def _sanitize_model_name(
+    raw_model: str,
+    sanitized_model: str | None = None,
+    sanitized_model_group: str | None = None,
+) -> str:
+    fallback = sanitized_model_group or sanitized_model
+    if not raw_model:
+        return fallback or ""
+    if not _SAFE_MODEL_NAME_PATTERN.match(raw_model):
+        return fallback if isinstance(fallback, str) and fallback else MASKED_VALUE
+    if isinstance(fallback, str) and fallback:
+        raw_bare = raw_model.rsplit("/", 1)[-1]
+        fb_bare = fallback.rsplit("/", 1)[-1]
+        if fallback != raw_model and fb_bare != raw_bare:
+            if not _SAFE_MODEL_NAME_PATTERN.match(fallback) or fallback in ("invalid-model", "unknown", "redacted"):
+                return fallback
+            if sanitized_model and sanitized_model == sanitized_model_group and raw_bare != fb_bare:
+                return fallback
+    return raw_model
+
+
+def _summarize_response_format(value: Any) -> dict[str, Any]:
+    out: dict[str, Any] = {"bytes": _estimate_size(value)}
+    if isinstance(value, Mapping):
+        rf_type = value.get("type")
+        if isinstance(rf_type, str):
+            out["type"] = _truncate_str(rf_type, 32)
+        js = value.get("json_schema")
+        if isinstance(js, Mapping) and isinstance(js.get("strict"), bool):
+            out["strict"] = js["strict"]
+    return out
 
 
 def _truncate_str(value: str, max_len: int) -> str:
@@ -278,6 +318,7 @@ def _scrub_text(
     runtime_secrets: tuple[str, ...] = (),
     credential_name: str | None = None,
     scrub_high_entropy: bool = False,
+    redact_ip_addresses: bool = False,
 ) -> tuple[str, bool]:
     changed = False
     out = value[:MAX_REGEX_SCAN_LEN] if len(value) > MAX_REGEX_SCAN_LEN else value
@@ -306,6 +347,17 @@ def _scrub_text(
         if new_out != out:
             out = new_out
             changed = True
+    if redact_ip_addresses and len(out) >= 7:
+        if "." in out:
+            new_out = _IPV4_PATTERN.sub(MASKED_VALUE, out)
+            if new_out != out:
+                out = new_out
+                changed = True
+        if ":" in out:
+            new_out = _IPV6_PATTERN.sub(MASKED_VALUE, out)
+            if new_out != out:
+                out = new_out
+                changed = True
     return out, changed
 
 
@@ -356,6 +408,7 @@ def _sanitize_url(
     url: str,
     credential_name: str | None = None,
     runtime_secrets: tuple[str, ...] = (),
+    redact_ip_addresses: bool = False,
 ) -> str:
     if not url:
         return ""
@@ -379,7 +432,7 @@ def _sanitize_url(
                     sanitized_q.append((k, MASKED_VALUE))
             query = urlencode(sanitized_q)
         rebuilt = urlunsplit((parts.scheme, netloc, parts.path, query, ""))
-        rebuilt, _ = _scrub_text(rebuilt, runtime_secrets=runtime_secrets, credential_name=credential_name)
+        rebuilt, _ = _scrub_text(rebuilt, runtime_secrets=runtime_secrets, credential_name=credential_name, redact_ip_addresses=redact_ip_addresses)
         return _truncate_str(rebuilt, MAX_HEADER_VALUE_LEN)
     except Exception:
         return MASKED_VALUE
@@ -443,6 +496,7 @@ def _sanitize_headers(
     replace_action: str = "replace:credential_name",
     strip_provider_prefix: bool = False,
     runtime_secrets: tuple[str, ...] = (),
+    redact_ip_addresses: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
     if not isinstance(raw_headers, Mapping):
         return {}, {}
@@ -468,6 +522,7 @@ def _sanitize_headers(
                 val_str,
                 runtime_secrets=runtime_secrets,
                 credential_name=credential_label,
+                redact_ip_addresses=redact_ip_addresses,
             )
             headers_out[key_str] = _truncate_str(scrubbed, MAX_HEADER_VALUE_LEN)
             if was_scrubbed:
@@ -500,6 +555,8 @@ def _summarize_body(
             else:
                 params[key_str] = MASKED_VALUE
                 process_body[key_str] = "mask"
+        elif lower_key == "response_format":
+            params[key_str] = _summarize_response_format(v)
         elif lower_key in SAFE_BODY_FIELDS:
             if isinstance(v, (bool, int, float)) or v is None:
                 params[key_str] = v
@@ -551,6 +608,7 @@ def capture_external_egress(
     additional_args: Any,
     model_call_details: Mapping[str, Any],
     api_key: Any = None,
+    redact_ip_addresses: bool = False,
 ) -> dict[str, Any]:
     args = additional_args if isinstance(additional_args, Mapping) else {}
     litellm_params = model_call_details.get("litellm_params")
@@ -564,6 +622,7 @@ def capture_external_egress(
         credential_label=credential_name,
         replace_action="replace:credential_name",
         runtime_secrets=runtime_secrets,
+        redact_ip_addresses=redact_ip_addresses,
     )
     body_params, process_body, raw_body_keys = _summarize_body(
         args.get("complete_input_dict") or {},
@@ -618,6 +677,9 @@ def build_gateway_io_metadata(
     api_base: str | None,
     response_obj: object = None,
     sanitized_error_info: Mapping[str, Any] | None = None,
+    sanitized_model: str | None = None,
+    sanitized_model_group: str | None = None,
+    redact_ip_addresses: bool = False,
 ) -> dict[str, Any]:
     psr = litellm_params.get("proxy_server_request")
     psr_map = psr if isinstance(psr, Mapping) else {}
@@ -637,11 +699,22 @@ def build_gateway_io_metadata(
         credential_label=key_label,
         replace_action="replace:key_alias",
         runtime_secrets=in_secrets,
+        redact_ip_addresses=redact_ip_addresses,
     )
     raw_route = str(psr_map.get("url") or metadata.get("user_api_key_request_route") or "")
+    raw_in_model = str(psr_body_map.get("model") or metadata.get("model_group") or "")
     internal_ingress: dict[str, Any] = {
-        "route": _sanitize_url(raw_route, credential_name=key_label, runtime_secrets=in_secrets),
-        "model": str(psr_body_map.get("model") or metadata.get("model_group") or ""),
+        "route": _sanitize_url(
+            raw_route,
+            credential_name=key_label,
+            runtime_secrets=in_secrets,
+            redact_ip_addresses=redact_ip_addresses,
+        ),
+        "model": _sanitize_model_name(
+            raw_in_model,
+            sanitized_model=sanitized_model,
+            sanitized_model_group=sanitized_model_group,
+        ),
         "headers": in_headers,
         "body_bytes": _estimate_size(psr_body),
     }
@@ -706,12 +779,25 @@ def build_gateway_io_metadata(
         if hk.lower() not in in_header_lower and hk not in ext_proc_header:
             ext_proc_header[hk] = "add"
 
+    if isinstance(ext_body_params.get("model"), str):
+        ext_body_params["model"] = _sanitize_model_name(
+            ext_body_params["model"],
+            sanitized_model=sanitized_model,
+            sanitized_model_group=sanitized_model_group,
+        )
+    if redact_ip_addresses and ext_headers:
+        for hk, hv in list(ext_headers.items()):
+            scrubbed_hv, was_ip = _scrub_text(hv, redact_ip_addresses=True)
+            if was_ip:
+                ext_headers[hk] = scrubbed_hv
+                ext_proc_header[hk] = "mask"
+
     in_body_keys = {str(k) for k in psr_body_map}
     if in_body_keys:
         for bk in ext_raw_keys:
             if bk not in in_body_keys and bk not in ext_proc_body:
                 ext_proc_body[bk] = "add"
-        in_model = psr_body_map.get("model")
+        in_model = internal_ingress.get("model")
         ext_model = ext_body_params.get("model")
         if isinstance(in_model, str) and isinstance(ext_model, str) and in_model != ext_model:
             ext_proc_body["model"] = "replace:model"
@@ -743,6 +829,7 @@ def build_gateway_io_metadata(
         credential_label=None,
         strip_provider_prefix=True,
         runtime_secrets=runtime_secrets,
+        redact_ip_addresses=redact_ip_addresses,
     )
     external_ingress: dict[str, Any] = {
         "status": status_str,
@@ -751,7 +838,11 @@ def build_gateway_io_metadata(
     }
     resp_model = response_obj_dict.get("model") if response_obj_dict else getattr(response_obj, "model", None)
     if isinstance(resp_model, str):
-        external_ingress["model"] = resp_model
+        external_ingress["model"] = _sanitize_model_name(
+            resp_model,
+            sanitized_model=sanitized_model,
+            sanitized_model_group=sanitized_model_group,
+        )
     resp_ap = (
         response_obj_dict.get("access_programs")
         if response_obj_dict
@@ -775,6 +866,7 @@ def build_gateway_io_metadata(
                 runtime_secrets=runtime_secrets,
                 credential_name=cred_name,
                 scrub_high_entropy=True,
+                redact_ip_addresses=redact_ip_addresses,
             )
             external_ingress["error_message"] = _truncate_str(scrubbed_err, MAX_ERROR_MSG_LEN)
     if resp_proc_header:
@@ -797,6 +889,7 @@ def attach_gateway_io_to_spend_log_payload(
     *,
     kwargs: Mapping[str, Any] | None,
     response_obj: object,
+    redact_ip_addresses: bool = False,
 ) -> Any:
     if not isinstance(payload, dict):
         return payload
@@ -833,6 +926,9 @@ def attach_gateway_io_to_spend_log_payload(
         api_base=str(payload.get("api_base") or ""),
         response_obj=response_obj,
         sanitized_error_info=sanitized_err if isinstance(sanitized_err, Mapping) else None,
+        sanitized_model=str(payload["model"]) if isinstance(payload.get("model"), str) else None,
+        sanitized_model_group=str(payload["model_group"]) if isinstance(payload.get("model_group"), str) else None,
+        redact_ip_addresses=redact_ip_addresses,
     )
     if isinstance(parsed_meta, dict):
         parsed_meta.pop("_gateway_credential_name", None)

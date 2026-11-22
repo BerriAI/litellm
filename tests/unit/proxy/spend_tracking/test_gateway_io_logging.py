@@ -163,3 +163,55 @@ def test_attach_gateway_io_to_spend_log_payload() -> None:
     assert "_gateway_credential_name" not in parsed_meta
     assert "internal" in parsed_meta["gateway_io"]
     assert "external" in parsed_meta["gateway_io"]
+
+
+
+def test_gateway_io_logging_redacts_rejected_model_schema_desc_and_ip() -> None:
+    cap = capture_external_egress(
+        additional_args={
+            "api_base": "https://api.openai.com/v1/responses",
+            "headers": {"x-correlation-id": "client-203.0.113.9"},
+            "complete_input_dict": {
+                "model": "opus-4.6 Please summarize\nPatient has diabetes",
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "med_record",
+                        "strict": True,
+                        "description": "PRIVATE_SCHEMA_DESC",
+                        "schema": {"type": "object"},
+                    },
+                },
+            },
+        },
+        model_call_details={"litellm_params": {}},
+        redact_ip_addresses=True,
+    )
+    res = build_gateway_io_metadata(
+        kwargs={"_gateway_external_egress": cap, "exception": types.SimpleNamespace(status_code=400)},
+        metadata={"status": "failure"},
+        litellm_params={
+            "proxy_server_request": {
+                "url": "/v1/responses",
+                "headers": {"x-correlation-id": "client-203.0.113.9"},
+                "body": {"model": "opus-4.6 Please summarize\nPatient has diabetes"},
+            }
+        },
+        response_obj_dict={},
+        standard_logging_payload=None,
+        custom_llm_provider="openai",
+        api_base="",
+        response_obj=None,
+        sanitized_error_info={"error_class": "BadRequestError", "error_message": "bad model"},
+        sanitized_model="invalid-model",
+        sanitized_model_group="invalid-model",
+        redact_ip_addresses=True,
+    )
+    out = json.dumps(res)
+    for leaked in ("Patient has diabetes", "PRIVATE_SCHEMA_DESC", "203.0.113.9"):
+        assert leaked not in out
+    assert res["internal"]["ingress"]["model"] == "invalid-model"
+    assert res["external"]["egress"]["body_params"]["model"] == "invalid-model"
+    assert res["external"]["egress"]["body_params"]["response_format"]["type"] == "json_schema"
+    assert res["external"]["egress"]["body_params"]["response_format"]["strict"] is True
+    assert res["external"]["egress"]["headers"]["x-correlation-id"] == "client-***"
