@@ -224,7 +224,7 @@ async def acreate(
     system_instruction: str | None = None,
     description: str | None = None,
     tools: Sequence[Mapping[str, object]] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse:
     """Async: Create a managed agent on the provider side."""
     local_vars: Final = locals()
@@ -279,7 +279,7 @@ def create(
     system_instruction: str | None = None,
     description: str | None = None,
     tools: Sequence[Mapping[str, object]] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
     """
     Sync: Create a managed agent on the provider side.
@@ -355,7 +355,7 @@ async def alist(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentListResponse:
     """Async: List all agents on the provider side."""
     local_vars: Final = locals()
@@ -389,7 +389,7 @@ def list(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentListResponse | Coroutine[object, object, AgentListResponse]:
     """Sync: List all agents on the provider side."""
     local_vars: Final = locals()
@@ -431,7 +431,7 @@ async def aget(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse:
     """Async: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -470,7 +470,7 @@ def get(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
     """Sync: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -514,7 +514,7 @@ async def adelete(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentDeleteResult:
     """Async: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -553,7 +553,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentDeleteResult | Coroutine[object, object, AgentDeleteResult]:
     """Sync: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -599,7 +599,7 @@ async def alist_versions(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentVersionsResponse:
     """Async: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -638,7 +638,7 @@ def list_versions(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentVersionsResponse | Coroutine[object, object, AgentVersionsResponse]:
     """Sync: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
