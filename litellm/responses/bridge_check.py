@@ -453,6 +453,7 @@ def should_route_to_interactions_api(
     deployment_model_info: object = None,
     skip_bridge: object = False,
     candidate_count: object = None,
+    asks_for_logprobs: bool = False,
 ) -> bool:
     if bool(skip_bridge):
         return False
@@ -485,6 +486,7 @@ def should_route_to_interactions_api(
         _is_gemini_4_or_newer(model)
         and litellm.vertex_ai_safety_settings is None
         and candidate_count in _ONE_CANDIDATE
+        and not asks_for_logprobs
         and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
         and not _relies_on_ambient_vertex_location(custom_llm_provider, str_keyed_mapping(optional_params), llm_map)
     )

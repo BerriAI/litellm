@@ -6168,6 +6168,7 @@ def completion(
             deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
             skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
             candidate_count=n,
+            asks_for_logprobs=logprobs is True or top_logprobs is not None,
         )
         drops_tool_choice: Final = drops_unsupported_allowed_tools_tool_choice(
             tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic

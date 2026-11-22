@@ -574,6 +574,7 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
             {"optional_params": {"extra_body": {"cachedContent": "cachedContents/abc"}}},
             False,
         ),
+        ("gemini-4-neon", "gemini", {"asks_for_logprobs": True}, False),
     ),
 )
 def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do_not(
