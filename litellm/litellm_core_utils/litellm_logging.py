@@ -2423,6 +2423,8 @@ class Logging(LiteLLMLoggingBaseClass):
         return self.call_type if isinstance(self.call_type, str) else str(self.call_type)
 
     def claim_sync_success_log(self) -> bool:
+        if self.stream:
+            return True
         if self._sync_success_scheduled:
             return False
         self._sync_success_scheduled = True
@@ -4317,7 +4319,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        if not self.stream and not self.claim_sync_success_log():
+        if not self.claim_sync_success_log():
             return
         executor.submit(
             self.success_handler,
@@ -4335,8 +4337,9 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
-        if self.claim_sync_success_log():
-            executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
+        if not self.claim_sync_success_log():
+            return
+        executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict
         """The success-event payload with the request messages put back where `turn_off_message_logging`

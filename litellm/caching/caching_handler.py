@@ -821,17 +821,20 @@ class LLMCachingHandler:
             end_time (datetime): The end time of the operation.
             cache_hit (bool): Whether it was a cache hit.
         """
+        if not logging_obj.claim_async_success_log():
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-        if logging_obj.claim_async_success_log():
-            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                async_coroutine=logging_obj.async_success_handler(
-                    result=cached_result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                )
+        logging_obj.mark_async_success_log_enqueued()
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=logging_obj.async_success_handler(
+                result=cached_result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
             )
+        )
 
         logging_obj.handle_sync_success_callbacks_for_async_calls(
             result=cached_result,
