@@ -878,7 +878,9 @@ class CustomGuardrail(CustomLogger):
         supported_event_hooks: list[GuardrailEventHooks],
     ) -> None:
         allowed_hooks: Final = frozenset(supported_event_hooks) | (
-            frozenset((GuardrailEventHooks.logging_only,)) if self.accepts_logging_only_mode() else frozenset()
+            frozenset((GuardrailEventHooks.logging_only, GuardrailEventHooks.mcp_event))
+            if self.accepts_logging_only_mode()
+            else frozenset()
         )
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
