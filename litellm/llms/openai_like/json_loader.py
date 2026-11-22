@@ -5,12 +5,12 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 import os
 import platform
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import Annotated, Final, Protocol
 
-from pydantic import TypeAdapter
+from pydantic import Field, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._version import version as _LITELLM_VERSION
@@ -26,6 +26,9 @@ _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
 _STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
+    str | Annotated[tuple[str, ...], Field(min_length=1)]
+)
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
@@ -41,7 +44,9 @@ class SimpleProviderConfig:
     def __init__(self, slug: str, data: dict):
         self.slug = slug
         self.base_url: str = _STR_ADAPTER.validate_python(data["base_url"])
-        self.api_key_env: str = data["api_key_env"]
+        api_key_env: Final = _API_KEY_ENV_ADAPTER.validate_python(data["api_key_env"])
+        self.api_key_envs: Final[tuple[str, ...]] = (api_key_env,) if isinstance(api_key_env, str) else api_key_env
+        self.api_key_env: str = self.api_key_envs[0]
         self.api_base_env: str | None = data.get("api_base_env")
         self.base_class = data.get("base_class", "openai_gpt")
         self.user_agent: str | None = _STR_ADAPTER.validate_python(data["user_agent"]) if "user_agent" in data else None
@@ -70,6 +75,9 @@ class SimpleProviderConfig:
         self.provider_info: ProviderSpecificModelInfo = (
             _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
         )
+
+    def api_key_from(self, lookup: Callable[[str], str | None]) -> str | None:
+        return next(filter(None, map(lookup, self.api_key_envs)), None)
 
     def default_base_url(self, model: str | None) -> str:
         if model is None:

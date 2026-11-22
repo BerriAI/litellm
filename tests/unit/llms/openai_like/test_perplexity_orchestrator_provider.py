@@ -3,11 +3,13 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
 import respx
 
 import litellm
-from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 ORCHESTRATOR_BASE: Final = "https://api.perplexity.ai/orchestrator/v1"
 HAIKU: Final = "perplexity_orchestrator/anthropic/claude-haiku-5-5"
@@ -31,10 +33,45 @@ def _row(model: str) -> Mapping[str, float]:
     return litellm.model_cost[model]
 
 
-def test_provider_resolution_keeps_the_vendor_prefix_the_orchestrator_requires(monkeypatch: pytest.MonkeyPatch):
-    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+def _messages_response(usage: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "id": "msg_orchestrator",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic/claude-haiku-5-5",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": dict(usage),
+    }
 
-    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-env-key")
+
+_RESPONSES_RESPONSE: Final = {
+    "id": "resp_orchestrator",
+    "object": "response",
+    "created_at": 1_795_300_000,
+    "model": "openai/gpt-6-luna",
+    "status": "completed",
+    "output": [
+        {
+            "id": "msg_orchestrator",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5},
+}
+
+
+@pytest.mark.parametrize("key_variable", ["PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"])
+def test_provider_resolution_keeps_the_vendor_prefix_the_orchestrator_requires(
+    monkeypatch: pytest.MonkeyPatch, key_variable: str
+):
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.setenv(key_variable, "pplx-env-key")
 
     model, provider, api_key, api_base = get_llm_provider(model=HAIKU)
 
@@ -43,6 +80,45 @@ def test_provider_resolution_keeps_the_vendor_prefix_the_orchestrator_requires(m
     assert api_key == "pplx-env-key"
     assert api_base == ORCHESTRATOR_BASE
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key_variable", ["PERPLEXITYAI_API_KEY", "PERPLEXITY_API_KEY"])
+async def test_either_perplexity_key_variable_authenticates_chat_responses_and_messages(
+    monkeypatch: pytest.MonkeyPatch, key_variable: str
+):
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_API_KEY", raising=False)
+    monkeypatch.setenv(key_variable, "pplx-env-key")
+    with respx.mock() as upstream:
+        routes: Final = (
+            upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+                200, json=_chat_response("openai/gpt-6-luna", {"prompt_tokens": 4, "completion_tokens": 1})
+            ),
+            upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE),
+            upstream.post(f"{ORCHESTRATOR_BASE}/messages").respond(
+                200, json=_messages_response({"input_tokens": 4, "output_tokens": 1})
+            ),
+        )
+        litellm.completion(model=GPT_LUNA, messages=[{"role": "user", "content": "hi"}])
+        litellm.responses(model=GPT_LUNA, input="hi")
+        await litellm.anthropic.messages.acreate(
+            model=HAIKU,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=8,
+            client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+        )
+
+    assert [route.calls.last.request.headers["authorization"] for route in routes] == ["Bearer pplx-env-key"] * 3
+
+
+def test_with_both_perplexity_key_variables_set_the_orchestrator_uses_the_key_the_perplexity_provider_uses(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PERPLEXITYAI_API_KEY", "pplx-ai-key")
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-key")
+
+    assert get_llm_provider(model=HAIKU)[2] == get_llm_provider(model="perplexity/sonar-pro")[2]
 
 def test_chat_request_sends_tools_and_maps_cache_control_to_the_orchestrator_breakpoint():
     tools: Final = [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
@@ -117,26 +193,7 @@ def test_a_param_the_orchestrator_rejects_answers_400_or_drops_under_drop_params
 
 def test_responses_request_goes_to_the_orchestrator_responses_route():
     with respx.mock() as upstream:
-        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(
-            200,
-            json={
-                "id": "resp_orchestrator",
-                "object": "response",
-                "created_at": 1_795_300_000,
-                "model": "openai/gpt-6-luna",
-                "status": "completed",
-                "output": [
-                    {
-                        "id": "msg_orchestrator",
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "ok", "annotations": []}],
-                    }
-                ],
-                "usage": {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5},
-            },
-        )
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
         response: Final = litellm.responses(model=GPT_LUNA, input="hi", api_key="pplx-test-key")
 
     request: Final = route.calls.last.request
@@ -146,30 +203,19 @@ def test_responses_request_goes_to_the_orchestrator_responses_route():
 
 
 @pytest.mark.asyncio
-async def test_messages_request_keeps_the_one_hour_cache_ttl_and_bills_it_at_the_one_hour_rate(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+async def test_messages_request_keeps_the_one_hour_cache_ttl_and_bills_it_at_the_one_hour_rate():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/messages").respond(
             200,
-            json={
-                "id": "msg_orchestrator",
-                "type": "message",
-                "role": "assistant",
-                "model": "anthropic/claude-haiku-5-5",
-                "content": [{"type": "text", "text": "ok"}],
-                "stop_reason": "end_turn",
-                "stop_sequence": None,
-                "usage": {
+            json=_messages_response(
+                {
                     "input_tokens": 10,
                     "cache_creation_input_tokens": 4500,
                     "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 4500},
                     "cache_read_input_tokens": 0,
                     "output_tokens": 20,
-                },
-            },
+                }
+            ),
         )
         response: Final = await litellm.anthropic.messages.acreate(
             model=HAIKU,
@@ -177,6 +223,7 @@ async def test_messages_request_keeps_the_one_hour_cache_ttl_and_bills_it_at_the
             messages=[{"role": "user", "content": "hi"}],
             max_tokens=32,
             api_key="pplx-test-key",
+            client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
         )
 
     request: Final = route.calls.last.request
