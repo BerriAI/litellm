@@ -83,7 +83,7 @@ class _Subscription:
     reserved: bool = False
 
 
-def _validate(
+def validate_subscription(
     context: OperationContext, params: SubscribeEventsParams, settings: EventsSettings, store: EventStore | None
 ) -> Result[_Request, EventsFailure]:
     if settings.public_base_url is None:
@@ -183,7 +183,7 @@ async def _roll_back(
     await _discard_pending(subscription)
 
 
-async def _activate(
+async def activate_subscription(
     subscription: _Subscription,
     upstream: SubscribeEventsResult,
     context: OperationContext,
@@ -262,7 +262,7 @@ async def _retire_if_moved(
     return row.model_copy(update={"status": "terminated"})
 
 
-async def _prepare(
+async def prepare_subscription(
     context: OperationContext,
     params: SubscribeEventsParams,
     headers: Mapping[str, str] | None,
@@ -299,7 +299,9 @@ async def _prepare(
     return Ok(_Subscription(base, existing, prepared.ok, params, opened.ok, binding, request))
 
 
-async def _reserve(subscription: _Subscription, settings: EventsSettings) -> Result[_Subscription, EventsFailure]:
+async def reserve_subscription(
+    subscription: _Subscription, settings: EventsSettings
+) -> Result[_Subscription, EventsFailure]:
     """Claim the subscription id before any upstream work, so racing subscribes share one row and one secret."""
     if subscription.existing is not None and subscription.existing.status == "pending":
         return Error(_BEING_CREATED)

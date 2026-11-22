@@ -12,11 +12,11 @@ from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret
 from litellm.proxy.mcp_server.events.webhooks.subscribe import (
-    _activate,
-    _prepare,  # pyright: ignore[reportPrivateUsage]  # the reservation step is the unit under test
     _Request,  # pyright: ignore[reportPrivateUsage]  # see above
-    _reserve,  # pyright: ignore[reportPrivateUsage]  # see above
-    _validate,
+    activate_subscription,
+    prepare_subscription,
+    reserve_subscription,
+    validate_subscription,
 )
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
@@ -75,12 +75,12 @@ async def test_a_reservation_past_the_cap_backs_itself_out() -> None:
     capped: Final = EventsSettings(enabled=True, public_base_url="https://gw", max_subscriptions_per_key=1)
     store: Final = MemoryStore()
     upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
-    prepared: Final = await _prepare(
+    prepared: Final = await prepare_subscription(
         context(), _params(), None, capped, runtime((server(),), upstream=upstream), _request(store), _Client()
     )
     assert isinstance(prepared, Ok)
     await store.reserve(prepared.ok.base.model_copy(update={"id": "sub_other"}))
-    reserved: Final = await _reserve(prepared.ok, capped)
+    reserved: Final = await reserve_subscription(prepared.ok, capped)
     assert isinstance(reserved, Error) and reserved.error.code is EventsErrorCode.RESOURCE_EXHAUSTED
     assert set(store.rows) == {"sub_other"}
 
@@ -88,7 +88,7 @@ async def test_a_reservation_past_the_cap_backs_itself_out() -> None:
 @pytest.mark.parametrize("field", ("end_user_id", "agent_id"))
 def test_a_request_scoped_authority_cannot_open_a_durable_subscription(field: str) -> None:
     caller: Final = CALLER.model_copy(update={field: "request-id"})
-    result: Final = _validate(context(caller), _params(), SETTINGS, MemoryStore())
+    result: Final = validate_subscription(context(caller), _params(), SETTINGS, MemoryStore())
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.FORBIDDEN
 
 
@@ -99,11 +99,11 @@ async def test_refresh_preserves_the_watermark_with_a_delivery_outstanding() -> 
 
     store: Final = MemoryStore()
     run: Final = runtime((server(),), upstream=FakeUpstream())
-    prepared: Final = await _prepare(context(), _params(), None, SETTINGS, run, _request(store), _Client())
+    prepared: Final = await prepare_subscription(context(), _params(), None, SETTINGS, run, _request(store), _Client())
     assert isinstance(prepared, Ok)
-    reserved: Final = await _reserve(prepared.ok, SETTINGS)
+    reserved: Final = await reserve_subscription(prepared.ok, SETTINGS)
     assert isinstance(reserved, Ok)
-    first: Final = await _activate(
+    first: Final = await activate_subscription(
         reserved.ok, SubscribeEventsResult.model_validate(UPSTREAM_OK), context(), SETTINGS, run
     )
     assert isinstance(first, Ok) and first.ok.cursor is not None
@@ -116,9 +116,9 @@ async def test_refresh_preserves_the_watermark_with_a_delivery_outstanding() -> 
             next_attempt_at=datetime(2026, 11, 20, tzinfo=timezone.utc),
         )
     )
-    refresh: Final = await _prepare(context(), _params(), None, SETTINGS, run, _request(store), _Client())
+    refresh: Final = await prepare_subscription(context(), _params(), None, SETTINGS, run, _request(store), _Client())
     assert isinstance(refresh, Ok)
-    result: Final = await _activate(
+    result: Final = await activate_subscription(
         refresh.ok, SubscribeEventsResult.model_validate({**UPSTREAM_OK, "cursor": "ahead"}), context(), SETTINGS, run
     )
     assert isinstance(result, Ok) and result.ok.cursor == first.ok.cursor
