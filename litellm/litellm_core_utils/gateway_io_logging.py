@@ -141,7 +141,6 @@ SAFE_BODY_FIELDS: Final[frozenset[str]] = frozenset(
         "stream",
         "stream_options",
         "temperature",
-        "text",
         "thinking",
         "timeout",
         "tool_choice",
@@ -618,6 +617,7 @@ def build_gateway_io_metadata(
     custom_llm_provider: str | None,
     api_base: str | None,
     response_obj: object = None,
+    sanitized_error_info: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     psr = litellm_params.get("proxy_server_request")
     psr_map = psr if isinstance(psr, Mapping) else {}
@@ -760,13 +760,18 @@ def build_gateway_io_metadata(
     if resp_ap is not None:
         external_ingress["access_programs"] = resp_ap
     if is_failure:
-        err_cls = err_map.get("error_class") or (type(exc).__name__ if exc is not None else None)
+        san_err = sanitized_error_info if isinstance(sanitized_error_info, Mapping) else {}
+        err_cls = (
+            san_err.get("error_class")
+            or err_map.get("error_class")
+            or (type(exc).__name__ if exc is not None else None)
+        )
         if err_cls:
             external_ingress["error_type"] = str(err_cls)
-        err_msg = err_map.get("error_message") or (str(exc) if exc is not None else None)
-        if err_msg:
+        err_msg = san_err.get("error_message")
+        if isinstance(err_msg, str) and err_msg:
             scrubbed_err, _ = _scrub_text(
-                str(err_msg),
+                err_msg,
                 runtime_secrets=runtime_secrets,
                 credential_name=cred_name,
                 scrub_high_entropy=True,
@@ -807,6 +812,17 @@ def attach_gateway_io_to_spend_log_payload(
     resp_dict: Mapping[str, Any] = response_obj if isinstance(response_obj, Mapping) else {}
     slp = kw.get("standard_logging_object")
     slp_map = slp if isinstance(slp, Mapping) else None
+    raw_meta = payload.get("metadata")
+    parsed_meta: dict[str, Any] | None = None
+    if isinstance(raw_meta, str):
+        try:
+            loaded = json.loads(raw_meta)
+            parsed_meta = loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            parsed_meta = {}
+    elif isinstance(raw_meta, dict):
+        parsed_meta = raw_meta
+    sanitized_err = parsed_meta.get("error_information") if isinstance(parsed_meta, dict) else None
     gateway_io = build_gateway_io_metadata(
         kwargs=kw,
         metadata=meta_map,
@@ -816,20 +832,12 @@ def attach_gateway_io_to_spend_log_payload(
         custom_llm_provider=str(payload.get("custom_llm_provider") or lp_map.get("custom_llm_provider") or ""),
         api_base=str(payload.get("api_base") or ""),
         response_obj=response_obj,
+        sanitized_error_info=sanitized_err if isinstance(sanitized_err, Mapping) else None,
     )
-    raw_meta = payload.get("metadata")
-    if isinstance(raw_meta, str):
-        try:
-            parsed = json.loads(raw_meta)
-        except Exception:
-            parsed = {}
-        if isinstance(parsed, dict):
-            parsed.pop("_gateway_credential_name", None)
-            parsed.pop("_gateway_credential_source", None)
-            parsed["gateway_io"] = gateway_io
-            payload["metadata"] = json.dumps(parsed, default=str, ensure_ascii=False)
-    elif isinstance(raw_meta, dict):
-        raw_meta.pop("_gateway_credential_name", None)
-        raw_meta.pop("_gateway_credential_source", None)
-        raw_meta["gateway_io"] = gateway_io
+    if isinstance(parsed_meta, dict):
+        parsed_meta.pop("_gateway_credential_name", None)
+        parsed_meta.pop("_gateway_credential_source", None)
+        parsed_meta["gateway_io"] = gateway_io
+        if isinstance(raw_meta, str):
+            payload["metadata"] = json.dumps(parsed_meta, default=str, ensure_ascii=False)
     return payload
