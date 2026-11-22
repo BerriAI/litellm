@@ -15,14 +15,14 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.llms.anthropic.pass_through.convertible_blocks import malformed_tool_result_text_error
-from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
-from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+from litellm.llms.anthropic.messages.convertible_blocks import malformed_tool_result_text_error
+from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+from litellm.llms.anthropic.messages.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.anthropic import AnthropicMessagesRequest, AnthropicOutputSchema
-from litellm.types.llms.openai import ResponsesAPIRequestParams
+from litellm.types.llms.openai import ResponsesAPIRequestParams, replayable_responses_input
 from litellm.types.utils import all_litellm_params
 
 
@@ -343,6 +343,8 @@ class OpenAICountTokensConfig:
         system: object,
         tools: Sequence[Mapping[str, object]] | None,
         output_format: JsonValue = None,
+        *,
+        preserve_system_instructions: bool = False,
     ) -> ResponsesCountRequestParts:
         """Convert with the adapter /v1/messages inference uses, so the count sees the same input it bills."""
         anthropic_request: Final = AnthropicMessagesRequest(
@@ -354,7 +356,9 @@ class OpenAICountTokensConfig:
         )
         translated: Final = _TRANSLATED_REQUEST.validate_python(
             LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
-                anthropic_request, include_encrypted_reasoning=False
+                anthropic_request,
+                include_encrypted_reasoning=False,
+                preserve_system_instructions=preserve_system_instructions,
             )
         )
         return OpenAICountTokensConfig.count_request_parts(
@@ -387,10 +391,13 @@ def _forwards(field: str, policy: DropPolicy) -> bool:
     return field in _COUNT_REQUEST_FIELDS or (not policy.drop_params and field in _INFERENCE_REQUEST_FIELDS)
 
 
-def _restored(field: str, value: object) -> object:
+def _restored(field: str, value: object, policy: DropPolicy) -> object:
     match field, value:
         case "input", _:
-            return ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value))
+            return replayable_responses_input(
+                ResponsesAPIRequestUtils.restore_encrypted_content_item_ids_in_input(copy.deepcopy(value)),
+                drops_set_created_by=policy.drop_params,
+            )
         case "previous_response_id", str():
             return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(value)
         case _:
@@ -398,5 +405,7 @@ def _restored(field: str, value: object) -> object:
 
 
 def native_count_request(request: Mapping[str, object], model: str, policy: DropPolicy) -> Mapping[str, object]:
-    forwarded: Final = {field: _restored(field, value) for field, value in request.items() if _forwards(field, policy)}
+    forwarded: Final = {
+        field: _restored(field, value, policy) for field, value in request.items() if _forwards(field, policy)
+    }
     return {**forwarded, "model": model}
