@@ -5,9 +5,11 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import accumulate, chain
+from functools import partial, reduce
+from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
+from urllib.parse import urlsplit
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -47,6 +49,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     responses_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_or_none,
     drops_unsupported_params,
@@ -897,19 +900,84 @@ class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
 
 
+_CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
+    ("function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output")
+)
 _MAX_CALL_ID_LENGTH: Final = 64
+_CALL_ID_LIMITED_AZURE_HOST_SUFFIXES: Final = (".openai.azure.com", ".services.ai.azure.com")
+_NO_CALL_ID_REPLACEMENTS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
-def _with_bounded_call_id(item: object) -> object:
+def _url_hostname(url: str) -> str:
+    try:
+        return urlsplit(url).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _limits_call_id_length(url: str) -> bool:
+    from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE
+    from litellm.llms.openai.common_utils import is_openai_backed_api_base
+
+    hostname: Final = _url_hostname(url)
+    return bool(hostname) and (
+        is_openai_backed_api_base(url)
+        or MANTLE_HOST_RE.match(url) is not None
+        or hostname.endswith(_CALL_ID_LIMITED_AZURE_HOST_SUFFIXES)
+    )
+
+
+def _call_id(item: object) -> str | None:
     match item:
-        case {
-            "type": "function_call" | "function_call_output" | "custom_tool_call" | "custom_tool_call_output",
-            "call_id": str() as call_id,
-        } if len(call_id) > _MAX_CALL_ID_LENGTH:
-            fields: Final = cast(Mapping[str, object], item)  # cast-ok: matched a JSON input item above
-            return {**fields, "call_id": hashlib.sha256(call_id.encode("utf-8", "surrogatepass")).hexdigest()}
+        case {"call_id": str() as call_id}:
+            return call_id
         case _:
-            return item
+            return None
+
+
+def _overlong_tool_call_id(item: object) -> str | None:
+    match item:
+        case {"type": str() as item_type, "call_id": str() as call_id} if (
+            item_type in _CALL_ID_LIMITED_ITEM_TYPES and len(call_id) > _MAX_CALL_ID_LENGTH
+        ):
+            return call_id
+        case _:
+            return None
+
+
+def _call_id_candidates(call_id: str) -> Iterator[str]:
+    return (
+        hashlib.sha256((f"{attempt}:{call_id}" if attempt else call_id).encode("utf-8", "surrogatepass")).hexdigest()
+        for attempt in count()
+    )
+
+
+def _with_replacement(replacements: Mapping[str, str], call_id: str, reserved: frozenset[str]) -> Mapping[str, str]:
+    taken: Final = reserved | frozenset(replacements.values())
+    replacement: Final = next(candidate for candidate in _call_id_candidates(call_id) if candidate not in taken)
+    return MappingProxyType({**replacements, call_id: replacement})
+
+
+def _with_replaced_call_id(item: object, replacements: Mapping[str, str]) -> object:
+    call_id: Final = _overlong_tool_call_id(item)
+    if call_id is None:
+        return item
+    fields: Final = cast(Mapping[str, object], item)  # cast-ok: matched a JSON input item above
+    return {**fields, "call_id": replacements[call_id]}
+
+
+def bounded_call_id_fields(request: Mapping[str, object], url: str) -> Mapping[str, object]:
+    items: Final = as_object_list(request.get("input"))
+    if items is None:
+        return MappingProxyType({})
+    overlong: Final = tuple(sorted({call_id for call_id in map(_overlong_tool_call_id, items) if call_id is not None}))
+    if not overlong or not _limits_call_id_length(url):
+        return MappingProxyType({})
+    reserved: Final = frozenset(
+        call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
+    )
+    replacements: Final = reduce(partial(_with_replacement, reserved=reserved), overlong, _NO_CALL_ID_REPLACEMENTS)
+    return MappingProxyType({"input": [_with_replaced_call_id(item, replacements) for item in items]})
 
 
 def tool_call_dict_from_output_item(
@@ -1466,17 +1534,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             include_namespace=True,
             replay_openai_history=replays_responses_history(provider),
         )
-        bounded_input_items: Final = [_with_bounded_call_id(item) for item in converted_input_items]
         # Keep the system text in input instead of instructions when the Responses API needs it there.
         # It rejects an empty input, and json_object requires the word "json" in input, ignoring instructions.
         typed_optional_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         system_goes_in_input: Final = converted_instructions is not None and (
-            not bounded_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
+            not converted_input_items or _payload_type(typed_optional_params.get("response_format")) == "json_object"
         )
         target_input_items: Final = (
-            _without_audio_input_parts(bounded_input_items)
+            _without_audio_input_parts(converted_input_items)
             if _drops_audio_input(model, litellm_params)
-            else bounded_input_items
+            else converted_input_items
         )
         input_items: Final = (
             [

@@ -7719,9 +7719,6 @@ async def test_truncation_auto_sends_a_system_prompt_too_long_for_instructions_a
     assert (sent.get("instructions"), sent["input"]) == expected
 
 
-_CALL_ID_LIMIT: Final = 64
-_SHARED_PREFIX: Final = "call_" + "p" * 75
-
 
 def _tool_call(call_id: object, kind: Literal["function", "custom"]) -> dict[str, object]:
     if kind == "custom":
@@ -7740,161 +7737,29 @@ def _tool_turn(calls: Sequence[tuple[object, Literal["function", "custom"]]]) ->
     ]
 
 
-def _bridged_input(messages: list[dict[str, object]]) -> list[Mapping[str, object]]:
-    result: Final = LiteLLMResponsesTransformationHandler().transform_request(
-        model="gpt-6.2-sol",
-        messages=cast(list[AllMessageValues], messages),
-        optional_params={},
-        litellm_params={"custom_llm_provider": "openai"},
-        headers={},
-        litellm_logging_obj=Mock(),
-    )
-    return result["input"]
-
-
 def _tool_items(input_items: Sequence[Mapping[str, object]]) -> list[tuple[object, object]]:
     return [(item["type"], item["call_id"]) for item in input_items if "call_id" in item]
 
 
-@pytest.mark.parametrize("kind", ["function", "custom"])
-@pytest.mark.parametrize("length", [40, 64])
-def test_transform_request_sends_tool_call_ids_within_the_limit_unchanged(
-    kind: Literal["function", "custom"], length: int
-) -> None:
-    call_id: Final = "call_" + "a" * (length - 5)
+def test_transform_request_leaves_overlong_tool_call_ids_for_the_dispatch_to_bound() -> None:
+    function_id: Final = "call_" + "a" * 80
+    custom_id: Final = "call_" + "b" * 80
 
-    sent: Final = _tool_items(_bridged_input(_tool_turn([(call_id, kind)])))
-
-    output_type: Final = "custom_tool_call_output" if kind == "custom" else "function_call_output"
-    call_type: Final = "custom_tool_call" if kind == "custom" else "function_call"
-    assert sent == [(call_type, call_id), (output_type, call_id)]
-
-
-@pytest.mark.parametrize("length", [65, 85])
-def test_transform_request_bounds_an_overlong_function_call_id_and_keeps_it_paired(length: int) -> None:
-    call_id: Final = "call_" + "a" * (length - 5)
-
-    sent: Final = _bridged_input(_tool_turn([(call_id, "function")]))
-
-    bounded: Final = sent[1]["call_id"]
-    assert isinstance(bounded, str) and len(bounded) <= _CALL_ID_LIMIT, sent
-    assert sent[1:] == [
-        {"type": "function_call", "call_id": bounded, "name": "get_weather", "arguments": '{"city":"Paris"}'},
-        {"type": "function_call_output", "call_id": bounded, "output": [{"type": "input_text", "text": "result 0"}]},
-    ]
-
-
-@pytest.mark.parametrize("length", [65, 85])
-def test_transform_request_bounds_an_overlong_custom_tool_call_id_and_keeps_it_paired(length: int) -> None:
-    call_id: Final = "call_" + "a" * (length - 5)
-
-    sent: Final = _bridged_input(_tool_turn([(call_id, "custom")]))
-
-    bounded: Final = sent[1]["call_id"]
-    assert isinstance(bounded, str) and len(bounded) <= _CALL_ID_LIMIT, sent
-    assert sent[1:] == [
-        {"type": "custom_tool_call", "call_id": bounded, "name": "apply_patch", "input": "*** Begin Patch"},
-        {"type": "custom_tool_call_output", "call_id": bounded, "output": "result 0"},
-    ]
-
-
-def test_transform_request_keeps_distinct_overlong_ids_apart_beside_unchanged_short_ids() -> None:
-    calls: Final = (
-        (_SHARED_PREFIX + "_first", "function"),
-        (_SHARED_PREFIX + "_second", "function"),
-        (_SHARED_PREFIX + "_third", "custom"),
-        ("call_short", "function"),
-        ("call_" + "e" * 59, "custom"),
-    )
-    messages: Final = _tool_turn(calls)
-    original: Final = copy.deepcopy(messages)
-
-    sent: Final = _tool_items(_bridged_input(messages))
-
-    sent_calls: Final = sent[: len(calls)]
-    sent_outputs: Final = sent[len(calls) :]
-    assert [call_id for _, call_id in sent_calls] == [call_id for _, call_id in sent_outputs], sent
-    bounded_ids: Final = [call_id for _, call_id in sent_calls[:3]]
-    assert len(set(bounded_ids)) == 3, bounded_ids
-    assert all(isinstance(call_id, str) and len(call_id) <= _CALL_ID_LIMIT for call_id in bounded_ids), bounded_ids
-    assert sent_calls[3:] == [("function_call", "call_short"), ("custom_tool_call", "call_" + "e" * 59)]
-    assert messages == original, "the caller's messages must not be mutated"
-
-
-def test_transform_request_bounds_overlong_ids_in_a_saved_responses_replay() -> None:
-    from litellm.completion_extras.litellm_responses_transformation import history
-
-    function_id: Final = _SHARED_PREFIX + "_weather"
-    custom_id: Final = _SHARED_PREFIX + "_patch"
-    output_items: Final = (
-        {
-            "type": "message",
-            "role": "assistant",
-            "phase": "commentary",
-            "content": [{"type": "output_text", "text": "Checking."}],
-        },
-        {"type": "function_call", "call_id": function_id, "name": "get_weather", "arguments": "{}"},
-        {"type": "custom_tool_call", "call_id": custom_id, "name": "apply_patch", "input": "*** Begin Patch"},
-        {
-            "type": "message",
-            "role": "assistant",
-            "phase": "final_answer",
-            "content": [{"type": "output_text", "text": "Done."}],
-        },
-    )
-    assistant: Final = {
-        "role": "assistant",
-        "content": "Checking.Done.",
-        "tool_calls": [
-            {"id": function_id, "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
-            {"id": custom_id, "type": "function", "function": {"name": "apply_patch", "arguments": "*** Begin Patch"}},
-        ],
-    }
-    replayed: Final = {
-        **assistant,
-        "provider_specific_fields": dict(
-            history.replay_fields(output_items, assistant, completed=True, first_message_only=False)
-        ),
-    }
-
-    sent: Final = _bridged_input(
-        [
-            {"role": "user", "content": "Weather, then patch."},
-            replayed,
-            {"role": "tool", "tool_call_id": function_id, "content": "sunny"},
-            {"role": "tool", "tool_call_id": custom_id, "content": "applied"},
-        ]
+    result: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model="gpt-6.2-sol",
+        messages=cast(list[AllMessageValues], _tool_turn([(function_id, "function"), (custom_id, "custom")])),
+        optional_params={},
+        litellm_params={"custom_llm_provider": "openai", "api_base": "https://api.openai.com/v1"},
+        headers={},
+        litellm_logging_obj=Mock(),
     )
 
-    assert [item["type"] for item in sent] == [
-        "message",
-        "message",
-        "function_call",
-        "custom_tool_call",
-        "message",
-        "function_call_output",
-        "custom_tool_call_output",
-    ], "the saved replay must drive the item order"
-    function_call, custom_call, function_output, custom_output = (item for item in sent if "call_id" in item)
-    assert function_call["call_id"] == function_output["call_id"] != custom_call["call_id"] == custom_output["call_id"]
-    assert all(len(item["call_id"]) <= _CALL_ID_LIMIT for item in sent if "call_id" in item), sent
-
-
-def test_transform_request_passes_missing_and_non_string_tool_call_ids_through() -> None:
-    integer_id: Final = 10**70
-
-    sent: Final = _tool_items(
-        _bridged_input(
-            [
-                {"role": "user", "content": "Use the tools."},
-                {"role": "assistant", "tool_calls": [_tool_call(integer_id, "function")]},
-                {"role": "tool", "tool_call_id": integer_id, "content": "result"},
-                {"role": "tool", "content": "orphan result"},
-            ]
-        )
-    )
-
-    assert sent == [("function_call", integer_id), ("function_call_output", integer_id), ("function_call_output", None)]
+    assert _tool_items(result["input"]) == [
+        ("function_call", function_id),
+        ("custom_tool_call", custom_id),
+        ("function_call_output", function_id),
+        ("custom_tool_call_output", custom_id),
+    ], "the final URL is only known at dispatch, so the bridge request keeps the caller's ids"
 
 
 def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_callers() -> None:
@@ -7910,3 +7775,35 @@ def test_shared_chat_to_responses_converter_keeps_overlong_ids_for_its_other_cal
         ("function_call_output", call_id),
         ("custom_tool_call_output", call_id + "_custom"),
     ]
+
+
+_OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        pytest.param({"input": [{"type": "function_call", "call_id": 10**70}]}, id="integer-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "call_id": None}]}, id="none-call-id"),
+        pytest.param({"input": [{"type": "function_call_output", "output": "x"}]}, id="missing-call-id"),
+        pytest.param({"input": [{"type": "tool_search_call", "call_id": "call_" + "s" * 80}]}, id="other-item-type"),
+        pytest.param({"input": [{"call_id": "call_" + "u" * 80}]}, id="untyped-item"),
+        pytest.param({"input": "a plain prompt"}, id="string-input"),
+        pytest.param({}, id="no-input"),
+    ],
+)
+def test_bounded_call_id_fields_leaves_requests_without_an_overlong_tool_call_id_alone(
+    request_body: Mapping[str, object],
+) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    assert bounded_call_id_fields(request_body, _OPENAI_RESPONSES_URL) == {}
+
+
+@pytest.mark.parametrize("url", ["https://[::1/v1/responses", "not a url", ""])
+def test_bounded_call_id_fields_leaves_a_request_to_an_unclassifiable_url_alone(url: str) -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    request_body: Final = {"input": [{"type": "function_call", "call_id": "call_" + "a" * 80, "name": "f"}]}
+
+    assert bounded_call_id_fields(request_body, url) == {}
