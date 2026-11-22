@@ -32,7 +32,7 @@ interface LimitXray {
 }
 
 const amount = (layer: LimitLayer, value: number) =>
-  layer.kind === "budget" ? `$${value.toFixed(2)}` : `${value.toFixed(0)} rpm`;
+  layer.kind === "budget" ? `$${value.toFixed(layer.limit < 1 ? 4 : 2)}` : `${value.toFixed(0)} rpm`;
 
 export default function LimitXrayPage() {
   const { t } = useTranslation();
