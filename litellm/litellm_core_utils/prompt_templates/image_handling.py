@@ -537,6 +537,12 @@ def _remote_urls_to_inline(
     return tuple(dict.fromkeys(remote.url for remote in remotes if should_inline(_remote_media(remote))))
 
 
+def has_remote_media(messages: Iterable[AllMessageValues], matches: Callable[[RemoteMedia], bool]) -> bool:
+    parts: Final = chain.from_iterable(_content_parts(message) for message in messages)
+    remotes: Final = (remote for part in parts if (remote := _parse_remote_part(part)) is not None)
+    return any(matches(_remote_media(remote)) for remote in remotes)
+
+
 def inline_remote_media(
     messages: list[AllMessageValues],  # mutable-ok: every transform_request takes list[AllMessageValues]
     should_inline: Callable[[RemoteMedia], bool] = inline_every_remote_url,
