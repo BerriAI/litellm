@@ -154,10 +154,12 @@ async def test_ui_from_a_lens_that_does_not_mount_it_here_reads_as_older(named: 
     assert (error.value.status_code, error.value.detail) == (404, UNSUPPORTED)
 
 
-def _request(method: str, headers: Mapping[str, str]) -> Request:
+def _request(method: str, headers: Mapping[str, str], scheme: str = "http") -> Request:
     return Request(
         {
             "type": "http",
+            "scheme": scheme,
+            "server": ("gateway.test", 443 if scheme == "https" else 80),
             "method": method,
             "path": "/lens/datasets",
             "query_string": b"",
@@ -180,6 +182,16 @@ def _request(method: str, headers: Mapping[str, str]) -> Request:
 )
 def test_only_a_page_on_the_gateway_address_counts_as_same_origin(headers: Mapping[str, str], allowed: bool) -> None:
     assert same_origin(_request("POST", headers)) is allowed
+
+
+@pytest.mark.parametrize(
+    ("origin", "allowed"),
+    (("https://gateway.test", True), ("http://gateway.test", False)),
+    ids=("same_scheme", "plain_http_page"),
+)
+def test_a_page_on_another_scheme_of_the_gateway_host_is_not_same_origin(origin: str, allowed: bool) -> None:
+    request: Final = _request("POST", {"origin": origin, "host": "gateway.test"}, scheme="https")
+    assert same_origin(request) is allowed
 
 
 async def _signed_in(request: Request) -> UserAPIKeyAuth | None:

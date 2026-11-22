@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable
 from types import MappingProxyType
 from typing import Final
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -35,6 +35,7 @@ from litellm.integrations.lens.proxy.buffering import (
 from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
 from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
@@ -135,7 +136,8 @@ def same_origin(request: Request) -> bool:
     if site is not None:
         return site == "same-origin"
     origin: Final = request.headers.get("origin")
-    return origin is not None and urlsplit(origin).netloc == request.headers.get("host")
+    scheme: Final = "https" if IPAddressUtils.is_request_https(request) else "http"
+    return origin is not None and origin == f"{scheme}://{request.headers.get('host')}"
 
 
 async def _key_auth(request: Request, key: str) -> UserAPIKeyAuth:
