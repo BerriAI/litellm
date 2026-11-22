@@ -832,6 +832,7 @@ def test_an_assistant_video_url_part_reaches_gemini_as_video() -> None:
                 "role": "assistant",
                 "content": [
                     {"type": "text", "text": "Here it is"},
+                    {"type": "refusal", "refusal": "I won't narrate it"},
                     {"type": "video_url", "video_url": {"url": "gs://qa-bucket/clip.mp4"}},
                 ],
             },

@@ -1903,6 +1903,7 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
 _MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
 _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
 
 
 @pytest.mark.parametrize(
@@ -1911,6 +1912,7 @@ _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
         pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
         pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
         pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
         pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
     ],
 )
