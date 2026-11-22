@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, Optional
 
 import httpx
 from fastapi import HTTPException
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -15,6 +16,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.llms.base_llm.guardrail_translation.utils import message_slot_texts, message_with_slot_texts
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:
 _SANITIZE_FILE_FAIL_OPEN_TIMEOUT_SECONDS: Final = 30.0
 _SANITIZE_FILE_QUEUED_STATUSES: Final = frozenset({"created", "in progress"})
 _PROTECT_ROLES: Final = frozenset({"system", "user", "assistant"})
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class PromptSecurityGuardrailMissingSecrets(Exception):
@@ -82,10 +85,6 @@ class _ProtectResult(TypedDict, total=False):
 
 class _ProtectResponse(TypedDict, total=False):
     result: ReadOnly[_ProtectResult]
-
-
-class _SanitizeUploadResponse(TypedDict, total=False):
-    jobId: ReadOnly[str]
 
 
 class _SanitizeMetadata(TypedDict, total=False):
@@ -528,8 +527,8 @@ class PromptSecurityGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         upload_response.raise_for_status()
-        upload_result: Final[_SanitizeUploadResponse] = upload_response.json()
-        job_id: Final = upload_result.get("jobId")
+        upload_result: Final = _DECODED_JSON.validate_python(upload_response.json())
+        job_id: Final = require_get(upload_result).get("jobId")
 
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",

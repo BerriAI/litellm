@@ -798,10 +798,6 @@ def test_cancel_forwards_provider_id_and_returns_cancelled_response(
 
 @pytest.mark.parametrize("prefix", _ALIASES)
 def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, prefix: str) -> None:
-    pytest.skip(
-        "BUG: GET /v1/responses/{id}/input_items drops pagination and include query params; "
-        "upstream receives limit=20&order=desc without after or include"
-    )
     raw_id: Final = f"resp_input_items_{uuid.uuid4().hex}"
 
     def respond(request: Request) -> Reply:
@@ -824,13 +820,15 @@ def test_input_items_pagination_query_reaches_the_provider(gateway: Gateway, pre
         )
         assert page.data == [], page.model_dump_json()
         requests: Final = drain_contract_requests(wire)
-        assert [(request.method, request.target) for request in requests] == [
+        assert [(request.method, urlsplit(request.target).path) for request in requests] == [
             ("POST", "/v1/responses"),
-            (
-                "GET",
-                f"/v1/responses/{raw_id}/input_items?limit=2&order=asc&after=item_after"
-                "&include=message.output_text.logprobs",
-            ),
+            ("GET", f"/v1/responses/{raw_id}/input_items"),
         ], requests
+        assert sorted(parse_qsl(urlsplit(requests[1].target).query)) == [
+            ("after", "item_after"),
+            ("include[]", "message.output_text.logprobs"),
+            ("limit", "2"),
+            ("order", "asc"),
+        ], requests[1]
         assert all(request.headers["authorization"] == f"Bearer {_API_KEY}" for request in requests), requests
         assert requests[1].body == b"", requests[1]

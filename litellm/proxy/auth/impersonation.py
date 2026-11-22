@@ -162,7 +162,7 @@ def _as_subject(actor: UserAPIKeyAuth, subject: LiteLLM_UserTable, grants: _Subj
         models=list(grants.models),
         user_tpm_limit=subject.tpm_limit,
         user_rpm_limit=subject.rpm_limit,
-        user_max_budget=subject.max_budget,
+        user_max_budget=subject.effective_max_budget(),
         user_spend=subject.spend,
         user_model_max_budget=grants.model_max_budget,
         parent_otel_span=actor.parent_otel_span,

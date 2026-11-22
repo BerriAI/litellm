@@ -1665,6 +1665,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             stream_ended=self._check_streaming_has_ended(frames),
         )
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        """A Converse ``contentBlockStart`` that opens a ``toolUse``, or an invoke frame whose ``/v1/messages``
+        event opens a ``tool_use`` block."""
+        if isinstance(item, InvokeStreamFrame):
+            return AnthropicMessagesHandler().starts_client_tool_call(item.received_sse())
+        return any(
+            frame.event_type == "contentBlockStart"
+            and _json_object_member(_json_object_member(frame.payload, "start"), "toolUse") is not None
+            for frame in _converse_frames((item,))
+        )
+
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         return _invoke_stream_has_ended(_invoke_frames(responses_so_far)) or any(
             frame.event_type == "messageStop" or frame.ends_stream for frame in _converse_frames(responses_so_far)

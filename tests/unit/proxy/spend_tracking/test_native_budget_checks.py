@@ -28,12 +28,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth import auth_checks
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-    tag_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
@@ -313,7 +310,7 @@ def _project_soft(spend: float, soft_budget: float) -> Check:
 def _organization(max_budget: float) -> Check:
     async def run(alerts: _RecordedAlerts, cache: UserApiKeyCache) -> None:
         await cache.async_set_cache(
-            key="org_id:org-checks:with_budget",
+            key=AuthObject.org_with_budget("org-checks"),
             value=LiteLLM_OrganizationTable(
                 organization_id="org-checks",
                 budget_id="b",
@@ -337,7 +334,7 @@ def _organization(max_budget: float) -> Check:
 def _tag(max_budget: float) -> Check:
     async def run(alerts: _RecordedAlerts, cache: UserApiKeyCache) -> None:
         await cache.async_set_cache(
-            key=tag_cache_key("tag-checks"),
+            key=AuthObject.tag("tag-checks"),
             value=LiteLLM_TagTable(
                 tag_name="tag-checks", litellm_budget_table=LiteLLM_BudgetTable(max_budget=max_budget)
             ),
@@ -357,7 +354,7 @@ def _tag(max_budget: float) -> Check:
 def _access_group(max_budget: float) -> Check:
     async def run(_alerts: _RecordedAlerts, cache: UserApiKeyCache) -> None:
         await cache.async_set_cache(
-            key=model_access_group_cache_key("group-checks"),
+            key=AuthObject.model_access_group("group-checks"),
             value=ModelAccessGroupBudget(access_group_name="group-checks", max_budget=max_budget),
             model_type=ModelAccessGroupBudget,
         )

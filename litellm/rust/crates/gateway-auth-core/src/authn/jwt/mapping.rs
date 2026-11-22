@@ -48,13 +48,13 @@ impl CachedMapping {
     }
 }
 
-/// The one cache key format for a claim's mapping. Python's management endpoints invalidate
-/// through this too, so a key they evict is the key auth reads.
-pub fn mapping_cache_key(claim_field: &str, claim_value: &str, issuer: Option<&str>) -> String {
-    match issuer.filter(|issuer| !issuer.is_empty()) {
-        None => format!("jwt_key_mapping:{claim_field}:{claim_value}"),
-        Some(issuer) => format!("jwt_key_mapping:{issuer}:{claim_field}:{claim_value}"),
-    }
+/// The claim a key mapping is cached under. `issuer` is `None` or empty for the mapping every issuer
+/// shares. The host spells the cache key, since the auth cache owns its keyspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MappedClaim<'a> {
+    pub field: &'a str,
+    pub value: &'a str,
+    pub issuer: Option<&'a str>,
 }
 
 /// `IdentityStore.resolve(hashed_token)` as the mapping reads it.
@@ -114,9 +114,18 @@ pub struct MappedJwt<U> {
 pub(crate) struct Pending {
     pub(crate) claim_field: String,
     pub(crate) claim_value: String,
-    pub(crate) cache_key: String,
     pub(crate) issuer: Option<String>,
     pub(crate) behavior: Behavior,
+}
+
+impl Pending {
+    pub(crate) fn claim(&self) -> MappedClaim<'_> {
+        MappedClaim {
+            field: &self.claim_field,
+            value: &self.claim_value,
+            issuer: self.issuer.as_deref(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -139,11 +148,12 @@ async fn key<H: AuthHost>(host: &H, hash: &KeyHash) -> Result<Resolved<KeyRow<H>
 
 async fn cache(
     host: &impl AuthHost,
-    key: &str,
+    claim: MappedClaim<'_>,
     mapping: &CachedMapping,
     settings: &JwtSettings,
 ) -> Result<(), Error> {
-    host.cache_json(key, &mapping.value(), ttl(settings)).await
+    host.cache_key_mapping(claim, &mapping.value(), ttl(settings))
+        .await
 }
 
 /// `_lookup_jwt_mapping_token_hash`: the issuer's row, else the global row, each cached under its
@@ -160,14 +170,17 @@ async fn lookup_hash(
     );
     if let Some(hash) = host.key_mapping_hash(field, value, issuer).await? {
         let mapping = CachedMapping::Key(hash.clone());
-        cache(host, &pending.cache_key, &mapping, settings).await?;
+        cache(host, pending.claim(), &mapping, settings).await?;
         return Ok(Some(hash));
     }
     if issuer.is_none() {
         return Ok(None);
     }
-    let global_key = mapping_cache_key(field, value, None);
-    match CachedMapping::read(host.cached_json(&global_key).await?.as_ref()) {
+    let global_claim = MappedClaim {
+        issuer: None,
+        ..pending.claim()
+    };
+    match CachedMapping::read(host.cached_key_mapping(global_claim).await?.as_ref()) {
         Some(CachedMapping::Key(hash)) => return Ok(Some(hash)),
         // `_lookup_jwt_mapping_token_hash` reads the proxy admin sentinel under the global key as a
         // hash, which no key has.
@@ -177,7 +190,7 @@ async fn lookup_hash(
     let global = host.key_mapping_hash(field, value, None).await?;
     if let Some(hash) = &global {
         let mapping = CachedMapping::Key(hash.clone());
-        cache(host, &global_key, &mapping, settings).await?;
+        cache(host, global_claim, &mapping, settings).await?;
     }
     Ok(global)
 }
@@ -225,7 +238,6 @@ pub(crate) async fn resolve<H: AuthHost>(
         };
     };
     let pending = Pending {
-        cache_key: mapping_cache_key(claim_field.as_str(), &claim_value, issuer),
         claim_field: claim_field.to_string(),
         claim_value,
         issuer: issuer.map(str::to_owned),
@@ -237,7 +249,7 @@ pub(crate) async fn resolve<H: AuthHost>(
     };
     let needs_db = JwtDenial::MappingNeedsDb { behavior };
 
-    let cached = host.cached_json(&pending.cache_key).await?;
+    let cached = host.cached_key_mapping(pending.claim()).await?;
     match CachedMapping::read(cached.as_ref()) {
         Some(CachedMapping::ProxyAdmin) if behavior == Behavior::AutoRegister => {
             return Ok(Resolved::Unmapped);
@@ -248,7 +260,7 @@ pub(crate) async fn resolve<H: AuthHost>(
                 Unregistered::Reject => Err(no_mapping().into()),
                 Unregistered::NeedsDb => Err(needs_db.into()),
                 Unregistered::Pending => {
-                    host.forget_json(&pending.cache_key).await?;
+                    host.forget_key_mapping(pending.claim()).await?;
                     Ok(Resolved::Pending(pending))
                 }
                 Unregistered::Fallback => Ok(Resolved::Unmapped),
@@ -266,25 +278,13 @@ pub(crate) async fn resolve<H: AuthHost>(
     }
     match unregistered(behavior, settings.has_db) {
         Unregistered::Reject => {
-            cache(
-                host,
-                &pending.cache_key,
-                &CachedMapping::NoMapping,
-                settings,
-            )
-            .await?;
+            cache(host, pending.claim(), &CachedMapping::NoMapping, settings).await?;
             Err(no_mapping().into())
         }
         Unregistered::NeedsDb => Err(needs_db.into()),
         Unregistered::Pending => Ok(Resolved::Pending(pending)),
         Unregistered::Fallback => {
-            cache(
-                host,
-                &pending.cache_key,
-                &CachedMapping::NoMapping,
-                settings,
-            )
-            .await?;
+            cache(host, pending.claim(), &CachedMapping::NoMapping, settings).await?;
             Ok(Resolved::Unmapped)
         }
     }
@@ -369,7 +369,7 @@ pub(crate) async fn registered<H: AuthHost>(
         }
     };
     let mapping = CachedMapping::Key(hash.clone());
-    cache(host, &registration.pending.cache_key, &mapping, settings).await?;
+    cache(host, registration.pending.claim(), &mapping, settings).await?;
     Ok(host
         .key_by_hash(&hash)
         .await?
@@ -382,13 +382,7 @@ pub(crate) async fn remember_proxy_admin(
     pending: &Pending,
     settings: &JwtSettings,
 ) -> Result<(), Error> {
-    cache(
-        host,
-        &pending.cache_key,
-        &CachedMapping::ProxyAdmin,
-        settings,
-    )
-    .await
+    cache(host, pending.claim(), &CachedMapping::ProxyAdmin, settings).await
 }
 
 /// The mapped key's `end_user_id` and the owner's email it backfills from the claims.
@@ -544,18 +538,9 @@ mod tests {
         Resolved::Pending(Pending {
             claim_field: FIELD.to_owned(),
             claim_value: "app".to_owned(),
-            cache_key: "jwt_key_mapping:client_id:app".to_owned(),
             issuer: None,
             behavior,
         })
-    }
-
-    #[rstest]
-    #[case::global(None, "jwt_key_mapping:f:v")]
-    #[case::empty_issuer_is_global(Some(""), "jwt_key_mapping:f:v")]
-    #[case::issuer_scoped(Some("https://idp"), "jwt_key_mapping:https://idp:f:v")]
-    fn cache_key_is_scoped_by_issuer(#[case] issuer: Option<&str>, #[case] expected: &str) {
-        assert_eq!(mapping_cache_key("f", "v", issuer), expected);
     }
 
     #[rstest]

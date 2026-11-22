@@ -75,7 +75,7 @@ async def acreate_skill(
     display_title: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_query: Mapping[str, object] | None = None,
-    extra_body: dict[str, Any] | None = None,
+    extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,

@@ -9,7 +9,10 @@
 <!-- The author writes this in their own words, and it can be left empty. AI agents never write here and leave the
      placeholder line below as is, and when updating an existing PR they keep whatever the author wrote. Keep this heading
      Say what the PR does for users and why, then anything that keeps it working over time (a sync job, a config someone owns)
-     No bullets, tables, or code names here. Everything else goes inside the Details block below -->
+     No bullets, tables, or code names here. Everything else goes inside the Details block below
+     One exception for agents: when the PR breaks a supported public contract (see the conventional commits rule in AGENTS.md),
+     add one sentence here starting "Breaking change:" naming who is affected and what to change before upgrading, and put `!`
+     after the type or scope in the title, e.g. `refactor(proxy)!: ...`. Never add either one to a PR that does not meet that bar -->
 
 [insert handwritten description here]
 
@@ -19,7 +22,8 @@
 ## TLDR
 
 <!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
-     If the PR intentionally changes what existing users see or how a screen behaves, add a line under the bullets that starts "Intentional product change:" describing what changes, why, and what users lose. Reviewers must never have to infer a deliberate UX change from the diff -->
+     If the PR intentionally changes what existing users see or how a screen behaves, add a line under the bullets that starts "Intentional product change:" describing what changes, why, and what users lose. Reviewers must never have to infer a deliberate UX change from the diff
+     That line does not mark the PR as breaking. A change that breaks a supported public contract also needs the `!` title and the "Breaking change:" sentence described in the handwritten section -->
 
 Problem this solves:
 
@@ -91,6 +95,9 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
 <!-- Include screenshots, screen recordings, or command (e.g., curl) + output demonstrating that your changes work as expected
      Simple PR exception (2026-10-28, #49030). A mechanical change fully proven by focused checks may skip before/after e2e. Follow AGENTS.md's eligibility rule, trace callers, and verify bug-fix regression sensitivity. Record E2E exception at <tip SHA>, scope, rationale, commands and results here. Tests/static checks suffice only for this exception. Keep CI and bot gates, reassess changed diffs, and honor explicit e2e requests. Omit the Before/After scaffold for an exception
      Otherwise proof must be fully e2e, no mocks, with real provider calls where applicable. Pytest alone is insufficient. The following format applies to live proof
+     LLM translation PRs always need this live proof, per AGENTS.md. Before runs at the merge base and After at the latest product commit, each run names its commit hash,
+     every command shows its actual output, and every endpoint the translation reaches gets its own case, with streaming and tool calls when affected
+     For shared translation code, show each affected provider route in both legs and report blocked routes or models as required by AGENTS.md
      Show only the latest proof. Before uses the merge base and After the tested tip. Rerun affected QA after behavior changes. Verified neutral diffs may carry proof with the tested SHA, current tip, equivalence reason and focused checks, following AGENTS.md and /qa
      Use matching Before/After case headings with numbered commands and observed output. Put shared setup above them. For one case, omit case headings
      A reviewer must be able to rerun every case from the body alone, so the shared setup gives the proxy start command, the config.yaml, env var names (never values) and the client code or curl used, all exactly as run. Wrap any block longer than about 20 lines in a collapsed <details> with a one-line summary
@@ -141,10 +148,13 @@ If you're seeing a delay in your PR being merged, ping the LiteLLM Team on [Slac
      short bullet points inside each, just like the TLDR: one line per bullet, roughly 10 words max
      Call out known limitations, follow-up work, or anything a reviewer should watch out for
      Include only the tiers that have caveats; drop the empty ones
-     - Severe: inherent to what the PR deliberately ships, there even when the code works as intended:
-       it can degrade or take down a running deployment (e.g. a slow or table-locking boot migration),
-       rewrite data by design, break an existing workflow on purpose, or change auth behavior. An
-       operator must plan around it before rollout
+     - Severe: an evidenced rollout hazard inherent to the intended change, requiring operator planning,
+       such as downtime, destructive data changes or a supported workflow requiring migration.
+       A changed value or auth implementation alone is not such a hazard. For compatibility breaks,
+       name the previously valid request/config, before/after behavior and required migration, and
+       still add the `!` title and "Breaking change:" sentence, which this caveat does not replace.
+       Provider price refreshes and fixes restoring intended behavior are not breaking by themselves.
+       Keep billing and security risks assessed separately (2026-11-03, price correction false positive)
      - High: an unintended hole: a correctness, security, data-loss, or backward-compatibility bug,
        unsafe to ship as is
      - Medium: a real gap someone can hit, but with a workaround or a narrow blast radius

@@ -37,6 +37,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 
 from pydantic import ValidationError
 
+from litellm.litellm_core_utils.core_helpers import spread
 from litellm.types.llms.anthropic import (
     ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX,
     ANTHROPIC_TOOL_SEARCH_TOOL_NAMES,
@@ -313,12 +314,12 @@ def anthropic_tool_search_result(block: object) -> AnthropicToolSearchToolResult
 
 def find_anthropic_server_tool_result(
     tool_id: str,
-    web_search_results: Sequence[object] | None,
-    tool_results: Sequence[object] | None,
+    web_search_results: object,
+    tool_results: object,
 ) -> dict[str, object] | None:
     if not tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX):
         return None
-    candidates: Final = (*(web_search_results or ()), *(tool_results or ()))
+    candidates: Final = (*spread(web_search_results or ()), *spread(tool_results or ()))
     return next(
         (result for result in candidates if isinstance(result, dict) and result.get("tool_use_id") == tool_id),
         None,

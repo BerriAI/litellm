@@ -1,6 +1,6 @@
 # Rust forwarding, Python half
 
-With `LITELLM_RUST_FIRST` on, a supervisor runs the Rust gateway on the public port and Python on a private loopback listener. Rust forwards every request to Python unchanged, so Python still serves every route. This package is the Python half of forwarding and pairs with the crate `litellm-rust/crates/gateway-forward`. Once Rust serves every route, both get deleted together, along with one dispatch branch in each entry point
+With `LITELLM_RUST_FIRST` on, a supervisor runs the Rust gateway on the public port and Python on a private loopback listener. Rust answers the requests it admits itself, which today is a master key caller's `POST /v1/messages` under a config and for a model it honors, and forwards every other request to Python unchanged, so Python still serves every route it receives. This package is the Python half of forwarding and pairs with the crate `litellm-rust/crates/gateway-forward`. Once Rust serves every route, both get deleted together, along with one dispatch branch in each entry point
 
 The same path runs everywhere. `litellm` (the main images and a local CLI run) and `python -m gateway.launch` (the gateway image) both call `supervisor.supervise`, and nothing else starts the Rust gateway in forwarding mode. In a container the supervisor is PID 1, so its signal and exit rules are deployment behavior and not CLI polish
 

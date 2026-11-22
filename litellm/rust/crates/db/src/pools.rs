@@ -1,14 +1,21 @@
 use std::{
+    io,
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
 use litellm_circuit_breaker::{Breaker, Config, Failure};
 use sqlx::{PgPool, Postgres, pool::PoolConnection};
+use tokio::{net::TcpStream, sync::Mutex as AsyncMutex};
 
 use crate::{Endpoint, Error};
 
 const RECOVERY: Duration = Duration::from_secs(30);
+/// How long an acquire runs before it checks that the server accepts connections at all. sqlx retries a
+/// refused connection until the acquire timeout, Prisma's `pool_timeout` (60s by default), while Prisma
+/// fails it at once, so without this check a stopped database stalls every lookup instead of failing it.
+const REFUSAL_CHECK_AFTER: Duration = Duration::from_millis(100);
+const REFUSAL_PROBE_REUSE: Duration = Duration::from_secs(1);
 
 type Connection = PoolConnection<Postgres>;
 
@@ -29,9 +36,68 @@ impl Recycled {
     }
 }
 
+struct RefusalWatch {
+    host: String,
+    port: u16,
+    last: AsyncMutex<Option<(Instant, bool)>>,
+}
+
+impl RefusalWatch {
+    fn of(endpoint: &Endpoint) -> Option<Self> {
+        endpoint.socket.is_none().then(|| Self {
+            host: endpoint.host.clone(),
+            port: endpoint.port,
+            last: AsyncMutex::default(),
+        })
+    }
+
+    async fn refused(&self) -> io::Error {
+        loop {
+            tokio::time::sleep(REFUSAL_CHECK_AFTER).await;
+            if self.refuses().await {
+                return io::ErrorKind::ConnectionRefused.into();
+            }
+        }
+    }
+
+    async fn refuses(&self) -> bool {
+        let mut last = self.last.lock().await;
+        if let Some((probed_at, refused)) = *last
+            && probed_at.elapsed() < REFUSAL_PROBE_REUSE
+        {
+            return refused;
+        }
+        let refused = matches!(
+            TcpStream::connect((self.host.as_str(), self.port)).await,
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused
+        );
+        *last = Some((Instant::now(), refused));
+        refused
+    }
+}
+
+#[derive(Clone)]
+struct FailFastPool {
+    pool: PgPool,
+    watch: Option<Arc<RefusalWatch>>,
+}
+
+impl FailFastPool {
+    async fn acquire(&self) -> Result<Connection, sqlx::Error> {
+        let Some(watch) = &self.watch else {
+            return self.pool.acquire().await;
+        };
+        tokio::select! {
+            biased;
+            acquired = self.pool.acquire() => acquired,
+            refused = watch.refused() => Err(sqlx::Error::Io(refused)),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Side {
-    pool: PgPool,
+    pool: FailFastPool,
     breaker: Breaker,
     recycled: Arc<Recycled>,
 }
@@ -50,7 +116,10 @@ impl Side {
             })
             .connect_lazy_with(endpoint.connect_options());
         Ok(Self {
-            pool,
+            pool: FailFastPool {
+                pool,
+                watch: RefusalWatch::of(endpoint).map(Arc::new),
+            },
             recycled,
             breaker: Breaker::new(
                 Config {
@@ -114,11 +183,11 @@ impl Pools {
     }
 
     pub fn writer(&self) -> &PgPool {
-        &self.writer.pool
+        &self.writer.pool.pool
     }
 
     pub fn reader_pool(&self) -> Option<&PgPool> {
-        self.reader.as_ref().map(|reader| &reader.pool)
+        self.reader.as_ref().map(|reader| &reader.pool.pool)
     }
 
     pub async fn read(&self) -> Result<Connection, Error> {
@@ -151,9 +220,9 @@ impl Pools {
     }
 
     pub async fn close(&self) {
-        self.writer.pool.close().await;
+        self.writer.pool.pool.close().await;
         if let Some(reader) = &self.reader {
-            reader.pool.close().await;
+            reader.pool.pool.close().await;
         }
     }
 }
@@ -168,8 +237,8 @@ mod tests {
     use rstest::rstest;
     use sqlx::{Connection as _, PgConnection};
 
-    use super::{Pools, Recycled};
-    use crate::{Endpoint, Error, ErrorKind, PoolLimits, test_support::database_endpoint};
+    use super::{Pools, Recycled, RefusalWatch};
+    use crate::{Endpoint, Error, ErrorKind, PoolLimits, SslMode, test_support::database_endpoint};
 
     #[rstest]
     #[case::never_recycled(None, 5, false)]
@@ -414,6 +483,92 @@ mod tests {
         let pools = Pools::new(&writer, Some(&read_only(&writer)))?;
 
         assert!(!is_read_only(&mut *pools.writer_only().await?).await?);
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn concurrent_waiters_share_one_refusal_probe() -> Result<(), Box<dyn StdError>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = std::sync::Arc::clone(&accepted);
+        let server = tokio::spawn(async move {
+            while listener.accept().await.is_ok() {
+                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        });
+        let watch = RefusalWatch::of(&local_endpoint(port)).ok_or("a TCP endpoint has a watch")?;
+
+        let verdicts = futures_util::future::join_all((0..20).map(|_| watch.refuses())).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        server.abort();
+
+        assert!(verdicts.iter().all(|refused| !refused));
+        assert_eq!(accepted.load(std::sync::atomic::Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    fn local_endpoint(port: u16) -> Endpoint {
+        Endpoint {
+            host: "127.0.0.1".to_owned(),
+            port,
+            socket: None,
+            username: "litellm".to_owned(),
+            password: None,
+            database: "proxy".to_owned(),
+            ssl_mode: SslMode::Disable,
+            ssl_root_cert: None,
+            ssl_client: None,
+            application_name: None,
+            options: Vec::new(),
+            statement_cache_capacity: 0,
+            pool: PoolLimits {
+                max_connections: 1,
+                acquire_timeout_seconds: Some(60.0),
+                idle_timeout_seconds: None,
+                socket_timeout_seconds: None,
+            },
+        }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_waiter_fails_once_the_server_starts_refusing() -> Result<(), Box<dyn StdError>> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let port = listener.local_addr()?.port();
+        let watch = RefusalWatch::of(&local_endpoint(port)).ok_or("a TCP endpoint has a watch")?;
+        let started = Instant::now();
+        let waiter = tokio::spawn(async move { watch.refused().await });
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(listener);
+        let refused = tokio::time::timeout(Duration::from_secs(5), waiter).await??;
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::ConnectionRefused);
+        assert!(started.elapsed() > Duration::from_millis(300));
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_refusing_server_fails_the_acquire_long_before_its_timeout()
+    -> Result<(), Box<dyn StdError>> {
+        let closed_port = std::net::TcpListener::bind("127.0.0.1:0")?
+            .local_addr()?
+            .port();
+        let refusing = local_endpoint(closed_port);
+        let pools = Pools::new(&refusing, None)?;
+        let started = Instant::now();
+
+        let error = pools
+            .writer_only()
+            .await
+            .err()
+            .ok_or("a refusing server handed out a connection")?;
+
+        assert_eq!(error.kind(), ErrorKind::Unreachable);
+        assert!(started.elapsed() < Duration::from_secs(5));
         Ok(())
     }
 

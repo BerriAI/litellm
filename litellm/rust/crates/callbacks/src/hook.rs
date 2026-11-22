@@ -106,7 +106,9 @@ impl Hook {
                 FieldSet::of(&[Field::ProviderRequestBody, Field::RequestHeaders])
             }
             Self::PostDeploymentSuccess => FieldSet::of(&[Field::Response]),
-            Self::PostDeploymentFailure | Self::PostCallFailure => FieldSet::of(&[Field::Error]),
+            Self::PostDeploymentFailure => FieldSet::of(&[Field::Error]),
+            Self::PostCallFailure => FieldSet::of(&[Field::Error, Field::BudgetReservation]),
+            Self::AttemptEnded => FieldSet::of(&[Field::BudgetReservation]),
             Self::PostCallSuccess => FieldSet::of(&[Field::Response, Field::GuardrailInfo]),
             Self::ResponseHeaders => FieldSet::of(&[Field::ResponseHeaders]),
             Self::StreamChunk => FieldSet::of(&[Field::StreamChunk]),
@@ -116,7 +118,6 @@ impl Hook {
             Self::DuringCall
             | Self::ProviderRequestSent
             | Self::ProviderResponseReceived
-            | Self::AttemptEnded
             | Self::CallEnded
             | Self::RouterEvent
             | Self::AuditEvent => FieldSet::EMPTY,
