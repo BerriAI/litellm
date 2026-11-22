@@ -131,7 +131,7 @@ from ..common_utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
-UNRESOLVED_ARN_BASE_MODEL_EXAMPLE: Final = "us.anthropic.claude-fable-5-2"
+UNRESOLVED_ARN_BASE_MODEL_EXAMPLE: Final = "us.anthropic.claude-fable-5-1"
 ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "Sending adaptive `thinking` as a fixed thinking budget for model=%s: an application inference profile ARN "
     "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set `base_model` on "
