@@ -1,3 +1,4 @@
+from copy import deepcopy
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -5,7 +6,8 @@ import httpx
 import pytest
 
 
-from litellm.exceptions import AuthenticationError
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
@@ -14,6 +16,178 @@ from litellm.llms.github_copilot.per_user_auth import (
     GITHUB_COPILOT_USER_SESSION_KWARG_KEY,
     GithubCopilotUserSession,
 )
+from litellm.types.router import GenericLiteLLMParams
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("in_tool_result", [False, True])
+@pytest.mark.parametrize("model", ["claude-opus-5.5", "claude-haiku-5.5", "claude-fable-5.2"])
+def test_text_attachment_is_readable_on_every_turn_without_mutating_history(
+    stream: bool, in_tool_result: bool, model: str
+) -> None:
+    document: Final = {
+        "type": "document",
+        "source": {"type": "text", "media_type": "text/plain", "data": "<h1>Résumé &amp; café</h1>\n"},
+        "title": "report.html",
+        "context": "Uploaded source code",
+        "citations": {"enabled": False},
+        "cache_control": {"type": "ephemeral"},
+    }
+    pdf: Final = {"type": "document", "source": {"type": "url", "url": "https://example.com/report.pdf"}}
+    image: Final = {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "aW1hZ2U="}}
+    blocks: Final = [document, pdf, image, {"type": "text", "text": "Explain this attachment."}]
+    content: Final = [{"type": "tool_result", "tool_use_id": "tool_1", "content": blocks}] if in_tool_result else blocks
+    attachment: Final = {"role": "user", "content": content}
+    expected_blocks: Final = [
+        {
+            "type": "text",
+            "text": "Title: report.html\n\nContext: Uploaded source code\n\n<h1>Résumé &amp; café</h1>\n",
+            "cache_control": {"type": "ephemeral"},
+        },
+        *blocks[1:],
+    ]
+    expected_content: Final = (
+        [{"type": "tool_result", "tool_use_id": "tool_1", "content": expected_blocks}]
+        if in_tool_result
+        else expected_blocks
+    )
+    for followups in (
+        [],
+        [{"role": "user", "content": "Retry after the failed attachment."}],
+        [{"role": "assistant", "content": "Read it."}, {"role": "user", "content": "Summarize again."}],
+    ):
+        messages: Final = [attachment, *followups]
+        original: Final = deepcopy(messages)
+        result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model=model,
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 128, "stream": stream},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert result == {
+            "model": model,
+            "max_tokens": 128,
+            "stream": stream,
+            "messages": [{"role": "user", "content": expected_content}, *followups],
+        }
+        assert messages == original
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0="},
+        {"type": "url", "url": "https://example.com/report.pdf"},
+        {"type": "file", "file_id": "file_123"},
+        {"type": "content", "content": [{"type": "text", "text": "A custom document"}]},
+        {"type": "text", "media_type": "text/plain", "data": None},
+        {"type": "text", "media_type": "text/plain"},
+    ],
+)
+def test_other_document_sources_keep_the_existing_wire_format(source: dict[str, object]) -> None:
+    messages: Final = [{"role": "user", "content": [{"type": "document", "source": source}]}]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == messages
+
+
+@pytest.mark.parametrize("text", ["<html>Keep <script> and whitespace.\n</html>", "", "  \n  "])
+def test_plain_document_text_is_not_parsed_or_base64_encoded(text: str) -> None:
+    messages: Final = [{"role": "user", "content": [{"type": "document", "source": {"type": "text", "data": text}}]}]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+
+def test_anthropic_keeps_text_documents_and_their_citations() -> None:
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "document", "source": {"type": "text", "data": "Source"}, "citations": {"enabled": True}}
+            ],
+        }
+    ]
+    result: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == messages
+
+
+def test_pdf_citations_and_tool_inputs_are_not_rewritten() -> None:
+    messages: Final = [
+        {"role": "user", "content": "Read the PDF."},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "tool_1",
+                    "name": "read_file",
+                    "input": {"type": "document", "source": {"type": "text", "data": "Tool input"}},
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool_1", "content": "Done"},
+                {
+                    "type": "document",
+                    "source": {"type": "url", "url": "https://example.com/report.pdf"},
+                    "citations": {"enabled": True},
+                },
+            ],
+        },
+    ]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == messages
+
+
+@pytest.mark.parametrize("cited_source", ["text", "url"])
+def test_text_document_fallback_does_not_silently_break_document_citations(cited_source: str) -> None:
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "document", "source": {"type": "text", "data": "Source"}},
+                {
+                    "type": "document",
+                    "source": {"type": cited_source, "data": "Cited source", "url": "https://example.com/report.pdf"},
+                    "citations": {"enabled": True},
+                },
+            ],
+        }
+    ]
+    with pytest.raises(UnsupportedParamsError, match=r"text documents.*citations"):
+        GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+            model="claude-sonnet-5.5",
+            messages=messages,
+            anthropic_messages_optional_request_params={"max_tokens": 128},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
 
 
 def test_github_copilot_anthropic_messages_get_complete_url():

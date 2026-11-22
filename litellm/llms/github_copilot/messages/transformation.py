@@ -1,9 +1,15 @@
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain
 from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
-from litellm.exceptions import AuthenticationError
+from pydantic import TypeAdapter
+
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.types.router import GenericLiteLLMParams
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -15,6 +21,54 @@ from ..common_utils import (
 from ..per_user_auth import require_github_copilot_user_session
 
 _MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
+_REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _documents(content: object) -> Iterator[Mapping[str, object]]:
+    for item in as_object_list(content) or ():
+        match as_str_mapping(item):
+            case {"type": "document"} as document:
+                yield document
+            case {"type": "tool_result", "content": nested}:
+                yield from _documents(nested)
+            case _:
+                pass
+
+
+def _text_document_data(block: Mapping[str, object]) -> str | None:
+    if block.get("type") != "document":
+        return None
+    match as_str_mapping(block.get("source")):
+        case {"type": "text", "data": str(data)}:
+            return data
+        case _:
+            return None
+
+
+def _text_document_content(content: object) -> object:
+    items: Final = as_object_list(content)
+    return content if items is None else [_text_document_block(item) for item in items]
+
+
+def _text_document_block(item: object) -> object:
+    block: Final = as_str_mapping(item)
+    if block is None:
+        return item
+    if block.get("type") == "tool_result" and "content" in block:
+        return {**block, "content": _text_document_content(block["content"])}
+    data: Final = _text_document_data(block)
+    if data is None:
+        return item
+    metadata: Final = tuple(
+        f"{key.capitalize()}: {value}"
+        for key in ("title", "context")
+        if isinstance(value := block.get(key), str) and value
+    )
+    return {
+        "type": "text",
+        "text": "\n\n".join((*metadata, data)),
+        **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
+    }
 
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -30,6 +84,41 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "github_copilot"
+
+    def transform_anthropic_messages_request(
+        self,
+        model: str,
+        messages: Sequence[Mapping[str, object]],
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:  # mutable-ok: the base request transformer requires a JSON dict
+        documents: Final = tuple(chain.from_iterable(_documents(message.get("content")) for message in messages))
+        has_text_documents: Final = any(_text_document_data(document) is not None for document in documents)
+        if has_text_documents and any(
+            (as_str_mapping(document.get("citations")) or {}).get("enabled") is True for document in documents
+        ):
+            raise UnsupportedParamsError(
+                message="GitHub Copilot text documents cannot preserve structured citations when converted to text. "
+                "Disable document citations or use a provider that supports text document sources.",
+                model=model,
+                llm_provider="github_copilot",
+            )
+        normalized: Final = [
+            {**message, "content": _text_document_content(message["content"])}
+            if has_text_documents and message.get("role") == "user" and "content" in message
+            else dict(message)
+            for message in messages
+        ]
+        return _REQUEST_FIELDS.validate_python(
+            super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # the base transformer uses legacy untyped containers
+                model=model,
+                messages=normalized,
+                anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+                litellm_params=litellm_params,
+                headers=dict(headers),
+            )
+        )
 
     def handles_web_search_natively(self) -> bool:
         """
