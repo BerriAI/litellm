@@ -327,6 +327,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     max_input_tokens: Required[int | None]
     max_output_tokens: Required[int | None]
     input_cost_per_token: Required[float | None]
+    input_cost_per_request: ReadOnly[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
     input_cost_per_token_balanced: ReadOnly[float | None]

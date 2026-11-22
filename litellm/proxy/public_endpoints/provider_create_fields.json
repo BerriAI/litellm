@@ -15,7 +15,7 @@
         "default_value": null
       }
     ],
-    "default_model_placeholder": "acedatacloud/gpt-6-luna"
+    "default_model_placeholder": "acedatacloud/gpt-6.2-astra"
   },
   {
     "provider": "AIAND",

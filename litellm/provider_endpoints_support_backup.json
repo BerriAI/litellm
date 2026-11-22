@@ -38,7 +38,7 @@
       "url": "https://docs.litellm.ai/docs/providers/acedatacloud",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
+        "messages": true,
         "responses": true,
         "embeddings": false,
         "image_generations": false,

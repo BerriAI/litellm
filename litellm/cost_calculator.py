@@ -591,6 +591,17 @@ def cost_per_token(
     if response_cost is not None:
         return response_cost[0], response_cost[1]
 
+    if custom_llm_provider == "acedatacloud":
+        catalog_key: Final = f"acedatacloud/{model.removeprefix('acedatacloud/')}"
+        price_info: Final = (
+            requested_model_info_override
+            if requested_model_info_override is not None
+            else litellm.model_cost.get(catalog_key, {})
+        )
+        request_price: Final = price_info.get("input_cost_per_request")
+        if isinstance(request_price, (int, float)):
+            return request_price, 0.0
+
     if requested_model_info_override is not None:
         per_second: Final = _per_second_pricing_cost_from_info(
             requested_model_info_override, response_time_ms, audio_transcription_file_duration
