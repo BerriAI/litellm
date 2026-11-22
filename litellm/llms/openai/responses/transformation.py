@@ -647,7 +647,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     _DEFAULT_DAYBREAK_RULES: Final[tuple[tuple[str, str], ...]] = tuple(
         sorted(
             _DEFAULT_DAYBREAK_BLUE_MODELS.items(),
-            key=lambda kv: len(kv[0]),
+            key=lambda key_value_item: len(key_value_item[0]),
             reverse=True,
         )
     )
@@ -674,19 +674,19 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         if config_items is not None:
             for k, v in config_items:
-                norm_k = k.strip().lower().removeprefix("openai/")
-                if norm_k:
-                    merged[norm_k] = v.strip()
+                normalized_key = k.strip().lower().removeprefix("openai/")
+                if normalized_key:
+                    merged[normalized_key] = v.strip()
         if safe_json:
             parsed_map: Final = as_str_mapping(safe_json_loads(safe_json))
             if parsed_map is not None:
                 for k, v in parsed_map.items():
                     if isinstance(v, str) and len(k) <= 256 and len(v) <= 64:
-                        norm_k = k.strip().lower().removeprefix("openai/")
-                        if norm_k:
-                            merged[norm_k] = v.strip()
+                        normalized_key = k.strip().lower().removeprefix("openai/")
+                        if normalized_key:
+                            merged[normalized_key] = v.strip()
         return tuple(
-            sorted(merged.items(), key=lambda kv: len(kv[0]), reverse=True)
+            sorted(merged.items(), key=lambda key_value_item: len(key_value_item[0]), reverse=True)
         )
 
     @classmethod
@@ -756,10 +756,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if not rules:
             return {}
         raw_existing: Final = params.get("access_programs")
-        existing_ap: Final = as_str_mapping(raw_existing)
-        if raw_existing is not None and existing_ap is None:
+        existing_access_programs: Final = as_str_mapping(raw_existing)
+        if raw_existing is not None and existing_access_programs is None:
             return {}
-        if existing_ap is not None and existing_ap.get("cyber"):
+        if existing_access_programs is not None and existing_access_programs.get("cyber"):
             return {}
         normalized: Final = (
             self._model_map_lookup_name(model).lower().removeprefix("openai/")
@@ -770,12 +770,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if normalized == prefix or normalized.startswith(prefix + "-"):
                 if tier.lower() in ("", "none"):
                     return {}
-                merged_ap: dict[str, object] = (
-                    {**existing_ap, "cyber": tier}
-                    if existing_ap is not None
+                merged_access_programs: dict[str, object] = (
+                    {**existing_access_programs, "cyber": tier}
+                    if existing_access_programs is not None
                     else {"cyber": tier}
                 )
-                return {"access_programs": merged_ap}
+                return {"access_programs": merged_access_programs}
         return {}
 
     def transform_extra_body(
