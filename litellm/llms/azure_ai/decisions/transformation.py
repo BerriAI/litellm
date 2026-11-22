@@ -1,5 +1,4 @@
 import asyncio
-import re
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -10,11 +9,11 @@ from pydantic import ValidationError
 import litellm
 from litellm.llms.azure_ai.common_utils import (
     AZURE_ENTRA_LITELLM_PARAM_KEYS,
+    foundry_resource_path,
     get_azure_ai_auth_headers,
 )
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
 
-_FOUNDRY_ROUTE_SUFFIX: Final = re.compile(r"(/api/projects/[^/]+)?(/openai/v1|/openai|/models|/v1)?$")
 _AZURE_AI_CREDENTIAL_PARAM_KEYS: Final = AZURE_ENTRA_LITELLM_PARAM_KEYS | frozenset({"azure_ad_token_provider"})
 
 
@@ -89,5 +88,5 @@ class AzureAIDecisionsConfig(BaseDecisionsConfig):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         url: Final = httpx.URL(api_base)
-        resource_path: Final = _FOUNDRY_ROUTE_SUFFIX.sub("", url.path.rstrip("/"))
+        resource_path: Final = foundry_resource_path(url)
         return str(url.copy_with(path=f"{resource_path}{self.path}", query=None, fragment=None))
