@@ -111,7 +111,7 @@ from litellm.llms.vertex_ai.cost_calculator import (
 from litellm.llms.vertex_ai.cost_calculator import cost_router as google_cost_router
 from litellm.llms.xai.cost_calculator import cost_per_token as xai_cost_per_token
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
+from litellm.router_utils.deployment_pricing import base_model_for_pricing
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.types.decisions import DecisionsResponse, DecisionsUsage, OpenAIDecisionResponse, OpenAIDecisionUsage
 from litellm.types.llms.base import CachedTokensDetails, LiteLLMBaseModel
@@ -999,7 +999,8 @@ def select_model_name_for_cost_calc(
             completion_response_model = completion_response.get("model", None)
     hidden_params: Final[dict | None] = getattr(completion_response, "_hidden_params", None)
     provider_response_model: Final = _get_hidden_str_for_cost_calc(hidden_params, "provider_response_model")
-    explicit_pricing: Final = custom_pricing is True or base_model is not None
+    priced_base_model: Final = base_model_for_pricing(base_model)
+    explicit_pricing: Final = custom_pricing is True or priced_base_model is not None
     configured_model: Final = model or (
         completion_response_model if isinstance(completion_response_model, str) else None
     )
@@ -1013,7 +1014,6 @@ def select_model_name_for_cost_calc(
         if not explicit_pricing and priced_from_response
         else None
     )
-    priced_base_model: Final = base_model if base_model is not None and not unpriced_bedrock_arn(base_model) else None
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
@@ -1657,20 +1657,21 @@ def completion_cost(
                 served=_served_service_tier(completion_response, cost_per_token_usage_object),
             )
 
-        explicit_pricing: Final = custom_pricing is True or base_model is not None
+        priced_base_model: Final = base_model_for_pricing(base_model)
+        explicit_pricing: Final = custom_pricing is True or priced_base_model is not None
         custom_priced_request_model: Final = model if custom_pricing is True else None
         configured_cost_per_query: Final = (
             _configured_search_cost_per_query(litellm_logging_obj) if custom_pricing else None
         )
         base_model_provider: Final = (
             _base_model_pricing_provider(
-                base_model,
+                priced_base_model,
                 _get_provider_for_cost_calc(
                     model=model,
                     custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
                 ),
             )
-            if base_model is not None and custom_pricing is not True
+            if priced_base_model is not None and custom_pricing is not True
             else None
         )
         invoked_model_id: Final = _invoked_model_id_for_cost(
@@ -1682,7 +1683,7 @@ def completion_cost(
             completion_response=completion_response,
             custom_llm_provider=base_model_provider or custom_llm_provider,
             custom_pricing=custom_pricing,
-            base_model=base_model,
+            base_model=priced_base_model,
             router_model_id=router_model_id,
             region_name=region_name,
             invoked_model_id=invoked_model_id,
@@ -1988,7 +1989,9 @@ def completion_cost(
                         data_residency=data_residency,
                         litellm_logging_obj=litellm_logging_obj,
                         custom_pricing_model=selected_model if custom_pricing else None,
-                        base_pricing_model=(selected_model if base_model is not None and not custom_pricing else None),
+                        base_pricing_model=(
+                            selected_model if priced_base_model is not None and not custom_pricing else None
+                        ),
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2457,7 +2460,7 @@ def pricing_entry_for_cost_calc(
         model or _get_response_model(completion_response),
         _invoked_model_id_for_cost(None, litellm_logging_obj),
         _get_provider_for_cost_calc(model, custom_llm_provider),
-        custom_pricing is True or base_model is not None,
+        custom_pricing is True or base_model_for_pricing(base_model) is not None,
     )
     if bedrock_model_info is not None:
         return bedrock_model_info["key"], bedrock_model_info

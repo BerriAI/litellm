@@ -969,7 +969,7 @@ def test_bedrock_deployment_keeps_custom_prices_when_profile_lookup_fails(
     router: Final = Router(model_list=[deployment.to_json(exclude_none=True)])
     if reload:
         router.replay_model_cost_registrations()
-    inherit_configured: Final = known_model and not explicit_base
+    inherit_configured: Final = known_model and (not explicit_base or catalog_entry is None)
     tier_rates: Final = inherit_configured and service_tier != "default"
     input_rate: Final = configured_prices[f"input_cost_per_token_{service_tier}"] if tier_rates else 0.01
     output_rate: Final = configured_prices[f"output_cost_per_token_{service_tier}"] if tier_rates else 0.02
@@ -1162,8 +1162,61 @@ def test_bedrock_model_id_deployment_bills_tokens_at_base_rates_its_profile_row_
     ) == pytest.approx(100 * 0.03 + 3 * 0.04)
 
 
-def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_beside_an_arn_deployment(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("profile_mode", (None, "chat"))
+@pytest.mark.parametrize("route", ("", "converse/"))
+def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_served_model_cache_price_its_profile_row_leaves_out(
+    monkeypatch: pytest.MonkeyPatch, profile_mode: str | None, route: str
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    model: Final = "anthropic.priced-profile-cache-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/priced-profile-cache-test"
+    profile_row: Final = {"litellm_provider": "bedrock", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02}
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+                "cache_read_input_token_cost": 0.001,
+            },
+            f"bedrock/{profile}": {**profile_row, "mode": profile_mode} if profile_mode else profile_row,
+        },
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/{route}{model}", "model_id": profile},
+                "model_info": {"id": "priced-profile-cache-deployment"},
+            }
+        ]
+    )
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="priced-profile-cache-deployment",
+    ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
+
+
+@pytest.mark.parametrize("arn_deployment", ("listed first", "listed last", "absent"))
+def test_bedrock_deployment_with_its_profile_as_base_model_bills_the_served_model_cache_price_beside_an_arn_deployment(
+    monkeypatch: pytest.MonkeyPatch, arn_deployment: str
 ) -> None:
     from litellm.cost_calculator import completion_cost
     from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
@@ -1217,11 +1270,53 @@ def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_besid
             router_model_id="profile-base-model-deployment",
         )
 
-    Router(model_list=[by_model_id])
-    alone: Final = cost()
-    router: Final = Router(model_list=[by_arn, by_model_id])
+    model_list: Final = {
+        "listed first": [by_arn, by_model_id],
+        "listed last": [by_model_id, by_arn],
+        "absent": [by_model_id],
+    }[arn_deployment]
+    router: Final = Router(model_list=model_list)
     assert router.has_model_id("profile-base-model-deployment")
-    assert cost() == pytest.approx(alone)
+    assert cost() == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
+
+
+@pytest.mark.parametrize("arn_deployment", (True, False))
+def test_bedrock_unpriced_profile_as_base_model_keeps_the_served_region_price(
+    monkeypatch: pytest.MonkeyPatch, arn_deployment: bool
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    model: Final = "anthropic.govcloud-profile-test"
+    profile: Final = "arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:application-inference-profile/govcloud-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {"litellm_provider": "bedrock", "mode": "chat", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+            f"bedrock/us-gov-west-1/{model}": {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+            },
+        },
+    )
+    if arn_deployment:
+        Router(model_list=[{"model_name": "by-arn", "litellm_params": {"model": f"bedrock/{profile}"}}])
+
+    def cost(base_model: str | None) -> float:
+        response: Final = ModelResponse(
+            model=model, usage=Usage(prompt_tokens=100, completion_tokens=3, total_tokens=103)
+        )
+        response._hidden_params = {"region_name": "us-gov-west-1"}
+        return completion_cost(
+            model=model, completion_response=response, custom_llm_provider="bedrock", base_model=base_model
+        )
+
+    assert cost(None) == pytest.approx(100 * 0.03 + 3 * 0.04)
+    assert cost(f"bedrock/{profile}") == pytest.approx(cost(None))
 
 
 @pytest.mark.parametrize(

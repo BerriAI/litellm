@@ -17,8 +17,7 @@ def pricing_models(base_model: object, model: object) -> tuple[str, ...]:
     prices a deployment walks this order, so a ``base_model`` the cost map does not know, or a Bedrock
     ARN whose row sets no price, falls through to the deployment model instead of billing or ranking at
     the unmapped default."""
-    priced_base_model: Final = None if isinstance(base_model, str) and unpriced_bedrock_arn(base_model) else base_model
-    return tuple(dict.fromkeys(_named_models(priced_base_model, model)))
+    return tuple(dict.fromkeys(_named_models(base_model_for_pricing(base_model), model)))
 
 
 def deployment_pricing_models(deployment: object) -> tuple[str, ...]:
@@ -34,7 +33,11 @@ def unpriced_bedrock_arn(model: str) -> bool:
     if not contains_bedrock_arn(model):
         return False
     row: Final = lookup_model_info_for_registration(model=model, custom_llm_provider="bedrock")
-    return not isinstance(row, ModelInfoLookupMiss) and not cost_map_key_declared_prices(row["key"])
+    return isinstance(row, ModelInfoLookupMiss) or not cost_map_key_declared_prices(row["key"])
+
+
+def base_model_for_pricing(base_model: object) -> str | None:
+    return base_model if isinstance(base_model, str) and not unpriced_bedrock_arn(base_model) else None
 
 
 def _named_models(*candidates: object) -> Iterator[str]:

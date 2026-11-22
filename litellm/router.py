@@ -81,6 +81,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.integrations.otel.runtime import phase_attributes, phase_event, phase_span
 from litellm.litellm_core_utils.asyncify import run_async_function
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     coerce_token_limit,
     get_litellm_metadata_from_kwargs,
@@ -227,7 +228,11 @@ from litellm.router_utils.cooldown_handlers import (
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
-from litellm.router_utils.deployment_pricing import deployment_pricing_models, unpriced_bedrock_arn
+from litellm.router_utils.deployment_pricing import (
+    base_model_for_pricing,
+    deployment_pricing_models,
+    unpriced_bedrock_arn,
+)
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -9609,11 +9614,11 @@ class Router:
 
     @staticmethod
     def _cost_map_backend_model(deployment: Deployment) -> str:
-        model_info_base_model: Final = deployment.model_info.base_model
-        if isinstance(model_info_base_model, str) and model_info_base_model:
+        model_info_base_model: Final = base_model_for_pricing(deployment.model_info.base_model)
+        if model_info_base_model:
             return model_info_base_model
-        params_base_model: Final = deployment.litellm_params.get("base_model")
-        if isinstance(params_base_model, str) and params_base_model:
+        params_base_model: Final = base_model_for_pricing(deployment.litellm_params.get("base_model"))
+        if params_base_model:
             return params_base_model
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
         invoked_model: Final = params.get("model_id")
@@ -10855,14 +10860,15 @@ class Router:
                 model_info[field] = field_value
         backend_model: Final = Router._cost_map_backend_model(deployment)
         params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
-        if (
+        profile_backend: Final = bool(
             params.get("model_id")
             and backend_model != deployment.litellm_params.model
             and (
                 deployment.litellm_params.custom_llm_provider == "bedrock"
                 or deployment.litellm_params.model.startswith("bedrock/")
             )
-        ):
+        )
+        if profile_backend:
             profile_info: Final = lookup_model_info_for_registration(
                 model=backend_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
             )
@@ -10873,25 +10879,30 @@ class Router:
                         _MODEL_INFO_ADAPTER.validate_python(model_info),
                     )
                 )
+        rates_model: Final = (
+            deployment.litellm_params.model
+            if profile_backend and contains_bedrock_arn(backend_model)
+            else backend_model
+        )
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         if model_info.get("input_cost_per_token") is not None:
             Router._inherit_builtin_cache_pricing(
                 model_info=model_info,
-                backend_model=backend_model,
+                backend_model=rates_model,
                 custom_llm_provider=deployment.litellm_params.custom_llm_provider,
             )
         Router._inherit_builtin_service_tier_pricing(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         Router._inherit_builtin_tiered_output_rate(
             model_info=model_info,
-            backend_model=backend_model,
+            backend_model=rates_model,
             custom_llm_provider=deployment.litellm_params.custom_llm_provider,
         )
         return model_info
