@@ -8,6 +8,7 @@ from typing import Final
 
 import pytest
 
+from litellm.proxy.mcp_server.events.webhooks.settlement import SettlementOutcome
 from litellm.proxy.mcp_server.events.webhooks.store import (
     Activation,
     PrismaEventStore,
@@ -275,3 +276,60 @@ async def test_only_the_current_claim_can_finish_or_reschedule_a_delivery() -> N
         await store.finish(current, NOW)
         assert await store.enqueue(delivery) is False
         await store.delete(row.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["delivered", "terminated", "timeout"])
+async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement_effects(
+    outcome: SettlementOutcome,
+) -> None:
+    async with _connected() as first_worker, _connected() as second_worker:
+        row = await _active(first_worker)
+        active = await first_worker.get(row.id)
+        assert active is not None
+        delivery = _delivery(row.id)
+        try:
+            assert await first_worker.enqueue(delivery)
+            stale = next(
+                d
+                for d in await first_worker.claim(NOW, NOW + timedelta(seconds=1), 100)
+                if d.delivery_id == delivery.delivery_id
+            )
+            later = NOW + timedelta(seconds=2)
+            winner = next(
+                d
+                for d in await second_worker.claim(later, later + timedelta(minutes=5), 100)
+                if d.delivery_id == delivery.delivery_id
+            )
+            assert not await first_worker.settle(stale, active.generation, later, outcome, gap=True)
+            assert await first_worker.activate(
+                row.id,
+                Activation(
+                    client_secret=ROTATED,
+                    upstream_subscription_id="up_1",
+                    upstream_refresh_before=None,
+                    refresh_before=None,
+                    cursor=None,
+                ),
+            )
+            assert not await second_worker.settle(winner, active.generation, later, outcome, gap=True)
+            refreshed = await first_worker.get(row.id)
+            assert refreshed is not None and refreshed.generation != active.generation
+            assert (refreshed.status, refreshed.last_delivery_at, refreshed.consecutive_failures) == ("active", None, 0)
+            assert await second_worker.settle(winner, refreshed.generation, later, outcome, gap=True)
+            assert not await first_worker.settle(stale, refreshed.generation, later, outcome, gap=True)
+            after = await first_worker.get(row.id)
+            assert after is not None
+            assert (after.status, after.last_delivery_at, after.consecutive_failures) == (
+                "terminated" if outcome == "terminated" else "active",
+                later if outcome == "delivered" else None,
+                1 if outcome == "timeout" else 0,
+            )
+            due = [
+                d
+                for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
+                if d.subscription_id == row.id
+            ]
+            assert [d.body for d in due] == (['{"type":"gap","cursor":null}'] if outcome == "timeout" else [])
+        finally:
+            await first_worker.delete(row.id)

@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
+from litellm.proxy.mcp_server.events.webhooks.settlement import SettlementOutcome, settle_delivery
 from litellm.types.mcp_server.events import CallbackFailure, JsonObject
 
 if TYPE_CHECKING:
@@ -20,6 +21,7 @@ class SubscriptionRow(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: str
+    generation: str = Field(default_factory=lambda: uuid.uuid4().hex)
     principal: str
     key_hash: str | None = None
     user_id: str | None = None
@@ -151,6 +153,10 @@ class EventStore(Protocol):
 
     async def drop_deliveries(self, subscription_id: str) -> None: ...
 
+    async def settle(
+        self, delivery: QueuedDelivery, generation: str, at: datetime, outcome: SettlementOutcome, *, gap: bool = False
+    ) -> bool: ...
+
     async def purge_delivered(self, before: datetime) -> None: ...
 
 
@@ -212,6 +218,7 @@ class PrismaEventStore:
         from litellm.repositories.table_repositories import MCPEventDeliveryRepository, MCPEventSubscriptionRepository
 
         # Every read follows a write it must see and the raw statements are UPDATEs, so a read replica is never used.
+        self._client: Final = prisma_client
         self._subscriptions: Final = MCPEventSubscriptionRepository(prisma_client, use_writer=True).table
         self._deliveries: Final = MCPEventDeliveryRepository(prisma_client, use_writer=True).table
         self._raw: Final[_RawQueries] = prisma_client.writer_db  # pyright: ignore[reportAttributeAccessIssue]  # PrismaWrapper forwards raw queries via __getattr__
@@ -250,6 +257,7 @@ class PrismaEventStore:
             where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
             data={
                 "status": "active",
+                "generation": uuid.uuid4().hex,
                 "client_secret": _encrypt(activation.client_secret),
                 "upstream_subscription_id": activation.upstream_subscription_id,
                 "upstream_refresh_before": activation.upstream_refresh_before,
@@ -408,6 +416,11 @@ class PrismaEventStore:
 
     async def drop_deliveries(self, subscription_id: str) -> None:
         await self._deliveries.delete_many(where={"subscription_id": subscription_id})
+
+    async def settle(
+        self, delivery: QueuedDelivery, generation: str, at: datetime, outcome: SettlementOutcome, *, gap: bool = False
+    ) -> bool:
+        return await settle_delivery(self._client, delivery, generation, at, outcome, gap=gap)
 
     async def purge_delivered(self, before: datetime) -> None:
         await self._deliveries.delete_many(where={"delivered_at": {"lt": before}})
