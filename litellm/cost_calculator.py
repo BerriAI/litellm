@@ -1001,8 +1001,9 @@ def _bedrock_pricing_info(
         ModelInfo,
         {
             **{field: value for field, value in profile.items() if not is_server_derived_pricing_key(field)},
-            **served_rates,
-            **bedrock_profile_pricing(profile["key"], overrides),
+            **pricing_with_overrides(
+                pricing_with_overrides(served_rates, cost_map_key_declared_prices(profile["key"])), overrides
+            ),
         },
     )
 

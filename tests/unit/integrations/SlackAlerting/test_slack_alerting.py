@@ -22,6 +22,7 @@ from litellm.integrations.SlackAlerting.slack_alerting import DeploymentMetrics,
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import CallInfo, Litellm_EntityType
 from litellm.router import Router
+from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.integrations.slack_alerting import AlertQueueItem, AlertType, SlackAlertingCacheKeys
 from litellm.utils import get_api_base
 from datetime import timedelta
@@ -1283,10 +1284,9 @@ async def test_model_added_alert_shows_served_prices_for_an_unpriced_bedrock_arn
             **({profile: profile_row} if profile_row is not None else {}),
         },
     )
-    slack_alerting: Final = SlackAlerting(alerting=["slack"], internal_usage_cache=DualCache())
-    send_alert: Final = AsyncMock()
-    monkeypatch.setattr(slack_alerting, "send_alert", send_alert)
-    await slack_alerting.model_added_alert("by-model-id", served, MagicMock(base_model=profile))
-    message: Final = send_alert.await_args.kwargs["message"]
+    monkeypatch.setenv("SLACK_WEBHOOK_URL", "https://hooks.slack.com/services/T0/B0/X0")
+    slack_alerting: Final = _slack_alerting_with_env_resolution()
+    await slack_alerting.model_added_alert("by-model-id", served, RouterModelInfo(base_model=profile))
+    message: Final = slack_alerting.log_queue[0]["payload"]["text"]
     assert f"Base Model: `{profile}`" in message
     assert "input_cost_per_token: 0.03000000" in message

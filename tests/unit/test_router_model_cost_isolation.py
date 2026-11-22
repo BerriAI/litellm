@@ -1548,6 +1548,65 @@ def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_served_model_cac
     ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
 
 
+@pytest.mark.parametrize(
+    ("profile_row", "registered_price", "flat_input_price"),
+    (
+        ({"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}, None, 0.01),
+        ({"output_cost_per_token": 0.02}, 0.05, 0.05),
+    ),
+    ids=("profile_row_flat_price", "registered_flat_price"),
+)
+def test_bedrock_model_id_deployment_bills_a_long_prompt_at_the_flat_input_price_over_the_served_model_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+    profile_row: dict[str, float],
+    registered_price: float | None,
+    flat_input_price: float,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    model: Final = "anthropic.flat-price-over-threshold-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/flat-over-threshold-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "input_cost_per_token_above_200k_tokens": 0.06,
+                "output_cost_per_token": 0.04,
+            },
+            f"bedrock/{profile}": {"litellm_provider": "bedrock", **profile_row},
+        },
+    )
+    if registered_price is not None:
+        litellm.register_model(
+            {model: {"litellm_provider": "bedrock", "input_cost_per_token": registered_price}},
+            persist_across_reloads=False,
+        )
+    Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "flat-over-threshold-deployment"},
+            }
+        ]
+    )
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model, usage=Usage(prompt_tokens=300_000, completion_tokens=3, total_tokens=300_003)
+        ),
+        custom_llm_provider="bedrock",
+        router_model_id="flat-over-threshold-deployment",
+        optional_params={"model_id": profile},
+    ) == pytest.approx(300_000 * flat_input_price + 3 * 0.02)
+
+
 @pytest.mark.parametrize("arn_deployment", ("listed first", "listed last", "absent"))
 def test_bedrock_deployment_with_its_profile_as_base_model_bills_the_served_model_cache_price_beside_an_arn_deployment(
     monkeypatch: pytest.MonkeyPatch, arn_deployment: str
