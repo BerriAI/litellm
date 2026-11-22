@@ -1216,6 +1216,55 @@ def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_served_model_cac
     ) == pytest.approx(20 * 0.01 + 80 * 0.001 + 3 * 0.02)
 
 
+def test_bedrock_model_id_deployment_bills_cached_tokens_at_the_cache_price_its_profile_row_declares_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    model: Final = "anthropic.cache-only-profile-price-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/cache-only-price-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+                "cache_read_input_token_cost": 0.003,
+            },
+            f"bedrock/{profile}": {"litellm_provider": "bedrock", "cache_read_input_token_cost": 0.001},
+        },
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "cache-only-profile-price-deployment"},
+            }
+        ]
+    )
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        router_model_id="cache-only-profile-price-deployment",
+        optional_params={"model_id": profile},
+    ) == pytest.approx(20 * 0.03 + 80 * 0.001 + 3 * 0.04)
+
+
 @pytest.mark.parametrize(
     ("profile_row", "registered_price", "flat_input_price"),
     (

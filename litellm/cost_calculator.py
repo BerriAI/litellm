@@ -155,6 +155,7 @@ from litellm.utils import (
     TranscriptionResponse,
     cached_get_model_info_helper,
     cost_map_key_declared_prices,
+    declared_pricing_fields,
     pricing_with_overrides,
     runtime_model_cost_registrations,
     token_counter,
@@ -922,7 +923,8 @@ def _bedrock_pricing_info(
         None,
     )
     profile: Final = _cost_map_model_info(invoked_model_id, "bedrock") if invoked_model_id else None
-    if profile is None or not _declares_rates(profile):
+    profile_prices: Final = cost_map_key_declared_prices(profile["key"]) if profile is not None else None
+    if profile is None or not profile_prices:
         return _cost_map_model_info(registration[0], None) if registration is not None else None
     overrides: Final = registration[1] if registration is not None and registration[0] != profile["key"] else {}
     served_rates: Final = _served_model_rates(model, profile["key"])
@@ -932,9 +934,7 @@ def _bedrock_pricing_info(
         ModelInfo,
         {
             **without_server_derived_pricing(profile),
-            **pricing_with_overrides(
-                pricing_with_overrides(served_rates, cost_map_key_declared_prices(profile["key"])), overrides
-            ),
+            **pricing_with_overrides(pricing_with_overrides(served_rates, profile_prices), overrides),
         },
     )
 
@@ -943,9 +943,9 @@ def _served_model_rates(model: str, profile_key: str) -> Mapping[str, object]:
     served: Final = _cost_map_model_info(model, "bedrock")
     if served is None or served["key"] == profile_key:
         return {}
-    return {
-        field: value for field, value in served.items() if value is not None and is_server_derived_pricing_key(field)
-    }
+    return declared_pricing_fields(
+        _raw_cost_map_entry(served["key"]) or unmapped_model_generalization(model, "bedrock") or {}
+    )
 
 
 def _declares_rates(model_info: ModelInfo | None) -> bool:

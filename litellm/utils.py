@@ -3416,11 +3416,14 @@ def pricing_with_overrides(
     return update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
 
 
-def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
-    entry: Final = _builtin_cost_map().get(key) or {}
+def declared_pricing_fields(entry: Mapping[str, object]) -> Mapping[str, object]:
     return MappingProxyType(
         {name: value for name, value in entry.items() if value is not None and is_server_derived_pricing_key(name)}
     )
+
+
+def cost_map_key_declared_prices(key: str) -> Mapping[str, object]:
+    return declared_pricing_fields(_builtin_cost_map().get(key) or {})
 
 
 @dataclass(frozen=True, slots=True)
