@@ -9004,18 +9004,10 @@
       "usageAria": "最近 {{days}} 天的用量",
       "usageFailed": "用量加载失败",
       "retry": "重试",
-      "whatsNew": "LiteLLM 最新动态",
       "leaderboard": {
         "title": "排行榜",
         "subtitle": "最近 {{days}} 天的 Token 占比，以及前后半段时间的变化"
       }
-    },
-    "updatesFeed": {
-      "title": "动态",
-      "viewAll": "查看全部",
-      "failed": "动态加载失败",
-      "retry": "重试",
-      "empty": "暂无动态"
     }
   },
   "uiTheme": {

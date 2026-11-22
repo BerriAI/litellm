@@ -9073,18 +9073,10 @@
       "usageAria": "Usage, last {{days}} days",
       "usageFailed": "Failed to load usage",
       "retry": "Retry",
-      "whatsNew": "What's new in LiteLLM?",
       "leaderboard": {
         "title": "Leaderboard",
         "subtitle": "Share of tokens over the last {{days}} days, with the change between the first and second half of the period"
       }
-    },
-    "updatesFeed": {
-      "title": "Updates",
-      "viewAll": "View all",
-      "failed": "Failed to load posts",
-      "retry": "Retry",
-      "empty": "No posts yet"
     }
   },
   "uiTheme": {
