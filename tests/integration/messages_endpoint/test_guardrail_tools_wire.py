@@ -115,7 +115,8 @@ def test_guardrail_preserves_anthropic_tools_except_explicit_edits(
         assert len(calls) == 1, calls
         scanned: Final = _OBJECTS.validate_python(object_value(json.loads(calls[0].body))["tools"])
         assert [
-            object_value(tool["function"])["name"] for tool in scanned if isinstance(tool.get("function"), dict)
+            object_value(tool["function"])["name"] if isinstance(tool.get("function"), dict) else tool.get("name")
+            for tool in scanned
         ] == [
             *(object_value(tool).get("name", object_value(tool).get("mcp_server_name")) for tool in native),
             "Read",

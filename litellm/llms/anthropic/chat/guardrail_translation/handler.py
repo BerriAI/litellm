@@ -26,13 +26,13 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
 from litellm.llms.anthropic.messages.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
+    is_anthropic_web_search_tool,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     is_non_empty_text_block,
@@ -219,6 +219,33 @@ def _legacy_hook_block(block: object) -> object:
         return block
     fields: Final = _as_str_mapping(block)
     return {**fields, "type": "tool_use"} if fields.get("type") == "server_tool_use" else fields
+
+
+def _is_web_search_tool(tool: object) -> bool:
+    fields: Final = as_str_mapping(tool)
+    return fields is not None and is_anthropic_web_search_tool(fields)
+
+
+def _with_web_search_tools(
+    tools: Sequence[object], translated_tools: Sequence[ChatCompletionToolParam]
+) -> Sequence[ChatCompletionToolParam]:
+    """
+    The request's tools as a guardrail sees them: each web search tool as the caller sent it, at its
+    position in the request, among the translated tools. The OpenAI translation carries web search as
+    `web_search_options` rather than as a tool, so it is absent from `translated_tools`.
+    """
+    web_search_tools: Final = [
+        cast(ChatCompletionToolParam, tool)  # cast-ok: hosted tools reach guardrails in Anthropic format
+        for tool in tools
+        if _is_web_search_tool(tool)
+    ]
+    if not web_search_tools:
+        return translated_tools
+    if len(translated_tools) != len(tools) - len(web_search_tools):
+        return [*translated_tools, *web_search_tools]
+    translated: Final = iter(translated_tools)
+    web_search: Final = iter(web_search_tools)
+    return [next(web_search) if _is_web_search_tool(tool) else next(translated) for tool in tools]
 
 
 def _is_web_search_result_block(block: object) -> bool:
@@ -410,6 +437,8 @@ _TOOL_METADATA_FIELDS: Final = frozenset(
 
 
 def _tool_scan_source(tool: Mapping[str, object]) -> AllAnthropicToolsValues:
+    if tool.get("type") != "function" and _is_web_search_tool(tool):
+        return cast(AllAnthropicToolsValues, tool)  # cast-ok: web search reaches guardrails in Anthropic format
     return (
         cast(  # cast-ok: only the nested function name identifies an OpenAI tool
             AllAnthropicToolsValues, {key: value for key, value in tool.items() if key != "name"}
@@ -450,6 +479,10 @@ def _rewrite_original_tool(
 ) -> AllAnthropicToolsValues:
     if before == after:
         return original
+    if _is_web_search_tool(before):
+        return cast(  # cast-ok: native web search retains the caller's Anthropic shape
+            AllAnthropicToolsValues, _apply_tool_field_edits(original, before, after)
+        )
     original_fields: Final = as_str_mapping(original) or {}
     if original_fields.get("type") == "function":
         return cast(AllAnthropicToolsValues, after)  # cast-ok: caller supplied an OpenAI-format tool
@@ -584,7 +617,12 @@ def _reconcile_tools(
     used: Final = frozenset(rewritten.values())
     config: Final = AnthropicConfig()
     additions: Final = tuple(tool for index, tool in enumerate(returned) if index not in used)
-    converted: Final = tuple(config.map_tool_helper(tool)[0] for tool in additions)
+    converted: Final = tuple(
+        cast(AllAnthropicToolsValues, tool)  # cast-ok: web search was shown in Anthropic format
+        if _is_web_search_tool(tool)
+        else config.map_tool_helper(tool)[0]
+        for tool in additions
+    )
     return [
         *(
             _rewrite_original_tool(tool, scanned[original_to_scanned[index]], returned[rewritten[index]])
@@ -1155,7 +1193,10 @@ class AnthropicMessagesHandler(BaseTranslation):
             if scan_only_tool_results
             else [
                 tool
-                for tool in chat_completion_compatible_request.get("tools", [])
+                for tool in _with_web_search_tools(
+                    list_field(translation_source, "tools"),
+                    chat_completion_compatible_request.get("tools", []),
+                )
                 if not is_provider_native_tool_dict(tool)
             ]
         )

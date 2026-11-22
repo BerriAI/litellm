@@ -59,6 +59,9 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     def _rejects_undocumented_voices(self, model: str) -> bool:
         return True
 
+    def _supports_avatars(self) -> bool:
+        return True
+
     # ------------------------------------------------------------------
     # URL
     # ------------------------------------------------------------------

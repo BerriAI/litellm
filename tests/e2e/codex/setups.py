@@ -9,6 +9,7 @@ from typing import Final, Literal
 import pytest
 from _pytest.mark.structures import ParameterSet
 from cli_harness.rate_limiter import RateBucket
+from codex.harness import CodexCatalog
 from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from models import LiteLLMParamsBody
 
@@ -25,10 +26,17 @@ type SetupId = Literal["bedrock_mantle", "bedrock_runtime", "azure_openai", "ope
 
 
 @dataclass(frozen=True, slots=True)
+class CodexEntry:
+    catalog: CodexCatalog
+    slug: str
+
+
+@dataclass(frozen=True, slots=True)
 class Deployment:
     litellm_params: LiteLLMParamsBody
     rate_bucket: RateBucket
     real_model_name: str
+    codex_entry: CodexEntry
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +64,7 @@ SETUPS: Final = (
             LiteLLMParamsBody(model=GPT_ON_BEDROCK_MANTLE, aws_region_name=_BEDROCK_REGION),
             RateBucket.BEDROCK_MANTLE,
             real_model_name=GPT,
+            codex_entry=CodexEntry("amazon-bedrock", GPT_ON_BEDROCK_MANTLE.removeprefix("bedrock_mantle/")),
         ),
         id="bedrock_mantle",
         marks=_drives(Provider.BEDROCK_MANTLE, GPT_ON_BEDROCK_MANTLE),
@@ -65,6 +74,7 @@ SETUPS: Final = (
             LiteLLMParamsBody(model=GPT_ON_BEDROCK_RUNTIME, aws_region_name=_BEDROCK_REGION),
             RateBucket.BEDROCK_CONVERSE,
             real_model_name=GPT,
+            codex_entry=CodexEntry("amazon-bedrock-runtime", GPT_ON_BEDROCK_RUNTIME.removeprefix("bedrock/")),
         ),
         id="bedrock_runtime",
         marks=(
@@ -79,6 +89,7 @@ SETUPS: Final = (
             ),
             RateBucket.AZURE_OPENAI,
             real_model_name=GPT,
+            codex_entry=CodexEntry("openai", GPT),
         ),
         id="azure_openai",
         marks=_drives(Provider.AZURE, GPT_ON_AZURE_OPENAI),
@@ -88,6 +99,7 @@ SETUPS: Final = (
             LiteLLMParamsBody(model=GPT_ON_OPENAI, api_key="os.environ/OPENAI_API_KEY"),
             RateBucket.OPENAI,
             real_model_name=GPT,
+            codex_entry=CodexEntry("openai", GPT),
         ),
         id="openai",
         marks=_drives(Provider.OPENAI, GPT_ON_OPENAI),
@@ -97,6 +109,7 @@ SETUPS: Final = (
             LiteLLMParamsBody(model=CLAUDE_ON_BEDROCK, aws_region_name=_BEDROCK_REGION),
             RateBucket.BEDROCK_CONVERSE,
             real_model_name=CLAUDE,
+            codex_entry=CodexEntry("openai", CLAUDE),
         ),
         id="claude_bedrock",
         marks=_drives(Provider.BEDROCK, CLAUDE_ON_BEDROCK),
