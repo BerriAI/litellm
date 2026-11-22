@@ -1832,6 +1832,16 @@ def _header_value(value: float | None) -> str | None:
     return str(value) if value is not None else None
 
 
+def response_cost_with_failed_attempts(response_cost: object, logging_obj: object) -> float | str:
+    if isinstance(response_cost, str):
+        return response_cost
+    if not isinstance(response_cost, int | float):
+        return ""
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return response_cost or ""
+    return logging_obj.with_failed_attempts_owed(response_cost) or ""
+
+
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:
@@ -3305,7 +3315,7 @@ class ProxyBaseLLMRequestProcessing:
         computed_cost_for_headers: Final = (
             self._response_cost_from_logging_obj(response=response, logging_obj=logging_obj) or ""
             if recover_response_cost
-            else response_cost
+            else response_cost_with_failed_attempts(hidden_params.get("response_cost", response_cost), logging_obj)
         )
         llm_cost_for_headers: Final = (
             0.0

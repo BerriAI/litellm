@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -63,8 +64,8 @@ def _failure_logged_in_background(logging_obj: Logging) -> bool:
     return logging_obj.model_call_details.get("stream") is True
 
 
-def _set_aside_failed_attempt_spend(logging_obj: object) -> _FailedAttemptSpend | None:
-    if not isinstance(logging_obj, Logging) or _failure_logged_in_background(logging_obj):
+def _set_aside_failed_attempt_spend(logging_obj: Logging | None) -> _FailedAttemptSpend | None:
+    if logging_obj is None or _failure_logged_in_background(logging_obj):
         return None
     usage: Final = logging_obj.model_call_details.get("combined_usage_object")
     if not isinstance(usage, Usage):
@@ -72,15 +73,27 @@ def _set_aside_failed_attempt_spend(logging_obj: object) -> _FailedAttemptSpend 
     response_cost: Final = logging_obj.model_call_details.get("response_cost")
     logging_obj.model_call_details.pop("combined_usage_object")
     logging_obj.model_call_details.pop("response_cost", None)
-    return _FailedAttemptSpend(usage, float(response_cost) if isinstance(response_cost, (int, float)) else 0.0)
+    spend: Final = _FailedAttemptSpend(usage, _known_cost(response_cost))
+    logging_obj.owe_failed_attempt_on_success(spend.usage, spend.response_cost)
+    return spend
 
 
-def _restore_failed_attempt_spend(logging_obj: object, spend: _FailedAttemptSpend | None) -> None:
-    if spend is None or not isinstance(logging_obj, Logging):
+def _known_cost(response_cost: object) -> float:
+    return float(response_cost) if isinstance(response_cost, (int, float)) else 0.0
+
+
+def _restore_failed_attempt_spend(logging_obj: Logging | None, spend: _FailedAttemptSpend | None) -> None:
+    if spend is None or logging_obj is None:
         return
-    if logging_obj.model_call_details.get("combined_usage_object") is not None:
+    logging_obj.withdraw_failed_attempt_owed_on_success()
+    later_usage: Final = logging_obj.model_call_details.get("combined_usage_object")
+    if not isinstance(later_usage, Usage):
+        logging_obj.record_partial_usage_for_failure(spend.usage, spend.response_cost)
         return
-    logging_obj.record_partial_usage_for_failure(spend.usage, spend.response_cost)
+    logging_obj.record_partial_usage_for_failure(
+        BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[later_usage, spend.usage]),
+        _known_cost(logging_obj.model_call_details.get("response_cost")) + spend.response_cost,
+    )
 
 
 def _trigger_cooldown_for_failed_deployment(
@@ -842,7 +855,9 @@ async def run_async_fallback(
                 )
                 continue
             attempted.record(attempt_key)
-        failed_attempt_spend = _set_aside_failed_attempt_spend(kwargs.get("litellm_logging_obj"))
+        logging_obj = kwargs.get("litellm_logging_obj")
+        billing_logging_obj = logging_obj if isinstance(logging_obj, Logging) else None
+        failed_attempt_spend = _set_aside_failed_attempt_spend(billing_logging_obj)
         try:
             # LOGGING
             kwargs = litellm_router.log_retry(kwargs=kwargs, e=original_exception)
@@ -881,7 +896,7 @@ async def run_async_fallback(
             )
             return response
         except Exception as e:
-            _restore_failed_attempt_spend(kwargs.get("litellm_logging_obj"), failed_attempt_spend)
+            _restore_failed_attempt_spend(billing_logging_obj, failed_attempt_spend)
             error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)
             await log_failure_fallback_event(
@@ -889,7 +904,6 @@ async def run_async_fallback(
                 kwargs=kwargs,
                 original_exception=original_exception,
             )
-            logging_obj = kwargs.get("litellm_logging_obj")
             if logging_obj is not None and logging_obj.model_call_details.get("has_logged_async_failure", False):
                 _trigger_cooldown_for_failed_deployment(
                     litellm_router=litellm_router,

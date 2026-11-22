@@ -463,6 +463,41 @@ class _BilledThenFailingImageHandler(litellm.CustomLLM):
         )
 
 
+class _PricedImageHandler(litellm.CustomLLM):
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        served: Final = ImageResponse(data=[ImageObject(url="https://example.com/tree.png")])
+        served._hidden_params = {"response_cost": 0.5}
+        return served
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: object,
+        prompt: str | None,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        return await self.aimage_generation(
+            model, prompt or "", model_response, api_key, api_base, optional_params, logging_obj
+        )
+
+
 class _ParamRecordingImageHandler(litellm.CustomLLM):
     received_params: Mapping[str, object] | None = None
 
@@ -597,6 +632,31 @@ def test_failed_image_request_bills_what_the_provider_charged_in_its_spend_row_a
         2240,
         2256,
     )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    app: Final = _image_regression_app(
+        monkeypatch,
+        UserAPIKeyAuth(api_key="sk-test"),
+        {"A": _BilledThenFailingImageHandler(), "B": _PricedImageHandler()},
+        fallbacks=({"A": ["B"]},),
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = send(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.75)
 
 
 def test_image_generation_keeps_a_keys_logging_callbacks_out_of_the_provider_params(

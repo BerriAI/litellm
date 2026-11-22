@@ -47,6 +47,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.cost_calculator import (
+    BaseTokenUsageProcessor,
     RealtimeAPITokenUsageProcessor,
     ResponsesWebSocketTokenUsageProcessor,
     get_usage_object,
@@ -757,6 +758,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.cost_breakdown: CostBreakdown | None = None
         self.billed_token_rates: BilledTokenRates | None = None
         self._provider_reported_cost: float | None = None
+        self._failed_attempts_owed_on_success: tuple[tuple[Usage, float], ...] = ()
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -2316,6 +2318,39 @@ class Logging(LiteLLMLoggingBaseClass):
         self.model_call_details["combined_usage_object"] = usage
         self.model_call_details["response_cost"] = response_cost
 
+    def owe_failed_attempt_on_success(self, usage: Usage, response_cost: float) -> None:
+        """A failed attempt the router falls back from stays owed by the attempt that serves the request."""
+        self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, (usage, response_cost))
+
+    def withdraw_failed_attempt_owed_on_success(self) -> None:
+        self._failed_attempts_owed_on_success = self._failed_attempts_owed_on_success[:-1]
+
+    def with_failed_attempts_owed(self, own_cost: float) -> float:
+        return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
+
+    def _add_failed_attempts_spend(self, served_response: object) -> None:
+        failed_attempts: Final = self._failed_attempts_owed_on_success
+        if not failed_attempts:
+            return
+        own_usage: Final = get_usage_object(completion_response=served_response)
+        own_cost: Final = self.model_call_details.get("response_cost")
+        if own_usage is None or not isinstance(own_cost, (int, float)):
+            return
+        failed_attempts_cost: Final = sum(cost for _, cost in failed_attempts)
+        self.model_call_details["failed_attempts_billed_on_success"] = failed_attempts
+        self.model_call_details["combined_usage_object"] = BaseTokenUsageProcessor.combine_usage_objects(
+            usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
+        )
+        self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        if self.cost_breakdown is not None:
+            self.cost_breakdown = self.cost_breakdown | CostBreakdown(
+                total_cost=own_cost + failed_attempts_cost,
+                additional_costs={
+                    **self.cost_breakdown.get("additional_costs", {}),
+                    "failed_attempts_cost": failed_attempts_cost,
+                },
+            )
+
     def attempt_scoped_copy(self) -> "Logging":
         """A copy with its own model_call_details, so logging one attempt of a request through it leaves
         the state the request's other attempts share untouched."""
@@ -2539,7 +2574,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _process_hidden_params_and_response_cost(
         self,
-        logging_result,
+        logging_result: object,
         start_time,
         end_time,
         build_logging_payload: bool = True,
@@ -2559,9 +2594,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
+            self._add_failed_attempts_spend(logging_result)
         elif "response_cost" in hidden_params:
             self.model_call_details["response_cost"] = hidden_params["response_cost"]
             self._record_zero_cost_diagnostic(logging_result, hidden_params["response_cost"])
+            self._add_failed_attempts_spend(logging_result)
         elif (existing_cost := self.model_call_details.get("response_cost")) is not None and existing_cost != 0:
             # Preserve response_cost if already calculated (e.g., by pass-through
             # handlers like Gemini/Vertex which call completion_cost directly).
@@ -2569,6 +2606,7 @@ class Logging(LiteLLMLoggingBaseClass):
             pass
         else:
             self.model_call_details["response_cost"] = self.response_cost_calculator(result=logging_result)
+            self._add_failed_attempts_spend(logging_result)
 
         if not build_logging_payload:
             return None
