@@ -15,6 +15,7 @@ from litellm.llms.azure_ai.common_utils import (
     is_foundry_project_agent,
 )
 from litellm.llms.openai.chat.gpt_reasoning_transformation import OpenAIGPT5Config
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
@@ -148,6 +149,10 @@ def _chat_gate_refuses_reasoning_effort_none(model: str, custom_llm_provider: st
             return OpenAIGPT5Config.refuses_reasoning_effort_level(model, "none")
 
 
+def serves_only_responses(model: str, custom_llm_provider: str) -> bool:
+    return custom_llm_provider == LlmProviders.VERTEX_AI.value and is_vertex_muse_model(model)
+
+
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
@@ -188,39 +193,18 @@ def responses_api_bridge_check(
     if custom_llm_provider == LlmProviders.AZURE_AI.value and is_foundry_project_agent(model):
         model_info["mode"] = "responses"
 
+    if serves_only_responses(model, custom_llm_provider):
+        model_info["mode"] = "responses"
+
     if web_search_options is not None and custom_llm_provider == "xai":
         model_info["mode"] = "responses"
         model = model.replace("responses/", "")
 
-    # OpenAI/Azure GPT-5 chat-completions that need Responses-only fields (e.g.
-    # ``reasoningSummary`` in ``extra_body``) must be bridged; Chat Completions rejects
-    # those keys.
-    #
-    # - gpt-5.4+: FUNCTION tools with reasoning active must be bridged. OpenAI enables
-    #   reasoning by default for these models (unset reasoning_effort means medium
-    #   server-side), and Chat Completions rejects function tools whenever reasoning is
-    #   on ("Function tools with reasoning_effort are not supported ... use
-    #   /v1/responses or set reasoning_effort to 'none'"), so only an explicit
-    #   ``"none"`` the chat gate forwards keeps the request chat-servable: a ``none``
-    #   the model's map row refuses is dropped (or refused) before the call, which
-    #   leaves the provider's default effort in force. Custom (grammar) tools are served
-    #   natively by Chat Completions with reasoning on, so custom-only requests stay on
-    #   chat and keep their native custom tool_call response shape.
-    # - The UNSET-effort arm only fires against endpoints known to enforce that
-    #   constraint (any api.openai.com host, or Azure OpenAI where api_base is
-    #   always set): chat-only OpenAI-compatible backends registered under the openai
-    #   provider with a custom api_base and gpt-5.4+ model names serve tools without
-    #   reasoning fine and have no /responses route, so they keep pre-existing
-    #   behavior (bridge only on an explicit reasoning_effort).
-    # - Azure AI Foundry's OpenAI v1 hosts (azure_ai provider) enforce it later in the series:
-    #   an explicit effort with function tools is rejected from gpt-5.6 on, and the unset
-    #   effort only from gpt-6 on (gpt-5.6 serves tools with reasoning silently off), so the
-    #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
-    # - Bedrock Mantle serves the same API and enforces the gpt-5.4+ rule even with the effort
-    #   unset (measured on gpt-5.6-terra), so a Mantle row that also serves Responses follows
-    #   these rules, which keeps a deployment pinned to ``mode: chat`` from a 400 on them.
-    # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
-    #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
+    # Function tools with explicit active reasoning bridge on GPT-5.4+. With effort unset,
+    # OpenAI/Azure and Responses-capable Mantle endpoints bridge only GPT-5.6+ whose map
+    # default is not "none". Custom OpenAI-compatible endpoints keep unset effort on chat.
+    # Foundry uses its separate measured boundaries. Custom-only tools remain chat-native;
+    # reasoning summaries and tool_search retain their independent Responses requirements.
     has_function_tool: Final = any(
         (
             tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
@@ -274,7 +258,14 @@ def responses_api_bridge_check(
             if on_foundry_openai_endpoint
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(gpt_series_name)
-                and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
+                and (
+                    reasoning_effort is not None
+                    or (
+                        on_constraint_enforcing_endpoint
+                        and OpenAIGPT5Config.is_model_gpt_5_6_plus_model(gpt_series_name)
+                        and model_info.get("default_reasoning_effort") != "none"
+                    )
+                )
             )
         )
     )

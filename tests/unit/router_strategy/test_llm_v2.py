@@ -8,7 +8,6 @@ from pydantic import ValidationError
 
 import litellm
 from litellm import ModelResponse, Router
-from litellm.caching.dual_cache import DualCache
 from litellm.router_api import RoutingContext
 from litellm.router_strategy.auto_router.auto_router_model_naming import strategy_router_dependencies
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -24,6 +23,7 @@ from litellm.router_strategy.complexity_router.llm_v2 import (
     llm_v2_response_format,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from tests.unit.redis.stores.router_session_pins_memory import memory_pins
 
 
 def _config(**overrides: object) -> ComplexityRouterConfig:
@@ -564,7 +564,7 @@ def test_response_schema_requires_both_model_forecasts() -> None:
 @pytest.mark.asyncio
 async def test_user_turn_mode_reuses_forecast_until_a_new_user_requirement() -> None:
     router, client = _router(_verdict().model_dump_json(), _config(classification_mode="user_turn"))
-    client.health.return_value.store = DualCache()
+    client.health.return_value.session_pins = memory_pins()
     initial: Final = [{"role": "user", "content": "Fix nested behavior"}]
     first: Final = await router.async_pre_routing_hook(
         model="v2-router", messages=initial, request_kwargs={"metadata": {"session_id": "v2-task"}}

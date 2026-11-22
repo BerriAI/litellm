@@ -1,0 +1,121 @@
+{
+  "requests": [
+    {
+      "method": "POST",
+      "target": "/anthropic/v1/messages",
+      "headers": {
+        "accept": [
+          "*/*"
+        ],
+        "accept-encoding": [
+          "gzip,deflate"
+        ],
+        "anthropic-version": [
+          "2023-06-01"
+        ],
+        "content-length": [
+          "671"
+        ],
+        "content-type": [
+          "application/json"
+        ],
+        "host": [
+          "<upstream-address>"
+        ],
+        "x-api-key": [
+          "<api-key>"
+        ]
+      },
+      "body": {
+        "model": "claude-sonnet-4-5",
+        "messages": [
+          {
+            "role": "user",
+            "content": "weather in Paris?"
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {
+                  "city": "Paris"
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01",
+                "content": "sunny"
+              }
+            ]
+          }
+        ],
+        "max_tokens": 16,
+        "system": [
+          {
+            "type": "text",
+            "text": "be terse",
+            "cache_control": {
+              "type": "ephemeral",
+              "ttl": "5m"
+            }
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_weather",
+            "description": "Weather for a city",
+            "input_schema": {
+              "type": "object",
+              "properties": {
+                "city": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "city"
+              ]
+            }
+          },
+          {
+            "name": "get_time",
+            "input_schema": {
+              "type": "object"
+            }
+          }
+        ],
+        "tool_choice": {
+          "type": "tool",
+          "name": "get_weather"
+        }
+      }
+    }
+  ],
+  "outcome": {
+    "complete": {
+      "id": "msg_1",
+      "type": "message",
+      "role": "assistant",
+      "model": "claude-sonnet-4-5",
+      "content": [
+        {
+          "type": "text",
+          "text": "hi"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "usage": {
+        "input_tokens": 1,
+        "output_tokens": 2
+      }
+    }
+  }
+}

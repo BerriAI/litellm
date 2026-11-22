@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Final
 
 import pytest
@@ -24,15 +24,26 @@ from litellm.litellm_core_utils.get_model_cost_map import (
     GetModelCostMap,
     ModelCostMapReloaded,
     ModelCostMapReloadUnavailable,
+    fetch_registration_document,
     get_model_cost_map_provenance,
+    git_blob_id,
     install_model_cost_map,
     refetch_model_cost_map,
+    registration_rows,
 )
 from litellm.rust_bridge._native import NativeInstalled, NativeModelCostMap, NativeRegistered
 from litellm.utils import catalog_with_runtime_registrations, get_model_cost_key, runtime_model_cost_registrations
 
 FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _BUNDLED: Final = GetModelCostMap.read_local_model_cost_map_bytes()
+
+
+def _marked_utf8(text: str) -> bytes:
+    return b"\xef\xbb\xbf" + text.encode()
+
+
+def _utf16(text: str) -> bytes:
+    return text.encode("utf-16")
 
 
 def _document_with(**rows: Mapping[str, object]) -> bytes:
@@ -369,6 +380,82 @@ def test_install_hands_the_fallback_rules_to_the_generalization_lookup():
         assert FALLBACK_GENERALIZATIONS_KEY not in litellm.model_cost
     finally:
         set_fallback_generalizations(previous)
+
+
+@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize("value", ["mirrored 2026-11-30", None, [1, 2], 5], ids=["string", "null", "list", "number"])
+def test_a_document_with_a_top_level_value_that_is_not_a_row_changes_nothing(value: object):
+    installed: Final = litellm.model_cost
+    price: Final = installed["gpt-4o"]["input_cost_per_token"]
+    provenance: Final = get_model_cost_map_provenance()
+    body: Final = json.dumps(
+        {
+            **json.loads(_BUNDLED),
+            "gpt-4o": {"litellm_provider": "openai", "input_cost_per_token": 0.5},
+            "_comment": value,
+        }
+    ).encode()
+
+    result: Final = install_model_cost_map(body)
+
+    assert isinstance(result, ModelCostMapReloadUnavailable)
+    assert "_comment" in result.reason
+    assert litellm.model_cost is installed
+    assert litellm.model_cost["gpt-4o"]["input_cost_per_token"] == price
+    assert get_model_cost_map_provenance() == provenance
+
+
+@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize(
+    "encode",
+    [_marked_utf8, _utf16],
+    ids=["utf-8-byte-order-mark", "utf-16"],
+)
+def test_a_document_that_starts_with_a_byte_order_mark_installs(encode: Callable[[str], bytes]):
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 0.5}
+
+    result: Final = install_model_cost_map(encode(_document_with(**{"lit-marked": row}).decode()))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert litellm.model_cost["lit-marked"] == row
+
+
+@pytest.mark.parametrize("encode", [str.encode, _marked_utf8, _utf16], ids=["utf-8", "utf-8-byte-order-mark", "utf-16"])
+def test_a_registration_document_reads_as_its_rows_without_the_rules_block(encode: Callable[[str], bytes]):
+    row: Final = {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06}
+
+    rows: Final = registration_rows(encode(json.dumps({"lit-url-model": row, FALLBACK_GENERALIZATIONS_KEY: {}})))
+
+    assert rows == {"lit-url-model": row}
+
+
+@pytest.mark.parametrize(
+    "body", [b"not json", b"[1, 2]", b'{"lit-url-model": "not a row"}'], ids=["text", "list", "row"]
+)
+def test_a_registration_document_that_is_not_an_object_of_rows_is_a_value_error(body: bytes):
+    with pytest.raises(ValueError):  # noqa: PT011  # the message is json's or pydantic's, only the type is ours
+        registration_rows(body)
+
+
+def test_register_model_from_a_url_fetches_nothing_in_offline_mode(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+):
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", "true")
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        document: Final = fetch_registration_document("http://127.0.0.1:9/cost.json")
+
+    assert document is None
+    assert "did not fetch http://127.0.0.1:9/cost.json because LITELLM_OFFLINE_MODE is set" in caplog.text
+
+
+@pytest.mark.usefixtures("own_model_cost")
+def test_git_blob_id_is_the_revision_an_install_records():
+    body: Final = _document_with(**{"lit-revision": {"litellm_provider": "openai", "mode": "chat"}})
+
+    install_model_cost_map(body)
+
+    assert git_blob_id(body) == get_model_cost_map_provenance()["source_revision"]
 
 
 @pytest.mark.usefixtures("own_model_cost")

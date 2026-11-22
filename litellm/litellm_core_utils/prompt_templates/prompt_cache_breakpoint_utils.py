@@ -204,6 +204,17 @@ def chat_completion_prompt_cache_breakpoints_for_wire(message: _MarkedT, drop_pa
     return cast(_MarkedT, {**message, "content": parts})  # cast-ok: same message shape with its parts' markers trimmed
 
 
+def with_only_content_part_prompt_cache_breakpoints(message: _MarkedT) -> _MarkedT:
+    """A message keeping only its content parts' ``prompt_cache_breakpoint``, cut down to what chat completions
+    accepts. The message's own marker, its tool calls' and a tool result's parts' are removed."""
+    stripped: Final = without_prompt_cache_breakpoints(message)
+    content: Final = message.get("content")
+    if message.get("role") == "tool" or not isinstance(content, list):
+        return stripped
+    marked: Final = cast(_MarkedT, {**stripped, "content": content})  # cast-ok: same message shape, parts restored
+    return chat_completion_prompt_cache_breakpoints_for_wire(marked, True)
+
+
 LITELLM_RESPONSE_ONLY_MESSAGE_FIELDS: Final = frozenset(
     {"thinking_blocks", "reasoning_items", "provider_specific_fields"}
 )
