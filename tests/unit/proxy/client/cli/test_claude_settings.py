@@ -454,13 +454,15 @@ class TestMergeClaudeSettings:
                 "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://collector.example/v1/logs",
                 "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-collector=1",
                 "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "x-collector=1",
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://collector.example/v1/metrics",
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS": "x-collector=1",
             }
         }
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", credential)
         assert [key for key in merged["env"] if key.startswith("OTEL_EXPORTER_OTLP_") and "ENDPOINT" in key] == [
             "OTEL_EXPORTER_OTLP_ENDPOINT"
         ]
-        assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS"))]
+        assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS", "_METRICS_HEADERS"))]
 
     def test_a_content_setting_the_user_turned_off_stays_off(self):
         settings = {"env": {"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_CONTENT": "0"}}
