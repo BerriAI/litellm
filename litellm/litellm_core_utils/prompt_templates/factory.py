@@ -1771,7 +1771,7 @@ def _skip_unfetched_tool_media(
             model=model or "",
             llm_provider=custom_llm_provider,
         )
-    verbose_logger.warning("Failed to process media in tool response: %s", reason)
+    verbose_logger.warning("Dropped media from a tool result because it could not be downloaded")
 
 
 def _function_response_part(part: VertexPartType) -> FunctionResponsePartType:

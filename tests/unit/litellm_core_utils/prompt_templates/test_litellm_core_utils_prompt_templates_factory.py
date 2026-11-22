@@ -2787,6 +2787,28 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
     assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
 
 
+@pytest.mark.parametrize(
+    ("part_type", "drop_params"),
+    [pytest.param("video_url", True, id="video-under-drop-params"), pytest.param("image_url", False, id="image")],
+)
+def test_dropped_tool_result_media_keeps_its_signed_link_out_of_the_logs(
+    part_type: str, drop_params: bool, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": signed_url}})
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider="gemini", drop_params=drop_params
+        )
+
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+    assert caplog.records
+    assert signature not in caplog.text
+
+
 _MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
 _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
