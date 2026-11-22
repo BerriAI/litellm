@@ -1136,13 +1136,19 @@ if MCP_AVAILABLE:
         if not isinstance(request, StarletteRequest):
             raise HTTPException(status_code=400, detail="Subscriptions require an HTTP request")
         async with _legacy_operation_context(ctx, trace=False) as initial:
+            toolset_id: Final = (
+                initial.user_api_key_auth.mcp_toolset_id if initial.user_api_key_auth is not None else None
+            )
 
             async def authorize() -> OperationContext:
                 auth, token, servers, server_headers, oauth_headers, headers = await extract_mcp_auth_context(
                     request.scope, request.url.path
                 )
+                scoped_auth: Final = (
+                    await apply_toolset_scope(auth, toolset_id) if toolset_id and auth is not None else auth
+                )
                 return operations.prepare_context(
-                    auth,
+                    scoped_auth,
                     token,
                     servers,
                     server_headers,
@@ -1152,7 +1158,7 @@ if MCP_AVAILABLE:
                     False,
                     initial.wire_compat,
                     initial.protocol_version,
-                    incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth),
+                    incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, scoped_auth),
                 )
 
             authorization: Final = SubscriptionAuthorization(initial, authorize, _owner_fingerprint_for)

@@ -534,3 +534,270 @@ async def test_tools_listing_propagates_other_mcp_errors(monkeypatch: pytest.Mon
         await subscriptions._listing(ToolsListChanged(), listener_context)
 
     assert exc_info.value is failure
+
+
+@pytest.mark.asyncio
+async def test_toolset_subscription_authorization_preserves_scope_and_dashboard_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.mcp_server import operations, server, ui_session_utils
+
+    granted_toolsets: Final = {"ts-1"}
+    toolset_perms: Final = {"srv-portal": ["stages_update_stage_forecast"]}
+    dashboard_user: Final = UserAPIKeyAuth(
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="user-op",
+            mcp_servers=["srv-portal", "srv-stalled"],
+        ),
+    )
+
+    async def fake_granted(_user: UserAPIKeyAuth) -> frozenset[str]:
+        return frozenset(granted_toolsets)
+
+    async def fake_acting(user: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        return user.model_copy(update={"user_id": "user-1", "team_id": None})
+
+    async def fake_extract(_scope: object, _path: str) -> tuple[
+        UserAPIKeyAuth,
+        None,
+        None,
+        None,
+        None,
+        object,
+    ]:
+        return (dashboard_user.model_copy(deep=True), None, None, None, None, {})
+
+    monkeypatch.setattr(ui_session_utils, "acting_user_auth", fake_acting)
+    monkeypatch.setattr(ui_session_utils, "granted_toolset_ids", fake_granted)
+    monkeypatch.setattr(
+        operations.global_mcp_server_manager,
+        "resolve_toolset_tool_permissions",
+        AsyncMock(return_value=toolset_perms),
+    )
+    monkeypatch.setattr(server, "extract_mcp_auth_context", fake_extract)
+    monkeypatch.setattr(
+        server,
+        "apply_toolset_scope",
+        lambda auth, ts_id: server._apply_toolset_scope(
+            auth, ts_id, acting_user=fake_acting, granted=fake_granted
+        ),
+    )
+
+    scoped_initial: Final = await server.apply_toolset_scope(dashboard_user, "ts-1")
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    http_request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+    ctx: Final = ServerRequestContext(
+        session=session,
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="notifications/initialized",
+        request_id=None,
+        request=http_request,
+    )
+
+    auth_token: Final = server.auth_context_var.set(
+        server.MCPAuthenticatedUser(
+            user_api_key_auth=scoped_initial,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={},
+            client_ip="127.0.0.1",
+        )
+    )
+    try:
+        async with server._subscription_authorization(ctx) as authorization:
+            refreshed: Final = await authorization()
+            assert refreshed.user_api_key_auth is not None
+            assert refreshed.user_api_key_auth.mcp_toolset_id == "ts-1"
+            assert refreshed.user_api_key_auth.object_permission is not None
+            assert refreshed.user_api_key_auth.object_permission.mcp_servers == ["srv-portal"]
+            assert refreshed.user_api_key_auth.object_permission.mcp_tool_permissions == toolset_perms
+
+            granted_toolsets.clear()
+            with pytest.raises(HTTPException) as denied:
+                await authorization()
+            assert denied.value.status_code == 403
+    finally:
+        server.auth_context_var.reset(auth_token)
+
+
+@pytest.mark.asyncio
+async def test_toolset_legacy_tools_list_ignores_unrelated_stalled_servers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.mcp_server import catalog, operations, server
+    from litellm.proxy.mcp_server.faults.list_outcomes import ServerListOk
+
+    portal: Final = MCPServer(
+        server_id="srv-portal",
+        name="portal",
+        url="http://portal.local/mcp",
+        transport=MCPTransport.http,
+    )
+    stalled: Final = MCPServer(
+        server_id="srv-stalled",
+        name="stalled",
+        url="http://stalled.local/mcp",
+        transport=MCPTransport.http,
+    )
+    toolset_perms: Final = {portal.server_id: ["stages_update_stage_forecast"]}
+    base_auth: Final = UserAPIKeyAuth(
+        api_key="sk-toolset-test",
+        user_id="user-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-toolset",
+            mcp_servers=[portal.server_id, stalled.server_id],
+            mcp_toolsets=["ts-1"],
+        ),
+    )
+    connects: Final[list[str]] = []  # mutable-ok: append-only log of upstream connection order
+    release_stalled: Final = asyncio.Event()
+
+    class _FakeUpstreamClient:
+        def __init__(self, srv: MCPServer) -> None:
+            self._server = srv
+
+        async def subscription_auth_fingerprint(self) -> str:
+            return "fp"
+
+        async def run_with_session(
+            self,
+            operation,
+            on_notification: object = None,
+        ) -> None:
+            from mcp.types import ServerCapabilities, ToolsCapability
+
+            _ = on_notification
+            connects.append(self._server.name)
+            if self._server.server_id == stalled.server_id:
+                await release_stalled.wait()
+                return
+            upstream: Final = SimpleNamespace(
+                server_capabilities=ServerCapabilities(tools=ToolsCapability(list_changed=True)),
+                protocol_version="2025-11-25",
+                send_ping=AsyncMock(),
+            )
+            await operation(upstream)
+
+    async def fake_allowed(
+        user_api_key_auth: UserAPIKeyAuth | None = None,
+        mcp_servers: object = None,
+        client_ip: str | None = None,
+    ) -> tuple[MCPServer, ...]:
+        _ = (mcp_servers, client_ip)
+        if user_api_key_auth and user_api_key_auth.object_permission and user_api_key_auth.object_permission.mcp_servers:
+            allowed_ids: Final = frozenset(user_api_key_auth.object_permission.mcp_servers)
+            return tuple(s for s in (portal, stalled) if s.server_id in allowed_ids)
+        return (portal, stalled)
+
+    async def fake_extract(_scope: object, _path: str) -> tuple[
+        UserAPIKeyAuth,
+        None,
+        None,
+        None,
+        None,
+        object,
+    ]:
+        return (base_auth.model_copy(deep=True), None, None, None, None, {})
+
+    async def fake_tools(
+        _srv: MCPServer,
+        **_kwargs: object,  # kwargs-ok: matches catalog.get_filtered_server_tools mock contract
+    ) -> tuple[ListToolsResult, ServerListOk]:
+        from mcp.types import Tool
+
+        return (
+            ListToolsResult(tools=[Tool(name="stages_update_stage_forecast", inputSchema={"type": "object"})]),
+            ServerListOk(tool_count=1),
+        )
+
+    monkeypatch.setattr(operations.global_mcp_server_manager, "registry", {portal.server_id: portal, stalled.server_id: stalled})
+    monkeypatch.setattr(
+        operations.global_mcp_server_manager,
+        "resolve_toolset_tool_permissions",
+        AsyncMock(return_value=toolset_perms),
+    )
+    monkeypatch.setattr(
+        operations.global_mcp_server_manager,
+        "create_mcp_client",
+        AsyncMock(side_effect=lambda srv, **__: _FakeUpstreamClient(srv)),
+    )
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", fake_allowed)
+    monkeypatch.setattr(catalog, "get_filtered_server_tools", fake_tools)
+    monkeypatch.setattr(server, "extract_mcp_auth_context", fake_extract)
+
+    scoped_auth: Final = await server.apply_toolset_scope(base_auth, "ts-1")
+    session: Final = Mock(spec=ServerSession)
+    session.client_params = Mock()
+    http_request: Final = StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+    init_ctx: Final = ServerRequestContext(
+        session=session,
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="notifications/initialized",
+        request_id=None,
+        request=http_request,
+    )
+    list_ctx: Final = ServerRequestContext(
+        session=session,
+        lifespan_context=None,
+        protocol_version="2025-11-25",
+        method="tools/list",
+        request_id="req-list",
+        request=http_request,
+    )
+
+    from mcp.types import NotificationParams, PaginatedRequestParams
+
+    auth_token: Final = server.auth_context_var.set(
+        server.MCPAuthenticatedUser(
+            user_api_key_auth=scoped_auth,
+            mcp_auth_header=None,
+            mcp_servers=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={},
+            client_ip="127.0.0.1",
+        )
+    )
+    init_task: Final = asyncio.create_task(server.legacy_notifications(init_ctx, NotificationParams()))
+    try:
+        result: Final = await asyncio.wait_for(
+            server.handle_list_tools(list_ctx, PaginatedRequestParams()),
+            timeout=2.0,
+        )
+        assert [tool.name for tool in result.tools] == ["stages_update_stage_forecast"]
+        assert connects == ["portal"]
+    finally:
+        release_stalled.set()
+        init_task.cancel()
+        await asyncio.gather(init_task, return_exceptions=True)
+        server.auth_context_var.reset(auth_token)
