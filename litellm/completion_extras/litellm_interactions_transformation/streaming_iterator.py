@@ -218,6 +218,21 @@ def build_stream_exception(
             )
 
 
+_NO_STEP: Final[JsonMapping] = MappingProxyType({})
+
+
+def _merged_value(known: JsonValue | None, update: JsonValue) -> JsonValue:
+    if isinstance(known, list) and isinstance(update, list):
+        return [*known, *(item for item in update if item not in known)]
+    if isinstance(known, dict) and isinstance(update, dict):
+        return {**known, **{key: _merged_value(known.get(key), value) for key, value in update.items()}}
+    return update if update or known is None else known
+
+
+def _merged_step(known: JsonMapping, update: JsonMapping) -> JsonMapping:
+    return {**known, **{key: _merged_value(known.get(key), value) for key, value in update.items()}}
+
+
 class InteractionsChatStreamingIterator:
     def __init__(
         self,
@@ -255,7 +270,7 @@ class InteractionsChatStreamingIterator:
         self._unsigned_tools: Final[dict[int, tuple[int, str]]] = {}  # mutable-ok: thought-step -> unsigned tool slot
         self._text_pieces: Final[list[str]] = []  # mutable-ok: per-stream answer text, joined only for citations
         self._text_length: int = 0
-        self._grounding_steps: Final[dict[tuple[int, str], JsonMapping]] = {}  # mutable-ok: per-stream grounding steps
+        self._grounding_steps: Final[dict[int, JsonMapping]] = {}  # mutable-ok: per-stream grounding steps by index
         self._cited_spans: Final[list[JsonValue]] = []  # mutable-ok: per-stream citations in joined-answer bytes
         self._last_text_start: int = 0
         self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
@@ -479,7 +494,7 @@ class InteractionsChatStreamingIterator:
         return _MediaDelta(audio=audio) if audio is not None else None
 
     def _record_grounding(self, step_index: int, raw_step: JsonMapping) -> tuple[ModelResponseStream, ...]:
-        self._grounding_steps.setdefault((step_index, json.dumps(raw_step, sort_keys=True)), raw_step)
+        self._grounding_steps[step_index] = _merged_step(self._grounding_steps.get(step_index, _NO_STEP), raw_step)
         return ()
 
     def _handle_step_delta(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:

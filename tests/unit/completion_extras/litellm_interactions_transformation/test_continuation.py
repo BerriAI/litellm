@@ -759,7 +759,13 @@ def _grounded_sse(*, whole_steps_on_start: bool = False) -> httpx.Response:
                     if whole_steps_on_start
                     else ()
                 ),
-                {"event_type": "step.delta", "index": position, "delta": call},
+                {
+                    "event_type": "step.delta",
+                    "index": position,
+                    "delta": {key: value for key, value in call.items() if key not in ("id", "call_id")}
+                    if whole_steps_on_start
+                    else call,
+                },
             )
         ),
         {"event_type": "step.start", "index": 3, "step": {"type": "model_output"}},
