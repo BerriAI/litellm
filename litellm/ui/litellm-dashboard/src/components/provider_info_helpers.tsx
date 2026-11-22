@@ -355,7 +355,7 @@ export const provider_map: Record<string, string> = {
   ZeroGPU: "zerogpu",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama", "perplexity_orchestrator"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
