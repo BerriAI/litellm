@@ -18,6 +18,7 @@ import pytest
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
+from litellm.llms.anthropic.chat.guardrail_translation import handler as handler_module
 from litellm.llms.anthropic.chat.guardrail_translation.handler import (
     AnthropicMessagesHandler,
 )
@@ -3377,6 +3378,10 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
             )
         )
 
+    def _sent_tools_in_provider_order(self) -> list[object]:
+        sent: Final = self._sent_tools()
+        return [self._GOOGLE_MAPS, *(tool for tool in sent if tool != self._GOOGLE_MAPS)]
+
     async def _tools_after(self, guardrail: CustomGuardrail, sent_tools: list[object] | None = None) -> list[object]:
         data: Final[dict[str, object]] = {
             "model": "claude-haiku-4-5",
@@ -3392,23 +3397,27 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         ids=["same-tools-handed-back", "equal-copy-handed-back"],
     )
     async def test_unchanged_tools_are_not_rewritten(self, guardrail: CustomGuardrail) -> None:
-        assert await self._tools_after(guardrail) == self._sent_tools()
+        assert await self._tools_after(guardrail) == self._sent_tools_in_provider_order()
 
     @pytest.mark.parametrize("in_place", [True, False], ids=["edited-in-place", "edited-on-a-copy"])
     async def test_only_the_tool_the_guardrail_changed_is_rewritten(self, in_place: bool) -> None:
         tools: Final = await self._tools_after(ToolDescriptionMaskingGuardrail(tool_name="Read", in_place=in_place))
 
-        assert tools == [{**self._READ, "type": "custom", "description": "[MASKED]"}, *self._sent_tools()[1:]]
+        assert tools == [
+            self._GOOGLE_MAPS,
+            {**self._READ, "type": "custom", "description": "[MASKED]"},
+            *self._sent_tools_in_provider_order()[2:],
+        ]
 
     async def test_a_tool_the_guardrail_removed_stays_removed_and_the_rest_are_not_rewritten(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write"))
 
-        assert tools == self._sent_tools()[:-1]
+        assert tools == self._sent_tools_in_provider_order()[:-1]
 
     async def test_a_removed_tool_stays_removed_when_the_guardrail_reorders_the_request_tools(self):
         tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name="Write", reverses_request_tools=True))
 
-        assert tools == self._sent_tools()[:-1]
+        assert tools == self._sent_tools_in_provider_order()[:-1]
 
     async def test_a_guardrail_removing_every_tool_it_saw_leaves_only_the_tools_it_never_saw(self):
         tools: Final = await self._tools_after(AllToolsRemovingGuardrail(guardrail_name="test"))
@@ -3419,7 +3428,7 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
         tools: Final = await self._tools_after(ToolAppendingGuardrail(guardrail_name="test"))
 
         assert tools[-1]["name"] == "injected_tool"
-        assert tools[:-1] == self._sent_tools()
+        assert tools[:-1] == self._sent_tools_in_provider_order()
 
     async def test_an_openai_format_tool_still_reaches_the_provider_in_anthropic_format(self):
         openai_format: Final[dict[str, object]] = {
@@ -3482,16 +3491,52 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [self._READ, self._DEFERRED]
 
-    async def test_a_tool_the_guardrail_renamed_goes_after_the_tools_that_kept_their_place(self):
+    async def test_a_tool_the_guardrail_renamed_stays_where_the_guardrail_put_it(self):
         def renamed(returned: list[object]) -> list[object]:
             first: Final = cast(dict[str, dict[str, object]], json.loads(json.dumps(returned[0])))
             return [{**first, "function": {**first["function"], "name": "ReadFile"}}, *returned[1:]]
 
+        cached_write: Final[dict[str, object]] = {**self._WRITE, "cache_control": {"type": "ephemeral"}}
         tools: Final = await self._tools_after(
-            ReturnedToolsRewritingGuardrail(renamed), json.loads(json.dumps([self._READ, self._WRITE]))
+            ReturnedToolsRewritingGuardrail(renamed), json.loads(json.dumps([self._READ, cached_write]))
         )
 
-        assert tools == [self._WRITE, {**self._READ, "name": "ReadFile", "type": "custom"}]
+        assert tools == [{**self._READ, "name": "ReadFile", "type": "custom"}, cached_write]
+
+    async def test_tools_reach_the_provider_in_the_order_the_guardrail_returned_them(self):
+        tools: Final = await self._tools_after(
+            ReturnedToolsRewritingGuardrail(lambda returned: returned[::-1]),
+            json.loads(json.dumps([self._READ, self._DEFERRED, self._WRITE])),
+        )
+
+        assert tools == [self._WRITE, self._DEFERRED, self._READ]
+
+    async def test_the_work_to_write_back_renamed_tools_grows_in_step_with_the_tool_count(self):
+        def renamed(returned: list[object]) -> list[object]:
+            tools: Final = cast(list[dict[str, dict[str, object]]], json.loads(json.dumps(returned)))
+            return [
+                {**tool, "function": {**tool["function"], "name": f"{tool['function']['name']}_v2"}} for tool in tools
+            ]
+
+        async def field_reads(tool_count: int) -> int:
+            reads: Final[list[object]] = []
+            read_fields: Final = handler_module.as_str_mapping
+
+            def counted(value: object) -> object:
+                reads.append(value)
+                return read_fields(value)
+
+            with patch.object(handler_module, "as_str_mapping", counted):
+                tools: Final = await self._tools_after(
+                    ReturnedToolsRewritingGuardrail(renamed),
+                    [{**self._READ, "name": f"tool_{index}"} for index in range(tool_count)],
+                )
+            assert [cast(dict[str, object], tool)["name"] for tool in tools] == [
+                f"tool_{index}_v2" for index in range(tool_count)
+            ]
+            return len(reads)
+
+        assert await field_reads(400) < 3 * await field_reads(200)
 
 
 class TestAnthropicMessagesHandlerStreamingScanKey:

@@ -14,7 +14,7 @@ Pattern Overview:
 
 import json
 from collections import Counter
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, filterfalse, repeat
@@ -472,51 +472,26 @@ def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
     )
 
 
-def _declared_tool_name(tool: object) -> object:
-    fields: Final = as_str_mapping(tool)
-    if fields is None:
-        return None
-    function: Final = as_str_mapping(fields.get("function"))
-    return fields.get("name") if function is None else function.get("name")
+def _as_sent_by_fingerprint(
+    shown_tools: Sequence[object], shown_fingerprints: Sequence[str], returned_counts: Mapping[str, int]
+) -> Mapping[str, Iterator[object]]:
+    """
+    The caller's tools the guardrail returned unchanged, keyed by what the guardrail was shown.
+    When it returned fewer of an identical-looking group than it was shown, the last ones are kept.
+    """
+    if len(shown_tools) != len(shown_fingerprints):
+        return {}
+    by_fingerprint: Final[dict[str, list[object]]] = {}  # mutable-ok: built here, read-only to the caller
+    for tool, fingerprint in zip(shown_tools, shown_fingerprints):
+        if not _is_openai_format_tool(tool):
+            by_fingerprint.setdefault(fingerprint, []).append(tool)
+    return {
+        fingerprint: iter(tools[max(0, len(tools) - returned_counts.get(fingerprint, 0)) :])
+        for fingerprint, tools in by_fingerprint.items()
+    }
 
 
-def _open_position_named(
-    name: object, request_tools: Sequence[object], open_positions: Sequence[int], taken: Mapping[int, object]
-) -> int | None:
-    if name is None:
-        return None
-    return next(
-        (
-            position
-            for position in open_positions
-            if position not in taken and _declared_tool_name(request_tools[position]) == name
-        ),
-        None,
-    )
-
-
-def _rewritten_in_place(
-    request_tools: Sequence[object],
-    open_positions: Sequence[int],
-    converted: Sequence[AllAnthropicToolsValues],
-) -> Mapping[int, AllAnthropicToolsValues]:
-    rewritten: Final[dict[int, AllAnthropicToolsValues]] = {}  # mutable-ok: built here, read-only to the caller
-    for tool in converted:
-        rewritten.update(
-            (position, tool)
-            for position in (_open_position_named(_declared_tool_name(tool), request_tools, open_positions, rewritten),)
-            if position is not None
-        )
-    return rewritten
-
-
-def _occurrences(fingerprints: Iterable[str]) -> tuple[int, ...]:
-    seen: Final[Counter[str]] = Counter()  # mutable-ok: running count local to this call
-    occurrences: Final[list[int]] = []  # mutable-ok: built here, returned as a tuple
-    for fingerprint in fingerprints:
-        seen[fingerprint] += 1
-        occurrences.append(seen[fingerprint])
-    return tuple(occurrences)
+_NOT_AS_SENT: Final = object()
 
 
 def _tools_after_guardrail(
@@ -525,50 +500,28 @@ def _tools_after_guardrail(
     returned_tools: Sequence[ChatCompletionToolParam],
     original_names: Mapping[str, str],
 ) -> list[object]:  # mutable-ok: becomes the request body's tools
-    shown_positions: Final = tuple(
-        position for position, tool in enumerate(request_tools) if not _is_hidden_from_guardrail(tool)
-    )
-    shown: Final = (
-        tuple(zip(shown_positions, shown_fingerprints)) if len(shown_positions) == len(shown_fingerprints) else ()
-    )
+    """
+    The guardrail's tools in the order it returned them: a tool it left alone as the caller sent it,
+    any other converted to Anthropic format. Tools it was never shown go first.
+    """
+    never_shown: Final = tuple(tool for tool in request_tools if _is_hidden_from_guardrail(tool))
+    shown: Final = tuple(tool for tool in request_tools if not _is_hidden_from_guardrail(tool))
     returned_fingerprints: Final = tuple(map(stream_item_fingerprint, returned_tools))
-    returned_counts: Final = Counter(returned_fingerprints)
-    as_sent_candidates: Final = tuple(
-        (position, fingerprint)
-        for position, fingerprint in reversed(shown)
-        if not _is_openai_format_tool(request_tools[position])
+    as_sent: Final = _as_sent_by_fingerprint(shown, shown_fingerprints, Counter(returned_fingerprints))
+    anthropic_config: Final = AnthropicConfig()
+    matched: Final = tuple(
+        next(as_sent.get(fingerprint, iter(())), _NOT_AS_SENT) for fingerprint in returned_fingerprints
     )
-    as_sent: Final = tuple(
-        (position, fingerprint)
-        for (position, fingerprint), occurrence in zip(
-            as_sent_candidates, _occurrences(fingerprint for _, fingerprint in as_sent_candidates)
+    kept: Final = tuple(
+        tool
+        for tool in (
+            _converted_tool(anthropic_config, returned, original_names) if original is _NOT_AS_SENT else original
+            for returned, original in zip(returned_tools, matched)
         )
-        if occurrence <= returned_counts[fingerprint]
+        if tool is not None
     )
-    as_sent_positions: Final = frozenset(position for position, _ in as_sent)
-    as_sent_counts: Final = Counter(fingerprint for _, fingerprint in as_sent)
-    removed_or_rewritten: Final = frozenset(shown_positions) - as_sent_positions
-    converted: Final = _converted_tools(
-        tuple(
-            tool
-            for tool, fingerprint, occurrence in zip(
-                returned_tools, returned_fingerprints, _occurrences(returned_fingerprints)
-            )
-            if occurrence > as_sent_counts[fingerprint]
-        ),
-        original_names,
-    )
-    rewritten: Final = _rewritten_in_place(request_tools, sorted(removed_or_rewritten), converted)
-    in_place: Final = tuple(
-        rewritten.get(position, tool)
-        for position, tool in enumerate(request_tools)
-        if position in rewritten or position not in removed_or_rewritten
-    )
-    placed: Final = frozenset(map(id, rewritten.values()))
-    return [
-        *(in_place if converted or len(returned_tools) >= len(shown) else _loaded_up_front(in_place)),
-        *(tool for tool in converted if id(tool) not in placed),
-    ]
+    all_as_sent: Final = _NOT_AS_SENT not in matched
+    return [*never_shown, *(_loaded_up_front(kept) if all_as_sent and len(returned_tools) < len(shown) else kept)]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
