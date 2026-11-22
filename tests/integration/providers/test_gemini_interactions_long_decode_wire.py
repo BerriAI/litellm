@@ -97,3 +97,55 @@ def test_gemini_4_chat_answer_with_no_output_cap_is_not_continued_and_returns_it
         assert choice["finish_reason"] == "length"  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert choice["message"]["content"] == "The first half, "  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert choice["message"]["provider_specific_fields"]["continuation_token"] == "token-after-first-hop"  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+
+
+def _hop_events(hop: dict[str, JsonValue]) -> tuple[bytes, ...]:  # mutable-ok: JSON hop fixture passed as a dict
+    steps: Final = hop["steps"]
+    events: Final = (
+        {"event_type": "interaction.created", "interaction": {"id": hop["id"], "status": "in_progress"}},
+        {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": steps[0]["content"][0]["text"]}},  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON fixture indexed by fixed keys
+        {
+            "event_type": "interaction.completed",
+            "interaction": {key: value for key, value in hop.items() if key != "steps"},
+        },
+    )
+    return (*(f"data: {json.dumps(event)}\n\n".encode() for event in events), b"data: [DONE]\n\n")
+
+
+def _scripted_stream(request: Request) -> Reply:
+    assert request.target == "/v1beta/interactions?alt=sse"
+    hop: Final = _SECOND_HOP if "continuation_token" in json.loads(request.body) else _FIRST_HOP
+    return Reply(content_type="text/event-stream", chunks=_hop_events(hop))
+
+
+def test_gemini_4_chat_stream_google_ends_early_is_continued_under_one_id_with_summed_usage(gateway: Gateway) -> None:
+    with wire_server(_scripted_stream) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_KEY)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": "write it all"}],
+                "max_tokens": 1000,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            key=scenario.key(models=[model]),
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = tuple(
+            _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+            for line in response.text.splitlines()
+            if line.startswith("data: ") and line != "data: [DONE]"
+        )
+        choices: Final = tuple(chunk["choices"][0] for chunk in chunks if chunk.get("choices"))  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        assert "".join(choice["delta"].get("content") or "" for choice in choices) == (  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType, reportAttributeAccessIssue, reportOptionalMemberAccess, reportUnknownMemberType, reportUnknownArgumentType]  # JSON payload indexed by fixed keys
+            "The first half, then the second half."
+        )
+        assert tuple(choice["finish_reason"] for choice in choices if choice.get("finish_reason")) == ("stop",)  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        assert {chunk["id"] for chunk in chunks} == {"v1_long_decode_first_hop"}
+        usages: Final = tuple(chunk["usage"] for chunk in chunks if chunk.get("usage"))
+        assert usages[-1]["completion_tokens"] == 150  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
+        assert wire.received.qsize() == 2
