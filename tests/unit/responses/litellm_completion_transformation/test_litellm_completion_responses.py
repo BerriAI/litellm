@@ -1586,6 +1586,20 @@ class TestFunctionCallTransformation:
                 id="unsigned-result-of-a-repeated-call",
             ),
             pytest.param(
+                ["call_other", _SIGNED_ID, "call_last"],
+                ["call_paired"],
+                ["call_other", _SIGNED_ID, "call_last"],
+                [_SIGNED_ID],
+                id="unsigned-result-of-a-call-among-others",
+            ),
+            pytest.param(
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                ["call_paired", "call_paired", _SIGNED_ID],
+                ["call_paired"],
+                id="result-of-an-id-made-twice",
+            ),
+            pytest.param(
                 [_SIGNED_ID, _OTHER_SIGNED_ID],
                 [_SIGNED_ID, _OTHER_SIGNED_ID],
                 [_SIGNED_ID, _OTHER_SIGNED_ID],

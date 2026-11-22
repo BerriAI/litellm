@@ -1645,7 +1645,7 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> dict[str, object] | None:
+    def _reconstruct_tool_call_from_tools(tool_call_id: str, tools: Sequence[object]) -> Mapping[str, object] | None:
         """Reconstruct a minimal tool_call definition from tools list."""
         for tool in tools:
             if isinstance(tool, dict):
@@ -1809,7 +1809,7 @@ class LiteLLMCompletionResponsesConfig:
             | ChatCompletionMessageToolCall
             | Message
         ] = list(copy.deepcopy(messages))
-        messages_to_remove: Final = []
+        messages_to_remove: Final[list[int]] = []
 
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database
