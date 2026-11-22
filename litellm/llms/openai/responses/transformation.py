@@ -94,6 +94,7 @@ _COMPACT_TRACKING_PARAMS: Final = frozenset({"metadata", "user"})
 _COMPACT_REJECTED_PARAMS: Final = frozenset(
     {
         "background",
+        "background_options",
         "context_management",
         "max_output_tokens",
         "max_tool_calls",
