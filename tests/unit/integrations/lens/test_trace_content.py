@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from typing import Final
 
 import pytest
+import pytest_asyncio
 from opentelemetry.sdk.trace import ReadableSpan, Span, TracerProvider
 from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -116,7 +117,7 @@ async def _pipeline(
         provider.shutdown()
 
 
-@pytest.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def pipeline(store: _Store) -> AsyncIterator[_Pipeline]:
     async with _pipeline(store) as built:
         yield built
