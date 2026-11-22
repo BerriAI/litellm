@@ -1,7 +1,6 @@
 import asyncio
 import threading
 from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timezone
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -350,23 +349,6 @@ async def test_rows_left_at_shutdown_are_parked_from_the_rust_queue(
     assert len(writer) == 0
 
 
-def _lens_tracing(monkeypatch: pytest.MonkeyPatch) -> AbstractAsyncContextManager[object]:
-    import httpx
-
-    import litellm
-    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
-    from litellm.integrations.lens.remote import LensConnection
-
-    monkeypatch.setattr(litellm, "callbacks", [])
-    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
-    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
-
-    def client(connection: LensConnection) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=connection.url, transport=httpx.MockTransport(lambda _: httpx.Response(204)))
-
-    return manage_tracing(enabled=True, client_factory=client)
-
-
 class _LedgerWriter:
     def __init__(self) -> None:
         self.client: Final = cast(  # cast-ok: FakePrismaClient has the queue attributes the installer reads
@@ -386,24 +368,26 @@ def _ledger_writer() -> _LedgerWriter:
     return _LedgerWriter()
 
 
-@pytest.mark.asyncio
-async def test_native_commit_reports_turn_on_when_lens_starts_after_the_writer(monkeypatch: pytest.MonkeyPatch) -> None:
-    tracing: Final = _lens_tracing(monkeypatch)
-    async with _ledger_writer() as writer:
-        assert writer.commit_reporting is False
-        async with tracing:
-            assert writer.commit_reporting is True
-        assert writer.commit_reporting is False
+class _CommitObserver:
+    def ledger_committed(self, rows: Sequence[Mapping[str, object]]) -> None:
+        return None
 
 
 @pytest.mark.asyncio
-async def test_native_commit_reports_are_on_for_a_writer_installed_while_lens_runs(
+async def test_native_commit_reports_follow_whether_a_commit_observer_is_registered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async with _lens_tracing(monkeypatch):
-        async with _ledger_writer() as writer:
-            assert writer.commit_reporting is True
+    import litellm
+    from litellm.proxy.db.rust_spend_log_writer import sync_native_commit_reporting
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    async with _ledger_writer() as writer:
+        assert writer.commit_reporting is False
+        monkeypatch.setattr(litellm, "callbacks", [_CommitObserver()])
+        sync_native_commit_reporting()
+        assert writer.commit_reporting is True
         async with _ledger_writer() as later:
             assert later.commit_reporting is True
-    async with _ledger_writer() as after_shutdown:
-        assert after_shutdown.commit_reporting is False
+        monkeypatch.setattr(litellm, "callbacks", [])
+        sync_native_commit_reporting()
+        assert writer.commit_reporting is False
