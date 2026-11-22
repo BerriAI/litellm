@@ -1496,6 +1496,9 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
     cost: float | None = None
     """The cost of the request."""
 
+    speed: str | None = None
+    """The provider-reported speed, when the provider reports one."""
+
     @field_validator("cost", mode="before")
     @classmethod
     def parse_cost(cls, v: object) -> object:

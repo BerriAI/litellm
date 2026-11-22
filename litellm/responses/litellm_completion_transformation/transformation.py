@@ -4291,6 +4291,9 @@ class LiteLLMCompletionResponsesConfig:
         if hasattr(usage, "cost") and usage.cost is not None:
             setattr(response_usage, "cost", usage.cost)
 
+        if hasattr(usage, "speed") and usage.speed is not None:
+            setattr(response_usage, "speed", usage.speed)
+
         # Translate prompt_tokens_details to input_tokens_details
         if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
             prompt_details: Final = usage.prompt_tokens_details
