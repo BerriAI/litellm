@@ -309,6 +309,10 @@ pub struct Attempt {
     pub target_order: Option<i64>,
     /// Every deployment `name` resolved to for this caller, the picked one included.
     pub candidate_ids: Vec<String>,
+    /// The deployments a weighted failover hop excluded from the pick.
+    pub excluded: Arc<[String]>,
+    /// The deployments weighted failover already excluded on the way to this level.
+    pub failover_excluded: Arc<[String]>,
     /// 0 for the first attempt in this group, then the retry number.
     pub retry: u32,
     pub fallback_depth: u32,

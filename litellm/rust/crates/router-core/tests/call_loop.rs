@@ -2571,6 +2571,33 @@ async fn a_failed_stream_fails_over_to_another_deployment_of_its_group() {
     assert_eq!(served.output.response, "a2");
 }
 
+#[tokio::test]
+async fn a_failed_failover_stream_falls_back_instead_of_failing_back_to_the_deployment_it_left() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(
+        beside_an_unrelated_group(
+            primary_and_backup(),
+            json!({"enable_weighted_failover": true}),
+        ),
+        falling_back(0),
+        host.clone(),
+    );
+    let failed_over = origin(json!({
+        "deployment_id": "a2",
+        "depth": 1,
+        "level": 1,
+        "excluded": ["a1"],
+        "failover_excluded": ["a1"],
+    }));
+    let taken = router
+        .take_over(request(), failed_over, server_error())
+        .await;
+
+    let served = answer(taken);
+
+    assert_eq!(served.output.response, "b1");
+}
+
 #[rstest]
 #[tokio::test]
 async fn a_level_reports_its_fallback_handling_before_any_hop(config: RouterConfig) {

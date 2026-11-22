@@ -124,6 +124,8 @@ class StreamAttempt:
     committed_budget: int | None = None
     # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
     routed: str | None = None
+    excluded: tuple[str, ...] = ()
+    failover_excluded: tuple[str, ...] = ()
     # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
     explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
@@ -153,6 +155,8 @@ class StreamAttempt:
             "attempted_retries": self.attempted_retries,
             "committed_budget": self.committed_budget,
             "routed": self.routed,
+            "excluded": self.excluded,
+            "failover_excluded": self.failover_excluded,
         }
 
     def policy(self, trigger: BaseException | None = None) -> Mapping[str, object]:

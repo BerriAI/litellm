@@ -43,7 +43,7 @@ pub struct StreamOrigin {
 }
 
 /// A [`StreamOrigin`] as the Python host hands it back. It names the level without the params
-/// and the exclusions the level carried, so a stream that host recovers starts without them.
+/// the level carried, so a stream that host recovers starts without them.
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct Document {
@@ -58,6 +58,8 @@ struct Document {
     committed_budget: Option<u32>,
     /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
     routed: Option<String>,
+    excluded: Vec<String>,
+    failover_excluded: Vec<String>,
 }
 
 impl From<Document> for StreamOrigin {
@@ -67,6 +69,8 @@ impl From<Document> for StreamOrigin {
                 group: document.group,
                 order: document.order,
                 routed: document.routed,
+                excluded: document.excluded.into(),
+                failover_excluded: document.failover_excluded.into(),
                 ..Target::default()
             },
             depth: document.depth,

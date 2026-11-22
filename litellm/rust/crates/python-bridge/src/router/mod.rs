@@ -1747,6 +1747,8 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             routed,
             target_order,
             candidate_ids,
+            excluded_ids,
+            failover_excluded_ids,
             retry,
             fallback_depth,
             fallback_level,
@@ -1768,6 +1770,8 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             dict.set_item("model_group", model_group)?;
             dict.set_item("target_order", target_order)?;
             dict.set_item("candidate_ids", PyList::new(py, candidate_ids)?)?;
+            dict.set_item("excluded_ids", PyTuple::new(py, excluded_ids.iter())?)?;
+            dict.set_item("failover_excluded_ids", PyTuple::new(py, failover_excluded_ids.iter())?)?;
             dict.set_item("retry", retry)?;
             dict.set_item("fallback_depth", fallback_depth)?;
             dict.set_item("fallback_level", fallback_level)?;

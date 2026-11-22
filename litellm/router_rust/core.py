@@ -4156,6 +4156,7 @@ def _seconds(value: object, default: float) -> float | int:
 
 
 _IO_TOKEN_USAGE: Final = TypeAdapter(tuple[int | None, int | None])
+_DEPLOYMENT_IDS: Final = TypeAdapter(tuple[str, ...])
 
 
 # The plans whose kwargs carry `original_generic_function`, which the fallback cooldown reads.
@@ -5144,6 +5145,8 @@ class _Driver:
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
+            excluded=_DEPLOYMENT_IDS.validate_python(step.get("excluded_ids", ())),
+            failover_excluded=_DEPLOYMENT_IDS.validate_python(step.get("failover_excluded_ids", ())),
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
         )

@@ -248,6 +248,10 @@ pub(crate) enum HostCall {
         target_order: Option<i64>,
         /// Every deployment `model` resolved to for this caller, the picked one included.
         candidate_ids: Vec<String>,
+        /// The deployments a weighted failover hop excluded from the pick.
+        excluded_ids: Arc<[String]>,
+        /// The deployments weighted failover already excluded on the way to this level.
+        failover_excluded_ids: Arc<[String]>,
         retry: u32,
         fallback_depth: u32,
         fallback_level: u32,
@@ -846,6 +850,8 @@ impl RouterHost for PythonRouterHost {
             routed: attempt.routed.clone(),
             target_order: attempt.target_order,
             candidate_ids: attempt.candidate_ids.clone(),
+            excluded_ids: attempt.excluded.clone(),
+            failover_excluded_ids: attempt.failover_excluded.clone(),
             retry: attempt.retry,
             fallback_depth: attempt.fallback_depth,
             fallback_level: attempt.fallback_level,

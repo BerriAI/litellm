@@ -333,6 +333,21 @@ async def test_a_mid_stream_server_error_before_content_falls_through_order_tier
     assert headers(stream)["x-litellm-model-group"] == "a"
 
 
+async def test_a_failover_stream_that_fails_before_content_does_not_fail_back_to_the_deployment_it_left(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a1", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/a2", chat_stream(error=server_error(), leading_role_chunk=True))
+    host.answer("openai/b", chat_stream("B"))
+    core = build(
+        make_core, model_list=[deployment("a", "a1"), deployment("a", "a2"), deployment("b", "b")], enable_weighted_failover=True
+    )
+    stream = await open_stream(core)
+    assert await collect_texts(stream) == "B"
+    called: Final = host.deployments_called()
+    assert (sorted(called[:2]), called[2:]) == (["a1", "a2"], ["b"])
+
+
 async def open_team_stream(core: RouterCore, bucket: str) -> object:
     return await core.acompletion(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
         model="tp", messages=MESSAGES, stream=True, **{bucket: {"user_api_key_team_id": "T1"}}
