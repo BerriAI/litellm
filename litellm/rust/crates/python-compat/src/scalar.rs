@@ -1,13 +1,13 @@
 use litellm_host::raw_json;
-use litellm_llms_types::recognized::Recognized;
-use litellm_python_compat::{
+use serde_json::Value;
+
+use crate::{
     Value as PythonValue,
     json::{from_json, loads},
     repr::to_str,
 };
-use serde_json::Value;
 
-pub(crate) fn python_value(value: &Value) -> PythonValue {
+pub fn python_value(value: &Value) -> PythonValue {
     match value {
         Value::String(text) => raw_json::decode(text)
             .and_then(|raw| loads(raw).ok())
@@ -23,7 +23,7 @@ pub(crate) fn python_value(value: &Value) -> PythonValue {
     }
 }
 
-pub(crate) fn python_number(value: &Value) -> Option<f64> {
+pub fn python_number(value: &Value) -> Option<f64> {
     match value {
         Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
         Value::Number(number) => number.as_f64(),
@@ -37,23 +37,13 @@ pub(crate) fn python_number(value: &Value) -> Option<f64> {
     }
 }
 
-pub(crate) fn is_one(value: &Recognized<f64>) -> bool {
-    match value {
-        Recognized::Known(number) => *number == 1.0,
-        Recognized::Unrecognized(other) => python_number(other) == Some(1.0),
-    }
+pub fn known_str<T: serde::Serialize>(known: &T) -> String {
+    serde_json::to_value(known)
+        .map(|known| to_str(&from_json(known)))
+        .unwrap_or_default()
 }
 
-pub(crate) fn python_str<T: serde::Serialize>(value: &Recognized<T>) -> String {
-    match value {
-        Recognized::Known(known) => serde_json::to_value(known)
-            .map(|known| to_str(&from_json(known)))
-            .unwrap_or_default(),
-        Recognized::Unrecognized(other) => unrecognized_str(other),
-    }
-}
-
-fn unrecognized_str(value: &Value) -> String {
+pub fn value_str(value: &Value) -> String {
     match value {
         Value::Null => "None".into(),
         Value::Bool(true) => "True".into(),
@@ -96,18 +86,23 @@ mod tests {
     fn nan_is_a_number_unequal_to_everything() {
         let nan = json!(raw_json::encode("NaN"));
         assert!(python_number(&nan).is_some_and(f64::is_nan));
-        assert!(!is_one(&Recognized::Unrecognized(nan)));
+        assert_ne!(python_number(&nan), Some(1.0));
     }
 
     #[rstest]
-    #[case::known(Recognized::Known(0.5), "0.5")]
-    #[case::known_wide(Recognized::Known(1e16), "1e+16")]
-    #[case::int(Recognized::Unrecognized(json!(0)), "0")]
-    #[case::bool(Recognized::Unrecognized(json!(false)), "False")]
-    #[case::string(Recognized::Unrecognized(json!("0.5")), "0.5")]
-    #[case::nan(Recognized::Unrecognized(json!(raw_json::encode("NaN"))), "nan")]
-    #[case::wide(Recognized::Unrecognized(json!(raw_json::encode("-1180591620717411303424"))), "-1180591620717411303424")]
-    fn values_print_as_python_prints_them(#[case] value: Recognized<f64>, #[case] expected: &str) {
-        assert_eq!(python_str(&value), expected);
+    #[case::half(0.5, "0.5")]
+    #[case::wide(1e16, "1e+16")]
+    fn known_values_print_as_python_prints_them(#[case] value: f64, #[case] expected: &str) {
+        assert_eq!(known_str(&value), expected);
+    }
+
+    #[rstest]
+    #[case::int(json!(0), "0")]
+    #[case::bool(json!(false), "False")]
+    #[case::string(json!("0.5"), "0.5")]
+    #[case::nan(json!(raw_json::encode("NaN")), "nan")]
+    #[case::wide(json!(raw_json::encode("-1180591620717411303424")), "-1180591620717411303424")]
+    fn values_print_as_python_prints_them(#[case] value: Value, #[case] expected: &str) {
+        assert_eq!(value_str(&value), expected);
     }
 }

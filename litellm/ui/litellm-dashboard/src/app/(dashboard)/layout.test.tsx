@@ -130,6 +130,24 @@ describe("(dashboard) Layout", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
   });
 
+  it.each(["/app-groups", "/ui/app-groups/"])(
+    "selects Customer Management when opening %s directly",
+    async (pathname) => {
+      localStorage.setItem("litellm_plugin_mode", "ai-gateway");
+      vi.mocked(usePathname).mockReturnValue(pathname);
+      render(
+        <AuthProvider>
+          <Layout>
+            <p>App groups content</p>
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+      await screen.findByText("App groups content");
+      await waitFor(() => expect(localStorage.getItem("litellm_plugin_mode")).toBe("customer-portal"));
+    },
+  );
+
   it("records one page view per route segment, not per query change", async () => {
     const dashboard = () => (
       <AuthProvider>

@@ -8,7 +8,9 @@ use litellm_redis_client::{Declared, RedisBatch, commands};
 use parking_lot::Mutex;
 
 pub use self::keys::AuthObject;
-pub use self::types::Settings;
+pub use self::types::{
+    Bag, CachedKey, CachedMember, CachedObjectPermission, Lists, MemberRole, Settings,
+};
 use crate::{
     Error, Number, Pending, RequestRedis, Send, codec,
     dual_cache::DualCache,

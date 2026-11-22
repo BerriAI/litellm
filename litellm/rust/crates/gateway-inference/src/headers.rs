@@ -34,7 +34,7 @@ impl From<ExposedHeader> for HeaderName {
 /// [`layer`] is the one place that turns it into the proxy's `x-litellm-*` headers, the same for
 /// a complete answer and for a stream, whose head is written after its attempt was served.
 #[derive(Clone, Debug)]
-pub(crate) struct Routing {
+pub struct Routing {
     /// The deployment the last attempt ran on.
     deployment_id: String,
     /// `None` for a call that ended on a failed attempt, which the proxy names only the
