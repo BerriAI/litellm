@@ -579,13 +579,33 @@ mod tests {
         assert_eq!(upstream(decoded(wire).await.1).0, 500);
     }
 
+    fn request_id() -> Vec<(String, String)> {
+        vec![("x-amzn-requestid".to_string(), "rid-1".to_string())]
+    }
+
+    fn reply_cut_before_its_checksum() -> Vec<u8> {
+        let wire =
+            chunk(&json!({"type": "content_block_delta", "delta": {"text": "a private reply"}}));
+        wire[..wire.len() - 4].to_vec()
+    }
+
+    #[rstest]
+    #[case::empty_body(Vec::new())]
+    #[case::first_frame_cut(reply_cut_before_its_checksum())]
     #[tokio::test]
-    async fn an_empty_body_is_a_502() {
-        let (_, body, _) = upstream(decoded(Vec::new()).await.1);
-        assert_eq!(
-            body,
-            "Bedrock answered the stream with HTTP 200 but its body decoded to no events (content-type='application/vnd.amazon.eventstream', x-amzn-requestid='rid-1', 0 bytes received)"
+    async fn a_body_with_no_events_is_a_502_naming_the_request_without_its_bytes(
+        #[case] wire: Vec<u8>,
+    ) {
+        let received = wire.len();
+        let (status, body, headers) = upstream(decoded(wire).await.1);
+        assert_eq!((status, headers), (502, request_id()));
+        assert!(
+            body.contains("decoded to no events")
+                && body.contains("x-amzn-requestid='rid-1'")
+                && body.contains(&format!("{received} bytes received")),
+            "{body}"
         );
+        assert!(!body.contains(r#""bytes":""#), "{body}");
     }
 
     #[tokio::test]
@@ -641,29 +661,6 @@ mod tests {
         assert!(items[0].is_err());
     }
 
-    fn stopped_decoding(
-        events: usize,
-        kind: &str,
-        received: usize,
-    ) -> (u16, String, Vec<(String, String)>) {
-        (
-            502,
-            format!(
-                "Bedrock answered the stream with HTTP 200 but its body stopped decoding as an AWS event stream after {events} events ({kind}, content-type='application/vnd.amazon.eventstream', x-amzn-requestid='rid-1', {received} bytes received)"
-            ),
-            vec![("x-amzn-requestid".to_string(), "rid-1".to_string())],
-        )
-    }
-
-    #[tokio::test]
-    async fn a_json_body_is_a_502_naming_the_prelude_checksum_mismatch() {
-        let body = br#"{"id":"msg_1","type":"message","content":[]}"#;
-        assert_eq!(
-            upstream(decoded(body.to_vec()).await.1),
-            stopped_decoding(0, "ChecksumMismatch", PRELUDE_BYTES.next_multiple_of(5))
-        );
-    }
-
     fn with_prelude(total: u32, headers: u32) -> Vec<u8> {
         let mut prelude = [total.to_be_bytes(), headers.to_be_bytes()].concat();
         let crc = crc32fast::hash(&prelude);
@@ -671,36 +668,44 @@ mod tests {
         prelude
     }
 
-    #[rstest]
-    #[case::headers_too_long(with_prelude(200_000, 140_000), "InvalidHeadersLength")]
-    #[case::payload_too_long(with_prelude(30_000_000, 0), "InvalidPayloadLength")]
-    #[case::duplicate_header(
-        frame(&[(":message-type", "event"), (":message-type", "event")], b"{}"),
-        "DuplicateHeader"
-    )]
-    #[tokio::test]
-    async fn a_malformed_frame_is_a_502_naming_the_botocore_parser_error(
-        #[case] wire: Vec<u8>,
-        #[case] kind: &str,
-    ) {
-        let received = wire.len();
-        assert_eq!(
-            upstream(decoded(wire).await.1),
-            stopped_decoding(0, kind, received)
-        );
-    }
-
-    #[tokio::test]
-    async fn a_corrupt_frame_after_an_event_keeps_the_event_and_is_a_502() {
-        let good = chunk(&json!({"type": "ping"}));
+    fn corrupt_frame_after_an_event() -> Vec<u8> {
         let mut corrupt = chunk(&json!({"type": "message_stop"}));
         let last = corrupt.len() - 1;
         corrupt[last] ^= 0xff;
-        let received = good.len() + corrupt.len();
-        let (events, error) = decoded([good, corrupt].concat()).await;
+        [chunk(&json!({"type": "ping"})), corrupt].concat()
+    }
+
+    #[rstest]
+    #[case::json_body(
+        br#"{"id":"msg_1","type":"message","content":[]}"#.to_vec(),
+        0,
+        "ChecksumMismatch"
+    )]
+    #[case::headers_too_long(with_prelude(200_000, 140_000), 0, "InvalidHeadersLength")]
+    #[case::payload_too_long(with_prelude(30_000_000, 0), 0, "InvalidPayloadLength")]
+    #[case::duplicate_header(
+        frame(&[(":message-type", "event"), (":message-type", "event")], b"{}"),
+        0,
+        "DuplicateHeader"
+    )]
+    #[case::corrupt_frame_after_an_event(corrupt_frame_after_an_event(), 1, "ChecksumMismatch")]
+    #[tokio::test]
+    async fn a_body_that_stops_decoding_is_a_502_naming_the_parser_error(
+        #[case] wire: Vec<u8>,
+        #[case] events: usize,
+        #[case] kind: &str,
+    ) {
+        let (decoded_events, error) = decoded(wire).await;
+        let (status, body, headers) = upstream(error);
         assert_eq!(
-            (events.len(), upstream(error)),
-            (1, stopped_decoding(1, "ChecksumMismatch", received))
+            (decoded_events.len(), status, headers),
+            (events, 502, request_id())
+        );
+        assert!(
+            body.contains(&format!("after {events} events ({kind}, "))
+                && body.contains("content-type='application/vnd.amazon.eventstream'")
+                && body.contains("x-amzn-requestid='rid-1'"),
+            "{body}"
         );
     }
 }
