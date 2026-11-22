@@ -1834,7 +1834,10 @@ class TestFunctionCallTransformation:
         assert function.get("name") == "search_web"
         assert function.get("arguments") == '{"query": "attribute objects"}'
 
-    def test_ensure_tool_results_answer_the_signed_call_a_cut_result_id_names(self):
+    @pytest.mark.parametrize("result_message", [dict, Message])
+    def test_ensure_tool_results_answer_the_signed_call_a_cut_result_id_names(
+        self, result_message: type[dict] | type[Message]
+    ):
         signed_call_id: Final = f"call_weather{THOUGHT_SIGNATURE_SEPARATOR}{'S' * 3000}"
         cut_result_id: Final = f"{signed_call_id[:1000]}...cut...{signed_call_id[-1000:]}"
         weather_call: Final = {
@@ -1847,7 +1850,7 @@ class TestFunctionCallTransformation:
             messages=[
                 {"role": "user", "content": "What is the weather?"},
                 {"role": "assistant", "content": None, "tool_calls": [weather_call]},
-                {"role": "tool", "content": "sunny", "tool_call_id": cut_result_id},
+                result_message(role="tool", content="sunny", tool_call_id=cut_result_id),
             ],
             tools=[{"type": "function", "function": {"name": "get_weather", "parameters": {}}}],
         )

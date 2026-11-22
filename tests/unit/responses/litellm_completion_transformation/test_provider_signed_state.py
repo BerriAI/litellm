@@ -1,4 +1,5 @@
 import json
+from functools import reduce
 from typing import Final
 
 import pytest
@@ -96,3 +97,12 @@ def test_an_altered_reasoning_item_keeps_its_summary_without_the_encrypted_conte
 )
 def test_whole_state_and_unsigned_text_replay_unchanged(stored: object):
     assert without_altered_provider_state(stored) == stored
+
+
+def test_state_nested_past_the_depth_bound_replays_instead_of_failing():
+    levels: Final = range(5000)
+    nested: Final = reduce(lambda inner, _: [inner], levels, "leaf")
+
+    replayed: Final = without_altered_provider_state(nested)
+
+    assert reduce(lambda outer, _: outer[0], levels, replayed) == "leaf"
