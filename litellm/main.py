@@ -6070,9 +6070,6 @@ def completion(
                 ),
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - route the request over the Responses API when selected above
-        _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
-
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model

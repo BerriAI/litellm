@@ -146,13 +146,15 @@ def _redact_function_call(function_call) -> None:
         function_call.arguments = REDACTED_BY_LITELLM
 
 
+def _drop_field_when_present(item: object, field: str) -> None:
+    if getattr(item, field, None) is not None:
+        setattr(item, field, None)
+
+
 def _redact_choice_content(choice):
     """Helper to redact content in a choice (message or delta)."""
-    if (
-        isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices))
-        and getattr(choice, "logprobs", None) is not None
-    ):
-        choice.logprobs = None
+    if isinstance(choice, (litellm.Choices, litellm.utils.StreamingChoices)):
+        _drop_field_when_present(choice, "logprobs")
     if isinstance(choice, litellm.Choices):
         if choice.message.content is not None:
             choice.message.content = REDACTED_BY_LITELLM
@@ -203,6 +205,13 @@ def _redacted_provider_specific_fields(fields: Mapping[str, object]) -> Mapping[
     }
 
 
+def _redact_content_part(content_part: object) -> None:
+    for field in ("text", "refusal"):
+        if getattr(content_part, field, None) is not None:
+            setattr(content_part, field, REDACTED_BY_LITELLM)
+    _drop_field_when_present(content_part, "logprobs")
+
+
 def _redact_responses_api_output(output_items):
     """Helper to redact ResponsesAPIResponse output items."""
     for output_item in output_items:
@@ -211,12 +220,7 @@ def _redact_responses_api_output(output_items):
 
         if hasattr(output_item, "content") and isinstance(output_item.content, list):
             for content_part in output_item.content:
-                if getattr(content_part, "text", None) is not None:
-                    content_part.text = REDACTED_BY_LITELLM
-                if getattr(content_part, "refusal", None) is not None:
-                    content_part.refusal = REDACTED_BY_LITELLM
-                if getattr(content_part, "logprobs", None) is not None:
-                    content_part.logprobs = None
+                _redact_content_part(content_part)
 
         # Redact reasoning items in output array
         if hasattr(output_item, "type") and output_item.type == "reasoning":
@@ -242,12 +246,13 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
 
         if isinstance(output_item.get("content"), list):
             for content_item in output_item["content"]:
-                if isinstance(content_item, dict) and content_item.get("text") is not None:
-                    content_item["text"] = redacted_str
-                if isinstance(content_item, dict) and content_item.get("refusal") is not None:
-                    content_item["refusal"] = redacted_str
-                if isinstance(content_item, dict):
-                    content_item.pop("logprobs", None)
+                if not isinstance(content_item, dict):
+                    continue
+                for field in ("text", "refusal"):
+                    if content_item.get(field) is not None:
+                        content_item[field] = redacted_str
+                if "logprobs" in content_item:
+                    del content_item["logprobs"]
 
         if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
             for summary_item in output_item["summary"]:
@@ -339,7 +344,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
     for choice in choices:
         if isinstance(choice, dict):
             _redact_provider_specific_fields_dict(choice)
-            if choice.get("logprobs") is not None:
+            if "logprobs" in choice:
                 choice["logprobs"] = None
             if "message" in choice and isinstance(choice["message"], dict):
                 if choice["message"].get("content") is not None:

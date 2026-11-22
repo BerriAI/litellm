@@ -228,13 +228,6 @@ class _TextPart(Protocol):
     text: str
 
 
-def _set_content_part_text(item: object, index: int, text: str) -> None:
-    parts: Final = tuple(attribute_items(item, "content"))
-    part: Final = parts[index] if index < len(parts) else None
-    if isinstance(part, _TextPart):
-        OpenAIResponsesHandler._write_rewritten_text(part, "text", text)
-
-
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
     {
         ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
@@ -1287,6 +1280,18 @@ class OpenAIResponsesHandler(BaseTranslation):
         if changed and stream_item_field(event, "logprobs") is not None:
             OpenAIResponsesHandler._write_event_field(event, "logprobs", None)
 
+    @staticmethod
+    def _rewrite_text_part(part: object, text: str) -> None:
+        if isinstance(part, dict) or hasattr(part, "text"):
+            OpenAIResponsesHandler._write_rewritten_text(part, "text", text)
+
+    @staticmethod
+    def _set_content_part_text(item: object, index: int, text: str) -> None:
+        parts: Final = tuple(attribute_items(item, "content"))
+        part: Final = parts[index] if index < len(parts) else None
+        if isinstance(part, _TextPart):
+            OpenAIResponsesHandler._write_rewritten_text(part, "text", text)
+
     def _sync_stream_events_with_rewrites(
         self,
         stream_events: Sequence[Any],
@@ -1765,14 +1770,13 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            _set_content_part_text(output_item, content_idx, guardrail_response)
+                            self._set_content_part_text(output_item, content_idx, guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):
                 content = output_item.get("content", [])
                 if content and content_idx < len(content):
-                    if isinstance(content[content_idx], dict) or hasattr(content[content_idx], "text"):
-                        self._write_rewritten_text(content[content_idx], "text", guardrail_response)
+                    self._rewrite_text_part(content[content_idx], guardrail_response)
 
     def build_block_sse_chunks(
         self,
