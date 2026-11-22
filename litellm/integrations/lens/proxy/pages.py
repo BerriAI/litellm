@@ -20,7 +20,6 @@ from litellm.integrations.lens.proxy.adapter import (
     Connection,
     Identity,
     ServiceConnection,
-    browser_session,
     delegated_identity,
     service_connection,
 )
@@ -148,10 +147,35 @@ async def _key_auth(request: Request, key: str) -> UserAPIKeyAuth:
     )
 
 
+def _cookie_identity(request: Request) -> tuple[str | None, str | None]:
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # circular import at module load
+        session_identity_from_cookie,
+    )
+
+    return session_identity_from_cookie(request)
+
+
+async def dashboard_session(
+    request: Request,
+    *,
+    cookie: Callable[[Request], tuple[str | None, str | None]] = _cookie_identity,
+    key: Callable[[Request, str], Awaitable[UserAPIKeyAuth]] = _key_auth,
+) -> UserAPIKeyAuth | None:
+    """The dashboard login in the browser's cookie, held to the same route rules as that login sent as a key."""
+    user_id, session_key = cookie(request)
+    if not user_id or not session_key:
+        return None
+    try:
+        auth: Final = await key(request, f"Bearer {session_key}")
+    except Exception:  # noqa: BLE001  # any rejected dashboard session means the browser signs in again
+        return None
+    return auth if auth.user_id == user_id else None
+
+
 async def page_auth(
     request: Request,
     *,
-    session: Callable[[Request], Awaitable[UserAPIKeyAuth | None]] = browser_session,
+    session: Callable[[Request], Awaitable[UserAPIKeyAuth | None]] = dashboard_session,
     key: Callable[[Request, str], Awaitable[UserAPIKeyAuth]] = _key_auth,
 ) -> UserAPIKeyAuth:
     """A key when the caller sends one (the CLI, MCP clients), otherwise the dashboard login the browser holds."""

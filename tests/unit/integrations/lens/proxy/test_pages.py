@@ -7,7 +7,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.integrations.lens.proxy.buffering import BufferBudget
-from litellm.integrations.lens.proxy.pages import lens_ui_asset, page_auth, same_origin, ui_mount
+from litellm.integrations.lens.proxy.pages import dashboard_session, lens_ui_asset, page_auth, same_origin, ui_mount
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -232,3 +232,45 @@ async def test_a_key_is_used_instead_of_the_dashboard_login_when_one_is_sent() -
         key=keyed,
     )
     assert auth.user_id == "owner-of-Bearer sk-cli"
+
+
+def _cookie(user_id: str | None, session_key: str | None):
+    def read(_: Request) -> tuple[str | None, str | None]:
+        return user_id, session_key
+
+    return read
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_runs_the_gateway_route_rules_on_the_cookie_login() -> None:
+    seen: Final[list[str]] = []  # mutable-ok: records the key handed to the gateway's own auth
+
+    async def key(_: Request, api_key: str) -> UserAPIKeyAuth:
+        seen.append(api_key)
+        return UserAPIKeyAuth(user_id="alice")
+
+    auth: Final = await dashboard_session(_request("GET", {}), cookie=_cookie("alice", "sk-session"), key=key)
+
+    assert auth is not None and auth.user_id == "alice"
+    assert seen == ["Bearer sk-session"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_session_is_refused_when_the_gateway_route_rules_refuse_it() -> None:
+    async def refused(_: Request, __: str) -> UserAPIKeyAuth:
+        raise HTTPException(403, "this login may only change its password")
+
+    assert await dashboard_session(_request("GET", {}), cookie=_cookie("alice", "sk-session"), key=refused) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "session_key", "resolved"), [(None, None, "alice"), ("alice", "sk-session", "bob")]
+)
+async def test_dashboard_session_needs_a_cookie_login_that_resolves_to_its_own_user(
+    user_id: str | None, session_key: str | None, resolved: str
+) -> None:
+    async def key(_: Request, __: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id=resolved)
+
+    assert await dashboard_session(_request("GET", {}), cookie=_cookie(user_id, session_key), key=key) is None
