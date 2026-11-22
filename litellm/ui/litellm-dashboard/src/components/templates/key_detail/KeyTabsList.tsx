@@ -5,14 +5,14 @@ import { useTranslation } from "react-i18next";
 import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const TRIGGER_CLASS =
-  "flex-none rounded-sm px-3 font-medium text-muted-foreground data-active:bg-muted data-active:text-foreground data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-muted";
+  "flex-1 rounded-sm px-1.5 font-medium md:flex-none md:px-3 text-muted-foreground data-active:bg-muted data-active:text-foreground data-active:shadow-none dark:data-active:border-transparent dark:data-active:bg-muted";
 
 export function KeyTabsList({ showAutoRouter }: { showAutoRouter: boolean }) {
   const { t } = useTranslation();
   return (
     <TabsList
       aria-label={t("keyDetail.keyInfoView.tabs.label")}
-      className="h-8 max-w-full rounded-md border border-border bg-background p-0.5 group-data-horizontal/tabs:h-8"
+      className="h-8 w-full rounded-md border border-border bg-background p-0.5 group-data-horizontal/tabs:h-8 md:w-fit"
     >
       <TabsTrigger value="overview" className={TRIGGER_CLASS}>
         {t("keyDetail.keyInfoView.tabs.overview")}

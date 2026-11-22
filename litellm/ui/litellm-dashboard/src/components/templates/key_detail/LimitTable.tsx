@@ -25,8 +25,8 @@ interface LimitTableProps {
 const SEARCH_THRESHOLD = 8;
 
 const GRID_COLUMNS: Readonly<Record<number, string>> = {
-  2: "grid-cols-[minmax(0,1fr)_140px]",
-  3: "grid-cols-[minmax(0,1fr)_140px_140px]",
+  2: "grid-cols-[minmax(0,2fr)_minmax(64px,1fr)] md:grid-cols-[minmax(0,1fr)_140px]",
+  3: "grid-cols-[minmax(0,2fr)_minmax(64px,1fr)_minmax(64px,1fr)] md:grid-cols-[minmax(0,1fr)_140px_140px]",
 };
 
 export function LimitTable({ title, searchLabel, columns, rows, visibleRows = 5 }: LimitTableProps) {
@@ -52,8 +52,8 @@ export function LimitTable({ title, searchLabel, columns, rows, visibleRows = 5 
       ) : null}
       <div role="table" aria-label={title} className="flex flex-col">
         <div role="row" className={cn(grid, "min-h-6 text-xs font-medium text-muted-foreground")}>
-          {columns.map((column) => (
-            <span key={column} role="columnheader" className="whitespace-nowrap">
+          {columns.map((column, index) => (
+            <span key={column} role="columnheader" className={cn("md:whitespace-nowrap", index > 0 && "text-right")}>
               {column}
             </span>
           ))}
@@ -61,7 +61,7 @@ export function LimitTable({ title, searchLabel, columns, rows, visibleRows = 5 
         {shown.map((row) => (
           <div key={row.key} role="row" className={cn(grid, "min-h-8 border-t border-border")}>
             {row.cells.map((cell, index) => (
-              <span key={index} role="cell" className="min-w-0 truncate tabular-nums">
+              <span key={index} role="cell" className={cn("min-w-0 truncate tabular-nums", index > 0 && "text-right")}>
                 {cell}
               </span>
             ))}

@@ -141,7 +141,7 @@ export function KeyOverview(props: KeyOverviewProps) {
         accessGroupNames={props.accessGroupNames}
       />
       {showGuardrails || showLogging ? (
-        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(360px,100%),1fr))] items-start gap-4">
           {showGuardrails ? (
             <GuardrailsCard
               guardrails={guardrails}
