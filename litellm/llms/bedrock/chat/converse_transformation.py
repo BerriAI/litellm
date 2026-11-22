@@ -134,9 +134,9 @@ if TYPE_CHECKING:
 UNRESOLVED_ARN_BASE_MODEL_EXAMPLE: Final = "us.anthropic.claude-fable-5-1"
 ADAPTIVE_THINKING_ON_UNRESOLVED_ARN_WARNING: Final = (
     "Sending adaptive `thinking` as a fixed thinking budget for model=%s: an application inference profile ARN "
-    "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set `base_model` on "
-    f"the deployment to the Bedrock model ID the profile points at (for example `{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`) "
-    "to send adaptive thinking as requested."
+    "does not name its model, so LiteLLM cannot tell whether it supports adaptive thinking. Set "
+    "`model_info.base_model` on the deployment to the Bedrock model ID the profile points at "
+    f"(for example `{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`) to send adaptive thinking as requested."
 )
 
 # Computer use tool prefixes supported by Bedrock
