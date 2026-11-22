@@ -521,17 +521,23 @@ async def test_invoke_agent_exception_event_raises_its_modeled_status_instead_of
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_agent_http")
 @pytest.mark.parametrize("sync_mode", [True, False])
-async def test_invoke_agent_error_event_raises_with_its_error_code_and_message(
-    respx_mock: respx.MockRouter, sync_mode: bool
+@pytest.mark.parametrize(
+    ("error_code", "expected_error"),
+    [("InternalFailure", litellm.ServiceUnavailableError), ("ThrottlingException", litellm.RateLimitError)],
+)
+async def test_invoke_agent_error_event_raises_a_retryable_error_with_its_code_and_message(
+    respx_mock: respx.MockRouter, sync_mode: bool, error_code: str, expected_error: type[openai.APIStatusError]
 ) -> None:
     error_event: Final = _agent_frame(
-        {":message-type": "error", ":error-code": "InternalFailure", ":error-message": "agent runtime failed"}, b""
+        {":message-type": "error", ":error-code": error_code, ":error-message": "agent runtime failed"}, b""
     )
 
     with pytest.raises(openai.APIStatusError) as exc_info:
         await _invoke_agent(respx_mock, _agent_chunk("Hello") + error_event, sync_mode, stream=False)
 
-    assert "InternalFailure agent runtime failed" in exc_info.value.message
+    assert type(exc_info.value) is expected_error
+    assert litellm._should_retry(exc_info.value.status_code)
+    assert f"{error_code} agent runtime failed" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -542,5 +548,31 @@ async def test_invoke_agent_complete_body_returns_its_text(
     respx_mock: respx.MockRouter, sync_mode: bool, stream: bool
 ) -> None:
     content: Final = await _invoke_agent(respx_mock, _agent_chunk("Hello") + _agent_chunk(" world"), sync_mode, stream)
+
+    assert content == "Hello world"
+
+
+def _agent_trace(trace: Mapping[str, object]) -> bytes:
+    return _agent_frame(
+        {":event-type": "trace", ":content-type": "application/json", ":message-type": "event"},
+        json.dumps({"trace": trace}).encode(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_invoke_agent_reply_with_trace_events_returns_its_text(
+    respx_mock: respx.MockRouter, sync_mode: bool, stream: bool
+) -> None:
+    body: Final = (
+        _agent_trace({"preProcessingTrace": {"modelInvocationOutput": {"metadata": {"usage": {"inputTokens": 7}}}}})
+        + _agent_chunk("Hello")
+        + _agent_trace({"orchestrationTrace": {"rationale": {"text": "answer directly"}}})
+        + _agent_chunk(" world")
+    )
+
+    content: Final = await _invoke_agent(respx_mock, body, sync_mode, stream)
 
     assert content == "Hello world"

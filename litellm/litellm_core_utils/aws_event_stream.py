@@ -36,12 +36,9 @@ class EventStreamTally:
         self.recognized_events = 0
         self.unrecognized_event_types: frozenset[str] = frozenset()
         self.unrecognized_head = b""
-        self.head = b""
 
     def add_chunk(self, chunk: bytes) -> None:
         self.bytes_received += len(chunk)
-        if len(self.head) < STREAM_HEAD_BYTES:
-            self.head = (self.head + chunk)[:STREAM_HEAD_BYTES]
 
     def add_event(self, event: "EventStreamMessage", headers: Mapping[str, object] = _NO_EVENT_HEADERS) -> None:
         self.events += 1
@@ -73,8 +70,7 @@ class EventStreamTally:
             return UndecodedEventStream(
                 status_code=502,
                 message=(
-                    f"{self.provider} answered the stream with HTTP 200 but its body decoded to no events "
-                    f"({detail}, first bytes={self.head!r})"
+                    f"{self.provider} answered the stream with HTTP 200 but its body decoded to no events ({detail})"
                 ),
                 headers=request_id_headers,
             )

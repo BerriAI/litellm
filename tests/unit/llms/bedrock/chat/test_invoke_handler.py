@@ -992,7 +992,6 @@ def _assert_no_events_error(error: BedrockError, body: bytes) -> None:
     assert f"{len(body)} bytes received" in error.message
     assert "application/vnd.amazon.eventstream" in error.message
     assert "req-empty-1" in error.message
-    assert f"first bytes={body[:200]!r}" in error.message
 
 
 @pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
@@ -1030,7 +1029,6 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
-    assert "first bytes=" not in exc_info.value.message
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:

@@ -23,6 +23,8 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BedrockError,
+    BedrockEventStreamResponseDict,
+    bedrock_event_stream_header,
     bedrock_event_stream_response,
     build_bedrock_stream_error,
     get_bedrock_agent_response_stream_shape,
@@ -56,12 +58,30 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_UNMODELED_ERROR_FRAME_STATUS: Final = 500
+
+
+def _unmodeled_error_frame_message(response_dict: BedrockEventStreamResponseDict) -> str:
+    parts: Final = (
+        bedrock_event_stream_header(response_dict["headers"], ":error-code"),
+        bedrock_event_stream_header(response_dict["headers"], ":error-message"),
+        response_dict["body"].decode(errors="replace"),
+    )
+    return " ".join(part for part in parts if part)
+
+
 def _exception_event_error(
     event: "EventStreamMessage", request_id_headers: httpx.Headers | None
 ) -> BedrockError | None:
     response_dict: Final = bedrock_event_stream_response(event)
     if response_dict["status_code"] == 200:
         return None
+    if bedrock_event_stream_header(response_dict["headers"], ":exception-type") is None:
+        return BedrockError(
+            status_code=_UNMODELED_ERROR_FRAME_STATUS,
+            message=_unmodeled_error_frame_message(response_dict),
+            headers=request_id_headers,
+        )
     return build_bedrock_stream_error(
         response_dict, get_bedrock_agent_response_stream_shape(), headers=request_id_headers
     )

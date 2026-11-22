@@ -390,8 +390,21 @@ async def test_200_body_that_decodes_to_no_events_raises_bad_gateway_naming_the_
     assert f"{len(body)} bytes received" in exc_info.value.message
     assert "application/vnd.amazon.eventstream" in exc_info.value.message
     assert "req-sagemaker-1" in exc_info.value.message
-    assert f"first bytes={body[:200]!r}" in exc_info.value.message
     assert exc_info.value.headers["x-amzn-requestid"] == "req-sagemaker-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_bad_gateway_for_a_first_frame_cut_before_its_checksum_keeps_its_text_out_of_the_error(mode: str):
+    body: Final = _payload_part(_sse({"token": {"text": "patient 4471 is allergic"}}))[:-4]
+    stream: Final = _stream_frames((body,), False, mode, _EVENT_STREAM_RESPONSE_HEADERS)
+
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+
+    assert exc_info.value.status_code == 502
+    assert "patient 4471" not in exc_info.value.message
+    assert "req-sagemaker-1" in exc_info.value.message
 
 
 @pytest.mark.asyncio
