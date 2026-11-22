@@ -1820,6 +1820,38 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Gradium",
+    "provider_display_name": "Gradium",
+    "litellm_provider": "gradium",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": "Gradium endpoint. Use api.gradium.ai to route to the closest region.",
+        "required": true,
+        "field_type": "select",
+        "options": [
+          "https://api.gradium.ai",
+          "https://eu.api.gradium.ai",
+          "https://us.api.gradium.ai"
+        ],
+        "default_value": "https://api.gradium.ai"
+      }
+    ],
+    "default_model_placeholder": "gradium/default"
+  },
+  {
     "provider": "Groq",
     "provider_display_name": "Groq",
     "litellm_provider": "groq",
@@ -3174,6 +3206,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "RESETDATA",
+    "provider_display_name": "ResetData",
+    "litellm_provider": "resetdata",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.resetdata.ai/api/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "resetdata/zai/glm-5.3"
   },
   {
     "provider": "RUNWAYML",
