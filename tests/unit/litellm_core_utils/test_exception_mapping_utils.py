@@ -4222,3 +4222,18 @@ def test_litellm_proxy_flat_responses_failure_keeps_its_logged_code(status_code:
         exception_type(model="m", original_exception=upstream.value, custom_llm_provider="litellm_proxy")
 
     assert _logged_error_code(caught.value) == logged_code
+
+
+def test_a_deeply_nested_provider_error_keeps_its_status() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    depth: Final = 200_000
+    nested: Final = '{"error":' * depth + "1" + "}" * depth
+
+    with pytest.raises(litellm.BadRequestError):
+        exception_type(
+            model="qwen",
+            original_exception=BaseLLMException(status_code=400, message=nested),
+            custom_llm_provider="hosted_vllm",
+        )

@@ -19,12 +19,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    CREDENTIAL_FIELD_NAME_FRAGMENTS,
+    CREDENTIAL_FIELD_NAME_WORDS,
     CREDENTIAL_HEADER_NAMES,
     DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    QUANTITY_FIELD_NAME_WORDS,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -147,6 +150,7 @@ def redact_internal_details_from_client_message(value: str) -> str:
 _CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CLIENT_ITEMS: Final = TypeAdapter(list[object])
 _CREDENTIAL_KEY_PROBE: Final = "key-name-probe"
+_FIELD_NAME_BOUNDARY: Final = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[^A-Za-z]+")
 
 
 def _redacted_client_key(key: str) -> str:
@@ -161,8 +165,20 @@ def _names_a_credential_header(key: str | None) -> bool:
     return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
 
 
+def _names_a_credential_field(key: str | None) -> bool:
+    if key is None:
+        return False
+    words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
+    if words & QUANTITY_FIELD_NAME_WORDS:
+        return False
+    compact: Final = "".join(character for character in key.lower() if character.isalnum())
+    return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
+        fragment in compact for fragment in CREDENTIAL_FIELD_NAME_FRAGMENTS
+    )
+
+
 def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
-    if _names_a_credential_header(key):
+    if _names_a_credential_header(key) or _names_a_credential_field(key):
         return REDACTED
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, value))

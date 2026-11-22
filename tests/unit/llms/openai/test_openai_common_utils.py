@@ -713,3 +713,23 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert len(drop_warnings) == 1
     assert len(drop_warnings[0]) < 300
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+@pytest.mark.parametrize("upstream_body", ["upstream is down", "<html>bad gateway</html>", "[1, 2]", "12345"])
+@respx.mock
+def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstream_body: str) -> None:
+    respx.post("https://errors.example.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text=upstream_body)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.completion(
+            model="openai/test-model",
+            api_base="https://errors.example.invalid/v1",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            max_retries=0,
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream_body in raised.value.message

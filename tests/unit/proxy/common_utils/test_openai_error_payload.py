@@ -747,3 +747,45 @@ def test_relayed_provider_specific_fields_survive_a_zero_recursion_limit(monkeyp
     assert relayed is not None
     assert relayed["trace_ref"] == "trace_1"
     assert "value" not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "token_value",
+        "client-secret",
+        "clientsecret",
+        "privateKey",
+        "x-internal-token",
+        "accessToken",
+        "pass",
+        "pwd",
+        "signature",
+        "session_id",
+    ],
+)
+@pytest.mark.parametrize("nested", [False, True], ids=["top_level", "nested"])
+def test_relayed_provider_specific_fields_redact_any_credential_field_name(field: str, nested: bool) -> None:
+    fields: Final = {field: "opaque-upstream-credential"}
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", **({"debug": fields} if nested else fields)},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert "opaque-upstream-credential" not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize(
+    "field", ["max_tokens", "prompt_tokens", "token_count", "request_id", "key_id", "keyword", "passed", "bypass"]
+)
+def test_relayed_provider_specific_fields_keep_a_plain_field_name(field: str) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected", model="qwen", llm_provider="hosted_vllm", body={"message": "rejected", field: "kept"}
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {field: "kept"}

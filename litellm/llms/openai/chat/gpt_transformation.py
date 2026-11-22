@@ -18,6 +18,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
     drops_unsupported_params,
     map_finish_reason,
     require_attributes,
@@ -81,7 +82,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object, declared_mid_conversation_system_support
 
-from ..common_utils import OpenAIError, without_cache_control
+from ..common_utils import OpenAIError, RelayOnlyBodyOpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -1104,9 +1105,10 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             error_details: Final = self._extract_error_from_chunk(chunk)
             if error_details is not None:
                 error_message, error_status_code = error_details
-                raise OpenAIError(
+                raise RelayOnlyBodyOpenAIError(
                     status_code=error_status_code,
                     message=error_message,
+                    body=as_str_mapping(_OBJECT_MAPPING.validate_python(chunk).get("error")),
                 )
             raw_choices: Final = chunk.get("choices") or []
             if any(choice.get("finish_reason") == "abort" for choice in _CHOICE_MAPPINGS.validate_python(raw_choices)):

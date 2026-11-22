@@ -359,7 +359,7 @@ def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Ma
 def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
     try:
         decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     if decoded is None or decoded.get("type") == "error":
         return None
@@ -3191,7 +3191,11 @@ def exception_type(
                 )
     except Exception as e:
         carry_agentic_followup_mark(source=original_exception, mapped=e)
-        _carry_provider_error(source=original_exception, mapped=e, custom_llm_provider=custom_llm_provider)
+        _carry_provider_error(
+            source=original_exception,
+            mapped=e,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
         # LOGGING
         exception_logging(
             logger_fn=None,
