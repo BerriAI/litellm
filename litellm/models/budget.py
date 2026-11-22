@@ -7,6 +7,7 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from math import isfinite
 from typing import TYPE_CHECKING, Annotated, Final, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, model_validator
@@ -16,6 +17,22 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 if TYPE_CHECKING:
     from litellm.proxy.common_utils.timezone_utils import BudgetResetSettings
+
+
+BudgetRolloverCap: TypeAlias = Annotated[
+    float,
+    Field(gt=0, allow_inf_nan=False, description="Maximum allowance including unused budget carried forward, in USD."),
+]
+
+
+def active_rollover_credit(
+    base: float | None, ceiling: float | None, duration: str | None, credit: float | None
+) -> float | None:
+    if base is None or ceiling is None or not duration:
+        return None
+    if not 0 < base < ceiling or not isfinite(ceiling):
+        return None
+    return min(max(0.0, credit or 0.0), ceiling - base)
 
 
 def _is_none(value: object) -> bool:
@@ -94,6 +111,7 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     budget_id: str | None = None
     soft_budget: float | None = None
     max_budget: float | None = None
+    rollover_max_budget: float | None = Field(default=None, exclude_if=_is_none)
     max_parallel_requests: int | None = None
     tpm_limit: int | None = None
     rpm_limit: int | None = None
