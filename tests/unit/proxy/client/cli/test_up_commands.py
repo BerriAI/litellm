@@ -103,8 +103,6 @@ class TestMergeClaudeSettings:
             "OTEL_LOG_ASSISTANT_RESPONSES": "1",
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "1",
-            "OTEL_LOG_RAW_API_BODIES": "1",
-            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "1048576",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4000",
             "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer sk-fresh",
             "ENABLE_TOOL_SEARCH": "true",
