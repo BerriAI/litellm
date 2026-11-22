@@ -5,7 +5,7 @@ from typing import Any, Final, cast  # noqa: TID251  # narrows untyped request d
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -24,13 +24,17 @@ _MESSAGES_PROXY_API_VERSION: Final = "2026-06-01"
 _REQUEST_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
+def _blocks(content: object) -> tuple[Mapping[str, object], ...]:
+    return tuple(block for item in as_object_list(content) or () if (block := as_str_mapping(item)) is not None)
+
+
 def _documents(content: object) -> Iterator[Mapping[str, object]]:
-    for item in as_object_list(content) or ():
-        match as_str_mapping(item):
-            case {"type": "document"} as document:
-                yield document
+    for block in _blocks(content):
+        match block:
+            case {"type": "document"}:
+                yield block
             case {"type": "tool_result", "content": nested}:
-                yield from _documents(nested)
+                yield from (inner for inner in _blocks(nested) if inner.get("type") == "document")
             case _:
                 pass
 
@@ -45,30 +49,48 @@ def _text_document_data(block: Mapping[str, object]) -> str | None:
             return None
 
 
-def _text_document_content(content: object) -> object:
+def _text_document_content(content: object, drop_citations: bool) -> object:
     items: Final = as_object_list(content)
-    return content if items is None else [_text_document_block(item) for item in items]
+    if items is None:
+        return content
+    return list(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
 
 
-def _text_document_block(item: object) -> object:
+def _content_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
     block: Final = as_str_mapping(item)
-    if block is None:
-        return item
-    if block.get("type") == "tool_result" and "content" in block:
-        return {**block, "content": _text_document_content(block["content"])}
+    nested: Final = (
+        as_object_list(block.get("content")) if block is not None and block.get("type") == "tool_result" else None
+    )
+    if block is None or nested is None:
+        return _document_blocks(item, drop_citations)
+    return (
+        {**block, "content": list(chain.from_iterable(_document_blocks(inner, drop_citations) for inner in nested))},
+    )
+
+
+def _document_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
+    block: Final = as_str_mapping(item)
+    if block is None or block.get("type") != "document":
+        return (item,)
     data: Final = _text_document_data(block)
     if data is None:
-        return item
+        uncited: Final = drop_citations and "citations" in block
+        return ({key: value for key, value in block.items() if key != "citations"},) if uncited else (item,)
     metadata: Final = tuple(
         f"{key.capitalize()}: {value}"
         for key in ("title", "context")
         if isinstance(value := block.get(key), str) and value
     )
-    return {
-        "type": "text",
-        "text": "\n\n".join((*metadata, data)),
-        **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
-    }
+    text: Final = "\n\n".join(part for part in (*metadata, data) if part)
+    if not text:
+        return ()
+    return (
+        {
+            "type": "text",
+            "text": text,
+            **({"cache_control": block["cache_control"]} if "cache_control" in block else {}),
+        },
+    )
 
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
@@ -95,17 +117,20 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> dict[str, object]:  # mutable-ok: the base request transformer requires a JSON dict
         documents: Final = tuple(chain.from_iterable(_documents(message.get("content")) for message in messages))
         has_text_documents: Final = any(_text_document_data(document) is not None for document in documents)
-        if has_text_documents and any(
+        cites_documents: Final = has_text_documents and any(
             (as_str_mapping(document.get("citations")) or {}).get("enabled") is True for document in documents
-        ):
+        )
+        drop_citations: Final = cites_documents and drops_unsupported_params(litellm_params.drop_params)
+        if cites_documents and not drop_citations:
             raise UnsupportedParamsError(
                 message="GitHub Copilot text documents cannot preserve structured citations when converted to text. "
-                "Disable document citations or use a provider that supports text document sources.",
+                "Disable document citations, set drop_params to drop them, "
+                "or use a provider that supports text document sources.",
                 model=model,
                 llm_provider="github_copilot",
             )
         normalized: Final = [
-            {**message, "content": _text_document_content(message["content"])}
+            {**message, "content": _text_document_content(message["content"], drop_citations)}
             if has_text_documents and message.get("role") == "user" and "content" in message
             else dict(message)
             for message in messages
