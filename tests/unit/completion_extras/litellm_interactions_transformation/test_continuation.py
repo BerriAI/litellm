@@ -747,7 +747,18 @@ def _grounded_sse(*, whole_steps_on_start: bool = False) -> httpx.Response:
             event
             for position, call in enumerate(_GROUNDED_CALLS)
             for event in (
-                *(({"event_type": "step.start", "index": position, "step": call},) if whole_steps_on_start else ()),
+                *(
+                    (
+                        {
+                            "event_type": "step.start",
+                            "index": position,
+                            "step": {"type": call["type"], "arguments": {}},
+                        },
+                        {"event_type": "step.start", "index": position, "step": call},
+                    )
+                    if whole_steps_on_start
+                    else ()
+                ),
                 {"event_type": "step.delta", "index": position, "delta": call},
             )
         ),

@@ -255,9 +255,8 @@ class InteractionsChatStreamingIterator:
         self._unsigned_tools: Final[dict[int, tuple[int, str]]] = {}  # mutable-ok: thought-step -> unsigned tool slot
         self._text_pieces: Final[list[str]] = []  # mutable-ok: per-stream answer text, joined only for citations
         self._text_length: int = 0
-        self._grounding_steps: Final[list[JsonMapping]] = []  # mutable-ok: per-stream search and URL steps
+        self._grounding_steps: Final[dict[tuple[int, str], JsonMapping]] = {}  # mutable-ok: per-stream grounding steps
         self._cited_spans: Final[list[JsonValue]] = []  # mutable-ok: per-stream citations in joined-answer bytes
-        self._whole_grounding_steps: Final[set[int]] = set()  # mutable-ok: step indexes already recorded whole
         self._last_text_start: int = 0
         self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
@@ -406,9 +405,7 @@ class InteractionsChatStreamingIterator:
                 self._count_text(step_index, direct_text)
                 return (self._build_chunk(Delta(role="assistant", content=direct_text)),) if direct_text else ()
             case step_type if step_type in GROUNDING_STEP_TYPES and ("arguments" in raw_step or "result" in raw_step):
-                self._grounding_steps.append(raw_step)
-                self._whole_grounding_steps.add(step_index)
-                return ()
+                return self._record_grounding(step_index, raw_step)
             case _:
                 return ()
 
@@ -437,7 +434,7 @@ class InteractionsChatStreamingIterator:
             "type": "model_output",
             "content": [{"type": "text", "text": "".join(self._text_pieces), "annotations": list(self._cited_spans)}],
         }
-        return vertex_metadata_of((*(dict(step) for step in self._grounding_steps), answer))
+        return vertex_metadata_of((*(dict(step) for step in self._grounding_steps.values()), answer))
 
     def _delta_annotations(self, step_index: int, raw_delta: JsonMapping) -> tuple[ChatCompletionAnnotation, ...]:
         if raw_delta.get("annotations") is None:
@@ -481,9 +478,8 @@ class InteractionsChatStreamingIterator:
             return _MediaDelta(images=list(images))
         return _MediaDelta(audio=audio) if audio is not None else None
 
-    def _record_grounding_delta(self, step_index: int, raw_delta: JsonMapping) -> tuple[ModelResponseStream, ...]:
-        if step_index not in self._whole_grounding_steps:
-            self._grounding_steps.append(raw_delta)
+    def _record_grounding(self, step_index: int, raw_step: JsonMapping) -> tuple[ModelResponseStream, ...]:
+        self._grounding_steps.setdefault((step_index, json.dumps(raw_step, sort_keys=True)), raw_step)
         return ()
 
     def _handle_step_delta(self, event: JsonMapping) -> tuple[ModelResponseStream, ...]:
@@ -493,7 +489,7 @@ class InteractionsChatStreamingIterator:
             return ()
 
         if raw_delta.get("type") in GROUNDING_STEP_TYPES:
-            return self._record_grounding_delta(step_index, raw_delta)
+            return self._record_grounding(step_index, raw_delta)
 
         match raw_delta.get("type"):
             case "text":
