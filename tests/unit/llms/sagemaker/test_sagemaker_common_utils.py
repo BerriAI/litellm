@@ -393,6 +393,52 @@ async def test_200_body_that_decodes_to_no_events_raises_bad_gateway_naming_the_
     assert exc_info.value.headers["x-amzn-requestid"] == "req-sagemaker-1"
 
 
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+@pytest.mark.parametrize("is_messages_api", [True, False])
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_200_body_that_is_not_an_event_stream_raises_bad_gateway_naming_the_request(
+    body: bytes, content_type: str, is_messages_api: bool, mode: str
+):
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-sagemaker-1"})
+    stream: Final = _stream_frames((body,), is_messages_api, mode, response_headers)
+
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+
+    assert exc_info.value.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in exc_info.value.message
+    assert f"content-type='{content_type}'" in exc_info.value.message
+    assert f"{len(body)} bytes received" in exc_info.value.message
+    assert "Service Unavailable" not in exc_info.value.message
+    assert exc_info.value.headers["x-amzn-requestid"] == "req-sagemaker-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["sync", "async"])
+async def test_stream_whose_next_frame_is_not_an_event_raises_bad_gateway_after_the_complete_chunks(mode: str):
+    stream: Final = _stream_frames(
+        (_payload_part(_VLLM_EVENTS[1]), b"<html><body>Service Unavailable</body></html>"),
+        True,
+        mode,
+        _EVENT_STREAM_RESPONSE_HEADERS,
+    )
+
+    assert _text(await anext(stream), True) == "Hél"
+    with pytest.raises(SagemakerError) as exc_info:
+        await anext(stream)
+    assert exc_info.value.status_code == 502
+    assert "stopped decoding as an AWS event stream after 1 events" in exc_info.value.message
+    assert "req-sagemaker-1" in exc_info.value.message
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["sync", "async"])
 async def test_bad_gateway_for_a_first_frame_cut_before_its_checksum_keeps_its_text_out_of_the_error(mode: str):

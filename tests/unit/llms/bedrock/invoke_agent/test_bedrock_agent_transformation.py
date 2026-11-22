@@ -436,8 +436,14 @@ def _agent_http(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     litellm.in_memory_llm_clients_cache.flush_cache()
 
 
-async def _invoke_agent(respx_mock: respx.MockRouter, body: bytes, sync_mode: bool, stream: bool) -> str:
-    respx_mock.post(_AGENT_URL).mock(return_value=httpx.Response(200, content=body, headers=_AGENT_RESPONSE_HEADERS))
+async def _invoke_agent(
+    respx_mock: respx.MockRouter,
+    body: bytes,
+    sync_mode: bool,
+    stream: bool,
+    response_headers: Mapping[str, str] = _AGENT_RESPONSE_HEADERS,
+) -> str:
+    respx_mock.post(_AGENT_URL).mock(return_value=httpx.Response(200, content=body, headers=response_headers))
     request: Final = {
         "model": "bedrock/agent/AGENT1234/ALIAS1234",
         "messages": [{"role": "user", "content": "hi"}],
@@ -489,6 +495,34 @@ async def test_invoke_agent_body_cut_inside_a_message_raises_bad_gateway(
     assert exc_info.value.status_code == 502
     assert f"{len(cut_message)} undecoded bytes after 1 events" in exc_info.value.message
     assert "req-agent-1" in exc_info.value.message
+
+
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_agent_http")
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_invoke_agent_200_body_that_is_not_an_event_stream_raises_bad_gateway_naming_the_request(
+    respx_mock: respx.MockRouter, body: bytes, content_type: str, sync_mode: bool, stream: bool
+) -> None:
+    response_headers: Final = {**_AGENT_RESPONSE_HEADERS, "content-type": content_type}
+
+    with pytest.raises(litellm.BadGatewayError) as exc_info:
+        await _invoke_agent(respx_mock, body, sync_mode, stream, response_headers)
+
+    assert exc_info.value.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in exc_info.value.message
+    assert f"content-type='{content_type}'" in exc_info.value.message
+    assert f"{len(body)} bytes received" in exc_info.value.message
+    assert "req-agent-1" in exc_info.value.message
+    assert "Service Unavailable" not in exc_info.value.message
 
 
 def _modeled_agent_stream_status(exception_type: str) -> int:

@@ -342,19 +342,13 @@ class AWSEventStreamDecoder:
         self, iterator: Iterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> Iterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         records: Final = _StreamRecordBuffer()
         tally: Final = EventStreamTally("SageMaker")
 
-        for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                tally.add_event(event)
-                if payload := self._parse_message_from_event(event):
-                    yield from self._chunks(records.feed(payload))
+        for event in tally.decode(iterator):
+            tally.add_event(event)
+            if payload := self._parse_message_from_event(event):
+                yield from self._chunks(records.feed(payload))
 
         _raise_undecoded_stream(tally, response_headers)
         unparsed: Final = records.close()
@@ -368,20 +362,14 @@ class AWSEventStreamDecoder:
         self, iterator: AsyncIterator[bytes], *, response_headers: Mapping[str, str] | None = None
     ) -> AsyncIterator[GChunk | StreamingChatCompletionChunk | None]:
         """Given an async iterator that yields lines, iterate over it & yield every event encountered"""
-        from botocore.eventstream import EventStreamBuffer
-
-        event_stream_buffer: Final = EventStreamBuffer()
         records: Final = _StreamRecordBuffer()
         tally: Final = EventStreamTally("SageMaker")
 
-        async for chunk in iterator:
-            event_stream_buffer.add_data(chunk)
-            tally.add_chunk(chunk)
-            for event in event_stream_buffer:
-                tally.add_event(event)
-                if payload := self._parse_message_from_event(event):
-                    for parsed_chunk in self._chunks(records.feed(payload)):
-                        yield parsed_chunk
+        async for event in tally.adecode(iterator):
+            tally.add_event(event)
+            if payload := self._parse_message_from_event(event):
+                for parsed_chunk in self._chunks(records.feed(payload)):
+                    yield parsed_chunk
 
         _raise_undecoded_stream(tally, response_headers)
         unparsed: Final = records.close()
