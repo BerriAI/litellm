@@ -3371,9 +3371,13 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
     )
 
 
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
 # usage.input_tokens that POST /v1/messages billed for the user turn "What is the weather in Paris?" through xAI
 # grok-4.3-latest, Azure AI Foundry grok-4-1-fast-non-reasoning, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3,
-# and that POST /v1/responses billed for the same input through Perplexity xai/grok-4.3, on 2026-11-17
+# and that POST /v1/responses billed for the same input through Perplexity xai/grok-4.3, on 2026-11-17, and that
+# POST /v1/messages billed through Azure AI Foundry grok-4.3 on 2026-11-21
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "billed_prompt_tokens"),
@@ -3383,6 +3387,7 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         ("vertex_ai/xai/grok-4.3", 342),
         ("bedrock_mantle/xai.grok-4.3", 37),
         ("perplexity/xai/grok-4.3", 218),
+        ("azure_ai/grok-4.3", 11),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3391,7 +3396,7 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
     counted: Final = await _count_the_paris_weather_turn(monkeypatch, model)
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 @pytest.mark.asyncio
