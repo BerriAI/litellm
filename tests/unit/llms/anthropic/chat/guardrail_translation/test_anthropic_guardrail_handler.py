@@ -6,7 +6,8 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
-from typing import Any, Literal, Optional, Final
+from collections.abc import Callable, Mapping
+from typing import Any, Literal, Optional, Final, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -21,6 +22,7 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
 from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.llms.openai import ChatCompletionToolParam
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -2688,6 +2690,106 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         released = (self._text_delta("hi"), self._text_delta(" there"))
         ended = AnthropicMessagesHandler().released_stream_as_ended(released)
         assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+class ToolsSeenGuardrail(CustomGuardrail):
+    def __init__(self, keep: Callable[[Mapping[str, object]], bool] = lambda _tool: True) -> None:
+        super().__init__(guardrail_name="test")
+        self._keep: Final = keep
+        self.seen_tools: list[Mapping[str, object]] | None = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        shown: Final = [cast(Mapping[str, object], tool) for tool in inputs.get("tools") or []]
+        self.seen_tools = json.loads(json.dumps(shown))
+        return {**inputs, "tools": [cast(ChatCompletionToolParam, tool) for tool in shown if self._keep(tool)]}
+
+
+def _is_web_search(tool: Mapping[str, object]) -> bool:
+    return tool.get("name") == "web_search"
+
+
+class TestWebSearchToolIsShownToTheGuardrail:
+    _WEB_SEARCH: Final[dict[str, object]] = {"type": "web_search_20250305", "name": "web_search", "max_uses": 5}
+    _READ: Final[dict[str, object]] = {
+        "name": "Read",
+        "description": "Reads a file",
+        "input_schema": {"type": "object", "properties": {"path": {"type": "string"}}},
+    }
+
+    async def _run(self, guardrail: ToolsSeenGuardrail, tools: list[dict[str, object]]) -> list[dict[str, object]]:
+        data: Final[dict[str, object]] = {
+            "model": "claude-haiku-4-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": json.loads(json.dumps(tools)),
+        }
+        await AnthropicMessagesHandler().process_input_messages(data, guardrail)
+        return cast(list[dict[str, object]], data["tools"])
+
+    async def test_the_guardrail_sees_web_search_as_sent_at_its_position_in_the_request(self):
+        guardrail: Final = ToolsSeenGuardrail()
+
+        await self._run(guardrail, [self._READ, self._WEB_SEARCH, {**self._READ, "name": "Write"}])
+
+        assert guardrail.seen_tools is not None
+        assert [tool["type"] for tool in guardrail.seen_tools] == ["function", "web_search_20250305", "function"]
+        assert guardrail.seen_tools[1] == self._WEB_SEARCH
+
+    async def test_the_guardrail_sees_web_search_when_it_is_the_only_tool(self):
+        guardrail: Final = ToolsSeenGuardrail()
+
+        tools: Final = await self._run(guardrail, [self._WEB_SEARCH])
+
+        assert guardrail.seen_tools == [self._WEB_SEARCH]
+        assert tools == [self._WEB_SEARCH]
+
+    async def test_web_search_the_guardrail_returned_reaches_the_provider_as_sent(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(), [self._READ, self._WEB_SEARCH])
+
+        assert tools[1] == self._WEB_SEARCH
+        assert [tool["name"] for tool in tools] == ["Read", "web_search"]
+
+    async def test_web_search_declared_by_name_alone_reaches_the_provider_as_sent(self):
+        by_name_alone: Final[dict[str, object]] = {"name": "web_search"}
+        guardrail: Final = ToolsSeenGuardrail()
+
+        tools: Final = await self._run(guardrail, [self._READ, by_name_alone])
+
+        assert guardrail.seen_tools is not None
+        assert guardrail.seen_tools[1] == by_name_alone
+        assert tools[1] == by_name_alone
+
+    async def test_web_search_the_guardrail_removed_does_not_reach_the_provider(self):
+        tools: Final = await self._run(
+            ToolsSeenGuardrail(keep=lambda tool: not _is_web_search(tool)), [self._READ, self._WEB_SEARCH]
+        )
+
+        assert [tool["name"] for tool in tools] == ["Read"]
+
+    async def test_web_search_stays_when_the_guardrail_removed_every_other_tool(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(keep=_is_web_search), [self._READ, self._WEB_SEARCH])
+
+        assert tools == [self._WEB_SEARCH]
+
+    async def test_a_guardrail_returning_no_tools_removes_web_search(self):
+        tools: Final = await self._run(ToolsSeenGuardrail(keep=lambda _tool: False), [self._READ, self._WEB_SEARCH])
+
+        assert tools == []
+
+    async def test_a_tool_results_only_guardrail_is_not_shown_web_search(self):
+        guardrail: Final = ToolsSeenGuardrail()
+        guardrail.scan_only_tool_results = True
+
+        tools: Final = await self._run(guardrail, [self._READ, self._WEB_SEARCH])
+
+        assert not guardrail.seen_tools
+        assert tools == [self._READ, self._WEB_SEARCH]
 
 
 class PerRowTextGuardrail(CustomGuardrail):
