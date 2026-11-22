@@ -28023,6 +28023,60 @@ async def test_a_client_cut_after_a_fallback_bills_the_tokens_cache_reads_and_co
     assert (get_hidden_params(billed) or {}).get("response_cost") == pytest.approx(0.0000065)
 
 
+_FIXED_MARGIN: Final = 0.001
+
+
+def _priced_cut_responses_stream(response_id: str, response_cost: float, logging_obj: LiteLLMLogging) -> MagicMock:
+    stream: Final = _cut_responses_stream(response_id, _cut_usage(25, 0), response_cost)
+    event: Final = stream.partial_response_on_disconnect.return_value
+
+    def priced_partial() -> ResponseIncompleteEvent:
+        logging_obj.set_cost_breakdown(
+            input_cost=response_cost - _FIXED_MARGIN,
+            output_cost=0.0,
+            total_cost=response_cost,
+            cost_for_built_in_tools_cost_usd_dollar=0.0,
+            margin_fixed_amount=_FIXED_MARGIN,
+            margin_total_amount=_FIXED_MARGIN,
+        )
+        return event
+
+    stream.partial_response_on_disconnect = MagicMock(side_effect=priced_partial)
+    stream.logging_obj = logging_obj
+    return stream
+
+
+def _cut_stream_logging(call_id: str) -> LiteLLMLogging:
+    return LiteLLMLogging(
+        model="claude-haiku-5-5",
+        messages=[],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id=call_id,
+        function_id=call_id,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deployments_share_one_logging_object", [True, False])
+async def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(deployments_share_one_logging_object: bool):
+    primary_logging: Final = _cut_stream_logging("primary")
+    fallback_logging: Final = (
+        primary_logging if deployments_share_one_logging_object else _cut_stream_logging("fallback")
+    )
+    billed: Final = await _billed_after_a_fallback(
+        _priced_cut_responses_stream("resp_primary", 0.00105, primary_logging),
+        _priced_cut_responses_stream("resp_fallback", 0.0010325, fallback_logging),
+    )
+
+    billed_cost: Final = (get_hidden_params(billed) or {}).get("response_cost")
+    assert billed_cost == pytest.approx(0.00105 + 0.0010325 - _FIXED_MARGIN)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
+    assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(_FIXED_MARGIN)
+
+
 @pytest.mark.asyncio
 async def test_a_client_cut_after_a_fallback_from_a_deployment_that_reported_no_usage_bills_the_fallbacks_usage():
     billed: Final = await _billed_after_a_fallback(

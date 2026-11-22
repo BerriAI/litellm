@@ -3733,17 +3733,27 @@ class Router:
                 stream's usage and cost are added to the fallback's event.
                 """
                 from litellm.responses.streaming_iterator import (
+                    cost_breakdown_of_both_deployments,
                     partial_billed_for_both_deployments,
                     partial_responses_incomplete_event_on_disconnect,
+                    stream_cost_breakdown,
+                    stream_logging,
                 )
 
                 current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
                 if self._billing_source is source_iterator:
                     return current
+                current_breakdown: Final = stream_cost_breakdown(self._billing_source)
                 primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
                 if current is None or primary is None:
                     return current or primary
-                return partial_billed_for_both_deployments(primary, current)
+                primary_breakdown: Final = stream_cost_breakdown(source_iterator)
+                billing_logging: Final = stream_logging(self)
+                if billing_logging is not None:
+                    billing_logging.cost_breakdown = cost_breakdown_of_both_deployments(
+                        primary_breakdown, current_breakdown
+                    )
+                return partial_billed_for_both_deployments(primary, primary_breakdown, current, current_breakdown)
 
             def __aiter__(self):
                 return self

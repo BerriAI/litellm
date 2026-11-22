@@ -54,7 +54,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -1578,6 +1578,9 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
 
 
 _STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+_PER_REQUEST_COST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
+_TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
+_COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
 
 
 def _summed_count(primary: object, fallback: object) -> object:
@@ -1607,8 +1610,49 @@ def _response_cost(response: ResponsesAPIResponse) -> object:
     return (get_hidden_params(response) or {}).get("response_cost")
 
 
+def stream_logging(stream: object) -> LiteLLMLoggingObj | None:
+    logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
+    return logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None
+
+
+def stream_cost_breakdown(stream: object) -> CostBreakdown | None:
+    logging_obj: Final = stream_logging(stream)
+    return None if logging_obj is None else logging_obj.cost_breakdown
+
+
+def _fixed_margin_charged_twice(primary: CostBreakdown | None, fallback: CostBreakdown | None) -> float:
+    if primary is None or fallback is None or primary is fallback:
+        return 0.0
+    return min(primary.get("margin_fixed_amount", 0.0), fallback.get("margin_fixed_amount", 0.0))
+
+
+def _summed_cost_entry(key: str, primary: Mapping[str, object], fallback: Mapping[str, object]) -> object:
+    if key in _PER_REQUEST_COST_KEYS:
+        return fallback[key] if key in fallback else primary[key]
+    return _summed_count(primary.get(key), fallback.get(key))
+
+
+def cost_breakdown_of_both_deployments(
+    primary: CostBreakdown | None, fallback: CostBreakdown | None
+) -> CostBreakdown | None:
+    if primary is None or fallback is None or primary is fallback:
+        return None
+    first: Final = _STR_KEYED.validate_python(primary)
+    final: Final = _STR_KEYED.validate_python(fallback)
+    keys: Final = (*first, *(key for key in final if key not in first))
+    summed: Final = MappingProxyType({key: _summed_cost_entry(key, first, final) for key in keys})
+    charged_twice: Final = _fixed_margin_charged_twice(primary, fallback)
+    charged_once: Final = MappingProxyType(
+        {key: total - charged_twice for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
+    )
+    return _COST_BREAKDOWN.validate_python({**summed, **charged_once})
+
+
 def partial_billed_for_both_deployments(
-    primary: ResponseIncompleteEvent, fallback: ResponseIncompleteEvent
+    primary: ResponseIncompleteEvent,
+    primary_breakdown: CostBreakdown | None,
+    fallback: ResponseIncompleteEvent,
+    fallback_breakdown: CostBreakdown | None,
 ) -> ResponseIncompleteEvent:
     primary_cost: Final = _response_cost(primary.response)
     fallback_cost: Final = _response_cost(fallback.response)
@@ -1619,7 +1663,9 @@ def partial_billed_for_both_deployments(
         billed,
         {
             **(get_hidden_params(fallback.response) or {}),
-            "response_cost": primary_cost + fallback_cost
+            "response_cost": primary_cost
+            + fallback_cost
+            - _fixed_margin_charged_twice(primary_breakdown, fallback_breakdown)
             if isinstance(primary_cost, (int, float)) and isinstance(fallback_cost, (int, float))
             else None,
         },
