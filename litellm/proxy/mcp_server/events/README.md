@@ -8,6 +8,7 @@ Apply the subscription, delivery and object-permission migrations before enablin
 
 ```yaml
 general_settings:
+  mcp_advertised_versions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
   mcp_events_enabled: true
   mcp_events_public_base_url: https://gateway.example.com
 mcp_servers:
