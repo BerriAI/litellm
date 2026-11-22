@@ -33419,6 +33419,12 @@ export interface components {
              */
             mcp_xff_num_trusted_hops?: number | null;
             /**
+             * Meter Webrtc Calls
+             * @description Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.
+             * @default true
+             */
+            meter_webrtc_calls: boolean;
+            /**
              * Missing Session Id
              * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
              */
