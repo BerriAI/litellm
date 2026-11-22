@@ -2345,7 +2345,7 @@ _S3_MIME_SUBTYPE_FORMATS: Final = MappingProxyType(
     {"jpg": "jpeg", "quicktime": "mov", "x-matroska": "mkv", "x-flv": "flv", "x-ms-wmv": "wmv", "3gpp": "3gp"}
 )
 _CONVERSE_VIDEO_FORMAT_NAMES: Final = MappingProxyType({"3gp": "three_gp"})
-_EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
+EMPTY_TEXT_PLACEHOLDER: Final = "[System: Empty message content sanitised to satisfy protocol]"
 
 
 def _sanitize_empty_text_content(
@@ -2369,7 +2369,7 @@ def _sanitize_empty_text_content(
     if isinstance(content, str):
         if not content or not content.strip():
             message = cast(AllMessageValues, dict(message))  # Make a copy
-            message["content"] = _EMPTY_TEXT_PLACEHOLDER
+            message["content"] = EMPTY_TEXT_PLACEHOLDER
             verbose_logger.debug(
                 "_sanitize_empty_text_content: Replaced empty text content in %s message", message.get("role")
             )
@@ -2386,7 +2386,7 @@ def _sanitize_empty_text_content(
                 text = block.get("text")
                 if not isinstance(text, str) or not text or not text.strip():
                     new_block = dict(block)
-                    new_block["text"] = _EMPTY_TEXT_PLACEHOLDER
+                    new_block["text"] = EMPTY_TEXT_PLACEHOLDER
                     new_blocks.append(new_block)
                     rewrote_any = True
                     continue
@@ -2751,7 +2751,7 @@ def _tool_result_later_in_turn(
 
 
 def _empty_text_placeholder(message: AllMessageValues) -> AnthropicMessagesTextParam:
-    placeholder: Final = AnthropicMessagesTextParam(type="text", text=_EMPTY_TEXT_PLACEHOLDER)
+    placeholder: Final = AnthropicMessagesTextParam(type="text", text=EMPTY_TEXT_PLACEHOLDER)
     add_cache_control_to_content(anthropic_content_element=placeholder, original_content_element=message)
     return placeholder
 

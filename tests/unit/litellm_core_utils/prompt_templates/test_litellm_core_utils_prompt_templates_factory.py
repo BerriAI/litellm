@@ -17,7 +17,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
-    _EMPTY_TEXT_PLACEHOLDER,
+    EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -1122,7 +1122,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1226,7 +1226,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 

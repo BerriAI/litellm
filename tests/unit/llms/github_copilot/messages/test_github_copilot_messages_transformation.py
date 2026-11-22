@@ -7,6 +7,7 @@ import pytest
 
 
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.prompt_templates.factory import EMPTY_TEXT_PLACEHOLDER
 from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
@@ -133,6 +134,27 @@ def test_empty_text_document_never_becomes_an_empty_text_block(
         headers={},
     )
     assert result["messages"] == [{"role": "user", "content": expected}]
+
+
+@pytest.mark.parametrize("cache_fields", [{}, {"cache_control": {"type": "ephemeral"}}])
+def test_turn_of_only_empty_text_documents_keeps_non_empty_content(cache_fields: dict[str, object]) -> None:
+    document: Final = {"type": "document", "source": {"type": "text", "data": ""}}
+    messages: Final = [
+        {"role": "user", "content": [document, {**document, **cache_fields}]},
+        {"role": "assistant", "content": "The file is empty."},
+        {"role": "user", "content": "Thanks"},
+    ]
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, **cache_fields}]},
+        *messages[1:],
+    ]
 
 
 def test_anthropic_keeps_text_documents_and_their_citations() -> None:
