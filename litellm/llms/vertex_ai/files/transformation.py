@@ -1050,12 +1050,13 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                 deployment_params=deployment_params,
             ),
         )
+    drop_params: Final = drops_unsupported_params(entry_body.get("drop_params", deployment_params.get("drop_params")))
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
-        litellm_params={},
+        litellm_params={"drop_params": drop_params},
         cached_content=None,
     )
 
@@ -1065,16 +1066,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return (
-        {
-            "request": _with_json_schema_config_in_its_own_column(
-                vertex_request_body,
-                drop_params=drops_unsupported_params(
-                    entry_body.get("drop_params", deployment_params.get("drop_params"))
-                ),
-            )
-        },
-    )
+    return ({"request": _with_json_schema_config_in_its_own_column(vertex_request_body, drop_params=drop_params)},)
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:

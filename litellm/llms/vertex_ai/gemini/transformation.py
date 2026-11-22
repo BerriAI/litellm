@@ -7,6 +7,7 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Mapping
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
@@ -16,17 +17,20 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    MAX_VIDEO_DOWNLOAD_BYTES,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
     get_thought_signature_from_tool,
+    keeps_gemini_video,
     response_schema_prompt,
+    skip_unfetched_video,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -60,11 +64,13 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
+    gemini_fetches_url_itself,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    normalize_youtube_url,
+    youtube_video_mime_type,
 )
 
 # VertexBase is imported only for type checking to avoid introducing a
@@ -129,6 +135,12 @@ def _convert_detail_to_media_resolution_enum(
     elif detail == "ultra_high":
         return {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
     return None
+
+
+def changes_gemini_media_settings(detail: str | None, video_metadata: Mapping[str, object] | None) -> bool:
+    return _convert_detail_to_media_resolution_enum(detail) is not None or bool(
+        gemini_video_metadata_from_openai(video_metadata or {})
+    )
 
 
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
@@ -275,44 +287,56 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
+def _message_fields(message: object) -> Mapping[str, object] | None:
+    if isinstance(message, BaseModel):
+        return as_str_mapping(message.model_dump(exclude_none=False))
+    return as_str_mapping(message)
+
+
+def _video_may_need_download(video_url: object) -> bool:
+    url: Final = video_url if isinstance(video_url, str) else (as_str_mapping(video_url) or {}).get("url")
+    return isinstance(url, str) and url.startswith(("http://", "https://")) and not gemini_fetches_url_itself(url)
+
+
 def _openai_messages_may_need_sync_gcs_metadata_fetch(
     messages: list[AllMessageValues],
 ) -> bool:
     """
     Heuristic: True if any message part can trigger a blocking GCS JSON
     metadata read inside _transform_request_body (extension-less gs:// without
-    explicit MIME hints). Covers user/system ``content`` parts and assistant
-    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
-    to decide whether ``async_transform_request_body`` should offload the sync
-    transform via ``asyncify``.
+    explicit MIME hints) or a blocking download of a remote ``video_url``.
+    Covers user/system/tool ``content`` parts and assistant ``images`` (same
+    paths as ``_gemini_convert_messages_with_history``). Used to decide whether
+    ``async_transform_request_body`` should offload the sync transform via
+    ``asyncify``.
     """
     for raw in messages:
-        msg: Any = raw
-        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
-            msg = msg.model_dump(exclude_none=False)
-        if not isinstance(msg, dict):
+        message_fields = _message_fields(raw)
+        if message_fields is None:
             continue
-        images_field = msg.get("images")
-        if isinstance(images_field, list):
-            for image_item in images_field:
-                if not isinstance(image_item, dict):
-                    continue
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(image_item.get("image_url")):
-                    return True
+        for image_item in as_object_list(message_fields.get("images")) or ():
+            image_fields = as_str_mapping(image_item)
+            if image_fields is not None and _image_url_payload_may_need_sync_gcs_metadata_fetch(
+                image_fields.get("image_url")
+            ):
+                return True
 
-        content = msg.get("content")
-        if not isinstance(content, list):
+        content = as_object_list(message_fields.get("content"))
+        if content is None:
             continue
         for item in content:
-            if not isinstance(item, dict):
+            fields = as_str_mapping(item)
+            if fields is None:
                 continue
-            itype = item.get("type")
-            if itype == "image_url":
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(item.get("image_url")):
+            itype = fields.get("type")
+            if itype == "video_url" and _video_may_need_download(fields.get("video_url")):
+                return True
+            if itype in ("image_url", "video_url"):
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(fields.get(itype)):
                     return True
             elif itype == "file":
-                file_obj = item.get("file")
-                if not isinstance(file_obj, dict):
+                file_obj = as_str_mapping(fields.get("file"))
+                if file_obj is None:
                     continue
                 fmt = file_obj.get("format") or file_obj.get("mime_type") or file_obj.get("content_type")
                 passed = file_obj.get("file_id") or file_obj.get("file_data")
@@ -483,6 +507,7 @@ def _process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    max_download_bytes: int | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -559,13 +584,13 @@ def _process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
-            # Gemini Files API URIs — the file is already uploaded to Google's
-            # servers; pass the URI through as file_data without fetching it.
-            # These URLs return 403 when accessed directly, so we must not try
-            # to resolve their MIME type via HTTP.
-            if format:
-                file_data = FileDataType(mime_type=format, file_uri=image_url)
+        elif gemini_fetches_url_itself(image_url):
+            # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
+            # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
+            # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
+            uri_mime_type: Final = format or youtube_video_mime_type(image_url)
+            if uri_mime_type:
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=normalize_youtube_url(image_url))
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
@@ -576,13 +601,73 @@ def _process_gemini_media(
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            image: Final = convert_to_anthropic_image_obj(image_url, format=format)
+            image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
+
+
+def _str_field(fields: Mapping[str, object], *keys: str) -> str | None:
+    value: Final = next((fields[key] for key in keys if fields.get(key)), None)
+    return value if isinstance(value, str) else None
+
+
+def _process_gemini_video_url(
+    video_url: object,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+    custom_llm_provider: str,
+) -> PartType | None:
+    video_fields: Final = as_str_mapping(video_url) or {}
+    url: Final = video_url if isinstance(video_url, str) else _str_field(video_fields, "url")
+    if not url and drop_params:
+        return None
+    if not url:
+        raise litellm.BadRequestError(
+            message="Invalid message content: element type is 'video_url' but it has no 'url'",
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        )
+    try:
+        part: Final = _process_gemini_media(
+            image_url=url,
+            format=_str_field(video_fields, "format", "mime_type", "content_type"),
+            media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
+            model=model,
+            video_metadata=as_str_mapping(video_fields.get("video_metadata")),
+            vertex_project=vertex_project,
+            vertex_credentials=vertex_credentials,
+            max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
+        )
+    except litellm.ImageFetchError:
+        return skip_unfetched_video(
+            "The link is unreachable, too large, or not a video.",
+            location="a message",
+            drop_params=drop_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    media: Final = part.get("inline_data") or part.get("file_data")
+    holds_video: Final = keeps_gemini_video(
+        media.get("mime_type") if media is not None else None,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
+    )
+    return part if holds_video else None
+
+
+def _assistant_video_url_part(element: object, video_url_part: Callable[[object], PartType | None]) -> PartType | None:
+    fields: Final = as_str_mapping(element)
+    if fields is None or fields.get("type") != "video_url":
+        return None
+    return video_url_part(fields.get("video_url"))
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -721,6 +806,14 @@ def gemini_convert_messages_with_history(
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
+    video_url_part: Final = partial(
+        _process_gemini_video_url,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+        drop_params=drop_params,
+        custom_llm_provider=custom_llm_provider or "vertex_ai",
+    )
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
@@ -781,6 +874,9 @@ def gemini_convert_messages_with_history(
                                 vertex_credentials=vertex_credentials,
                             )
                             _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            if (video_part := video_url_part(element.get("video_url"))) is not None:
+                                _parts.append(video_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
                             audio_data = audio_element["input_audio"].get("data")
@@ -898,6 +994,8 @@ def gemini_convert_messages_with_history(
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+                            elif (video_part := _assistant_video_url_part(element, video_url_part)) is not None:
+                                _parts.append(video_part)
 
                     assistant_content.extend(_parts)
                 elif _message_content is not None and isinstance(_message_content, str):
@@ -1030,6 +1128,9 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    drop_params=drop_params,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1148,10 +1249,15 @@ def transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
+        supports_system_message=supports_system_message,
+        messages=messages,
+        drop_params=drops_unsupported_params(request_params.get("drop_params")),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1191,7 +1297,6 @@ def transform_request_body(
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
-        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
@@ -1315,11 +1420,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not gemini_fetches_url_itself(media.url)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if gemini_fetches_url_itself(media.url):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None
@@ -1410,8 +1515,17 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _has_video_url_part(message: object) -> bool:
+    parts: Final = as_object_list((as_str_mapping(message) or {}).get("content")) or ()
+    return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
+
+
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues]
+    supports_system_message: bool,
+    messages: list[AllMessageValues],
+    drop_params: bool = False,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
     Extracts the system message from the openai message list.
@@ -1432,6 +1546,15 @@ def transform_system_message(
                 if isinstance(message["content"], str):
                     _system_content_block = PartType(text=message["content"])
                 elif isinstance(message["content"], list):
+                    if not drop_params and _has_video_url_part(message):
+                        raise litellm.BadRequestError(
+                            message=(
+                                "Gemini system instructions take text only. "
+                                "Move the video to a user message or set drop_params=True."
+                            ),
+                            model=model or "",
+                            llm_provider=custom_llm_provider or "gemini",
+                        )
                     system_text = ""
                     for content in message["content"]:
                         system_text += content.get("text") or ""
