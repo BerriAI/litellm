@@ -1,10 +1,10 @@
-from collections.abc import Coroutine, Mapping
+from collections.abc import Coroutine, Mapping, Sequence
 from typing import Final, Literal, overload
 
 from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.llms.mistral.chat.transformation import MistralConfig
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionTextObject
 
 
 def _part_text(part: object) -> str | None:
@@ -15,12 +15,18 @@ def _part_text(part: object) -> str | None:
             return None
 
 
-def _several_part_texts(message: Mapping[str, object]) -> tuple[str, ...] | None:
-    parts: Final = as_object_list(message.get("content"))
-    if parts is None or len(parts) < 2:
-        return None
-    texts: Final = tuple(text for part in parts if (text := _part_text(part)) is not None)
-    return texts if len(texts) == len(parts) else None
+def _bare_text_part(part: object) -> object:
+    text: Final = _part_text(part)
+    return part if text is None else ChatCompletionTextObject(type="text", text=text)
+
+
+def _content_parts(message: Mapping[str, object]) -> Sequence[object] | None:
+    return as_object_list(message.get("content"))
+
+
+def _has_several_text_parts(message: Mapping[str, object]) -> bool:
+    parts: Final = _content_parts(message)
+    return parts is not None and len(parts) >= 2 and all(_part_text(part) is not None for part in parts)
 
 
 class VertexAIMistralConfig(MistralConfig):
@@ -53,14 +59,22 @@ class VertexAIMistralConfig(MistralConfig):
         list[AllMessageValues]  # mutable-ok: mirrors override contract
         | Coroutine[object, object, list[AllMessageValues]]
     ):
-        mistral_messages: Final = [with_mistral_tool_call_ids(message) for message in messages]
+        mistral_messages: Final = [
+            self._with_bare_text_parts(with_mistral_tool_call_ids(message)) for message in messages
+        ]
         if is_async:
             return super()._transform_messages(mistral_messages, model, True)
         return super()._transform_messages(mistral_messages, model, False)
 
     @staticmethod
+    def _with_bare_text_parts(message: AllMessageValues) -> AllMessageValues:
+        parts: Final = _content_parts(message)
+        if parts is None:
+            return message
+        return MistralConfig._with_content_parts(message, tuple(map(_bare_text_part, parts)))
+
+    @staticmethod
     def _with_flattened_content(message: AllMessageValues) -> AllMessageValues:
-        texts: Final = _several_part_texts(message)
-        if texts is None:
-            return MistralConfig._with_flattened_content(message)
-        return MistralConfig._with_text_parts(message, texts)
+        if _has_several_text_parts(message):
+            return message
+        return MistralConfig._with_flattened_content(message)

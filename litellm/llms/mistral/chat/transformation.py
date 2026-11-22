@@ -28,7 +28,7 @@ from litellm.router_utils.reasoning_effort_capability import (
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.mistral import MistralThinkingBlock, MistralToolCallMessage
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionTextObject
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse, ModelResponseStream
 from litellm.utils import convert_to_model_response_object, supports_reasoning
 
@@ -439,10 +439,9 @@ class MistralConfig(OpenAIGPTConfig):
         return handle_messages_with_content_list_to_str_conversion([message])[0]
 
     @staticmethod
-    def _with_text_parts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues:
-        text_parts: Final = [ChatCompletionTextObject(type="text", text=text) for text in texts]
-        return cast(  # cast-ok: every message role takes a list of text parts
-            AllMessageValues, {**message, "content": text_parts}
+    def _with_content_parts(message: AllMessageValues, parts: Sequence[object]) -> AllMessageValues:
+        return cast(  # cast-ok: every message role takes a list of content parts
+            AllMessageValues, {**message, "content": list(parts)}
         )
 
     @classmethod
