@@ -74,6 +74,7 @@ from litellm.router_utils.fallback_event_handlers import (
 from litellm.router_utils.prompt_caching_cache import PromptCachingCache
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.scheduler import FlowItem
+from litellm.types.decisions import OpenAIDecisionInputMessage
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
 from litellm.types.router import (
     CustomRoutingStrategyBase,
@@ -193,6 +194,190 @@ def test_decisions_on_a_mixed_group_never_routes_to_a_leg_without_decisions_supp
         )
 
     assert route.call_count == 20
+
+
+_TYPESAFE_DECISIONS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "jev-1.13",
+    "answers": {"damaged": {"type": "noul", "noul": 0.9}},
+    "usage": {"input_tokens": 1, "output_tokens": 0},
+}
+_TICKET_PART: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
+_EVIDENCE_PART: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
+_RECEIPT_PART: Final = {"type": "input_image", "image_url": "https://example.com/receipt.png"}
+_DAMAGED_QUESTIONS: Final = [
+    {"type": "predicate", "name": "damaged", "instructions": "Does the customer report a damaged item?"}
+]
+
+
+def _json_decisions_router(**router_arguments: object) -> Router:
+    """``typesafe-leg`` takes no JSON input and weighs more; ``openai-leg`` takes it."""
+    return Router(
+        model_list=[
+            _decisions_leg("typesafe-leg", {"model": "typesafe/jev-1.13", "api_key": "k"}, weight=1),
+            _decisions_leg("openai-leg", _OPENAI_DECISIONS_PARAMS, weight=0),
+        ],
+        routing_strategy="simple-shuffle",
+        **router_arguments,
+    )
+
+
+_JSON_INPUTS: Final = pytest.mark.parametrize(
+    "decision_input",
+    [
+        [{"role": "user", "content": [_TICKET_PART, _EVIDENCE_PART]}],
+        ({"role": "user", "content": (_TICKET_PART, _EVIDENCE_PART)},),
+        [OpenAIDecisionInputMessage.model_validate({"content": [_TICKET_PART, _EVIDENCE_PART]})],
+    ],
+    ids=["as-sent", "as-sent-tuple", "validated"],
+)
+
+
+@_JSON_INPUTS
+@pytest.mark.asyncio
+async def test_decisions_carrying_json_input_skip_the_leg_refusing_it(
+    decision_input: object, respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    router: Final = _json_decisions_router()
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        await router.adecisions(model="decision-group", input=decision_input, questions=_DAMAGED_QUESTIONS)
+
+    assert route.call_count == 5
+
+
+@_JSON_INPUTS
+def test_decisions_carrying_json_input_skip_the_leg_refusing_it_sync(
+    decision_input: object, respx_mock: respx.MockRouter
+) -> None:
+    router: Final = _json_decisions_router()
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        router.decisions(model="decision-group", input=decision_input, questions=_DAMAGED_QUESTIONS)
+
+    assert route.call_count == 5
+
+
+@pytest.mark.parametrize(
+    ("router_arguments", "request_extra", "content"),
+    [
+        ({}, {}, [_TICKET_PART]),
+        ({"default_litellm_params": {"drop_params": True}}, {}, [_TICKET_PART, _EVIDENCE_PART]),
+        ({}, {"drop_params": True}, [_TICKET_PART, _EVIDENCE_PART]),
+    ],
+    ids=["text-only", "router-default-drop-params", "request-drop-params"],
+)
+@pytest.mark.asyncio
+async def test_decisions_keep_the_leg_refusing_json_input_when_nothing_needs_it(
+    router_arguments: dict[str, object],
+    request_extra: dict[str, object],
+    content: list[object],
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _json_decisions_router(**router_arguments)
+    route: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(json=_TYPESAFE_DECISIONS_RESPONSE)
+
+    await router.adecisions(
+        model="decision-group",
+        input=[{"role": "user", "content": content}],
+        questions=_DAMAGED_QUESTIONS,
+        **request_extra,
+    )
+
+    assert route.call_count == 1
+    assert "input_json" not in route.calls.last.request.content.decode()
+
+
+@pytest.mark.parametrize(
+    ("router_arguments", "request_extra"),
+    [({"default_litellm_params": {"drop_params": True}}, {}), ({}, {"drop_params": True})],
+    ids=["router-default-drop-params", "request-drop-params"],
+)
+@pytest.mark.parametrize(
+    "content",
+    [[_EVIDENCE_PART], [_RECEIPT_PART, _EVIDENCE_PART]],
+    ids=["only-json", "dropped-image-and-json"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_only_json_input_skip_the_leg_that_would_drop_it_all(
+    content: list[object],
+    router_arguments: dict[str, object],
+    request_extra: dict[str, object],
+    respx_mock: respx.MockRouter,
+    _router_httpx_transport: None,
+) -> None:
+    router: Final = _json_decisions_router(**router_arguments)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": content}],
+            questions=_DAMAGED_QUESTIONS,
+            **request_extra,
+        )
+
+    assert route.call_count == 5
+
+
+_GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("image_url", "answering_url"),
+    [
+        (_GIF_RECEIPT, "https://api.openai.com/v1/decisions"),
+        (_PNG_RECEIPT, "https://api.typesafe.ai/v1/systemone"),
+        ("https://example.com/receipt.gif", "https://api.openai.com/v1/decisions"),
+        ("data:image/png;base64,", "https://api.openai.com/v1/decisions"),
+    ],
+    ids=["gif-the-leg-drops", "png-the-leg-keeps", "remote-url-of-unknown-type", "malformed-data-url"],
+)
+@pytest.mark.asyncio
+async def test_decisions_with_json_and_an_image_count_only_the_image_types_a_leg_keeps(
+    image_url: str, answering_url: str, respx_mock: respx.MockRouter, _router_httpx_transport: None
+) -> None:
+    router: Final = _json_decisions_router()
+    openai: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_ROUTER_DECISIONS_RESPONSE)
+    typesafe: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json=_TYPESAFE_DECISIONS_RESPONSE
+    )
+
+    for _ in range(5):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+            drop_params=True,
+            extra_headers={"typesafe-danger-zone-images": "true"},
+        )
+
+    assert {str(route.calls.last.request.url) for route in (openai, typesafe) if route.call_count == 5} == {
+        answering_url
+    }
+
+
+@pytest.mark.asyncio
+async def test_decisions_with_json_input_on_a_group_where_every_leg_refuses_it_name_input_json() -> None:
+    router: Final = Router(
+        model_list=[
+            _decisions_leg("typesafe-a", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+            _decisions_leg("typesafe-b", {"model": "typesafe/jev-1.13", "api_key": "k"}),
+        ],
+        routing_strategy="simple-shuffle",
+    )
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="input_json"):
+        await router.adecisions(
+            model="decision-group",
+            input=[{"role": "user", "content": [_TICKET_PART, _EVIDENCE_PART]}],
+            questions=_DAMAGED_QUESTIONS,
+        )
 
 
 @pytest.mark.asyncio

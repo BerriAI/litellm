@@ -1392,6 +1392,18 @@ def _dispatch_success_logging(
     )
 
 
+def _schedule_sync_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> None:
+    if not logging_obj.claim_sync_success_log():
+        return
+    executor.submit(contextvars.copy_context().run, logging_obj.success_handler, result, start_time, end_time)
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -1958,17 +1970,8 @@ def client(original_function):
             # LOG SUCCESS - handle streaming success logging in the _next_ object, remove `handle_success` once it's deprecated
             verbose_logger.info("Wrapper: Completed Call, calling success_handler")
             if not is_internal_call.get():
-                # Copy the current context to propagate it to the background thread
-                # This is essential for OpenTelemetry span context propagation
-                ctx: Final = contextvars.copy_context()
                 executor: Final[BoundedLoggingThreadPoolExecutor] = litellm_utils.executor
-                executor.submit(
-                    ctx.run,
-                    logging_obj.success_handler,
-                    result,
-                    start_time,
-                    end_time,
-                )
+                _schedule_sync_success_logging(logging_obj, result, start_time, end_time, executor)
             # RETURN RESULT
             return result
         except Exception as e:
@@ -4987,14 +4990,6 @@ def get_optional_params(
             drop_params=bool(drop_params),
         )
 
-    elif custom_llm_provider == "cohere_chat" or custom_llm_provider == "cohere":
-        # handle cohere params
-        optional_params = litellm.CohereChatConfig().map_openai_params(
-            non_default_params=non_default_params,
-            optional_params=optional_params,
-            model=model,
-            drop_params=bool(drop_params),
-        )
     elif custom_llm_provider == "triton":
         optional_params = litellm.TritonConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -9499,6 +9494,8 @@ class ProviderConfigManager:
             return litellm.AzureAIDecisionsConfig()
         if provider == LlmProviders.VERCEL_AI_GATEWAY:
             return litellm.VercelAIGatewayDecisionsConfig()
+        if provider == LlmProviders.LITELLM_PROXY:
+            return litellm.LiteLLMProxyDecisionsConfig()
         return None
 
     @staticmethod

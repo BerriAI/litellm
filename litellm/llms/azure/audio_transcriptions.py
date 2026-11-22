@@ -42,7 +42,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         data: Final = {"model": model, "file": audio_file, **optional_params}
         deployment_api_version: Final = (
             None
-            if self.is_api_version_opt_out(api_version) or self._is_azure_v1_api_version((api_version or "").lower())
+            if self.is_api_version_opt_out(api_version) or self.is_azure_v1_api_version((api_version or "").lower())
             else api_version
         )
 
