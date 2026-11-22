@@ -207,7 +207,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 status_code=e.response.status_code,
                 message=e.response.text,
             )
-        except litellm.Timeout as e:
+        except (litellm.Timeout, httpx.TimeoutException) as e:
             raise OpenAILikeError(status_code=408, message=str(e))
         except Exception as e:
             raise OpenAILikeError(status_code=500, message=str(e))

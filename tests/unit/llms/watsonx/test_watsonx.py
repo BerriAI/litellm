@@ -584,3 +584,36 @@ def test_watsonx_chat_tools_are_rewritten_without_touching_the_callers_tool() ->
         }
     ]
     assert tools == tools_before
+
+
+async def test_watsonx_async_stream_reads_with_the_deployment_stream_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    chunk: Final = {
+        "id": "chatcmpl-watsonx",
+        "object": "chat.completion.chunk",
+        "created": 1760000000,
+        "model": "ibm/granite-3-8b-instruct",
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    }
+    read_timeouts: Final[list[object]] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        read_timeouts.append(request.extensions["timeout"]["read"])
+        return httpx.Response(
+            200, text=f"id: 0\nevent: message\ndata: {json.dumps(chunk)}\n\n", headers={"content-type": "text/event-stream"}
+        )
+
+    response: Final = await litellm.acompletion(
+        model="watsonx/ibm/granite-3-8b-instruct",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        timeout=60,
+        stream_timeout=8,
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(handle_request)),
+    )
+    chunks: Final = [streamed async for streamed in response]
+
+    assert read_timeouts == [8]
+    assert "".join(streamed.choices[0].delta.content or "" for streamed in chunks) == "hi"

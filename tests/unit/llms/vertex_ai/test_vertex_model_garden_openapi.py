@@ -5,13 +5,21 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.vertex_ai.common_utils import (
+    VertexAIError,
     vertex_model_garden_model_id_in_json_body,
 )
-from litellm.llms.vertex_ai.vertex_model_garden.main import create_vertex_url
+from litellm.llms.vertex_ai.vertex_model_garden.main import (
+    VertexAIModelGardenModels,
+    create_vertex_url,
+)
+from litellm.types.utils import ModelResponse
 
 
 @pytest.mark.parametrize(
@@ -235,3 +243,41 @@ async def test_default_api_base_when_none_provided_publisher_model(
         "test-project/locations/us-central1/endpoints/openapi/chat/completions"
     )
     assert request_body["model"] == "xai/grok-4.1-fast-reasoning"
+
+
+class _ModelGardenWithFakeToken(VertexAIModelGardenModels):
+    def _ensure_access_token(self, credentials, project_id, custom_llm_provider) -> tuple[str, str]:
+        return "fake-token", "test-project"
+
+
+def _read_timeout(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("Read timed out", request=request)
+
+
+def test_sync_endpoint_read_timeout_surfaces_as_a_timeout() -> None:
+    with pytest.raises(VertexAIError) as raised:
+        _ModelGardenWithFakeToken().completion(
+            model="5464397967697903616",
+            messages=[{"role": "user", "content": "hello"}],
+            model_response=ModelResponse(),
+            print_verbose=print,
+            encoding=None,
+            logging_obj=MagicMock(),
+            api_base=None,
+            optional_params={},
+            custom_prompt_dict={},
+            headers=None,
+            timeout=8.0,
+            litellm_params={},
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_read_timeout))),
+        )
+
+    assert raised.value.status_code == 408
+    with pytest.raises(litellm.Timeout):
+        exception_type(
+            model="5464397967697903616",
+            custom_llm_provider="vertex_ai",
+            original_exception=raised.value,
+        )

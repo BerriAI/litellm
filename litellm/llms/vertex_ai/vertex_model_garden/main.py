@@ -21,6 +21,7 @@ from typing import Final
 
 import httpx
 
+from litellm.llms.openai_like.common_utils import OpenAILikeError
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
@@ -138,5 +139,7 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
+        except OpenAILikeError as e:
+            raise VertexAIError(status_code=e.response.status_code, message=str(e))
         except Exception as e:
             raise VertexAIError(status_code=500, message=str(e))

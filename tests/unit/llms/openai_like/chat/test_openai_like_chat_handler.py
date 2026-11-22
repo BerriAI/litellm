@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Final
 
@@ -207,9 +208,21 @@ def _read_timeout(request: httpx.Request) -> httpx.Response:
     raise httpx.ReadTimeout("Read timed out", request=request)
 
 
+def _refuse_then_read_timeout() -> Callable[[httpx.Request], httpx.Response]:
+    failures: Final = iter((httpx.ConnectError, httpx.ReadTimeout))
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        raise next(failures)("upstream unavailable", request=request)
+
+    return fail
+
+
 @pytest.mark.asyncio
-async def test_async_non_stream_read_timeout_maps_to_a_408() -> None:
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_read_timeout))
+@pytest.mark.parametrize("upstream", [_read_timeout, _refuse_then_read_timeout()], ids=["read", "read_after_reconnect"])
+async def test_async_non_stream_read_timeout_maps_to_a_408(
+    upstream: Callable[[httpx.Request], httpx.Response],
+) -> None:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
 
     with pytest.raises(OpenAILikeError) as raised:
         await _complete(client, acompletion=True, stream=False, timeout=8.0)
