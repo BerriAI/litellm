@@ -787,13 +787,14 @@ def get_spend_log_metadata_from_kwargs(kwargs: Mapping[str, object]) -> Mapping[
     The request metadata a spend row records. A guardrail hook can plant `litellm_metadata` on a chat request
     after the proxy filled `metadata`, so the caller's spend_logs_metadata comes from `metadata` when the planted
     dict lacks it, in a new dict, since guardrail vendors receive the planted one. Only a `metadata` the proxy
-    stamped with the key hash counts, since on /v1/messages and /v1/responses it is the provider's body field.
+    filled at request setup counts, which its `litellm_api_version` marks. On /v1/messages and /v1/responses
+    `metadata` is the provider's body field, and the spend logger stamps the key's fields into it too.
     """
     litellm_metadata: Final = as_str_mapping(get_litellm_metadata_from_kwargs(dict(kwargs))) or {}  # pyright: ignore[reportUnknownArgumentType]  # the metadata helper returns an untyped dict
     litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
     metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
     carries: Final = (
-        "user_api_key_hash" in metadata
+        "litellm_api_version" in metadata
         and "spend_logs_metadata" in metadata
         and "spend_logs_metadata" not in litellm_metadata
     )

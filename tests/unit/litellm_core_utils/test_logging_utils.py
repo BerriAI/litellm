@@ -60,7 +60,11 @@ class TestSetDurationInModelCallDetails:
         logging_obj = MagicMock()
         logging_obj.model_call_details = {
             "litellm_params": {
-                "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
+                "metadata": {
+                    "litellm_api_version": "1.0.0",
+                    "user_api_key_hash": "hash",
+                    "spend_logs_metadata": {"team": "search"},
+                },
                 "litellm_metadata": planted,
             }
         }

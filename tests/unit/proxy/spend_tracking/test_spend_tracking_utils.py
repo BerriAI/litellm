@@ -332,7 +332,11 @@ def test_spend_row_keeps_the_callers_spend_logs_metadata_beside_a_planted_litell
         {
             "model": "gpt-4o-mini",
             "litellm_params": {
-                "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
+                "metadata": {
+                    "litellm_api_version": "1.0.0",
+                    "user_api_key_hash": "hash",
+                    "spend_logs_metadata": {"team": "search"},
+                },
                 "litellm_metadata": planted,
             },
         },
