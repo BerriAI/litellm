@@ -3,6 +3,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from copy import deepcopy
+from itertools import chain
 from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, Mock, patch
 
@@ -19,7 +20,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -10124,4 +10125,80 @@ def test_vertex_response_json_schema_pins_a_const_inside_the_defs_it_keeps() -> 
         "required": ["payment"],
         "$defs": {"Card": {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}}},
     }
+
+
+_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+
+
+def _ten_character_const_properties(numbers: range) -> dict[str, object]:
+    return {f"tag{n}": {"type": "string", "const": f"tag-{n:06d}"} for n in numbers}
+
+
+def _tool(name: str, properties: dict[str, object]) -> dict[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": properties}}}
+
+
+_SentDeclarations = list[dict[str, list[dict[str, dict[str, dict[str, object]]]]]]
+
+
+def _tools_through_chat(tools: list[dict[str, object]]) -> _SentDeclarations:
+    return VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": tools}, optional_params={}, model="gemini-4-argon", drop_params=False
+    )["tools"]
+
+
+def _tools_through_map_function(tools: list[dict[str, object]]) -> _SentDeclarations:
+    return cast(_SentDeclarations, VertexGeminiConfig().map_function(value=tools, optional_params={}))
+
+
+@pytest.mark.parametrize("map_tools", [_tools_through_chat, _tools_through_map_function], ids=["chat", "map-function"])
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_tools_send_consts_unpinned_once_the_request_enums_pass_the_enum_budget(
+    map_tools: Callable[[list[dict[str, object]]], _SentDeclarations], const_count: int, pinned: bool
+) -> None:
+    half: Final = const_count // 2
+    tools: Final = [
+        _tool("first", _ten_character_const_properties(range(half))),
+        _tool("second", _ten_character_const_properties(range(half, const_count))),
+    ]
+
+    declarations: Final = map_tools(tools)[0]["function_declarations"]
+
+    sent_properties: Final = dict(
+        chain.from_iterable(declaration["parameters"]["properties"].items() for declaration in declarations)
+    )
+    assert sent_properties == {
+        f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} if pinned else {"type": "string"}
+        for n in range(const_count)
+    }
+
+
+@pytest.mark.parametrize(
+    ("const_count", "pinned"),
+    [(_TEN_CHARACTER_CONSTS_IN_BUDGET, True), (_TEN_CHARACTER_CONSTS_IN_BUDGET + 1, False)],
+    ids=["at-budget", "over-budget"],
+)
+def test_gemini_response_json_schema_keeps_consts_as_sent_once_its_enums_pass_the_enum_budget(
+    const_count: int, pinned: bool
+) -> None:
+    schema: Final = {"type": "object", "properties": _ten_character_const_properties(range(const_count))}
+
+    request_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "response_format": {"type": "json_schema", "json_schema": {"name": "tags", "schema": schema}}
+        },
+        optional_params={},
+        model="gemini-4-argon",
+        drop_params=False,
+    )
+
+    assert request_params["response_json_schema"]["properties"] == (
+        {f"tag{n}": {"type": "string", "enum": [f"tag-{n:06d}"]} for n in range(const_count)}
+        if pinned
+        else schema["properties"]
+    )
 
