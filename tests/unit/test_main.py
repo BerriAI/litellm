@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import urllib.parse
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -51,12 +52,14 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_llm import CustomLLM
 from litellm.types.litellm_params import PROMPT_MANAGEMENT_APPLIED_FIELD, ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import (
     ChoiceLogprobs,
     Delta,
+    ModelResponse,
     ModelResponseStream,
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
@@ -13179,7 +13182,7 @@ def test_aleph_alpha_completion_that_is_not_text_fails_the_call(
 _SPLIT_TIMEOUT: Final = httpx.Timeout(connect=1.0, read=10.0, write=None, pool=4.0)
 _SPLIT_TIMEOUT_ON_THE_WIRE: Final = MappingProxyType({"connect": 1.0, "read": 10.0, "write": None, "pool": 4.0})
 _MISTRAL_MODEL: Final = "mistral/ministral-8b-latest"
-_MISTRAL_CHAT_COMPLETION: Final = MappingProxyType(
+_CHAT_COMPLETION: Final = MappingProxyType(
     {
         "id": "chatcmpl-timeout",
         "object": "chat.completion",
@@ -13189,7 +13192,7 @@ _MISTRAL_CHAT_COMPLETION: Final = MappingProxyType(
         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
     }
 )
-_MISTRAL_CHAT_COMPLETION_STREAM: Final = (
+_CHAT_COMPLETION_STREAM: Final = (
     b'data: {"id":"chatcmpl-timeout","object":"chat.completion.chunk","created":1789852145,'
     b'"model":"ministral-8b-latest","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},'
     b'"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
@@ -13217,7 +13220,7 @@ class _WireTimeoutRecorder:
         self.timeouts = (*self.timeouts, request.extensions["timeout"])
         if json.loads(request.content).get("stream") is True:
             return httpx.Response(
-                200, content=_MISTRAL_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"}
+                200, content=_CHAT_COMPLETION_STREAM, headers={"content-type": "text/event-stream"}
             )
         return httpx.Response(200, json=dict(self.body))
 
@@ -13227,7 +13230,7 @@ async def _wire_timeouts(
     model: str,
     body: Mapping[str, object],
     stream: Literal["off", "live", "fake"],
-    timeouts: Mapping[str, object],
+    params: Mapping[str, object],
 ) -> tuple[object, ...]:
     recorder: Final = _WireTimeoutRecorder(body)
     kwargs: Final = {
@@ -13237,7 +13240,7 @@ async def _wire_timeouts(
         "num_retries": 0,
         "stream": stream != "off",
         "fake_stream": stream == "fake",
-        **timeouts,
+        **params,
     }
     if asynchronous:
         async_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(recorder))
@@ -13257,14 +13260,22 @@ async def _wire_timeouts(
 
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 @pytest.mark.parametrize(
-    "model,body",
-    [(_MISTRAL_MODEL, _MISTRAL_CHAT_COMPLETION), ("anthropic/claude-opus-5-5", _ANTHROPIC_MESSAGE)],
-    ids=["mistral", "anthropic"],
+    "model,body,route_params",
+    [
+        (_MISTRAL_MODEL, _CHAT_COMPLETION, {}),
+        ("anthropic/claude-opus-5-5", _ANTHROPIC_MESSAGE, {}),
+        ("azure_ai/mistral-medium-2505", _CHAT_COMPLETION, {"api_base": "https://timeout-test.services.ai.azure.com"}),
+    ],
+    ids=["mistral", "anthropic", "azure_ai"],
 )
 async def test_split_httpx_timeout_reaches_the_wire_for_providers_on_the_shared_httpx_handler(
-    asynchronous: bool, model: str, body: Mapping[str, object], local_model_cost_map: None
+    asynchronous: bool,
+    model: str,
+    body: Mapping[str, object],
+    route_params: Mapping[str, object],
+    local_model_cost_map: None,
 ) -> None:
-    sent: Final = await _wire_timeouts(asynchronous, model, body, "off", {"timeout": _SPLIT_TIMEOUT})
+    sent: Final = await _wire_timeouts(asynchronous, model, body, "off", {"timeout": _SPLIT_TIMEOUT, **route_params})
 
     assert sent == (_SPLIT_TIMEOUT_ON_THE_WIRE,)
 
@@ -13286,7 +13297,7 @@ async def test_split_stream_timeout_bounds_a_live_stream_and_never_shortens_a_fa
     sent: Final = await _wire_timeouts(
         asynchronous,
         _MISTRAL_MODEL,
-        _MISTRAL_CHAT_COMPLETION,
+        _CHAT_COMPLETION,
         stream,
         {"timeout": _SPLIT_TIMEOUT, "stream_timeout": httpx.Timeout(connect=0.5, read=20.0, write=6.0, pool=8.0)},
     )
@@ -13306,6 +13317,135 @@ async def test_split_stream_timeout_bounds_a_live_stream_and_never_shortens_a_fa
 async def test_first_set_timeout_reaches_the_wire_whole_for_providers_on_the_shared_httpx_handler(
     timeouts: Mapping[str, object], expected: Mapping[str, float | None], local_model_cost_map: None
 ) -> None:
-    sent: Final = await _wire_timeouts(False, _MISTRAL_MODEL, _MISTRAL_CHAT_COMPLETION, "off", timeouts)
+    sent: Final = await _wire_timeouts(False, _MISTRAL_MODEL, _CHAT_COMPLETION, "off", timeouts)
 
     assert sent == (expected,)
+
+
+class _TimeoutRecordingLLM(CustomLLM):
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: tuple[float | httpx.Timeout | None, ...] = ()
+
+    def completion(
+        self,
+        model: str,
+        messages: Sequence[object],
+        api_base: str,
+        custom_prompt_dict: Mapping[str, object],
+        model_response: ModelResponse,
+        print_verbose: Callable[..., object],
+        encoding: object,
+        api_key: object,
+        logging_obj: object,
+        optional_params: Mapping[str, object],
+        acompletion: object = None,
+        litellm_params: object = None,
+        logger_fn: object = None,
+        headers: Mapping[str, object] | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        client: HTTPHandler | None = None,
+    ) -> ModelResponse:
+        self.timeouts = (*self.timeouts, timeout)
+        return model_response
+
+
+def _register_custom_provider(monkeypatch: pytest.MonkeyPatch, provider: str) -> _TimeoutRecordingLLM:
+    handler: Final = _TimeoutRecordingLLM()
+    monkeypatch.setattr(litellm, "provider_list", list(litellm.provider_list))
+    monkeypatch.setattr(litellm, "_custom_providers", list(litellm._custom_providers))
+    monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": provider, "custom_handler": handler}])
+    return handler
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "model,custom_provider",
+    [
+        ("deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8", None),
+        ("openai/gpt-5.6", "openai"),
+    ],
+    ids=["openai_compatible_sdk", "built_in_name_registered_as_custom"],
+)
+async def test_split_httpx_timeout_reaches_the_wire_through_the_openai_sdk(
+    asynchronous: bool,
+    model: str,
+    custom_provider: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+) -> None:
+    shadowed: Final = None if custom_provider is None else _register_custom_provider(monkeypatch, custom_provider)
+    recorder: Final = _WireTimeoutRecorder(_CHAT_COMPLETION)
+    kwargs: Final = {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "timeout": _SPLIT_TIMEOUT,
+        "num_retries": 0,
+    }
+
+    if asynchronous:
+        async with AsyncOpenAI(
+            api_key="test-key",
+            base_url="https://timeout-test.example/v1",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(recorder)),
+        ) as async_sdk_client:
+            await litellm.acompletion(client=async_sdk_client, **kwargs)
+    else:
+        with OpenAI(
+            api_key="test-key",
+            base_url="https://timeout-test.example/v1",
+            http_client=httpx.Client(transport=httpx.MockTransport(recorder)),
+        ) as sdk_client:
+            litellm.completion(client=sdk_client, **kwargs)
+
+    assert recorder.timeouts == (_SPLIT_TIMEOUT_ON_THE_WIRE,)
+    assert shadowed is None or shadowed.timeouts == ()
+
+
+@pytest.mark.parametrize(
+    "timeout,expected",
+    [(_SPLIT_TIMEOUT, 10.0), (httpx.Timeout(connect=1.0, read=None, write=3.0, pool=4.0), 600.0)],
+    ids=["read_timeout", "unbounded_read_falls_back"],
+)
+def test_a_registered_custom_handler_still_receives_only_the_read_timeout(
+    timeout: httpx.Timeout, expected: float, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    handler: Final = _register_custom_provider(monkeypatch, "timeout-recorder")
+
+    litellm.completion(
+        model="timeout-recorder/any-model",
+        messages=[{"role": "user", "content": "hi"}],
+        timeout=timeout,
+        num_retries=0,
+    )
+
+    assert handler.timeouts == (expected,)
+
+
+@dataclass(slots=True)
+class _SleepRecordingClock:
+    slept: tuple[float, ...] = ()
+
+    def sleep(self, seconds: float) -> None:
+        self.slept = (*self.slept, seconds)
+
+    def time(self) -> float:
+        return time.time()
+
+
+def test_a_sync_mock_timeout_still_waits_for_the_read_timeout(
+    monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    clock: Final = _SleepRecordingClock()
+    monkeypatch.setattr(litellm_main, "time", clock)
+
+    with pytest.raises(litellm.Timeout):
+        litellm.completion(
+            model=_MISTRAL_MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            timeout=_SPLIT_TIMEOUT,
+            mock_timeout=True,
+            num_retries=0,
+        )
+
+    assert clock.slept == (10.0,)

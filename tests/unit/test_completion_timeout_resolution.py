@@ -10,6 +10,7 @@ from openai import Timeout as SDKTimeout
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
+import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout, StreamKind
 from litellm.main import _completion_supports_httpx_timeout
 from litellm.utils import supports_httpx_timeout
@@ -196,7 +197,7 @@ _READ_ONLY_LIMITS: Final = httpx.Timeout(connect=1.0, read=2.0, write=None, pool
 _UNBOUNDED_READ_LIMITS: Final = httpx.Timeout(connect=1.0, read=None, write=3.0, pool=4.0)
 
 
-@pytest.mark.parametrize("provider", ("openai", "azure", "bedrock", "mistral"))
+@pytest.mark.parametrize("provider", ("openai", "azure", "bedrock", "mistral", "azure_ai"))
 @pytest.mark.parametrize("timeout", (_READ_ONLY_LIMITS, _UNBOUNDED_READ_LIMITS), ids=("read_only", "unbounded_read"))
 def test_completion_keeps_every_httpx_timeout_field_for_providers_that_send_it_whole(
     provider: str, timeout: httpx.Timeout
@@ -213,13 +214,14 @@ def test_completion_keeps_every_httpx_timeout_field_for_providers_that_send_it_w
 
 
 @pytest.mark.parametrize("timeout, expected", ((_READ_ONLY_LIMITS, 2.0), (_UNBOUNDED_READ_LIMITS, 600.0)))
-def test_completion_sends_only_the_read_timeout_for_a_provider_off_the_shared_httpx_routes(
-    timeout: httpx.Timeout, expected: float
+def test_completion_sends_only_the_read_timeout_to_a_registered_custom_provider(
+    timeout: httpx.Timeout, expected: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(litellm, "_custom_providers", ["timeout-recorder"])
     resolved: Final = CompletionTimeout.resolve(
         timeout,
         {},
-        "azure_ai",
+        "timeout-recorder",
         global_timeout=None,
         supports_httpx_timeout=_completion_supports_httpx_timeout,
         stream_kind=StreamKind.NOT_STREAMED,

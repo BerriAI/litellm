@@ -1577,59 +1577,8 @@ def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | Async
     return ctx.client
 
 
-# Providers whose completion dispatcher below always sends the request through litellm's own httpx handlers,
-# so every field of an httpx.Timeout reaches the wire. A provider that can reach a handler not verified to accept
-# httpx.Timeout (native SDK, aiohttp, in-process or legacy handlers) stays out and keeps the read-timeout float.
-_SHARED_HTTPX_COMPLETION_PROVIDERS: Final = frozenset(
-    {
-        "a2a",
-        "anthropic",
-        "anthropic_text",
-        "bedrock_mantle",
-        "bytez",
-        "cloudflare",
-        "cohere",
-        "cohere_chat",
-        "cometapi",
-        "compactifai",
-        "databricks",
-        "databricks_agent",
-        "datarobot",
-        "deepseek",
-        "edenai",
-        "fal_ai",
-        "gdc",
-        "gigachat",
-        "gradient_ai",
-        "groq",
-        "heroku",
-        "huggingface",
-        "langflow",
-        "langgraph",
-        "lemonade",
-        "minimax",
-        "mistral",
-        "nadir",
-        "oci",
-        "ollama",
-        "ollama_chat",
-        "opencode_go",
-        "openrouter",
-        "ovhcloud",
-        "ragflow",
-        "sagemaker_chat",
-        "sagemaker_nova",
-        "scaledown",
-        "snowflake",
-        "triton",
-        "watsonx_text",
-        "xai",
-    }
-)
-
-
 def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
-    return custom_llm_provider in _SHARED_HTTPX_COMPLETION_PROVIDERS or supports_httpx_timeout(custom_llm_provider)
+    return supports_httpx_timeout(custom_llm_provider) or custom_llm_provider not in litellm._custom_providers
 
 
 def _dispatch_client_azure(
@@ -5976,6 +5925,7 @@ def completion(
     mock_response: Final[MOCK_RESPONSE_TYPE | None] = kwargs.get("mock_response", None)
     mock_tool_calls: Final = kwargs.get("mock_tool_calls", None)
     mock_timeout: Final = cast(bool | None, kwargs.get("mock_timeout", None))
+    mocks_dispatch: Final = mock_response is not None or bool(mock_tool_calls) or bool(mock_timeout)
     force_timeout: Final = kwargs.get("force_timeout", 600)  ## deprecated
     logger_fn: Final = kwargs.get("logger_fn", None)
     verbose: Final = kwargs.get("verbose", False)
@@ -6401,7 +6351,7 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=_completion_supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout if mocks_dispatch else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
@@ -6584,7 +6534,7 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             model_id=optional_params.get("model_id"),
         )
-        if mock_response is not None or mock_tool_calls or mock_timeout:
+        if mocks_dispatch:
             kwargs.pop("mock_timeout", None)  # remove for any fallbacks triggered
             reasoning_drop_warnings.log_unless_dropped_effort_sent(optional_params)
             return mock_completion(
