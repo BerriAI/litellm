@@ -2027,12 +2027,8 @@ class RealTimeStreaming:
             return BackendClose(code=1011, reason="proxy failed while relaying the upstream websocket")
 
     def _backend_refused_session(self, close: BackendClose) -> bool:
-        if (
-            self._listens_only
-            and self._is_translation_session
-            and not self._backend_sent_frames
-            and close.code in (1000, 1006)
-        ):
+        heard_nothing: Final = self._listens_only and self._is_translation_session and not self._backend_sent_frames
+        if heard_nothing and close.code in (1000, 1006):
             # A translation call sends its listener nothing while nobody speaks, and the provider
             # refuses to let a listener join a call that is over.
             return False
