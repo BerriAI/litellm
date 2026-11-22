@@ -67,7 +67,7 @@ from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, Valida
 from pydantic.fields import PydanticUndefined
 from pydantic.main import IncEx
 from pydantic_core import PydanticSerializationError, to_jsonable_python
-from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
+from typing_extensions import Never, NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
 from litellm.constants import (
@@ -413,6 +413,7 @@ from litellm.litellm_core_utils.core_helpers import (
     json_contains,
     normalize_drop_params,
     require_attributes,
+    sum_of,
     unpackable_mapping,
     without,
 )
@@ -17294,6 +17295,14 @@ def _lowered(value: object) -> object:
     return require_attributes(value, _SupportsLower, "lower").lower()
 
 
+class _Orderable(Protocol):
+    def __lt__(self, other: Never, /) -> bool: ...
+
+
+def _orderable(value: object) -> _Orderable:
+    return require_attributes(value, _Orderable, "__lt__")
+
+
 def _without_openai_path(api_base: object) -> object:
     if json_contains(api_base, "/openai/"):
         return _split_once(api_base, "/openai/")[0]
@@ -17606,8 +17615,8 @@ def _sort_models(
 
     reverse: Final = sort_order.lower() == "desc"
 
-    def get_sort_key(model: dict[str, Any]) -> Any:
-        model_info: Final = _with_get(_UNTYPED_VALUE.validate_python(model.get("model_info", {})))
+    def get_sort_key(model: Mapping[str, object]) -> object:
+        model_info: Final = _with_get(model.get("model_info", {}))
 
         if sort_by == "model_name":
             # Team BYOK models persist an internal `model_name` (e.g.
@@ -17619,7 +17628,7 @@ def _sort_models(
             team_public_model_name: Final = model_info.get("team_public_model_name")
             if team_public_model_name:
                 return str(team_public_model_name).lower()
-            return _lowered(_UNTYPED_VALUE.validate_python(model.get("model_name", "")))
+            return _lowered(model.get("model_name", ""))
 
         elif sort_by == "created_at":
             created_at: Final = model_info.get("created_at")
@@ -17645,9 +17654,9 @@ def _sort_models(
             return normalized_dt
 
         elif sort_by == "costs":
-            input_cost: Final = model.get("model_info", {}).get("input_cost_per_token", 0) or 0
-            output_cost: Final = model.get("model_info", {}).get("output_cost_per_token", 0) or 0
-            total_cost: Final = input_cost + output_cost
+            input_cost: Final = model_info.get("input_cost_per_token", 0) or 0
+            output_cost: Final = model_info.get("output_cost_per_token", 0) or 0
+            total_cost: Final = sum_of(input_cost, output_cost)
             # Put 0 or None costs at the end for asc, at the start for desc
             if total_cost == 0:
                 return float("inf") if not reverse else float("-inf")
@@ -17661,7 +17670,7 @@ def _sort_models(
         return None
 
     try:
-        sorted_models: Final = sorted(all_models, key=get_sort_key, reverse=reverse)
+        sorted_models: Final = sorted(all_models, key=lambda model: _orderable(get_sort_key(model)), reverse=reverse)
         return sorted_models
     except Exception as e:
         verbose_proxy_logger.exception("Error sorting models by %s: %s", sort_by, e)
