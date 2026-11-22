@@ -415,6 +415,38 @@ async def _settled_row(proxy: Proxy, metadata: Mapping[str, object]) -> Mapping[
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("customer_id", ["customer-1", None])
+async def test_a_grouped_completion_charges_its_app_and_group_with_or_without_a_customer(
+    proxy: Proxy, customer_id: str | None
+) -> None:
+    from litellm.accounting.delivery_projection import entity_transactions
+    from litellm.accounting.projection import project
+
+    row: Final = await _settled_row(
+        proxy,
+        {
+            **_KEYED,
+            "user_api_key_app_id": "app-1",
+            "user_api_key_app_group_id": "group-1",
+            **({"user_api_key_customer_org_id": customer_id} if customer_id else {}),
+        },
+    )
+    accounting: Final = _SETTINGS.validate_python(row["accounting_payload"])
+    totals: Final = entity_transactions(project(accounting))
+    cost: Final = row["spend"]
+
+    assert isinstance(cost, float) and cost > 0
+    assert _metadata(row)["user_api_key_app_group_id"] == "group-1"
+    assert totals["app_group_list_transactions"] == {"group-1": cost}
+    assert totals["app_list_transactions"] == {"app-1": cost}
+    assert totals["app_group_customer_org_list_transactions"] == (
+        {f"group-1:{customer_id}": cost} if customer_id else {}
+    )
+    assert totals["app_customer_org_list_transactions"] == ({f"app-1:{customer_id}": cost} if customer_id else {})
+    assert totals["customer_org_list_transactions"] == ({customer_id: cost} if customer_id else {})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("margin", [0.1, 1])
 async def test_a_customer_success_is_charged_the_surcharge_main_applies(
     proxy: Proxy, monkeypatch: pytest.MonkeyPatch, margin: float

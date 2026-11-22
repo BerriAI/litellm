@@ -14,6 +14,10 @@ pub enum CustomerScope {
     AppOrganization,
     #[strum(serialize = "app_customer_member")]
     AppMember,
+    #[strum(serialize = "app_group")]
+    AppGroup,
+    #[strum(serialize = "app_group_customer_org")]
+    AppGroupOrganization,
 }
 
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
@@ -56,6 +60,8 @@ pub enum SpendCounter {
     App(String),
     AppCustomerOrg(String),
     AppCustomerMember(String),
+    AppGroup(String),
+    AppGroupCustomerOrg(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +104,8 @@ impl SpendCounter {
             Self::App(id) => format!("spend:app:{id}"),
             Self::AppCustomerOrg(id) => format!("spend:app_customer_org:{id}"),
             Self::AppCustomerMember(id) => format!("spend:app_customer_member:{id}"),
+            Self::AppGroup(id) => format!("spend:app_group:{id}"),
+            Self::AppGroupCustomerOrg(id) => format!("spend:app_group_customer_org:{id}"),
         }
     }
 
@@ -142,6 +150,8 @@ impl SpendCounter {
                     CustomerScope::App => Self::App(id.to_owned()),
                     CustomerScope::AppOrganization => Self::AppCustomerOrg(id.to_owned()),
                     CustomerScope::AppMember => Self::AppCustomerMember(id.to_owned()),
+                    CustomerScope::AppGroup => Self::AppGroup(id.to_owned()),
+                    CustomerScope::AppGroupOrganization => Self::AppGroupCustomerOrg(id.to_owned()),
                 }),
             };
         }
@@ -206,6 +216,12 @@ mod tests {
     )]
     #[case::app_member_window(
         "spend:app_customer_member:application%3Amember:window:12mo@2026-01-01T00:00:00+00:00"
+    )]
+    #[case::app_group("spend:app_group:group:lifetime")]
+    #[case::app_group_org("spend:app_group_customer_org:group:org:lifetime")]
+    #[case::app_group_window("spend:app_group:group:window:1mo@2026-11-01T00:00:00+00:00")]
+    #[case::app_group_org_window(
+        "spend:app_group_customer_org:group%3Aorg:window:1mo@2026-11-01T00:00:00+00:00"
     )]
     fn customer_counter_keys_round_trip(#[case] key: &str) {
         assert_eq!(

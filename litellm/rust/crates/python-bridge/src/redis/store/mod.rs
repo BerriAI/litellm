@@ -10,7 +10,7 @@ pub(crate) mod router_session_pins;
 pub(crate) mod router_usage;
 pub(crate) mod sensitive_route_pins;
 pub(crate) mod spend_counters;
-mod value;
+pub(crate) mod value;
 
 use value::PyValue;
 

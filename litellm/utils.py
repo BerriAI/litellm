@@ -1804,6 +1804,18 @@ def _sync_speech_end_logger(
     return log_speech_end
 
 
+def _schedule_sync_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> None:
+    if not logging_obj.claim_sync_success_log():
+        return
+    executor.submit(contextvars.copy_context().run, logging_obj.success_handler, result, start_time, end_time)
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -2573,16 +2585,7 @@ def client(original_function):
                     ),
                 )
             elif not is_internal_call.get() and not logged_by_fallback_attempt:
-                # Copy the current context to propagate it to the background thread
-                # This is essential for OpenTelemetry span context propagation
-                ctx: Final = contextvars.copy_context()
-                executor.submit(
-                    ctx.run,
-                    logging_obj.success_handler,
-                    checked_result,
-                    start_time,
-                    end_time,
-                )
+                _schedule_sync_success_logging(logging_obj, checked_result, start_time, end_time, executor)
             # RETURN RESULT
             return checked_result
         except Exception as e:
@@ -11005,6 +11008,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.responses.transformation import VertexAIMuseResponsesAPIConfig
+
+            return VertexAIMuseResponsesAPIConfig.for_model(model)
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
@@ -11959,6 +11966,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.GRADIUM == provider:
+            from litellm.llms.gradium.text_to_speech.transformation import (
+                GradiumTextToSpeechConfig,
+            )
+
+            return GradiumTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,

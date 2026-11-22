@@ -11,7 +11,7 @@ test.describe("Models and Endpoints responsive header", () => {
     await page.goto("/ui");
     await page
       .getByRole("complementary")
-      .getByRole("link", { name: "Models + Endpoints" })
+      .getByRole("link", { name: "Model Management" })
       .click();
 
     const tabs = page.getByRole("tablist");
