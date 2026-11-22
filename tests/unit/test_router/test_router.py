@@ -8211,6 +8211,36 @@ async def test_chat_calls_on_a_mixed_azure_group_stay_off_its_batch_deployment(m
     assert (batch_creates.call_count, chats.call_count, batch_chats.call_count) == (2, 20, 0)
 
 
+@pytest.mark.asyncio
+async def test_a_too_long_prompt_on_a_mixed_azure_group_takes_its_context_window_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", max_input_tokens=20),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+            _azure_sku_deployment("gpt-large", "large-sku", "chat"),
+        ],
+        enable_pre_call_checks=True,
+        context_window_fallbacks=[{"gpt-mixed": ["gpt-large"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        mixed_group: Final = respx_mock.post(host__regex=r"(chat|batch)-sku\.openai\.azure\.com").mock(
+            return_value=httpx.Response(400, json=_AZURE_BATCH_DEPLOYMENT_REFUSAL)
+        )
+        large: Final = respx_mock.post(host="large-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        response: Final = await router.acompletion(
+            model="gpt-mixed", messages=[{"role": "user", "content": "hi " * 200}]
+        )
+
+    assert (response.id, mixed_group.call_count, large.call_count) == (_AZURE_CHAT_COMPLETION["id"], 0, 1)
+
+
 _AZURE_FILE_DELETED: Final = {"id": "file-batch-input", "object": "file", "deleted": True}
 _AZURE_FILE_LIST: Final = {"object": "list", "data": [], "has_more": False}
 _AZURE_FINE_TUNING_JOB: Final = {
@@ -8357,6 +8387,55 @@ async def test_a_rate_limited_chat_deployment_cools_down_for_batch_api_calls_on_
         chat_requests_after_each_call: Final = tuple([await chat_requests_after_one_call() for _ in range(20)])
 
     assert len({requests for requests in chat_requests_after_each_call if requests}) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "expected_chat_refusals"),
+    [
+        (lambda router: router.afile_delete(model="gpt-mixed", file_id="file-batch-input"), 1),
+        (lambda router: router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}]), 20),
+    ],
+    ids=["delete-file", "chat"],
+)
+async def test_a_pre_call_rate_limit_refusal_cools_a_mixed_azure_chat_deployment_only_for_calls_its_batch_peer_takes(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    expected_chat_refusals: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-sku"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-sku"),
+        ],
+        num_retries=0,
+    )
+
+    class _ChatDeploymentAtItsLimit(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.refusals = 0
+
+        async def async_pre_call_check(self, deployment, parent_otel_span):
+            if deployment["model_info"]["id"] == "chat-sku":
+                self.refusals += 1
+                raise litellm.RateLimitError(message="rpm exceeded", llm_provider="azure", model="chat-sku")
+
+    refuser: Final = _ChatDeploymentAtItsLimit()
+
+    with (
+        patch.object(litellm, "callbacks", [refuser]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_DELETED)
+        )
+        for _ in range(20):
+            with contextlib.suppress(litellm.RateLimitError):
+                await call(router)
+
+    assert refuser.refusals == expected_chat_refusals
 
 
 @pytest.mark.asyncio

@@ -516,6 +516,9 @@ impl<H: RouterHost> Call<'_, H> {
         {
             healthy.retain(|d| !excluded.iter().any(|id| id.as_str() == Some(d.id.as_str())));
         }
+        if !resolution.kind.is_single() && !listed {
+            healthy = without_batch_only_deployments(request, &all, healthy);
+        }
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
         // async candidate list but a deployment named by id and a listed pass-through pick.
@@ -714,7 +717,6 @@ impl<H: RouterHost> Call<'_, H> {
 
         if !resolution.kind.is_single() {
             healthy = without_deployments_that_cannot_batch(request, &all, healthy);
-            healthy = without_batch_only_deployments(request, &all, healthy);
         }
 
         if let Some(pinned) = [
