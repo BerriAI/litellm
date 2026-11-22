@@ -11,6 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     decoded_json_object,
+    is_undecodable_json_object,
     loads_json_object,
     map_finish_reason,
 )
@@ -571,6 +572,10 @@ def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
     return any(_is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in _sse_frames(sse_stream))
 
 
+def _has_undecodable_object_event(sse_stream: str) -> bool:
+    return any(is_undecodable_json_object(_sse_data_payload(frame) or "") for frame in _sse_frames(sse_stream))
+
+
 def anthropic_sse_event_type(event: str) -> object:
     return next((event_data.get("type") for event_data in _parsed_sse_events(event)), None)
 
@@ -710,7 +715,7 @@ def assemble_anthropic_sse_stream(
     passes the upstream error on; a caller recording what was served keeps None.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
+    if sse_stream is None or _has_undecodable_object_event(sse_stream):
         return None
     message_start: Final = _anthropic_message_start(sse_stream)
     if message_start is None:

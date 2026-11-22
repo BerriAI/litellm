@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+from collections.abc import Iterable, Iterator, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, filterfalse, repeat
@@ -24,7 +24,13 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, loads_json_object
+from litellm.exceptions import GuardrailRaisedException
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    is_undecodable_json_object,
+    iter_items,
+    loads_json_object,
+)
 from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.common_utils import anthropic_server_tool_calls
@@ -818,6 +824,19 @@ class AnthropicMessagesHandler(BaseTranslation):
             return ()
         event: Final = loads_json_object(line[len("data:") :])
         return () if event is None else (event,)
+
+    @staticmethod
+    def _stripped_sse_lines(responses_so_far: Sequence[object]) -> Iterator[str]:
+        joined: Final = b"".join(item for item in responses_so_far if isinstance(item, (bytes, bytearray)))
+        return (line.strip() for line in joined.decode("utf-8", errors="replace").split("\n"))
+
+    @classmethod
+    def _has_undecodable_object_line(cls, responses_so_far: Sequence[object]) -> bool:
+        return any(
+            is_undecodable_json_object(line[len("data:") :])
+            for line in cls._stripped_sse_lines(responses_so_far)
+            if line.startswith("data:")
+        )
 
     @staticmethod
     def _iter_sse_events(item: object) -> Sequence[Mapping[str, object]]:
@@ -1622,6 +1641,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         """
         from litellm.integrations.custom_guardrail import ModifyResponseException
 
+        if self._has_undecodable_object_line(responses_so_far):
+            raise GuardrailRaisedException(
+                guardrail_name=guardrail_to_apply.guardrail_name,
+                message="The guardrail could not read an event in the upstream stream, so it cannot check the response",
+                should_wrap_with_default_message=False,
+            )
         has_ended: Final = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
