@@ -15,8 +15,6 @@ from litellm.types.utils import ModelResponse
 class RAGChunkingStrategy(TypedDict, total=False):
     """
     Chunking strategy config for RAG ingest using RecursiveCharacterTextSplitter.
-
-    See: https://docs.langchain.com/oss/python/langchain/rag
     """
 
     chunk_size: int  # Maximum size of chunks (default: 1000)

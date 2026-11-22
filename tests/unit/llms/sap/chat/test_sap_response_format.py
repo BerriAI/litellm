@@ -737,7 +737,7 @@ class TestResponseFormatErrorHandling:
 class TestStrictParameterFiltering:
     """Test that strict parameter is filtered from model_params.
 
-    LangChain agents pass strict=true at the top level of optional_params,
+    Some agent frameworks pass strict=true at the top level of optional_params,
     but SAP AI Core Orchestration API does not accept it as a model parameter
     for GPT models. The strict parameter should only exist inside
     response_format.json_schema, not as a top-level model param.
@@ -793,10 +793,9 @@ class TestStrictParameterFiltering:
         assert prompt_config["response_format"]["json_schema"]["strict"] is True
 
     def test_langchain_style_strict_filtered_with_response_format(self):
-        """LangChain sends strict at top level AND inside json_schema - only top level filtered."""
+        """Strict sent at top level AND inside json_schema - only top level filtered."""
         config = GenAIHubOrchestrationConfig()
 
-        # LangChain sends both top-level strict AND inside json_schema
         response_format = {
             "type": "json_schema",
             "json_schema": {
@@ -813,7 +812,7 @@ class TestStrictParameterFiltering:
             model="gpt-4o",
             messages=[{"role": "user", "content": "Hello"}],
             optional_params={
-                "strict": True,  # Top-level strict from LangChain - should be filtered
+                "strict": True,  # Top-level strict - should be filtered
                 "response_format": response_format,
                 "temperature": 0.5,
             },

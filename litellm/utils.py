@@ -5430,7 +5430,7 @@ def get_optional_params_embeddings(
 
 def remove_additional_properties(schema: _SchemaT) -> _SchemaT:
     """
-    clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+    clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors
 
     Relevant Issues: https://github.com/BerriAI/litellm/issues/6136, https://github.com/BerriAI/litellm/issues/6088
     """
@@ -5661,7 +5661,7 @@ def pre_process_non_default_params(
         non_default_params, list
     ):  # fixes https://github.com/BerriAI/litellm/issues/4933
         tools: Final = non_default_params["tools"]
-        for tool in tools:  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors - https://github.com/langchain-ai/langchainjs/issues/5240
+        for tool in tools:  # clean out 'additionalProperties = False'. Causes vertexai/gemini OpenAI API Schema errors
             tool_function = tool.get("function", {})
             parameters = tool_function.get("parameters", None)
             if parameters is not None:
@@ -8752,7 +8752,7 @@ def validate_environment(
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
-def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
+def acreate(*args, **kwargs):  ## Thin client to handle the acreate call
     return litellm.acompletion(*args, **kwargs)
 
 

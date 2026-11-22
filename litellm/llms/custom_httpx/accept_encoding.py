@@ -1,7 +1,7 @@
 """
 httpx keeps one zstd decompressor per response, so a streamed body that sends each event as its own
 zstd frame fails on the second frame with `cannot use a decompressobj multiple times`. httpx offers
-zstd whenever `zstandard` is importable (langchain, langsmith and `httpx[zstd]` all bring it in), so
+zstd whenever `zstandard` is importable (`httpx[zstd]` and other packages bring it in), so
 the clients litellm builds offer every encoding httpx decodes except zstd.
 """
 

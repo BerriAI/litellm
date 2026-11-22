@@ -66,13 +66,13 @@ def test_update_messages_with_model_file_ids():
 
 
 def test_get_file_ids_from_messages_skips_langchain_v1_file_block():
-    """A LangChain v1 standardized file block must not crash file-id discovery."""
+    """A standardized file block must not crash file-id discovery."""
     messages = [
         {
             "role": "user",
             "content": [
                 {"type": "text", "text": "summarise this PDF"},
-                # LangChain v1 shape produced by `_normalize_messages`.
+                # Standardized shape produced by `_normalize_messages`.
                 # No `file` sub-dict: the discriminator is `type: "file"` but
                 # the payload lives on `base64`/`mime_type` siblings.
                 {

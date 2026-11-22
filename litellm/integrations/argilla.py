@@ -222,11 +222,11 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
+                    "Skipping Argilla logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
-                "Langsmith Sync Layer Logging - kwargs: %s, response_obj: %s",
+                "Argilla Sync Layer Logging - kwargs: %s, response_obj: %s",
                 kwargs,
                 response_obj,
             )
@@ -235,13 +235,13 @@ class ArgillaLogger(CustomBatchLogger):
                 return
 
             self.log_queue.append(data)
-            verbose_logger.debug("Langsmith, event added to queue. Will flush in %s seconds...", self.flush_interval)
+            verbose_logger.debug("Argilla, event added to queue. Will flush in %s seconds...", self.flush_interval)
 
             if len(self.log_queue) >= self.batch_size:
                 self._send_batch()
 
         except Exception:
-            verbose_logger.exception("Langsmith Layer Error - log_success_event error")
+            verbose_logger.exception("Argilla Layer Error - log_success_event error")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -249,11 +249,11 @@ class ArgillaLogger(CustomBatchLogger):
             random_sample: Final = random.random()
             if random_sample > sampling_rate:
                 verbose_logger.info(
-                    "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
+                    "Skipping Argilla logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
                 )
                 return  # Skip logging
             verbose_logger.debug(
-                "Langsmith Async Layer Logging - kwargs: %s, response_obj: %s",
+                "Argilla Async Layer Logging - kwargs: %s, response_obj: %s",
                 kwargs,
                 response_obj,
             )
@@ -276,7 +276,7 @@ class ArgillaLogger(CustomBatchLogger):
 
             self.log_queue.append(data)
             verbose_logger.debug(
-                "Langsmith logging: queue length %s, batch size %s",
+                "Argilla logging: queue length %s, batch size %s",
                 len(self.log_queue),
                 self.batch_size,
             )
@@ -290,22 +290,22 @@ class ArgillaLogger(CustomBatchLogger):
         random_sample: Final = random.random()
         if random_sample > sampling_rate:
             verbose_logger.info(
-                "Skipping Langsmith logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
+                "Skipping Argilla logging. Sampling rate=%s, random_sample=%s", sampling_rate, random_sample
             )
             return  # Skip logging
-        verbose_logger.info("Langsmith Failure Event Logging!")
+        verbose_logger.info("Argilla Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
             self.log_queue.append(data)
             verbose_logger.debug(
-                "Langsmith logging: queue length %s, batch size %s",
+                "Argilla logging: queue length %s, batch size %s",
                 len(self.log_queue),
                 self.batch_size,
             )
             if len(self.log_queue) >= self.batch_size:
                 await self.flush_queue()
         except Exception:
-            verbose_logger.exception("Langsmith Layer Error - error logging async failure event.")
+            verbose_logger.exception("Argilla Layer Error - error logging async failure event.")
 
     async def async_send_batch(self):
         """

@@ -8,7 +8,7 @@ class httpxSpecialProvider(str, Enum):
     Httpx Clients can be created for these litellm internal providers
 
     Example:
-    - langsmith logging would need a custom async httpx client
+    - a logging integration would need a custom async httpx client
     - pass through endpoint would need a custom async httpx client
     """
 

@@ -815,7 +815,7 @@ async def get_team_callbacks(
             raise _unknown_team_error(team_id, user_api_key_dict, status.HTTP_404_NOT_FOUND)
 
         # IDOR guard: callback metadata holds third-party API credentials
-        # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
+        # (Langfuse / GCS). Only proxy admins / org admins /
         # team admins of THIS team may read them.
         if not await get_team_access().allows(
             user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN

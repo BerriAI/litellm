@@ -922,7 +922,7 @@ def test_get_api_key_with_custom_litellm_key_header_no_prefix():
 
 
 def test_get_api_key_with_custom_litellm_key_header_aws_sigv4():
-    """AWS Signature V4 format (LangChain AWS SDK)."""
+    """AWS Signature V4 format."""
     token = "sk-" + "1" * 8
     header = (
         f"AWS4-HMAC-SHA256 Credential=Bearer {token}/20260210/us-east-1/bedrock/"

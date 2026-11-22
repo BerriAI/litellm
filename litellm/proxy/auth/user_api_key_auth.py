@@ -1209,7 +1209,7 @@ def _get_bearer_token_or_received_api_key(api_key: str) -> str:
     elif (credential := bearer_credential(api_key)) is not None and not _is_master_key(api_key):
         return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
-        # Handle AWS Signature V4 format from LangChain
+        # Handle AWS Signature V4 format
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)
@@ -1284,7 +1284,7 @@ def get_bearer_token(
     elif (credential := bearer_credential(api_key)) is not None:
         return credential
     elif api_key.startswith("AWS4-HMAC-SHA256"):
-        # Handle AWS Signature V4 format from LangChain
+        # Handle AWS Signature V4 format
         # Format: AWS4-HMAC-SHA256 Credential=Bearer $LITELLM_MASTER_KEY/date/region/service/aws4_request, SignedHeaders=..., Signature=...
         # Extract the Bearer token from the Credential field
         match = re.search(r"Credential=Bearer\s+([^/\s,]+)", api_key)

@@ -239,7 +239,7 @@ def test_google_ai_studio_transform_messages_http_file_id_convert_failure_leaves
 
 def test_update_messages_with_model_file_ids_malformed_skips_non_openai_file_block():
     """Non-OpenAI file blocks (e.g. missing nested `file` dict) are skipped so callers
-    relying on LangChain v1 / provider-native shapes are not rejected here."""
+    relying on standardized / provider-native shapes are not rejected here."""
     messages = _malformed()
     result = update_messages_with_model_file_ids(
         messages=messages,

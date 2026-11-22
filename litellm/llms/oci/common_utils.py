@@ -537,7 +537,7 @@ def validate_oci_environment(
 # OCI Generative AI does not support JSON Schema extensions ($ref, $defs,
 # anyOf).  Pydantic v2 emits all three for models with Optional fields or
 # nested schemas.  The helpers below are ported from the official
-# langchain-oracle reference implementation so that tool schemas are always
+# reference implementation so that tool schemas are always
 # valid before they reach the OCI endpoint.
 # ---------------------------------------------------------------------------
 

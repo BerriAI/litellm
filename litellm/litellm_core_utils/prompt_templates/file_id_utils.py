@@ -105,8 +105,8 @@ def update_messages_with_model_file_ids(
                         file_object_file_field = file_object.get("file")
                         if not isinstance(file_object_file_field, dict):
                             # Content block has `type: "file"` but not the
-                            # OpenAI Chat Completions shape (e.g. a LangChain
-                            # v1 standardized file block, or a provider-native
+                            # OpenAI Chat Completions shape (e.g. a
+                            # standardized file block, or a provider-native
                             # shape that also uses `type: "file"`). Nothing to
                             # remap here, so skip instead of crashing.
                             continue

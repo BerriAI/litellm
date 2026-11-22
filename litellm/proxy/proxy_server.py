@@ -13578,7 +13578,7 @@ async def embeddings(
             and isinstance(data["input"][0], list)
             and isinstance(data["input"][0][0], int)
         ):  # check if array of tokens passed in
-            # check if provider accept list of tokens as input - e.g. for langchain integration
+            # check if provider accept list of tokens as input
             if llm_router is not None and data.get("model") in router_model_names:
                 # Use router's O(1) lookup instead of O(N) iteration through llm_model_list
                 deployment: Final = llm_router.registry().deployments(data["model"], source="first_in_group")
