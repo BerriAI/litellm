@@ -519,9 +519,9 @@ def test_gemini_deep_research_previews_accept_the_documented_input_window(prices
     assert prices[model]["max_output_tokens"] == 65_536
 
 
-# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions, checked 2026-11-21
 VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
-    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+    {"gemini-3.6-flash": "2027-01-28", "gemini-3.7-flash": "2027-01-28"}
 )
 
 

@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+from litellm.proxy.auth.auth_utils import bearer_credential
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.custom_openapi_spec import inline_request_body
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -563,7 +564,8 @@ async def proxy_realtime_calls(
     # Auth: the Bearer token is the encrypted ephemeral key issued by
     # /realtime/client_secrets, not a standard proxy API key.
     auth_header: Final[str | None] = request.headers.get("Authorization")
-    if not auth_header or not auth_header.startswith("Bearer "):
+    encrypted_token: Final = bearer_credential(auth_header) if auth_header else None
+    if encrypted_token is None:
         return Response(
             content=json.dumps({"error": "Missing or invalid Authorization header"}),
             status_code=http_status.HTTP_401_UNAUTHORIZED,
@@ -571,7 +573,6 @@ async def proxy_realtime_calls(
         )
 
     is_translation_request: Final = "/realtime/translations/calls" in request.url.path
-    encrypted_token: Final = auth_header.removeprefix("Bearer ").strip()
     decrypted_token_value: Final = decrypt_value_helper(
         value=encrypted_token,
         key="realtime_calls_auth",

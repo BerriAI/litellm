@@ -3186,6 +3186,7 @@ class AdapterCompletionStreamWrapper:
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
@@ -4847,6 +4848,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"

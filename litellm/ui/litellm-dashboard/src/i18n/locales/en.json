@@ -180,6 +180,43 @@
       "discovered": "{{count}} existing resources found in {{type}}",
       "more": "and {{count}} more",
       "lockHint": "This choice is fixed after a resource has been configured with app budget settings."
+    },
+    "groups": {
+      "title": "App groups",
+      "count_one": "{{count}} app group",
+      "count_other": "{{count}} app groups",
+      "manageBudgetGroups": "Manage app group budget groups",
+      "selectApps": "Select apps",
+      "selectionHint": "Select the apps in this group. Each app belongs to one group. Selecting an app moves it from its previous group and keeps its own budget.",
+      "search": "Search app groups",
+      "noMatches": "No app groups match your search.",
+      "hint": "Share a budget across related apps while keeping each app’s own limits.",
+      "create": "Create app group",
+      "edit": "Edit app group",
+      "empty": "Create an app group and select the apps that belong to it.",
+      "choose": "Select app group",
+      "notFound": "App group not found.",
+      "name": "Group name",
+      "description": "Description",
+      "nameRequired": "Enter a group name.",
+      "customerRequired": "Select a customer organization.",
+      "sharedBudget": "Shared budget",
+      "capHint": "Every request must fit both the group budget and the app’s own limits.",
+      "customerBudget": "Customer budget for app group",
+      "budgetSettings": "App group budget settings",
+      "customer": "Customer organization",
+      "apps": "Apps in this group",
+      "appLimitsHint": "App limits do not reserve funds. All apps share the group’s remaining budget.",
+      "usageHint": "Usage charts show requests attributed to customer organizations. The shared budget covers all requests.",
+      "noApps": "No apps selected. Edit this app group to add apps.",
+      "editApp": "Edit app settings",
+      "customers": "Customer organization budgets",
+      "setCustomerBudget": "Set customer budget",
+      "noCustomers": "No customer usage or budgets yet.",
+      "editBudget": "Edit budget",
+      "parent": "App group",
+      "noGroup": "No app group",
+      "membershipHint": "New requests count toward the selected group. Past usage stays with the group that served it."
     }
   },
   "format": {
@@ -849,7 +886,7 @@
   },
   "vectorStores": {
     "page": {
-      "title": "Vector Store Management",
+      "title": "Vector Stores",
       "lastRefreshed": "Last Refreshed: {{time}}",
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
@@ -2238,6 +2275,9 @@
         "unavailable": "Not recorded",
         "loading": "Loading download history…",
         "loadFailed": "Could not load download history. Try refreshing.",
+        "downloadCsv": "Download CSV",
+        "exporting": "Exporting...",
+        "exportFailed": "Could not export download history. Try again.",
         "empty": "No authenticated download history yet.",
         "refresh": "Refresh",
         "refreshing": "Refreshing download history…",
@@ -3740,7 +3780,7 @@
         "removing": "Removing…",
         "remove": "Remove"
       },
-      "title": "Cost Tracking Settings",
+      "title": "Cost Tracking",
       "description": "Configure cost discounts and margins for different LLM providers. Changes are saved automatically.",
       "loading": "Loading configuration...",
       "discounts": {
@@ -3758,6 +3798,7 @@
       },
       "margins": {
         "title": "Fee/Price Margin",
+        "configOwnedHint": "Controlled by config.yaml. Edit litellm_settings.cost_margin_config there.",
         "description": "Add fees or margins to LLM costs for internal billing and cost recovery",
         "addButton": "+ Add Provider Margin",
         "emptyTitle": "No provider margins configured",
@@ -4074,7 +4115,7 @@
   "costOptimization": {
     "view": {
       "title": "Cost Optimization",
-      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab",
+      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Model Management, on the Auto-Routers tab",
       "tabs": {
         "overall": "Overall",
         "compression": "Prompt Compression",
@@ -6104,6 +6145,7 @@
   "alerts": {
     "unified": {
       "title": "Alerts",
+      "inboxDescription": "Review gateway alerts and manage monitoring settings.",
       "saveError": "Could not save status. Please try again.",
       "resourceHeading": "This alert is tied to the following resource",
       "migrationDetails": "View migration details",
@@ -8511,7 +8553,7 @@
         "home": "Home",
         "virtualKeys": "Virtual Keys",
         "playground": "Playground",
-        "modelsAndEndpoints": "Models + Endpoints",
+        "modelsAndEndpoints": "Model Management",
         "agentic": "Agentic",
         "agents": "Agents",
         "workflowRuns": "Workflow Runs",
@@ -9053,7 +9095,7 @@
         "reset": "Theme settings reset to default!",
         "resetFailed": "Failed to reset theme settings"
       },
-      "title": "UI Theme Customization",
+      "title": "UI Theme",
       "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
       "logoUrl": {
         "label": "Custom Logo URL",
@@ -9297,6 +9339,7 @@
     },
     "inheritedBudgetHint": {
       "scopes": {
+        "key": "Key",
         "team": "Team",
         "teamMember": "Team member",
         "organization": "Organization",
@@ -9304,6 +9347,18 @@
       },
       "memberAlias": "{{member}} in {{team}}",
       "intro": "This key has no budget of its own, but its spend still counts toward:"
+    },
+    "appliedBudgets": {
+      "title": "Budgets that apply",
+      "explainer": "Each limit is checked on its own, and requests stop as soon as any one of them is reached.",
+      "empty": "No budget limits this key. Spend is tracked but never blocked.",
+      "thisKey": "This key",
+      "closestToLimit": "Closest to limit",
+      "spendOfLimit": "${{spend}} of ${{limit}}",
+      "limitOnly": "${{limit}} limit",
+      "percentUsed": "{{percent}}% used",
+      "resetsEvery": "Resets every {{duration}}",
+      "noReset": "Does not reset"
     },
     "multiSelect": {
       "placeholder": "Select options",
@@ -14789,7 +14844,6 @@
         "success": "Success"
       },
       "header": {
-        "backTo": "Back to {{label}}",
         "requestId": "Request ID",
         "provider": "Provider",
         "copied": "Copied!",
@@ -15280,6 +15334,7 @@
     },
     "page": {
       "loading": "Loading",
+      "description": "Review requests, audit activity, and deleted resources.",
       "tabs": {
         "requestLogs": "Request Logs",
         "auditLogs": "Audit Logs",
@@ -17026,6 +17081,7 @@
         "teamName": "Team Name",
         "teamId": "Team ID",
         "createdAt": "Created At",
+        "noMetadata": "No custom metadata",
         "models": "Models",
         "defaultMemberModels": "Default Member Models",
         "modelAliases": "Model Aliases",
@@ -17097,7 +17153,9 @@
         "rpmLimitTooltip": "Maximum requests per minute this member can make within this team. This is separate from any global user RPM limit",
         "rpmLimitPlaceholder": "Requests per minute limit for this member in this team",
         "allowedModels": "Allowed Models",
-        "allowedModelsTooltip": "Models this member can access within this team. Leave empty to inherit all team models.",
+        "allowedModelsTooltip": "Selecting models limits this member to your selection. Leave empty to inherit all team models.",
+        "addModelsOnKey": "To add a model without changing inherited access, attach an access group to an inheriting virtual key.",
+        "viewMemberKeys": "View member’s keys",
         "allowedModelsPlaceholder": "Leave empty to inherit all team models"
       },
       "deleteMember": {
@@ -21026,6 +21084,10 @@
     "loadFailed": "Could not load this model group's deployments. Saved weights are kept."
   },
   "customerPortal": {
+    "appGroupBudgetGroups": {
+      "title": "App group budget groups",
+      "help": "Reusable budgets for an entire app group. Select a budget group when creating or editing an app group. Changes apply to every app group using that budget."
+    },
     "overallAppGroups": {
       "title": "Overall app budget groups",
       "help": "Presets for an app's total usage across all customer organizations and members. Blank means no limit."
@@ -21061,13 +21123,18 @@
     "budgetGroups": {
       "organizationDefault": "Use organization default",
       "organizationDefaultHelp": "Apply the configured default when this organization is created.",
-      "settingsHint": "Manage separate presets for overall app limits, organization-wide limits, and each customer's usage within an app.",
+      "settingsHint": "Manage separate presets for app groups, apps, organizations, and each customer's usage within an app.",
       "overallAppTab": "Overall App Budget Groups",
+      "appGroupTab": "App Group Budget Groups",
       "overallTab": "Overall Organization Budget Groups",
       "appTab": "Per-App Organization Budget Groups",
       "appMemberTab": "App × member",
       "newOrganizationsJoin": "New organizations join",
       "newOrganizationsHelp": "Use this budget group for new organizations unless you choose another. No limit adds no organization-level cap.",
+      "newAppsUse": "New apps use",
+      "newAppsHelp": "Use this budget group for new apps unless you choose another. No limit adds no overall app cap.",
+      "newAppGroupsUse": "New app groups use",
+      "newAppGroupsHelp": "Use this budget group for new app groups unless you choose another. No limit adds no shared app group cap.",
       "atCap": "At the cap",
       "atCapLabel": "Group {{index}} at the cap",
       "pauseUntilReset": "Pause until reset",
@@ -21226,6 +21293,7 @@
     },
     "list": {
       "title": "$t(customerPortal.entities.organizations)",
+      "description": "Manage customer organizations and review their usage.",
       "create": "Create organization",
       "searchPlaceholder": "Search by name or ID",
       "overallUsage": "Overall customer usage",
@@ -21456,6 +21524,10 @@
       "withinMonthlyBudget": "Within monthly limit",
       "monthlyLimitAmount": "Monthly limit: {{amount}}",
       "yearlyLimitAmount": "Yearly limit: {{amount}}",
+      "totalLimitAmount": "{{amount}} total",
+      "noAutomaticReset": "No automatic reset",
+      "noMonthlyLimit": "No monthly limit",
+      "noYearlyLimit": "No yearly limit",
       "limitAmount": "{{amount}} limit",
       "budgetRemaining": "{{amount}} left",
       "budgetOver": "{{amount}} over",

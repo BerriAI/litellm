@@ -1901,7 +1901,7 @@ export const modelAvailableCall = async (
 
 export const userFilterUICall = async (accessToken: string, params: URLSearchParams) => {
   try {
-    return await apiClient.get(`/user/filter/ui`, {
+    return await apiClient.get<components["schemas"]["LiteLLM_UserTableFiltered"][]>(`/user/filter/ui`, {
       accessToken,
       query: {
         user_email: params.get("user_email") || undefined,
