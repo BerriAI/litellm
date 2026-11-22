@@ -1531,6 +1531,24 @@ def _gemini_tool_file_options(
     return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
 
 
+def _gemini_anthropic_tool_image_part(source: object) -> FunctionResponsePartType | None:
+    if not isinstance(source, dict) or source.get("type") != "base64":
+        return None
+    base64_source: Final = cast(  # cast-ok: Anthropic base64 source identified by its type
+        AnthropicContentParamSource, source
+    )
+    try:
+        return {
+            "inline_data": {
+                "data": base64_source.get("data", ""),
+                "mime_type": base64_source.get("media_type", "image/jpeg"),
+            }
+        }
+    except Exception as e:
+        verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+        return None
+
+
 def convert_to_gemini_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     last_message_with_tool_calls: dict | None,
@@ -1594,23 +1612,8 @@ def convert_to_gemini_tool_call_result(
                 if content_type == "text":
                     content_str += content.get("text", "")
                 elif content_type == "image":  # pyright: ignore[reportUnnecessaryComparison]  # loose runtime dict
-                    # Anthropic-native image block: {"type": "image", "source": {"type": "base64", ...}}
-                    source = content.get("source", {})
-                    if isinstance(source, dict) and source.get("type") == "base64":
-                        base64_source = cast(  # cast-ok: Anthropic base64 source identified by its type
-                            AnthropicContentParamSource, source
-                        )
-                        try:
-                            media_parts.append(
-                                {
-                                    "inline_data": BlobType(
-                                        data=base64_source.get("data", ""),
-                                        mime_type=base64_source.get("media_type", "image/jpeg"),
-                                    )
-                                }
-                            )
-                        except Exception as e:
-                            verbose_logger.warning("Failed to process Anthropic image block in tool response: %s", e)
+                    if (image_part := _gemini_anthropic_tool_image_part(content.get("source"))) is not None:
+                        media_parts.append(image_part)
                 elif content_type in ("input_image", "image_url"):
                     # Extract image for inline_data (for Computer Use screenshots and tool results)
                     image_url_data = content.get("image_url", "")
