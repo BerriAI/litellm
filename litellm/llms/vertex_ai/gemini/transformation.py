@@ -16,7 +16,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_object_list, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
@@ -1084,6 +1084,13 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
 def _has_google_maps_tool(tools: object) -> bool:
     """Return True if any tool object in the list has a 'googleMaps' key."""
     if not isinstance(tools, list):
@@ -1186,6 +1193,7 @@ def transform_request_body(
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
+        turns_server_side_tools_off: Final = optional_params.pop("includeServerSideToolInvocations", None) is False
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1217,10 +1225,10 @@ def transform_request_body(
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
-                data["tools"] = tools
+                data["tools"] = _without_search_tools_next_to_functions(tools) if turns_server_side_tools_off else tools
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
+            if include_server_side_tool_invocations and not turns_server_side_tools_off:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
                 data["toolConfig"]["includeServerSideToolInvocations"] = True

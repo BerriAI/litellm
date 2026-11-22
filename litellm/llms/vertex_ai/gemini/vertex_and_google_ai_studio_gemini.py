@@ -628,7 +628,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return
         if optional_params.get("include_server_side_tool_invocations"):
             return
+        optional_params["tools"] = list(cls.without_search_tools_next_to_functions(tools))
 
+    @classmethod
+    def without_search_tools_next_to_functions(cls, tools: Sequence[object]) -> tuple[object, ...]:
+        if not cls._mixes_search_tools_with_functions(tools):
+            return tuple(tools)
         verbose_logger.warning(
             "Vertex AI does not support mixing function declarations with "
             "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -636,7 +641,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "tools and keeping function declarations. To use search tools, "
             "send a request without function calling tools."
         )
-        optional_params["tools"] = [tool for tool in tools if not cls._is_search_tool(tool)]
+        return tuple(tool for tool in tools if not cls._is_search_tool(tool))
 
     @classmethod
     def _keep_search_tools_next_to_functions(
