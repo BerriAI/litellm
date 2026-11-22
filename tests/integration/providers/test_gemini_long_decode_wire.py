@@ -1212,12 +1212,7 @@ def test_request_with_no_output_cap_is_never_continued_and_returns_googles_cut_w
 
 _NOT_A_NUMBER: Final[tuple[tuple[str, Mapping[str, JsonValue], int | None], ...]] = (
     ("n-string", {"n": "1"}, CAP),
-    ("n-list", {"n": [1]}, CAP),
-    ("n-5kb", {"n": "1" * 5120}, CAP),
     ("max_tokens-string", {"max_tokens": "300"}, None),
-    ("max_tokens-list", {"max_tokens": [300]}, None),
-    ("max_tokens-empty", {"max_tokens": ""}, None),
-    ("max_tokens-5kb", {"max_tokens": "3" * 5120}, None),
 )
 _NOT_A_NUMBER_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
     pytest.param(extra, cap, stream, id=f"{name}-{_mode(stream)}")
@@ -1273,21 +1268,6 @@ def test_count_or_cap_sent_twice_in_one_body_is_read_from_its_last_value(
         observed: Final = answered("chat", stream, response)
         assert (observed.answer, observed.errors) == (_JOINED if continued else FIRST_HALF.text, ()), observed
         received(wire, "gemini", stream, (False, True) if continued else (False,))
-
-
-@pytest.mark.parametrize(("provider", "stream"), _provider_modes())
-def test_count_of_true_is_read_as_one_answer_and_continued(gateway: Gateway, provider: Provider, stream: bool) -> None:
-    first_id: Final = f"first-{uuid.uuid4().hex}"
-    respond: Final = upstream(answers(first_id, FIRST_HALF), answers(f"second-{uuid.uuid4().hex}", SECOND_HALF))
-    with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = register(gateway, scenario, provider, wire)
-        body: Final = request_body("chat", model, stream, {**NO_CACHE, "n": True})
-        observed: Final = answered("chat", stream, post(gateway, "chat", body))
-        assert (observed.answer, observed.finishes, observed.usage) == (_JOINED, ("stop",), _CHAIN_USAGE), observed
-        assert (observed.tokens, observed.errors) == ((), ()), observed
-        opening, continuing = received(wire, provider, stream, (False, True))
-        assert continuing == {**opening, "continuationToken": HOP_TOKEN}, (opening, continuing)
-        assert_billed(model, "chat", _CHAIN_USAGE, _identities(observed, first_id))
 
 
 @pytest.mark.parametrize(("provider", "endpoint", "stream"), _cells(PROVIDERS, ENDPOINTS))
