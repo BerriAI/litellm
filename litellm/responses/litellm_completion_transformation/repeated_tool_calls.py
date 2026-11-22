@@ -1,6 +1,6 @@
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import Final, TypeVar, cast  # noqa: TID251  # a dict of a generic type has no cast-free typed copy
 
@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 
 _FieldsT: Final = TypeVar("_FieldsT")
 _MessageT: Final = TypeVar("_MessageT")
-_FIELDS_OF_A_LONE_CALL: Final = frozenset({"role", "tool_calls"})
+_FIELDS_OF_LONE_CALLS: Final = frozenset({"role", "tool_calls"})
 _FIELDS_OF_A_CALL: Final = frozenset({"id", "type", "function", "index"})
 _FIELDS_OF_A_FUNCTION: Final = frozenset({"name", "arguments"})
 _NO_CALLS: Final[Mapping[str, int]] = MappingProxyType({})
@@ -23,9 +23,7 @@ _NO_CALLS: Final[Mapping[str, int]] = MappingProxyType({})
 class _RepeatedCall:
     made_by: int
     key: str
-    name: object
     arguments: object
-    says_more: bool
 
 
 def _call_key(call_id: object) -> str | None:
@@ -36,31 +34,31 @@ def _calls(message: object) -> Sequence[object]:
     return as_object_list(message_field(message, "tool_calls")) or ()
 
 
-def _says_more(fields: Mapping[str, object], expected: frozenset[str]) -> bool:
-    return any(value for key, value in fields.items() if key not in expected)
+def _bare(value: object, expected: frozenset[str]) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    if fields is None or any(field for name, field in fields.items() if name not in expected):
+        return None
+    return fields
 
 
-def _repeated_call(message: object, unanswered: Mapping[str, int]) -> _RepeatedCall | None:
-    calls: Final = _calls(message)
-    if len(calls) != 1:
+def _repeated_call(call: object, unanswered: Mapping[str, int]) -> _RepeatedCall | None:
+    fields: Final = _bare(call, _FIELDS_OF_A_CALL)
+    function: Final = _bare(message_field(call, "function"), _FIELDS_OF_A_FUNCTION)
+    if fields is None or function is None:
         return None
-    fields: Final = as_str_mapping(message)
-    call: Final = as_str_mapping(calls[0])
-    function: Final = as_str_mapping(message_field(calls[0], "function"))
-    if fields is None or call is None or function is None:
-        return None
-    key: Final = _call_key(call.get("id"))
+    key: Final = _call_key(fields.get("id"))
     if key is None or key not in unanswered:
         return None
-    return _RepeatedCall(
-        made_by=unanswered[key],
-        key=key,
-        name=function.get("name"),
-        arguments=function.get("arguments"),
-        says_more=_says_more(fields, _FIELDS_OF_A_LONE_CALL)
-        or _says_more(call, _FIELDS_OF_A_CALL)
-        or _says_more(function, _FIELDS_OF_A_FUNCTION),
-    )
+    return _RepeatedCall(made_by=unanswered[key], key=key, arguments=function.get("arguments"))
+
+
+def _repeated_calls(message: object, unanswered: Mapping[str, int]) -> tuple[_RepeatedCall, ...]:
+    if _bare(message, _FIELDS_OF_LONE_CALLS) is None:
+        return ()
+    calls: Final = _calls(message)
+    found: Final = (_repeated_call(call, unanswered) for call in calls)
+    repeated: Final = tuple(call for call in found if call is not None)
+    return repeated if len(repeated) == len(calls) else ()
 
 
 def _unanswered_after(unanswered: Mapping[str, int], indexed_message: tuple[int, object]) -> Mapping[str, int]:
@@ -68,7 +66,7 @@ def _unanswered_after(unanswered: Mapping[str, int], indexed_message: tuple[int,
     if message_field(message, "role") == "tool":
         answered: Final = _call_key(message_field(message, "tool_call_id"))
         return MappingProxyType({key: made_by for key, made_by in unanswered.items() if key != answered})
-    if _repeated_call(message, unanswered) is not None:
+    if _repeated_calls(message, unanswered):
         return unanswered
     keys: Final = tuple(_call_key(message_field(call, "id")) for call in _calls(message))
     return MappingProxyType({key: index for key in keys if key is not None})
@@ -86,9 +84,7 @@ def _with_field(fields: _FieldsT, name: str, value: object) -> _FieldsT:
 def _with_arguments_storage_cut(call: object, repeat: _RepeatedCall | None) -> object:
     function: Final = message_field(call, "function")
     stored: Final = message_field(function, "arguments")
-    if repeat is None or repeat.name != message_field(function, "name"):
-        return call
-    if not isinstance(stored, str) or not isinstance(repeat.arguments, str):
+    if repeat is None or not isinstance(stored, str) or not isinstance(repeat.arguments, str):
         return call
     if not is_truncation_of(stored, repeat.arguments):
         return call
@@ -111,15 +107,9 @@ def without_repeated_tool_calls(
     messages: Sequence[_MessageT], *, keep_stored_arguments: Callable[[], bool]
 ) -> tuple[_MessageT, ...]:
     unanswered_before: Final = accumulate(enumerate(messages), _unanswered_after, initial=_NO_CALLS)
-    repeated: Final = tuple(map(_repeated_call, messages, unanswered_before))
-    dropped: Final = MappingProxyType(
-        {(call.made_by, call.key): call for call in repeated if call is not None and not call.says_more}
-    )
-    kept: Final = tuple(
-        (index, message)
-        for index, (message, call) in enumerate(zip(messages, repeated))
-        if call is None or call.says_more
-    )
+    repeated: Final = tuple(map(_repeated_calls, messages, unanswered_before))
+    dropped: Final = MappingProxyType({(call.made_by, call.key): call for call in chain.from_iterable(repeated)})
+    kept: Final = tuple((index, message) for index, (message, calls) in enumerate(zip(messages, repeated)) if not calls)
     as_stored: Final = tuple(message for _, message in kept)
     whole: Final = tuple(_with_calls_whole(message, index, dropped) for index, message in kept)
     return as_stored if whole == as_stored or keep_stored_arguments() else whole

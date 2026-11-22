@@ -1,4 +1,5 @@
 from collections.abc import Callable, Sequence
+from types import SimpleNamespace
 from typing import Final
 
 import pytest
@@ -66,6 +67,25 @@ def test_calls_a_turn_already_made_are_not_made_again_before_their_outputs(
     assert _replayed([_USER, asked, *repeated, _ANSWER, _USER]) == [_USER, asked, *once, _ANSWER, _USER]
 
 
+@pytest.mark.parametrize("as_stored", _AS_STORED, ids=["message-dict", "stored-message"])
+@pytest.mark.parametrize("resent", [("c1", "c2", "c3"), ("c2", "c3"), ("c3", "c1")], ids="-".join)
+def test_calls_resent_together_before_their_outputs_are_not_made_again(
+    as_stored: Callable[[dict[str, object]], dict[str, object] | Message], resent: tuple[str, ...]
+) -> None:
+    asked: Final = as_stored(_asks("c1", "c2", "c3"))
+    once: Final = [_output(call_id) for call_id in resent]
+
+    assert _replayed([_USER, asked, _asks(*resent), *once, _ANSWER]) == [_USER, asked, *once, _ANSWER]
+
+
+@pytest.mark.parametrize("empty", [{"content": ""}, {"thinking_blocks": []}, {"cache_control": None}], ids=str)
+def test_a_repeat_whose_other_fields_are_empty_is_still_a_repeat(empty: dict[str, object]) -> None:
+    asked: Final = _asks("c1", "c2")
+    repeat: Final = {**_asks("c1"), "tool_calls": [{**_call("c1"), **empty}], **empty}
+
+    assert _replayed([asked, repeat, _output("c1"), _output("c2")]) == [asked, _output("c1"), _output("c2")]
+
+
 def test_a_call_repeated_twice_before_its_output_is_made_once() -> None:
     asked: Final = _asks("c1", "c2")
 
@@ -96,10 +116,30 @@ def test_a_repeated_call_gives_back_the_arguments_storage_cut(
         return as_stored({**asked, "tool_calls": [{**call, **signed} for call in asked["tool_calls"]]})
 
     stored_turn: Final = turn(_CUT)
-    repeats: Final = [m for i in call_ids for m in (_asks(i, arguments=_WHOLE), _output(i))]
+    outputs: Final = [_output(call_id) for call_id in call_ids]
+    one_by_one: Final = [m for i in call_ids for m in (_asks(i, arguments=_WHOLE), _output(i))]
+    together: Final = [_asks(*call_ids, arguments=_WHOLE), *outputs]
 
-    assert _replayed([_USER, stored_turn, *repeats]) == [_USER, turn(_WHOLE), *map(_output, call_ids)]
+    assert _replayed([_USER, stored_turn, *one_by_one]) == [_USER, turn(_WHOLE), *outputs]
+    assert _replayed([_USER, stored_turn, *together]) == [_USER, turn(_WHOLE), *outputs]
     assert stored_turn == turn(_CUT)
+
+
+def test_a_call_resent_under_its_namespaced_name_gives_back_its_arguments_under_the_stored_name() -> None:
+    stored: Final = _asks("c1", "c2", arguments=_CUT, name="search")
+    resent: Final = [m for i in ("c1", "c2") for m in (_asks(i, arguments=_WHOLE, name="crm__search"), _output(i))]
+
+    turn, *outputs = _replayed([stored, *resent])
+
+    assert turn == _asks("c1", "c2", arguments=_WHOLE, name="search")
+    assert outputs == [_output("c1"), _output("c2")]
+
+
+def test_a_stored_call_of_an_unknown_kind_keeps_what_storage_holds() -> None:
+    call: Final = SimpleNamespace(id="c1", function=SimpleNamespace(name="get_weather", arguments=_CUT))
+    asked: Final = {"role": "assistant", "tool_calls": [call]}
+
+    assert _replayed([asked, _asks("c1", arguments=_WHOLE), _output("c1")]) == [asked, _output("c1")]
 
 
 def test_only_the_call_that_was_repeated_gets_its_arguments_back() -> None:
@@ -126,7 +166,6 @@ def test_every_step_gets_back_the_arguments_of_its_own_call(next_id: str) -> Non
         pytest.param('{"city": "Paris"}', _asks("c1", arguments='{"city": "Rome"}'), id="whole-arguments"),
         pytest.param("{}", _asks("c1", arguments='{"city": "Rome"}'), id="no-arguments"),
         pytest.param(_CUT, _asks("c1", arguments='{"city": "Rome"}'), id="arguments-of-another-call"),
-        pytest.param(_CUT, _asks("c1", arguments=_WHOLE, name="get_time"), id="call-of-another-function"),
         pytest.param(_CUT, _asks("c1", arguments=None), id="nothing-repeated"),
         pytest.param(None, _asks("c1", arguments=_WHOLE), id="nothing-stored"),
     ],
@@ -152,13 +191,13 @@ def test_the_stored_arguments_stay_when_asked_to_keep_them() -> None:
     assert list(replayed) == [asked, _output("c1"), _output("c2")]
 
 
-def test_a_resent_call_that_says_more_stays_and_the_next_repeat_is_still_one() -> None:
-    asked: Final = _asks("c1", "c2", arguments=_CUT)
-    marked: Final = {**_asks("c1", arguments=_WHOLE), "cache_control": _EPHEMERAL}
+def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
+    asked: Final = _asks("c1", "c2")
+    marked: Final = {**_asks("c2"), "cache_control": _EPHEMERAL}
 
-    replayed: Final = _replayed([asked, marked, _output("c1"), _asks("c2"), _output("c2")])
+    replayed: Final = _replayed([asked, _asks("c1"), _output("c1"), marked, _output("c2")])
 
-    assert replayed == [asked, marked, _output("c1"), _output("c2")]
+    assert replayed == [asked, _output("c1"), marked, _output("c2")]
 
 
 @pytest.mark.parametrize(
@@ -175,7 +214,15 @@ def test_a_resent_call_that_says_more_stays_and_the_next_repeat_is_still_one() -
         pytest.param([_USER, _asks("c1"), _ANSWER, _asks("c1"), _output("c1")], id="id-reused-after-an-answer"),
         pytest.param([_asks("c1", "c2"), _output("c1"), _stored(_asks("c2"))], id="id-reused-by-a-stored-turn"),
         pytest.param([_USER, _asks("c1"), _asks("c2"), _output("c1"), _output("c2")], id="call-made-nowhere-else"),
-        pytest.param([_asks("c1", "c2"), _asks("c1", "c2"), _output("c1")], id="several-calls-at-once"),
+        pytest.param([_asks("c1", "c2"), _asks("c1", "c3"), _output("c1")], id="a-new-call-among-the-repeated"),
+        pytest.param(
+            [_asks("c1", "c2"), {**_asks("c1"), "cache_control": _EPHEMERAL}, _output("c1"), _asks("c2")],
+            id="after-a-resent-call-that-says-more",
+        ),
+        pytest.param(
+            [_asks("c1", "c2"), {"role": "assistant", "tool_calls": [{**_call("c1"), **_FIELDS}, _call("c2")]}],
+            id="one-of-the-repeated-calls-saying-more",
+        ),
         pytest.param([_asks("c1"), {**_asks("c1"), "content": "Checking."}, _output("c1")], id="text"),
         pytest.param([_asks("c1"), {**_asks("c1"), "thinking_blocks": [{}]}, _output("c1")], id="thinking"),
         pytest.param([_asks("c1"), {**_asks("c1"), "reasoning_content": "So"}, _output("c1")], id="reasoning"),
