@@ -318,7 +318,7 @@ def _get_active_ip_redactor(
             requester_ip_address_logging_disabled,
         )
 
-        if requester_ip_address_logging_disabled():
+        if requester_ip_address_logging_disabled() or bool(getattr(litellm, "disable_requester_ip_address_logging", False)):
             return _masked_ip_text
     except Exception:
         return None
