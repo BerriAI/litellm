@@ -310,6 +310,7 @@ from litellm.router_utils.routing_groups import (
 )
 from litellm.router_utils.routing_read_batch import ROUTER_USAGE_TARGET, RoutingPrefetch, RoutingReadBatch
 from litellm.scheduler import FlowItem, Scheduler
+from litellm.types.decisions import DecisionsIRMessages, DecisionsIRState
 from litellm.types.litellm_params import ControlOptions, RoutingStrategyName
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -521,6 +522,7 @@ _ROUTE_CAPABILITY_RESOLVERS: Final[Mapping[str, Callable[[str, LlmProviders], ob
         "decisions": ProviderConfigManager.get_provider_decisions_config,
     }
 )
+_DECISIONS_CALL_TYPES: Final = frozenset({"adecisions", "decisions"})
 _RUNTIME_TOGGLEABLE_PRE_CALL_CHECKS: Final[Mapping[str, type[CustomLogger]]] = MappingProxyType(
     {
         "prompt_caching": PromptCachingDeploymentCheck,
@@ -13549,6 +13551,62 @@ class Router:
         return cast(_RouteDeploymentsT, filtered_deployments)  # cast-ok: same list shape as the input candidates
 
     @staticmethod
+    def _deployment_refuses_json_input(
+        deployment: DeploymentTypedDict,
+        group: str,
+        sent_kwargs: Mapping[str, object],
+        decision_input: DecisionsIRState | DecisionsIRMessages,
+    ) -> bool:
+        from litellm.decisions.call import deployment_refuses_json_input
+
+        if "litellm_params" not in deployment:
+            return False
+        try:
+            model, custom_llm_provider = Router._capability_model_and_provider(deployment["litellm_params"], group)
+            return deployment_refuses_json_input(
+                model, custom_llm_provider, {**deployment["litellm_params"], **sent_kwargs}, decision_input
+            )
+        except Exception as e:  # noqa: BLE001  # best-effort filter: a deployment it cannot resolve answers for itself
+            verbose_router_logger.debug(
+                "litellm.router.py::_deployment_refuses_json_input: keeping deployment for model=%s. Got - %s",
+                group,
+                e,
+            )
+            return False
+
+    def _without_deployments_refusing_json_input(
+        self, healthy_deployments: _RouteDeploymentsT, group: str, request_kwargs: object
+    ) -> _RouteDeploymentsT:
+        from litellm.decisions.call import request_carries_json_input, routed_decision_input
+
+        if _routed_call_type.get() not in _DECISIONS_CALL_TYPES or isinstance(healthy_deployments, Mapping):
+            return healthy_deployments
+        sent_request: Final = _LITELLM_PARAMS_ADAPTER.validate_python(request_kwargs)
+        if not request_carries_json_input(sent_request.get("input")):
+            return healthy_deployments
+        decision_input: Final = routed_decision_input(sent_request.get("input"))
+        if decision_input is None:
+            return healthy_deployments
+        defaults: Final = _LITELLM_PARAMS_ADAPTER.validate_python(
+            self.default_litellm_params  # pyright: ignore[reportUnknownMemberType]  # untyped dict set in __init__
+        )
+        set_defaults: Final = {key: value for key, value in defaults.items() if value is not None}
+        sent_kwargs: Final[Mapping[str, object]] = {**set_defaults, **sent_request}
+        accepting: Final = [
+            deployment
+            for deployment in healthy_deployments
+            if not Router._deployment_refuses_json_input(
+                cast(DeploymentTypedDict, deployment),  # cast-ok: router candidates use the deployment shape
+                group,
+                sent_kwargs,
+                decision_input,
+            )
+        ]
+        if not accepting:
+            return healthy_deployments
+        return cast(_RouteDeploymentsT, accepting)  # cast-ok: same list shape as the input candidates
+
+    @staticmethod
     def _pre_call_check_requested_chat_params(request_kwargs: Mapping[str, object]) -> frozenset[str]:
         requested: Final = litellm.utils.get_non_default_params(passed_params=dict(request_kwargs))
         return frozenset(
@@ -14159,9 +14217,13 @@ class Router:
             verbose_router_logger.debug("healthy_deployments after web search filter: %s", healthy_deployments)
 
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_deployments_refusing_json_input(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                request_kwargs or {},  # pyright: ignore[reportUnknownArgumentType]  # legacy untyped request kwargs
             )
         )
 
@@ -15392,9 +15454,13 @@ class Router:
             request_kwargs=request_kwargs,
         )
         healthy_deployments = (  # pyright: ignore[reportUnknownVariableType]  # rebind-ok: route filter narrows
-            self._without_deployments_that_cannot_serve_route(
-                healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+            self._without_deployments_refusing_json_input(
+                self._without_deployments_that_cannot_serve_route(
+                    healthy_deployments,  # pyright: ignore[reportUnknownArgumentType]  # legacy selector type
+                    model,
+                ),
                 model,
+                request_kwargs or {},  # pyright: ignore[reportUnknownArgumentType]  # legacy untyped request kwargs
             )
         )
         strategy, strategy_selector = self._get_routing_context(model, request_kwargs)
