@@ -20,7 +20,7 @@ from aiohttp import web
 from aiohttp.client_proto import ResponseHandler
 from aiohttp.test_utils import TestServer
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import mock_completion
@@ -39,7 +39,15 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
-from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Choices,
+    Delta,
+    Function,
+    Message,
+    ModelResponse,
+    StreamingChoices,
+)
 
 
 def _make_mock_session_iterator(json_response, status=200, content_type="application/json", text_response=""):
@@ -2422,6 +2430,8 @@ def _anthropic_text_deltas(chunks: list[bytes]) -> list[tuple[int, str]]:
         if not line.startswith("data: "):
             continue
         event = json.loads(line[6:])
+        if not isinstance(event, dict):
+            continue
         if event.get("type") == "content_block_delta" and event["delta"].get("type") == "text_delta":
             deltas.append((event["index"], event["delta"]["text"]))
     return deltas
@@ -2597,7 +2607,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstr
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_that_is_not_json_send_the_upstream_error_alone():
+async def test_apply_to_output_streaming_anthropic_sse_bytes_mask_the_text_beside_a_tool_input_that_is_not_json():
     upstream_error: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     byte_chunks: Final = (
         _anthropic_sse(
@@ -2632,7 +2642,7 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_with_a_tool_input_t
     async with _guardrail_over_regex_presidio(PiiEntityType.CREDIT_CARD, _CARD_PATTERN, PiiAction.MASK) as guardrail:
         collected: Final = [chunk async for chunk in _post_call_stream(guardrail, byte_chunks)]
 
-    assert b"".join(collected).decode() == f"event: error\ndata: {json.dumps(upstream_error)}\n\n"
+    assert collected == [chunk.replace(b"4111 1111 1111 1111", b"<CREDIT_CARD>") for chunk in byte_chunks]
 
 
 _PHONE: Final = "212-555-0147"
@@ -2688,8 +2698,12 @@ def _regex_presidio_app(entity_type: PiiEntityType, pattern: re.Pattern[str]) ->
         )
 
     async def anonymize(request: web.Request) -> web.Response:
-        text: Final = _ANONYMIZE_REQUEST.validate_json(await request.read())["text"]
-        return web.json_response(_PresidioAnonymizeReply(text=pattern.sub(f"<{entity_type.value}>", text), items=()))
+        body: Final = _ANONYMIZE_REQUEST.validate_json(await request.read())
+        spans: Final = sorted((item["start"], item["end"]) for item in body.get("analyzer_results", ()))
+        starts: Final = (start for start, _ in (*spans, (None, None)))
+        ends: Final = (0, *(end for _, end in spans))
+        kept: Final = (body["text"][end:start] for end, start in zip(ends, starts, strict=True))
+        return web.json_response(_PresidioAnonymizeReply(text=f"<{entity_type.value}>".join(kept), items=()))
 
     app: Final = web.Application()
     app.router.add_post("/analyze", analyze)
@@ -2802,6 +2816,21 @@ _STREAMS_WITH_A_READABLE_PHONE: Final = {
         *_MESSAGE_END_SSE,
     ),
     "tool-input": _PHONE_IN_A_TOOL_INPUT,
+    "tool-start-input": (
+        _message_start_sse(),
+        _tool_use_start_sse(0, {"number": _PHONE}),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    ),
+    "text-block-start": (
+        _message_start_sse(),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": f"Call {_PHONE}"}},
+        ),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
     "json-escaped-tool-input": (
         _message_start_sse(),
         _tool_use_start_sse(0),
@@ -2816,7 +2845,7 @@ _STREAMS_WITH_A_READABLE_PHONE: Final = {
         _block_stop_sse(0),
         *_MESSAGE_END_SSE,
     ),
-    "error-after-text":(_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
+    "error-after-text": (_message_start_sse(), *_text_block_sse(0, "Sure, one moment."), _phone_error_sse()),
     "error-alone": (_phone_error_sse(),),
     "error-name-on-a-ping-frame": (
         _message_start_sse(),
@@ -2830,6 +2859,13 @@ _STREAMS_WITH_A_READABLE_PHONE: Final = {
         *_text_block_sse(0, "Sure, one moment."),
         b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", '
         + f'"message": "Call {_PHONE}", "message": "Overloaded"}}}}\n\n'.encode(),
+    ),
+    "error-name-on-a-text-delta": (
+        _message_start_sse(),
+        *_text_block_sse(0, "Sure. "),
+        _text_block_sse(0, f"Call me at {_PHONE}.")[1].replace(b"event: content_block_delta", b"event: error"),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
     ),
 }
 _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
@@ -2874,6 +2910,33 @@ _STREAMS_A_CLIENT_READS_ANOTHER_WAY: Final = {
         ),
         *_PHONE_IN_A_TOOL_INPUT[3:],
     ),
+    "block-that-is-not-an-object": (
+        _message_start_sse(),
+        _anthropic_sse(
+            "content_block_start", {"type": "content_block_start", "index": 0, "content_block": [f"Call {_PHONE}."]}
+        ),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "delta-that-is-not-an-object": (
+        _message_start_sse(),
+        *_text_block_sse(0),
+        _anthropic_sse(
+            "content_block_delta", {"type": "content_block_delta", "index": 0, "delta": [f"Call {_PHONE}."]}
+        ),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
+    "text-that-is-not-a-string": (
+        _message_start_sse(),
+        *_text_block_sse(0),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": [f"Call {_PHONE}."]}},
+        ),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    ),
 }
 
 
@@ -2889,6 +2952,32 @@ async def test_apply_to_output_streaming_anthropic_sse_masks_pii_in_every_frame_
     assert len(joined) > 0 and all(isinstance(chunk, bytes) for chunk in collected)
     assert _PHONE not in joined
     assert "<PHONE_NUMBER>" in joined
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masks_pii_split_into_a_text_delta_under_an_error_name():
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, f"Call {_PHONE[:8]}"),
+        _text_block_sse(0, f"{_PHONE[8:]}.")[1].replace(b"event: content_block_delta", b"event: error"),
+        _block_stop_sse(0),
+        *_MESSAGE_END_SSE,
+    )
+
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        collected: Final = [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+    sent: Final = [chunk for chunk in collected if isinstance(chunk, bytes)]
+    assert _anthropic_text_deltas(sent) == [(0, "Call <PHONE_NUMBER>."), (0, "")]
+    assert [chunk.split(b"\n", 1)[0] for chunk in sent] == [
+        b"event: message_start",
+        b"event: content_block_start",
+        b"event: content_block_delta",
+        b"event: error",
+        b"event: content_block_stop",
+        b"event: message_delta",
+        b"event: message_stop",
+    ]
 
 
 @pytest.mark.asyncio
@@ -3020,6 +3109,290 @@ async def test_apply_to_output_streaming_anthropic_sse_tool_input_without_pii_is
     assert collected == list(upstream)
 
 
+def _masked_phone(chunks: Iterable[bytes]) -> list[bytes]:
+    return [chunk.replace(_PHONE.encode(), b"<PHONE_NUMBER>") for chunk in chunks]
+
+
+async def _masked_phone_stream(upstream: Sequence[bytes]) -> list[object]:
+    async with _guardrail_over_regex_presidio(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN, PiiAction.MASK) as guardrail:
+        return [chunk async for chunk in _post_call_stream(guardrail, upstream)]
+
+
+_OUTPUT_LIMIT_END_SSE: Final = (
+    _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {}}),
+    _anthropic_sse("message_stop", {"type": "message_stop"}),
+)
+_CUT_TOOL_INPUTS: Final = {
+    "without-pii": '{"city": "Par',
+    "pii-in-a-finished-string": f'{{"number": "{_PHONE}", "city": "Par',
+    "pii-in-the-cut-string": f'{{"number": "{_PHONE}',
+    "pii-before-a-cut-escape": f'{{"number": "{_PHONE}\\',
+    "pii-in-a-cut-list": f'[["{_PHONE}", 5',
+    "pii-before-a-cut-key": f'{{"number": "{_PHONE}", "ci',
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", [(_block_stop_sse(0),), ()], ids=["stopped-block", "open-block"])
+@pytest.mark.parametrize("partial_json", _CUT_TOOL_INPUTS.values(), ids=_CUT_TOOL_INPUTS.keys())
+async def test_apply_to_output_streaming_anthropic_sse_tool_call_cut_by_the_output_limit_stays_cut(
+    partial_json: str, stop: tuple[bytes, ...]
+):
+    upstream: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, partial_json),
+        *stop,
+        *_OUTPUT_LIMIT_END_SSE,
+    )
+
+    assert await _masked_phone_stream(upstream) == _masked_phone(upstream)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_tool_input_with_an_unreadable_escape_is_masked():
+    upstream: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, f'{{"note": "x" "call \\q {_PHONE}"}}'),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+
+    sent: Final = str(await _masked_phone_stream(upstream))
+
+    assert _PHONE not in sent
+    assert "<PHONE_NUMBER>" in sent
+
+
+_WEB_SEARCH_RESULT: Final = {"type": "web_search_result", "url": "https://x.test", "encrypted_content": "opaque"}
+_REPLY_WITH_THINKING_SEARCH_AND_A_TOOL_CALL: Final = (
+    _anthropic_sse(
+        "message_start",
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "model": "claude",
+                "content": [],
+                "service_tier": "priority",
+                "container": {"id": "container_1", "expires_at": "2026-11-21T00:00:00Z"},
+                "usage": {"input_tokens": 3, "cache_read_input_tokens": 40, "output_tokens": 1},
+            },
+        },
+    ),
+    _anthropic_sse(
+        "content_block_start",
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}},
+    ),
+    _anthropic_sse(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "Search first."}},
+    ),
+    _anthropic_sse(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "sig"}},
+    ),
+    _block_stop_sse(0),
+    _anthropic_sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {}},
+        },
+    ),
+    _input_json_delta_sse(1, '{"query": "weather"}'),
+    _block_stop_sse(1),
+    _anthropic_sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 2,
+            "content_block": {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_1",
+                "content": [_WEB_SEARCH_RESULT],
+            },
+        },
+    ),
+    _block_stop_sse(2),
+    *_text_block_sse(3, "It is ", "sunny."),
+    _anthropic_sse(
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 3,
+            "delta": {"type": "citations_delta", "citation": {"type": "web_search_result_location", "cited_text": "sun"}},
+        },
+    ),
+    _block_stop_sse(3),
+    _anthropic_sse(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 4,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_4",
+                "name": "call",
+                "input": {},
+                "caller": {"type": "code_execution_20250825", "tool_id": "srvtoolu_1"},
+            },
+        },
+    ),
+    _input_json_delta_sse(4, json.dumps({"number": _PHONE})),
+    _block_stop_sse(4),
+    _anthropic_sse(
+        "message_delta",
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "container": {"id": "container_1"}},
+            "usage": {"output_tokens": 9, "server_tool_use": {"web_search_requests": 1}},
+        },
+    ),
+    _anthropic_sse("message_stop", {"type": "message_stop"}),
+)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masks_a_tool_input_without_moving_or_dropping_any_other_frame():
+    upstream: Final = _REPLY_WITH_THINKING_SEARCH_AND_A_TOOL_CALL
+
+    assert await _masked_phone_stream(upstream) == _masked_phone(upstream)
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_rewrites_only_the_text_block_with_pii():
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, "Hel", "lo. "),
+        _block_stop_sse(0),
+        *_text_block_sse(1, "Call ", _PHONE, "."),
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    )
+
+    assert await _masked_phone_stream(upstream) == [
+        _message_start_sse(),
+        *_text_block_sse(0, "Hel", "lo. "),
+        _block_stop_sse(0),
+        *_text_block_sse(1, "Call <PHONE_NUMBER>."),
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_masks_pii_split_over_two_text_blocks_in_both():
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, "Call 212-555"),
+        _block_stop_sse(0),
+        *_text_block_sse(1, "-0147 now."),
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    )
+
+    assert await _masked_phone_stream(upstream) == [
+        _message_start_sse(),
+        *_text_block_sse(0, "Call <PHONE_NUMBER>"),
+        _block_stop_sse(0),
+        *_text_block_sse(1, "<PHONE_NUMBER> now."),
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_drops_every_citation_once_a_text_is_masked():
+    citation: Final = {"type": "char_location", "cited_text": f"The office is on {_PHONE}"}
+    upstream: Final = (
+        _message_start_sse(),
+        *_text_block_sse(0, f"Call {_PHONE}. "),
+        _block_stop_sse(0),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": "", "citations": [citation]},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "citations_delta", "citation": citation}},
+        ),
+        _text_block_sse(1, "As the doc says.")[1],
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    )
+
+    assert await _masked_phone_stream(upstream) == [
+        _message_start_sse(),
+        *_text_block_sse(0, "Call <PHONE_NUMBER>. "),
+        _block_stop_sse(0),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "text", "text": "", "citations": []},
+            },
+        ),
+        _text_block_sse(1, "As the doc says.")[1],
+        _block_stop_sse(1),
+        *_MESSAGE_END_SSE,
+    ]
+
+
+def _verdict_end_sse(stop_details: dict[str, object] | None, safeguard_results: object) -> tuple[bytes, ...]:
+    verdicts: Final = {"stop_details": stop_details, "safeguard_results": safeguard_results}
+    delta: Final = {"stop_reason": "tool_use", **{key: value for key, value in verdicts.items() if value is not None}}
+    return (
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": delta, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+
+def _tool_verdicts(*tool_use_ids: str) -> list[dict[str, object]]:
+    tool_uses: Final = {tool_use_id: {"type": "evaluated", "outcome": "flagged"} for tool_use_id in tool_use_ids}
+    return [{"type": "dangerous_tool_use", "status": {"type": "available", "tool_uses": tool_uses}}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_end", "sent_end"),
+    [
+        (
+            _verdict_end_sse(
+                {"type": "refusal", "category": "cyber", "explanation": f"Calls {_PHONE}"},
+                _tool_verdicts("toolu_0", "toolu_1"),
+            ),
+            _verdict_end_sse(
+                {"type": "refusal", "category": "cyber", "explanation": None}, _tool_verdicts("toolu_1")
+            ),
+        ),
+        (_verdict_end_sse(None, {"explanation": f"Calls {_PHONE}"}), _verdict_end_sse(None, None)),
+    ],
+    ids=["readable-verdicts", "unreadable-verdicts"],
+)
+async def test_apply_to_output_streaming_anthropic_sse_drops_the_verdict_and_explanation_of_a_masked_tool_call(
+    upstream_end: tuple[bytes, ...], sent_end: tuple[bytes, ...]
+):
+    content: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, json.dumps({"number": _PHONE})),
+        _block_stop_sse(0),
+        _tool_use_start_sse(1),
+        _input_json_delta_sse(1, json.dumps({"city": "Paris"})),
+        _block_stop_sse(1),
+    )
+
+    assert await _masked_phone_stream((*content, *upstream_end)) == [*_masked_phone(content), *sent_end]
+
+
 _PHONE_UNDER_A_DUPLICATE_TOOL_INPUT_KEY: Final = (
     _message_start_sse(),
     _tool_use_start_sse(0),
@@ -3037,7 +3410,7 @@ _STREAMS_CARRYING_A_PHONE_NO_CLIENT_READS: Final = {
             _input_json_delta_sse(1, f'{{"number": "{_PHONE}'),
             _anthropic_sse("error", {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}),
         ),
-        {0: "text"},
+        {0: "text", 1: "tool_use"},
     ),
     "tool-start-input-its-streamed-input-replaces": (
         (
@@ -3215,6 +3588,123 @@ _NON_STREAMED_TOOL_INPUTS: Final = {
     "chat_completions": _chat_tool_input,
     "responses": _responses_tool_input,
 }
+
+
+async def _streamed_messages_tool_input(
+    guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]
+) -> object:
+    upstream: Final = (
+        _message_start_sse(),
+        _tool_use_start_sse(0),
+        _input_json_delta_sse(0, json.dumps(tool_input)),
+        _block_stop_sse(0),
+        *_TOOL_USE_END_SSE,
+    )
+    return _tool_input_of([chunk async for chunk in _post_call_stream(guardrail, upstream)])
+
+
+async def _streamed_chat_tool_input(guardrail: OPTIONAL_PresidioPIIMasking, tool_input: dict[str, object]) -> object:
+    tool_call: Final = ChatCompletionDeltaToolCall(
+        id="call_1",
+        type="function",
+        function=Function(name="save_contact", arguments=json.dumps(tool_input)),
+        index=0,
+    )
+    delta: Final = Delta(role="assistant", tool_calls=[tool_call])
+
+    async def upstream() -> AsyncIterator[ModelResponseStream]:
+        yield ModelResponseStream(
+            id="chatcmpl-1", choices=[StreamingChoices(index=0, delta=delta, finish_reason=None)], model="gpt-5.4-mini"
+        )
+        yield _chat_delta_chunk("", finish_reason="tool_calls")
+
+    sent: Final = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=upstream(), request_data={}
+    )
+    deltas: Final = [chunk.choices[0].delta async for chunk in sent if chunk.choices]
+    return json.loads("".join(call.function.arguments for delta in deltas for call in delta.tool_calls or ()))
+
+
+_TOOL_INPUTS: Final = {
+    **_NON_STREAMED_TOOL_INPUTS,
+    "messages_streamed": _streamed_messages_tool_input,
+    "chat_completions_streamed": _streamed_chat_tool_input,
+}
+_WHOLE_WORD_PHONE_PATTERN: Final = re.compile(r"\b\d{3}-\d{3}-\d{4}\b")
+_EMAIL_PATTERN: Final = re.compile(r"[\w.]+@[\w.]+\w")
+_FULL_NAME_PATTERN: Final = re.compile(r"Jane.*Doe")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TOOL_INPUTS)
+@pytest.mark.parametrize(
+    ("entity_type", "pattern", "tool_input", "sent_input"),
+    [
+        (
+            PiiEntityType.PHONE_NUMBER,
+            _WHOLE_WORD_PHONE_PATTERN,
+            {"content": f"Contact\n{_PHONE}\n\t{_PHONE}", "path": "contact.txt"},
+            {"content": "Contact\n<PHONE_NUMBER>\n\t<PHONE_NUMBER>", "path": "contact.txt"},
+        ),
+        (
+            PiiEntityType.EMAIL_ADDRESS,
+            _EMAIL_PATTERN,
+            {"content": "Contact\njane@example.com\n", "note": 'say "jane@example.com" \\ now'},
+            {"content": "Contact\n<EMAIL_ADDRESS>\n", "note": 'say "<EMAIL_ADDRESS>" \\ now'},
+        ),
+        (
+            PiiEntityType.EMAIL_ADDRESS,
+            _EMAIL_PATTERN,
+            {"jane@example.com": 1, "bob@example.com": {"jane@example.com": 2}, "ops": 3},
+            {"<EMAIL_ADDRESS>": 1, "<EMAIL_ADDRESS>_2": {"<EMAIL_ADDRESS>": 2}, "ops": 3},
+        ),
+        (
+            PiiEntityType.EMAIL_ADDRESS,
+            _EMAIL_PATTERN,
+            {"<EMAIL_ADDRESS>": 1, "<EMAIL_ADDRESS>_2": 2, "jane@example.com": 3},
+            {"<EMAIL_ADDRESS>": 1, "<EMAIL_ADDRESS>_2": 2, "<EMAIL_ADDRESS>_3": 3},
+        ),
+        (
+            PiiEntityType.PERSON,
+            _FULL_NAME_PATTERN,
+            {"first": "Ms Jane", "age": 41, "last": "Doe II"},
+            {"first": "Ms <PERSON>", "age": "<PERSON>", "last": "<PERSON> II"},
+        ),
+        (
+            PiiEntityType.PHONE_NUMBER,
+            _PHONE_PATTERN,
+            {"icon": "\ue000\ue001", "note": f"\ue002 {_PHONE}", "end": ""},
+            {"icon": "\ue000\ue001", "note": "\ue002 <PHONE_NUMBER>", "end": ""},
+        ),
+    ],
+    ids=[
+        "phone-after-a-line-break",
+        "email-after-a-line-break",
+        "email-keys",
+        "email-key-beside-its-mask",
+        "name-split-over-values",
+        "private-use-characters",
+    ],
+)
+async def test_a_tool_call_is_masked_in_the_values_its_client_reads(
+    endpoint: str,
+    entity_type: PiiEntityType,
+    pattern: re.Pattern[str],
+    tool_input: dict[str, object],
+    sent_input: dict[str, object],
+):
+    async with _guardrail_over_regex_presidio(entity_type, pattern, PiiAction.MASK) as guardrail:
+        assert await _TOOL_INPUTS[endpoint](guardrail, tool_input) == sent_input
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", _TOOL_INPUTS)
+async def test_pii_after_a_line_break_in_a_tool_call_is_blocked(endpoint: str):
+    async with _guardrail_over_regex_presidio(
+        PiiEntityType.PHONE_NUMBER, _WHOLE_WORD_PHONE_PATTERN, PiiAction.BLOCK
+    ) as guardrail:
+        with pytest.raises(BlockedPiiEntityError):
+            await _TOOL_INPUTS[endpoint](guardrail, {"content": f"Contact\n{_PHONE}"})
 
 
 @pytest.mark.asyncio
@@ -5907,6 +6397,7 @@ _BLOCK_CARD_MASK_EMAIL: Final = {
 
 class _PresidioAnonymizeRequest(TypedDict):
     text: ReadOnly[str]
+    analyzer_results: ReadOnly[NotRequired[tuple[PresidioAnalyzeResponseItem, ...]]]
 
 
 class _PresidioAnonymizeReply(TypedDict):

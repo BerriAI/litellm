@@ -36,7 +36,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
-    anthropic_sse_assembles_every_block,
+    anthropic_sse_assembles_every_tool_input,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
     anthropic_sse_reads_alike,
@@ -1181,7 +1181,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if surface is _StreamSurface.ANTHROPIC_MESSAGES:
             return (
                 assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
-                if anthropic_sse_reads_alike(all_chunks) and anthropic_sse_assembles_every_block(all_chunks)
+                if anthropic_sse_reads_alike(all_chunks) and anthropic_sse_assembles_every_tool_input(all_chunks)
                 else None
             )
         if surface is _StreamSurface.RESPONSES:

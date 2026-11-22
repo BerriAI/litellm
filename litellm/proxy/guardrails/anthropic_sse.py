@@ -8,7 +8,9 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final
 
@@ -16,27 +18,20 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.messages.native.utils import filtered_safeguard_results, redacted_stop_details
 from litellm.llms.anthropic.messages.stream_assembly import (
+    AnthropicSseFrame,
     anthropic_message_delta_fields,
+    anthropic_sse_error_event_of,
     anthropic_sse_error_events,
     anthropic_sse_event_type,
     anthropic_sse_event_types,
-    anthropic_sse_message_delta,
+    anthropic_sse_frames,
+    anthropic_sse_reads_alike,
     anthropic_sse_started_blocks,
-    anthropic_sse_started_message,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
-    anthropic_sse_assembles_every_block as anthropic_sse_assembles_every_block,  # noqa: PLC0414  # public re-export
-)
-from litellm.llms.anthropic.messages.stream_assembly import (
-    anthropic_sse_error_data as anthropic_sse_error_data,  # noqa: PLC0414  # public re-export
-)
-from litellm.llms.anthropic.messages.stream_assembly import (
-    anthropic_sse_error_event_of as anthropic_sse_error_event_of,  # noqa: PLC0414  # public re-export
-)
-from litellm.llms.anthropic.messages.stream_assembly import (
-    anthropic_sse_reads_alike as anthropic_sse_reads_alike,  # noqa: PLC0414  # public re-export
+    anthropic_sse_assembles_every_tool_input as anthropic_sse_assembles_every_tool_input,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
@@ -102,25 +97,9 @@ def _unchanged_tool_use_ids(source_content: Sequence[object], delivered_content:
     )
 
 
-_MESSAGE_FIELDS_THE_REWRITE_DECIDES: Final = frozenset({"id", "model", "content"})
-
-
-def _upstream_message_start_fields(source_chunks: Sequence[object]) -> Mapping[str, object]:
-    message: Final = anthropic_sse_started_message(source_chunks)
-    return MappingProxyType(
-        {key: value for key, value in message.items() if key not in _MESSAGE_FIELDS_THE_REWRITE_DECIDES}
-    )
-
-
-def _tool_use_starts(source_chunks: Sequence[object]) -> Mapping[str, Mapping[str, object]]:
-    blocks: Final = anthropic_sse_started_blocks(source_chunks).values()
-    return MappingProxyType({block_id: block for block in blocks if isinstance(block_id := block.get("id"), str)})
-
-
 def _rewritten_message_delta_fields(
-    source_chunks: Sequence[object], unchanged_tool_use_ids: frozenset[str], keep_explanations: bool
+    source_fields: Mapping[str, object], unchanged_tool_use_ids: frozenset[str], keep_explanations: bool
 ) -> Mapping[str, object]:
-    source_fields: Final = anthropic_message_delta_fields(source_chunks)
     stop_details: Final = source_fields.get("stop_details")
     safeguard_results: Final = source_fields.get("safeguard_results")
     return MappingProxyType(
@@ -186,39 +165,30 @@ def anthropic_sse_chunks_of_events(events: Sequence[str]) -> tuple[bytes, ...]:
 
 
 def anthropic_sse_chunks_from_response(
-    assembled: ModelResponse,
-    source_chunks: Sequence[object] = (),
-    *,
-    keep_explanations: bool = False,
-    error_events: Sequence[str] | None = None,
+    assembled: ModelResponse, source_chunks: Sequence[object] = (), *, keep_explanations: bool = False
 ) -> tuple[bytes, ...]:
     """Re-emit a rewritten response as the SSE events of the ``source_chunks`` stream it replaces.
 
-    ``message_delta`` keeps the source stream's own fields, such as the code execution ``container`` and
-    server tool usage, and carries its ``stop_details`` and ``safeguard_results`` and
+    ``message_delta`` carries the source stream's ``stop_details`` and ``safeguard_results`` and
     nothing the OpenAI round trip made up, with a verdict kept only for a tool call delivered with
     the input the classifier judged. Their free-text ``explanation`` was written about the text the
     guardrail rewrote, so it is dropped unless the caller rewrites no text (``keep_explanations``).
-    ``message_start`` keeps the fields the source stream sent in it, but for the content and the id and model
-    the caller assembled, and each tool call's ``content_block_start`` keeps the source's too, such as
-    ``service_tier``, cache usage and a tool call's ``caller``, which the round trip drops.
     A source stream that ended in an upstream ``error`` event ends with that event again, never
     with a ``message_delta`` or ``message_stop`` the upstream did not send, with its cut-off text
     block left open unless another block follows it, and with no finished text block when it read
     no text, since Claude Code does not retry a stream that shows a finished block. A response that
     cannot be re-emitted, such as one with a tool input that cannot be parsed, leaves a failed stream
     its error alone. No empty text block is re-emitted, since the OpenAI round trip adds one to a response
-    with only tool calls. ``error_events`` stands in for the source stream's own, for a caller that rewrote
-    their text.
+    with only tool calls.
     """
-    sent_error_events: Final = anthropic_sse_error_events(source_chunks) if error_events is None else error_events
+    error_events: Final = anthropic_sse_error_events(source_chunks)
     try:
-        return _rebuilt_sse_chunks(assembled, source_chunks, sent_error_events, keep_explanations)
+        return _rebuilt_sse_chunks(assembled, source_chunks, error_events, keep_explanations)
     except Exception:
-        if not sent_error_events:
+        if not error_events:
             raise
         verbose_proxy_logger.warning("Failed Anthropic stream could not be rebuilt, sending its upstream error alone")
-        return anthropic_sse_chunks_of_events(sent_error_events)
+        return anthropic_sse_chunks_of_events(error_events)
 
 
 def _rebuilt_sse_chunks(
@@ -244,10 +214,9 @@ def _rebuilt_sse_chunks(
     )
     rewritten_chunks: Final = FakeAnthropicMessagesStreamIterator(
         response=_without_empty_text(anthropic_response),
-        message_delta_fields=_rewritten_message_delta_fields(source_chunks, unchanged_tool_use_ids, keep_explanations),
-        message_start_fields=_upstream_message_start_fields(source_chunks),
-        tool_use_starts=_tool_use_starts(source_chunks),
-        upstream_message_delta=anthropic_sse_message_delta(source_chunks),
+        message_delta_fields=_rewritten_message_delta_fields(
+            anthropic_message_delta_fields(source_chunks), unchanged_tool_use_ids, keep_explanations
+        ),
     ).chunks
     if not error_events:
         return tuple(rewritten_chunks)
@@ -256,4 +225,180 @@ def _rebuilt_sse_chunks(
     return (
         *(chunk for chunk in rewritten_chunks if _sent_by_the_failed_upstream(chunk, block_left_open, end_events_sent)),
         *anthropic_sse_chunks_of_events(error_events),
+    )
+
+
+_BLOCK_CONTENT_KEYS: Final = MappingProxyType({"content_block_start": "content_block", "content_block_delta": "delta"})
+
+
+@dataclass(frozen=True, slots=True)
+class AnthropicSseBlock:
+    """The text and the tool input JSON a client reads in a content block, from its start and its deltas."""
+
+    index: int
+    text: str
+    tool_input: str
+    replaces_start_input: bool
+
+
+def _is_block_content(event: Mapping[str, object]) -> bool:
+    return event.get("type") in _BLOCK_CONTENT_KEYS
+
+
+def _block_content(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    return as_str_mapping(event.get(_BLOCK_CONTENT_KEYS[str(event.get("type"))]))
+
+
+def _holds_only_strings(content: Mapping[str, object] | None) -> bool:
+    return content is not None and all(isinstance(content.get(key) or "", str) for key in ("text", "partial_json"))
+
+
+def _joined_strings(contents: Sequence[Mapping[str, object]], key: str) -> str:
+    return "".join(value for content in contents if isinstance(value := content.get(key), str))
+
+
+def _sse_block(index: int, contents: Sequence[Mapping[str, object]]) -> AnthropicSseBlock:
+    start_input: Final = contents[0].get("input")
+    streamed_input: Final = _joined_strings(contents[1:], "partial_json")
+    return AnthropicSseBlock(
+        index=index,
+        text=_joined_strings(contents, "text"),
+        tool_input=streamed_input or (json.dumps(start_input) if start_input else ""),
+        replaces_start_input=bool(streamed_input and start_input),
+    )
+
+
+def anthropic_sse_blocks(source_chunks: Sequence[object]) -> tuple[AnthropicSseBlock, ...] | None:
+    """The content blocks of the stream, or None when some client reads the stream another way."""
+    if not anthropic_sse_reads_alike(source_chunks):
+        return None
+    frames: Final = tuple(frame for frame in anthropic_sse_frames(source_chunks) if _is_block_content(frame.event))
+    if not all(_holds_only_strings(_block_content(frame.event)) for frame in frames):
+        return None
+    by_index: Final = groupby((frame.event for frame in frames), key=lambda event: event.get("index"))
+    contents: Final = (tuple(_block_content(event) or {} for event in events) for _, events in by_index)
+    return tuple(_sse_block(index, block_contents) for index, block_contents in enumerate(contents))
+
+
+@dataclass(frozen=True, slots=True)
+class _SseRewrite:
+    blocks: Mapping[int, AnthropicSseBlock]
+    drops_citations: bool
+    unchanged_tool_use_ids: frozenset[str]
+    error_data: Mapping[str, str]
+
+
+def _sse_event(event: Mapping[str, object]) -> str:
+    return f"event: {event.get('type')}\ndata: {json.dumps(event)}"
+
+
+def _replaced_event(frame: AnthropicSseFrame, event: Mapping[str, object]) -> str:
+    return _sse_event(event) if frame.error_data is None else anthropic_sse_error_event_of(json.dumps(event))
+
+
+def _block_delta(index: int, delta: Mapping[str, object]) -> str:
+    return _sse_event({"type": "content_block_delta", "index": index, "delta": delta})
+
+
+def _block_deltas(block: AnthropicSseBlock) -> Iterator[str]:
+    if block.text:
+        yield _block_delta(block.index, {"type": "text_delta", "text": block.text})
+    if block.tool_input:
+        yield _block_delta(block.index, {"type": "input_json_delta", "partial_json": block.tool_input})
+
+
+def _rewritten_start(frame: AnthropicSseFrame, block: AnthropicSseBlock | None, rewrite: _SseRewrite) -> Iterator[str]:
+    content: Final = _block_content(frame.event) or {}
+    emptied: Final[Mapping[str, object]] = {
+        **({"text": "", "input": {}} if block is not None else {}),
+        **({"citations": []} if rewrite.drops_citations and content.get("citations") else {}),
+    }
+    kept: Final = {key: emptied.get(key, value) for key, value in content.items()}
+    yield frame.raw if kept == content else _replaced_event(frame, {**frame.event, "content_block": kept})
+    yield from () if block is None else _block_deltas(block)
+
+
+def _rewritten_delta(frame: AnthropicSseFrame, block: AnthropicSseBlock | None, rewrite: _SseRewrite) -> Iterator[str]:
+    delta: Final = _block_content(frame.event) or {}
+    dropped_keys: Final = frozenset(
+        (*(("text", "partial_json") if block is not None else ()), *(("citation",) if rewrite.drops_citations else ()))
+    )
+    if dropped_keys.isdisjoint(delta):
+        yield frame.raw
+    elif frame.error_data is not None:
+        emptied: Final = {key: "" if key in dropped_keys else value for key, value in delta.items()}
+        yield _replaced_event(frame, {**frame.event, "delta": emptied})
+
+
+def _rewritten_message_delta(frame: AnthropicSseFrame, rewrite: _SseRewrite) -> str:
+    delta: Final = as_str_mapping(frame.event.get("delta")) or {}
+    fields: Final = _rewritten_message_delta_fields(delta, rewrite.unchanged_tool_use_ids, keep_explanations=False)
+    kept: Final = {key: fields.get(key, value) for key, value in delta.items() if fields.get(key, "") is not None}
+    return frame.raw if kept == delta else _replaced_event(frame, {**frame.event, "delta": kept})
+
+
+def _with_rewritten_error(frame: AnthropicSseFrame, rewrite: _SseRewrite) -> tuple[AnthropicSseFrame, ...]:
+    if frame.error_data is None or rewrite.error_data.get(frame.error_data, frame.error_data) == frame.error_data:
+        return (frame,)
+    error_event: Final = anthropic_sse_error_event_of(rewrite.error_data[frame.error_data])
+    return anthropic_sse_frames(anthropic_sse_chunks_of_events((error_event,)))
+
+
+def _rewritten_frame(frame: AnthropicSseFrame, rewrite: _SseRewrite) -> Iterator[str]:
+    index: Final = frame.event.get("index")
+    block: Final = rewrite.blocks.get(index) if isinstance(index, int) else None
+    match frame.event.get("type"):
+        case "content_block_start":
+            yield from _rewritten_start(frame, block, rewrite)
+        case "content_block_delta":
+            yield from _rewritten_delta(frame, block, rewrite)
+        case "message_delta" if rewrite.blocks:
+            yield _rewritten_message_delta(frame, rewrite)
+        case _:
+            yield frame.raw
+
+
+def anthropic_sse_chunks_rewritten(
+    source_chunks: Sequence[object],
+    source_blocks: Sequence[AnthropicSseBlock],
+    blocks: Sequence[AnthropicSseBlock],
+    error_data: Mapping[str, str],
+) -> tuple[object, ...]:
+    """The stream with ``blocks`` in place of its ``source_blocks`` and each ``error`` event's data mapped.
+
+    Every other frame stays as the upstream sent it and where it sent it, so thinking keeps its signature and a cut
+    stream stays cut. A rewritten block sends its whole text or input in one delta after its start. The text blocks
+    lose their citations when one of them changed, since a citation quotes text the guardrail never read, and
+    ``message_delta`` loses the verdicts and explanations written about what changed.
+    """
+    rewritten: Final = MappingProxyType(
+        {
+            block.index: block
+            for source, block in zip(source_blocks, blocks, strict=True)
+            if block != source or source.replaces_start_input
+        }
+    )
+    if not rewritten and all(data == rewritten_data for data, rewritten_data in error_data.items()):
+        return tuple(source_chunks)
+    changed_inputs: Final = frozenset(
+        source.index
+        for source, block in zip(source_blocks, blocks, strict=True)
+        if source.tool_input != block.tool_input
+    )
+    started: Final = anthropic_sse_started_blocks(source_chunks)
+    rewrite: Final = _SseRewrite(
+        blocks=rewritten,
+        drops_citations=any(source.text != block.text for source, block in zip(source_blocks, blocks, strict=True)),
+        unchanged_tool_use_ids=frozenset(
+            block_id
+            for index, block in started.items()
+            if index not in changed_inputs and isinstance(block_id := block.get("id"), str)
+        ),
+        error_data=error_data,
+    )
+    frames: Final = chain.from_iterable(
+        _with_rewritten_error(frame, rewrite) for frame in anthropic_sse_frames(source_chunks)
+    )
+    return anthropic_sse_chunks_of_events(
+        tuple(chain.from_iterable(_rewritten_frame(frame, rewrite) for frame in frames))
     )

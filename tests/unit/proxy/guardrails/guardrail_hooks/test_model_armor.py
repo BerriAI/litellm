@@ -4043,6 +4043,45 @@ async def test_streaming_hook_scans_anthropic_sse_text_split_over_data_lines():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("card", ["4111-1111-1111-1111", "none"])
+@pytest.mark.parametrize("is_stopped", [False, True], ids=["open-block", "stopped-block"])
+async def test_streaming_hook_scans_an_anthropic_sse_tool_call_cut_by_the_output_limit(card: str, is_stopped: bool):
+    partial_json: Final = json.dumps(f'{{"card": "{card}", "amount": "12').encode()
+    chunks: Final = (
+        _ANTHROPIC_SSE_CHUNKS[0],
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+        b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay","input":{}}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"input_json_delta","partial_json":' + partial_json + b"}}\n\n",
+        *((_ANTHROPIC_SSE_CHUNKS[3],) if is_stopped else ()),
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if card == "none":
+        assert tuple(delivered) == chunks
+    else:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
 async def test_streaming_hook_scans_responses_api_events_instead_of_crashing():
     """A /v1/responses stream arrives as typed Responses events, which stream_chunk_builder
     cannot subscript. The final response.completed event carries the text to scan."""

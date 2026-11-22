@@ -1,6 +1,7 @@
 import codecs
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -580,16 +581,6 @@ def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[
     )
 
 
-def anthropic_sse_started_message(all_chunks: Sequence[object]) -> Mapping[str, object]:
-    message: Final = _anthropic_message_start(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
-    return MappingProxyType({}) if message is None else message
-
-
-def anthropic_sse_message_delta(all_chunks: Sequence[object]) -> Mapping[str, object]:
-    events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
-    return next((event for event in reversed(events) if event.get("type") == "message_delta"), MappingProxyType({}))
-
-
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
     """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
 
@@ -597,7 +588,13 @@ def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str,
     from that event and nowhere else (a Claude Code auto-mode session takes its classifier verdict
     from ``safeguard_results``), so a caller re-emitting a rewritten response merges them back in.
     """
-    delta: Final = as_str_mapping(anthropic_sse_message_delta(all_chunks).get("delta"))
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return MappingProxyType({})
+    message_delta: Final = next(
+        (event for event in reversed(_parsed_sse_events(sse_stream)) if event.get("type") == "message_delta"), None
+    )
+    delta: Final = as_str_mapping(message_delta.get("delta")) if message_delta is not None else None
     if delta is None:
         return MappingProxyType({})
     return MappingProxyType(
@@ -686,18 +683,26 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
 
 
-def _client_data(event: str) -> str:
-    client_frame: Final = _client_frame(event)
-    return "" if client_frame is None else client_frame[1]
+@dataclass(frozen=True, slots=True)
+class AnthropicSseFrame:
+    """A frame of the stream, with the Anthropic event a client reads in it and the data of an error one raises on."""
+
+    raw: str
+    event: Mapping[str, object]
+    error_data: str | None
 
 
-def _is_error_to_some_client(event: str) -> bool:
-    return _is_error_event(event) or _is_named_error_event(event)
+def _sse_frame(raw: str) -> AnthropicSseFrame:
+    name, data = _client_frame(raw) or ("", "")
+    return AnthropicSseFrame(
+        raw=raw,
+        event=_client_event(name, _json_mapping(data)) or MappingProxyType({}),
+        error_data=data if _is_error_event(raw) or _is_named_error_event(raw) else None,
+    )
 
 
-def anthropic_sse_error_data(all_chunks: Sequence[object]) -> tuple[str, ...]:
-    events: Final = _frames_a_client_dispatches(_joined_sse_stream(all_chunks) or "")
-    return tuple(_client_data(event) for event in events if _is_error_to_some_client(event))
+def anthropic_sse_frames(all_chunks: Sequence[object]) -> tuple[AnthropicSseFrame, ...]:
+    return tuple(map(_sse_frame, _frames_a_client_dispatches(_joined_sse_stream(all_chunks) or "")))
 
 
 def _error_data_lines(data: str) -> tuple[str, ...]:
@@ -864,12 +869,10 @@ def _replaces_its_start_input(event: Mapping[str, object], streamed_input_indexe
     return bool(tool_input) and _block_index(event) in streamed_input_indexes
 
 
-def anthropic_sse_assembles_every_block(all_chunks: Sequence[object]) -> bool:
+def anthropic_sse_assembles_every_tool_input(all_chunks: Sequence[object]) -> bool:
     events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
     streamed_input_indexes: Final = _streamed_input_indexes(events)
-    return all(block.get("type") == "text" for block in _unfinished_blocks(events).values()) and not any(
-        _replaces_its_start_input(event, streamed_input_indexes) for event in events
-    )
+    return not any(_replaces_its_start_input(event, streamed_input_indexes) for event in events)
 
 
 def _names_its_own_type(name: str, data: Mapping[str, object] | None) -> bool:

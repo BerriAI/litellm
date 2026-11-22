@@ -10,25 +10,16 @@ the LLM doesn't make a tool call, and we need to return a stream to the user.
 
 import json
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import Final, cast
 
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.llms.anthropic.messages.native.utils import MESSAGE_DELTA_OPTIONAL_KEYS, anthropic_message_delta
+from litellm.llms.anthropic.messages.native.utils import anthropic_message_delta
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 
 _CITATIONS: Final = TypeAdapter(tuple[object, ...])
-_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
-_DELTA_FIELDS_THE_RESPONSE_DECIDES: Final = frozenset({"stop_reason", "stop_sequence", *MESSAGE_DELTA_OPTIONAL_KEYS})
-
-
-def _upstream_delta_fields(upstream_message_delta: Mapping[str, object]) -> Mapping[str, object]:
-    delta: Final = as_str_mapping(upstream_message_delta.get("delta")) or _NO_FIELDS
-    return {key: value for key, value in delta.items() if key not in _DELTA_FIELDS_THE_RESPONSE_DECIDES}
 
 
 def _citations_of(block: Mapping[str, object]) -> tuple[object, ...]:
@@ -57,15 +48,9 @@ class FakeAnthropicMessagesStreamIterator:
         self,
         response: AnthropicMessagesResponse,
         message_delta_fields: Mapping[str, object] | None = None,
-        message_start_fields: Mapping[str, object] = _NO_FIELDS,
-        tool_use_starts: Mapping[str, Mapping[str, object]] = MappingProxyType({}),
-        upstream_message_delta: Mapping[str, object] = _NO_FIELDS,
     ):
         self.response = response
         self.message_delta_fields = message_delta_fields
-        self.message_start_fields = message_start_fields
-        self.tool_use_starts = tool_use_starts
-        self.upstream_message_delta = upstream_message_delta
         self.chunks = self._create_streaming_chunks()
         self.current_index = 0
 
@@ -127,14 +112,10 @@ class FakeAnthropicMessagesStreamIterator:
 
         elif block_type in ("tool_use", "server_tool_use"):
             empty_input: Final[Mapping[str, object]] = {}
-            block_id: Final = block_dict.get("id")
-            upstream_start: Final = (
-                self.tool_use_starts.get(block_id, _NO_FIELDS) if isinstance(block_id, str) else _NO_FIELDS
-            )
             tool_use_start: Final = {
                 "type": "content_block_start",
                 "index": index,
-                "content_block": {**upstream_start, **block_dict, "input": empty_input},
+                "content_block": {**block_dict, "input": empty_input},
             }
             chunks.append(f"event: content_block_start\ndata: {json.dumps(tool_use_start)}\n\n".encode())
             tool_use_delta: Final = {
@@ -181,7 +162,6 @@ class FakeAnthropicMessagesStreamIterator:
                     "input_tokens": usage.get("input_tokens", 0) if usage else 0,
                     "output_tokens": 0,
                 },
-                **self.message_start_fields,
             },
         }
         chunks.append(f"event: message_start\ndata: {json.dumps(message_start)}\n\n".encode())
@@ -209,11 +189,8 @@ class FakeAnthropicMessagesStreamIterator:
                 delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
         message_delta: Final = {
             "type": "message_delta",
-            "delta": {
-                **_upstream_delta_fields(self.upstream_message_delta),
-                **anthropic_message_delta(response_dict, self.message_delta_fields),
-            },
-            "usage": {**(as_str_mapping(self.upstream_message_delta.get("usage")) or _NO_FIELDS), **delta_usage},
+            "delta": anthropic_message_delta(response_dict, self.message_delta_fields),
+            "usage": delta_usage,
         }
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
 

@@ -68,10 +68,7 @@ def _tool_use_frames(index: int, tool_use_id: str, name: str) -> tuple[bytes, ..
 
 
 def _upstream_stream(
-    delta: dict[str, object],
-    text: str = "call 555-0100",
-    tool_uses: tuple[tuple[str, str], ...] = (),
-    usage: dict[str, object] | None = None,
+    delta: dict[str, object], text: str = "call 555-0100", tool_uses: tuple[tuple[str, str], ...] = ()
 ) -> tuple[bytes, ...]:
     tool_use_frames = tuple(
         chain.from_iterable(
@@ -105,7 +102,7 @@ def _upstream_stream(
         ),
         _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
         *tool_use_frames,
-        _frame("message_delta", {"type": "message_delta", "delta": delta, "usage": usage or {"output_tokens": 2}}),
+        _frame("message_delta", {"type": "message_delta", "delta": delta, "usage": {"output_tokens": 2}}),
         _frame("message_stop", {"type": "message_stop"}),
     )
 
@@ -141,9 +138,8 @@ REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanat
         ("end_turn", {"safeguard_results": SAFEGUARD_RESULTS}),
         ("refusal", {"stop_details": REFUSAL_STOP_DETAILS}),
         ("pause_turn", {}),
-        ("end_turn", {"container": {"id": "container_1", "expires_at": "2026-11-21T00:00:00Z"}}),
     ],
-    ids=["safeguard_results", "refusal_stop_details", "pause_turn", "code_execution_container"],
+    ids=["safeguard_results", "refusal_stop_details", "pause_turn"],
 )
 def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: str, delta_fields: dict[str, object]):
     """A guardrail that rewrites a streamed response assembles it into the OpenAI shape, which has no
@@ -163,70 +159,6 @@ def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: s
     assert payloads["content_block_delta"]["delta"] == {"type": "text_delta", "text": "call <PHONE>"}
     assert payloads["message_delta"]["delta"] == upstream_delta
     assert not set(delta_fields) & set(payloads["message_start"]["message"])
-
-
-def test_rewritten_stream_keeps_the_upstream_server_tool_usage():
-    usage: Final = {"output_tokens": 2, "server_tool_use": {"web_search_requests": 1}}
-    upstream: Final = _upstream_stream({"stop_reason": "end_turn", "stop_sequence": None}, usage=usage)
-    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
-    assert assembled is not None
-    _set_text("call [PHONE]")(assembled)
-
-    decoded: Final = _decode(anthropic_sse_chunks_from_response(assembled, upstream))
-    message_delta: Final = next(payload for event, payload in decoded if event == "message_delta")
-
-    assert message_delta["usage"]["server_tool_use"] == {"web_search_requests": 1}
-
-
-def test_rewritten_stream_keeps_the_upstream_message_start_and_tool_use_fields():
-    message: Final = {
-        "id": "msg_upstream_1",
-        "type": "message",
-        "role": "assistant",
-        "model": "claude-upstream",
-        "content": [],
-        "stop_reason": None,
-        "stop_sequence": None,
-        "service_tier": "priority",
-        "container": {"id": "container_1", "expires_at": "2026-11-21T00:00:00Z"},
-        "usage": {"input_tokens": 3, "cache_read_input_tokens": 40, "output_tokens": 1},
-    }
-    tool_use: Final = {
-        "type": "tool_use",
-        "id": "toolu_1",
-        "name": "call",
-        "input": {},
-        "caller": {"type": "code_execution_20250825", "tool_id": "srvtoolu_1"},
-    }
-    upstream: Final = (
-        _frame("message_start", {"type": "message_start", "message": message}),
-        _frame("content_block_start", {"type": "content_block_start", "index": 0, "content_block": tool_use}),
-        _frame(
-            "content_block_delta",
-            {
-                "type": "content_block_delta",
-                "index": 0,
-                "delta": {"type": "input_json_delta", "partial_json": '{"number": "555-0100"}'},
-            },
-        ),
-        _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
-        _frame("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}}),
-        _frame("message_stop", {"type": "message_stop"}),
-    )
-    assembled: Final = assemble_anthropic_sse_stream(upstream, restore_identity=True)
-    assert assembled is not None
-    choice: Final = assembled.choices[0]
-    assert isinstance(choice, Choices) and choice.message.tool_calls
-    choice.message.tool_calls[0].function.arguments = '{"number": "<PHONE>"}'
-
-    payloads: Final = dict(_decode(anthropic_sse_chunks_from_response(assembled, upstream)))
-
-    assert payloads["message_start"]["message"] == message
-    assert payloads["content_block_start"]["content_block"] == tool_use
-    assert payloads["content_block_delta"]["delta"] == {
-        "type": "input_json_delta",
-        "partial_json": '{"number": "<PHONE>"}',
-    }
 
 
 SSN: Final = "123-45-6789"
