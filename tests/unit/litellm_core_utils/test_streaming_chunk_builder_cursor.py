@@ -19,10 +19,15 @@ to None when the only update we saw was the cursor, allowing the
 text-based fallback to estimate from the real completion text.
 """
 
+import time
+
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicStreamParser
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
@@ -388,28 +393,91 @@ class TestProviderGuard:
         assert result["completion_tokens"] == 1
 
 
-    @pytest.mark.parametrize(
-        ("custom_llm_provider", "model"),
-        [
-            ("vertex_ai", "claude-sonnet-4-6@20250514"),
-            ("bedrock", "us.anthropic.claude-sonnet-4-6-v1:0"),
-            ("azure_ai", "claude-sonnet-4-6"),
-        ],
-    )
-    def test_claude_relayed_as_anthropic_events_resets_the_cut_placeholder(self, custom_llm_provider: str, model: str):
-        chunks = [
-            _make_chunk(
-                usage=Usage(prompt_tokens=1024, completion_tokens=1, total_tokens=1025),
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-            ),
-            _make_chunk(content="partial answer", custom_llm_provider=custom_llm_provider, model=model),
-        ]
-        result = ChunkProcessor(chunks=chunks, messages=[])._calculate_usage_per_chunk(chunks=chunks)
-        assert result["prompt_tokens"] == 1024
-        assert result["completion_tokens"] is None
+_PROMPT_TOKENS = 1024
+_STREAMED_TEXT = "The lighthouse keeper climbed the stairs"
 
-    def test_non_claude_model_on_a_claude_relaying_provider_keeps_its_lone_usage(self):
+
+def _anthropic_parsed_events(*, completed: bool) -> list[ModelResponseStream]:
+    parser = AnthropicStreamParser(streaming_response=None, sync_stream=True)
+    events = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_cut",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": _PROMPT_TOKENS, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": _STREAMED_TEXT}},
+    ]
+    if completed:
+        events += [
+            {"type": "content_block_stop", "index": 0},
+            {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 40}},
+            {"type": "message_stop"},
+        ]
+    return [parser.chunk_parser(event) for event in events]
+
+
+def _wrapped_stream(*, model: str, custom_llm_provider: str, completed: bool) -> CustomStreamWrapper:
+    return CustomStreamWrapper(
+        completion_stream=iter(_anthropic_parsed_events(completed=completed)),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        logging_obj=Logging(
+            model=model,
+            messages=[{"role": "user", "content": "Write a story"}],
+            stream=True,
+            call_type="completion",
+            start_time=time.time(),
+            litellm_call_id="cut-stream",
+            function_id="cut-stream",
+        ),
+    )
+
+
+_PROVIDERS_REUSING_ANTHROPICS_PARSER = pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("opencode_go", "minimax-m3"),
+        ("bedrock", "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"),
+        ("vertex_ai", "claude-sonnet-4-6@20250514"),
+        ("azure_ai", "claude-sonnet-4-6"),
+        ("bedrock_mantle", "anthropic.claude-sonnet-4-6"),
+        ("snowflake", "claude-sonnet-4-6"),
+    ],
+)
+
+
+class TestStreamsParsedFromAnthropicEvents:
+    @_PROVIDERS_REUSING_ANTHROPICS_PARSER
+    def test_a_cut_stream_bills_the_text_it_read_instead_of_the_message_start_placeholder(
+        self, custom_llm_provider: str, model: str
+    ):
+        stream = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=False)
+        read = next(chunk for chunk in stream if chunk.choices and chunk.choices[0].delta.content)
+
+        built = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[])
+
+        assert read.choices[0].delta.content == _STREAMED_TEXT
+        assert built.usage.prompt_tokens == _PROMPT_TOKENS
+        assert built.usage.completion_tokens == litellm.token_counter(
+            model=built.model, text=_STREAMED_TEXT, count_response_tokens=True
+        )
+
+    @_PROVIDERS_REUSING_ANTHROPICS_PARSER
+    def test_a_finished_stream_bills_the_output_count_the_provider_reported(self, custom_llm_provider: str, model: str):
+        stream = _wrapped_stream(model=model, custom_llm_provider=custom_llm_provider, completed=True)
+        list(stream)
+
+        usage = litellm.stream_chunk_builder(chunks=stream.chunks, messages=[]).usage
+
+        assert (usage.prompt_tokens, usage.completion_tokens) == (_PROMPT_TOKENS, 40)
+
+    def test_a_lone_usage_event_from_another_parser_on_the_same_provider_keeps_its_count(self):
         chunks = [
             _make_chunk(
                 usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
