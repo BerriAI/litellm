@@ -1232,11 +1232,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             drop_params=bool(litellm_params.get("drop_params") or litellm.drop_params),
             keep_prompt_cache_breakpoints=supports_prompt_cache_breakpoint,
             keep_system_order=marked_a_system_string,
-            preserve_system_instructions=(
-                preserve_system_instructions
-                or request_params.get("store") is not False
-                or provider not in _SYSTEM_INPUT_PROVIDERS
-            ),
+            preserve_system_instructions=preserve_system_instructions or provider not in _SYSTEM_INPUT_PROVIDERS,
             replay_tool_search=_requests_tool_search(cast(object, optional_params)),  # cast-ok: upcast
             include_namespace=True,
         )

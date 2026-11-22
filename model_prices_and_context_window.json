@@ -17122,6 +17122,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "c4ai-aya-expanse-32b": {
@@ -17146,7 +17147,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "command-nightly": {
@@ -17167,7 +17168,8 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_response_schema": true,
+        "supports_tool_choice": false
     },
     "command-r-plus-08-2024": {
         "input_cost_per_token": 2.5e-06,
@@ -17178,7 +17180,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_response_schema": true,
+        "supports_tool_choice": false
     },
     "command-r7b-12-2024": {
         "input_cost_per_token": 3.75e-08,
@@ -17189,6 +17192,112 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
         "source": "https://docs.cohere.com/v2/docs/command-r7b",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "c4ai-aya-vision-32b": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/aya-vision",
+        "supports_vision": true
+    },
+    "command-a-reasoning-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 288768,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-reasoning",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false
+    },
+    "command-a-translate-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8992,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-translate",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "command-a-vision-07-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-vision",
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
+    "command-r7b-arabic-02-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "north-mini-code-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 436000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-mini-code-1.0",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false
+    },
+    "north-small-translate-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-small-translate-1.0"
+    },
+    "tiny-aya-earth": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-fire": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-global": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-water": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -39439,6 +39548,48 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 100000
     },
+    "gradium/default": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-202602": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-beta": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
         "input_cost_per_token": 0,
         "litellm_provider": "lemonade",
@@ -47581,6 +47732,85 @@
         "max_tokens": 8192,
         "supports_reasoning": true,
         "supports_system_messages": true
+    },
+    "resetdata/deepseek/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 1.351e-08,
+        "input_cost_per_token": 7.432e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.486e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/google/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 6.054e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.328e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 3.378e-06,
+        "litellm_provider": "resetdata",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.resetdata.ai/guides/audio/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "resetdata/qwen/qwen3-coder-30b-a3b-instruct": {
+        "input_cost_per_token": 7.061e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.723e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/qwen/qwen3.8-27b": {
+        "input_cost_per_token": 2.905e-07,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.453e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/zai/glm-5.3": {
+        "cache_read_input_token_cost": 1.757e-07,
+        "input_cost_per_token": 1.189e-06,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 3.736e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "rerank-english-v3.0": {
         "input_cost_per_query": 0.002,
