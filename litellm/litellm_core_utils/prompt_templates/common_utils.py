@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_object_list
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data as extract_file_data,  # noqa: PLC0414  # public compatibility re-export
 )
@@ -1339,19 +1339,31 @@ def _tool_call_without_provider_specific_fields(tool_call: object) -> object:
     }
 
 
+def _image_without_provider_specific_fields(image: object) -> object:
+    fields: Final = as_str_mapping(image)
+    if fields is None or "provider_specific_fields" not in fields:
+        return image
+    return {key: value for key, value in fields.items() if key != "provider_specific_fields"}
+
+
 def _message_without_fields(message: AllMessageValues, dropped: frozenset[str]) -> AllMessageValues:
-    kept: Final = {key: value for key, value in message.items() if key not in dropped}
-    tool_calls: Final = message.get("tool_calls")
-    if not isinstance(tool_calls, list):
-        return cast(AllMessageValues, kept)  # cast-ok: same TypedDict minus dropped keys
-    return cast(  # cast-ok: same TypedDict minus dropped keys, tool calls minus their provider_specific_fields
+    kept: Final[Mapping[str, object]] = {key: value for key, value in message.items() if key not in dropped}
+    tool_calls: Final = as_object_list(kept.get("tool_calls"))
+    images: Final = as_object_list(kept.get("images"))
+    return cast(  # cast-ok: same TypedDict minus dropped keys and nested provider_specific_fields
         AllMessageValues,
         {
             **kept,
-            "tool_calls": [
-                _tool_call_without_provider_specific_fields(tool_call)
-                for tool_call in cast(list[object], tool_calls)  # cast-ok: untyped JSON tool calls
-            ],
+            **(
+                {"tool_calls": [_tool_call_without_provider_specific_fields(tool_call) for tool_call in tool_calls]}
+                if tool_calls is not None
+                else {}
+            ),
+            **(
+                {"images": [_image_without_provider_specific_fields(image) for image in images]}
+                if images is not None
+                else {}
+            ),
         },
     )
 
