@@ -1517,6 +1517,25 @@ def keeps_gemini_video(
     )
 
 
+def _is_downloadable_or_base64_url(url: str) -> bool:
+    if url.startswith(("http://", "https://")):
+        return True
+    header, separator, data = url.partition(";base64,")
+    return header.startswith("data:") and bool(separator) and bool(data)
+
+
+def _skip_unfetched_tool_result_video(
+    reason: str, exc: Exception | None, *, drop_params: bool, model: str | None, custom_llm_provider: str
+) -> None:
+    if not drop_params:
+        raise BadRequestError(
+            message=f"Could not download the video in a tool result. {reason} Fix the link or set drop_params=True.",
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        ) from exc
+    verbose_logger.warning("Failed to process video in tool response: %s", reason)
+
+
 def _gemini_tool_result_video_blob(
     content: object, *, drop_params: bool, model: str | None, custom_llm_provider: str
 ) -> BlobType | None:
@@ -1548,7 +1567,7 @@ def _gemini_tool_result_video_blob(
             model=model or "",
             llm_provider=custom_llm_provider,
         )
-    if gemini_fetches_url_itself(url):
+    if url.startswith("gs://") or gemini_fetches_url_itself(url):
         if drop_params:
             verbose_logger.warning("Dropped a video link from a Gemini tool result, which takes inline data only")
             return None
@@ -1560,20 +1579,24 @@ def _gemini_tool_result_video_blob(
             model=model or "",
             llm_provider=custom_llm_provider,
         )
+    if not _is_downloadable_or_base64_url(url):
+        return _skip_unfetched_tool_result_video(
+            "The link must be an http(s) URL or a base64 data URL.",
+            None,
+            drop_params=drop_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
     try:
         video: Final = convert_to_anthropic_image_obj(url, format=None)
     except litellm.ImageFetchError as exc:
-        if not drop_params:
-            raise BadRequestError(
-                message=(
-                    "Could not download the video in a tool result. "
-                    f"{exc.message.removeprefix('litellm.BadRequestError: ')} Fix the link or set drop_params=True."
-                ),
-                model=model or "",
-                llm_provider=custom_llm_provider,
-            ) from exc
-        verbose_logger.warning("Failed to process video in tool response: %s", exc)
-        return None
+        return _skip_unfetched_tool_result_video(
+            exc.message.removeprefix("litellm.BadRequestError: "),
+            exc,
+            drop_params=drop_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
     if not keeps_gemini_video(
         video["media_type"], model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
     ):

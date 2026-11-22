@@ -1857,18 +1857,31 @@ def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
     ]
 
 
-def test_gemini_tool_result_youtube_video_is_a_bad_request_instead_of_a_page_download() -> None:
+_LINKS_GEMINI_CANNOT_INLINE: Final = (
+    pytest.param("https://www.youtube.com/watch?v=aqz-KE-bpKQ", id="youtube"),
+    pytest.param("gs://cloud-samples-data/video/animals.mp4", id="gcs-uri"),
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_gemini_tool_result_video_link_it_cannot_inline_is_a_bad_request(
+    custom_llm_provider: str, video_url: str
+) -> None:
     with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
         convert_to_gemini_tool_call_result(
-            _find_clip_result({"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}), _FIND_CLIP_CALL
+            _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
         )
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
-def test_drop_params_drops_a_youtube_video_from_a_tool_result(custom_llm_provider: str) -> None:
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_drop_params_drops_a_video_link_gemini_cannot_inline_from_a_tool_result(
+    custom_llm_provider: str, video_url: str
+) -> None:
     with respx.mock:
         delivered: Final = convert_to_gemini_tool_call_result(
-            _find_clip_result({"url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ"}),
+            _find_clip_result({"url": video_url}),
             _FIND_CLIP_CALL,
             drop_params=True,
             custom_llm_provider=custom_llm_provider,
@@ -1877,14 +1890,22 @@ def test_drop_params_drops_a_youtube_video_from_a_tool_result(custom_llm_provide
     assert delivered == _TOOL_OUTPUT_ONLY
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
-def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
-    custom_llm_provider: str,
-) -> None:
-    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
 
-    with respx.mock as router:
-        router.get(video_url).respond(404)
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
         with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
             convert_to_gemini_tool_call_result(
                 _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
