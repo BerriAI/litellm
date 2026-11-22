@@ -63,6 +63,7 @@ pub enum AuthObject {
         claim_value: String,
     },
     AgentIdentity {
+        provider: String,
         tenant_id: String,
         client_id: String,
     },
@@ -134,9 +135,13 @@ impl AuthObject {
                 Some(issuer) => format!("jwt_key_mapping:{issuer}:{claim_name}:{claim_value}"),
             },
             Self::AgentIdentity {
+                provider,
                 tenant_id,
                 client_id,
-            } => format!("agent_identity:{}", json_strings(&[tenant_id, client_id])),
+            } => format!(
+                "agent_identity:{}",
+                json_strings(&[provider, tenant_id, client_id])
+            ),
             Self::GlobalProxySpend => "default_user_id:spend".to_owned(),
         }
     }

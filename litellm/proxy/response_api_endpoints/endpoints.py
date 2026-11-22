@@ -2291,6 +2291,7 @@ _SOCKET_ATTRIBUTION_METADATA_FIELDS: Final = (
     "billing_agent_id",
     "agent_execution_mode",
     "verified_human_user_id",
+    "agent_actor_chain",
     "session_id",
     SESSION_ID_OMITTED_METADATA_KEY,
     CALLER_SESSION_ID_METADATA_KEY,

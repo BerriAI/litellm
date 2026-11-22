@@ -236,8 +236,12 @@ async fn redis_ttl(raw: &RedisClient, key: &str) -> Duration {
     "jwt_key_mapping:https://idp:sub:a"
 )]
 #[case(
-    AuthObject::AgentIdentity { tenant_id: "t\u{e9}".to_owned(), client_id: "c\"1".to_owned() },
-    r#"agent_identity:["t\u00e9", "c\"1"]"#
+    AuthObject::AgentIdentity {
+        provider: "okta".to_owned(),
+        tenant_id: "t\u{e9}".to_owned(),
+        client_id: "c\"1".to_owned(),
+    },
+    r#"agent_identity:["okta", "t\u00e9", "c\"1"]"#
 )]
 #[case(AuthObject::GlobalProxySpend, "default_user_id:spend")]
 fn each_object_is_cached_under_mains_key(#[case] object: AuthObject, #[case] key: &str) {

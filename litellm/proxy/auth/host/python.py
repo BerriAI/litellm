@@ -38,6 +38,8 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.proxy.agent_endpoints.okta_identity import OktaAgents, okta_issuers, stamped_agent_context
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -66,6 +68,7 @@ from litellm.proxy.auth.host.facts import (
     FoundTeam,
     RegisteredAgentFacts,
     TeamMissing,
+    deactivated,
     end_user_params,
     team_facts,
     with_project,
@@ -74,6 +77,7 @@ from litellm.proxy.auth.host.identity import auto_registered_key
 from litellm.proxy.auth.host.steps import jwt_auto_register, team_member_add
 from litellm.proxy.auth.host.steps.budgets import BudgetChecks, proxy_budget_alert
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
+from litellm.proxy.auth.jwt import claims as claims_reading
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
@@ -103,7 +107,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
 from litellm.types.agents import AgentResponse
-from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
+from litellm.types.proxy.agent_identity import NO_PERSON, AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -325,7 +329,20 @@ class PythonAuthHost:
         key: Final = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token)
         if key is None or not key.is_session_token or self.prisma_client is None:
             return key
-        return await self._with_current_grants(key)
+        return await self._with_stamped_agent(await self._with_current_grants(key))
+
+    async def _with_stamped_agent(self, key: UserAPIKeyAuth) -> UserAPIKeyAuth:
+        if key.agent_id is None or key.agent_binding_revision is None:
+            return key
+        context: Final = await stamped_agent_context(
+            AgentIdentityStore.from_client(self.prisma_client).agent,
+            key.agent_id,
+            key.agent_binding_revision,
+            key.user_id,
+        )
+        if isinstance(context, AgentIdentityFailure):
+            raise_identity_failure(context)
+        return key.model_copy(update={"managed_agent_context": context})
 
     async def _with_current_grants(self, key: UserAPIKeyAuth) -> UserAPIKeyAuth:
         """A ``lite login`` key with the grants of its user's and team's current rows, so a `/team/update` or a
@@ -797,7 +814,25 @@ class PythonAuthHost:
         )
 
     async def managed_agent(self, claims: Mapping[str, object]) -> ManagedAgentContext | None:
-        return await resolve_managed_agent(claims, self.prisma_client, cache=self.user_api_key_cache)
+        return await resolve_managed_agent(
+            claims,
+            self.prisma_client,
+            cache=self.user_api_key_cache,
+            okta=OktaAgents(okta_issuers(self.litellm_jwtauth), self.okta_person),
+        )
+
+    async def okta_person(self, claims: Mapping[str, object], /) -> str | AgentIdentityFailure | None:
+        reading: Final = claims_reading(claims, self.litellm_jwtauth)
+        if reading.valid_user_email is False:
+            return None
+        if not reading.user_id:
+            return NO_PERSON
+        resolved: Final = await self.resolve_user_identity(
+            reading.user_id, reading.user_email, reading.user_id, False, None, None
+        )
+        if resolved is None:
+            return NO_PERSON
+        return None if deactivated(resolved[0]) else resolved[0].user_id
 
     async def record_agent_authentication(self, agent: ManagedAgentContext) -> AgentIdentityFailure | None:
         return await AgentIdentityStore.from_client(self.prisma_client).record_authentication(agent)

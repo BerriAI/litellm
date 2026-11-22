@@ -22,6 +22,7 @@ pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 66] = [
     "billing_agent_id",
     "agent_execution_mode",
     "verified_human_user_id",
+    "agent_actor_chain",
     "autorouter_baseline_observation",
     "additional_usage_values",
     "user_api_key",

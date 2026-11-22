@@ -100,6 +100,7 @@ from litellm.proxy.mcp_server.outbound_credentials.session_token import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.proxy.agent_identity import AgentStamp
 
 _DCR_CLAIMS_TARGET: Final = "mcp_dcr_claims"
 
@@ -198,7 +199,13 @@ class MintProxyCredential(Protocol):
     and mints the same credential ``lite login`` mints."""
 
     def __call__(
-        self, user_id: str, team_id: str | None, /, *, allowed_routes: Sequence[str] | None = None
+        self,
+        user_id: str,
+        team_id: str | None,
+        /,
+        *,
+        allowed_routes: Sequence[str] | None = None,
+        agent: AgentStamp | None = None,
     ) -> Awaitable[MintedProxyCredential | ProxyCredentialMintFailure]: ...
 
 
@@ -264,6 +271,7 @@ class AssertionIdentity(SubjectIdentity):
     replay_ttl_seconds: int = Field(gt=0)
     scope: str | None = None
     allowed_routes: tuple[str, ...] | None = None
+    agent: AgentStamp | None = None
 
 
 class ExchangeSubjectToken(Protocol):
@@ -297,7 +305,7 @@ class LookupConsentTeams(Protocol):
 
 
 async def _refuse_proxy_credential(
-    user_id: str, team_id: str | None, *, allowed_routes: Sequence[str] | None = None
+    user_id: str, team_id: str | None, *, allowed_routes: Sequence[str] | None = None, agent: AgentStamp | None = None
 ) -> ProxyCredentialMintFailure:
     return "unresolvable"
 
@@ -1526,6 +1534,7 @@ class _ProxyCredentialTokenResponse(TypedDict):
     team_id: ReadOnly[str | None]
     issued_token_type: NotRequired[ReadOnly[_IssuedTokenType]]
     scope: NotRequired[ReadOnly[str]]
+    agent_id: NotRequired[ReadOnly[str]]
 
 
 def proxy_credential_response(
@@ -1561,9 +1570,11 @@ def proxy_credential_response(
     return JSONResponse(status_code=200, content=exchanged, headers=TOKEN_NO_CACHE_HEADERS)
 
 
-def assertion_credential_response(minted: MintedProxyCredential, scope: str | None) -> Response:
+def assertion_credential_response(
+    minted: MintedProxyCredential, scope: str | None, agent: AgentStamp | None = None
+) -> Response:
     """The proxy-API token response for an assertion grant: the same access token, with the
-    scope the assertion carried, and no refresh token."""
+    scope the assertion carried, the agent it was stamped for, and no refresh token."""
     unscoped: Final[_ProxyCredentialTokenResponse] = {
         "access_token": minted.key,
         "token_type": "Bearer",
@@ -1571,7 +1582,10 @@ def assertion_credential_response(minted: MintedProxyCredential, scope: str | No
         "user_id": minted.user_id,
         "team_id": minted.team_id,
     }
-    credential: Final[_ProxyCredentialTokenResponse] = unscoped if scope is None else {**unscoped, "scope": scope}
+    scoped: Final[_ProxyCredentialTokenResponse] = unscoped if scope is None else {**unscoped, "scope": scope}
+    credential: Final[_ProxyCredentialTokenResponse] = (
+        scoped if agent is None else {**scoped, "agent_id": agent.agent_id}
+    )
     return JSONResponse(status_code=200, content=credential, headers=TOKEN_NO_CACHE_HEADERS)
 
 
@@ -1862,11 +1876,11 @@ class _GrantIssuer:
         if refused is not None:
             return refused
         minted: Final = await self._mint_proxy_credential(
-            identity.user_id, identity.team_id, allowed_routes=identity.allowed_routes
+            identity.user_id, identity.team_id, allowed_routes=identity.allowed_routes, agent=identity.agent
         )
         if not isinstance(minted, MintedProxyCredential):
             return _mint_failure_response(minted)
-        return assertion_credential_response(minted, identity.scope)
+        return assertion_credential_response(minted, identity.scope, identity.agent)
 
     def _assertion_target_refusal(self) -> Response | None:
         """An ID-JAG names the proxy origin or its MCP resource (``{base}/mcp``) as ``aud``, and an RFC

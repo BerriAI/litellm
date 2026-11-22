@@ -43,6 +43,7 @@ from litellm.proxy.mcp_server.idp_token_exchange import (
     read_token_exchange_prerequisites,
 )
 from litellm.proxy.mcp_server.oauth_utils import proxy_base_url_from_env
+from litellm.types.proxy.agent_identity import AgentIdentityFailure, AgentStamp
 
 ID_JAG_REQUIRED_CLAIMS: Final = ("iss", "sub", "aud", "exp", "iat", "jti", "client_id")
 REJECTED_ASSERTION: Final = "assertion was rejected"
@@ -431,7 +432,56 @@ async def redeem_id_jag_assertion(
         prerequisites=prerequisites,
         decode=partial(proxy_jwt.verify_assertion, settings),
         resolve_subject=resolve_subject,
+        stamp_agent=_proxy_agent_stamp,
     )
+
+
+async def _proxy_agent_stamp(
+    claims: Mapping[str, object], client_id: str, subject: SubjectIdentity
+) -> AgentStamp | AgentIdentityFailure | None:
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (  # noqa: PLC0415  # agent auth imports the proxy
+        verified_human_agent_grants,
+    )
+    from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore  # noqa: PLC0415  # imports the proxy
+    from litellm.proxy.agent_endpoints.okta_identity import (  # noqa: PLC0415  # imports the agent registry
+        IdJagAgents,
+        id_jag_agent,
+        okta_issuers,
+    )
+    from litellm.proxy.proxy_server import (  # noqa: PLC0415  # rebound after startup, so read them per call
+        litellm_jwtauth,
+        prisma_client,
+        user_api_key_cache,
+    )
+
+    if prisma_client is None:
+        return None
+    store: Final = AgentIdentityStore.from_client(prisma_client, cache=user_api_key_cache)
+    try:
+        return await id_jag_agent(
+            claims,
+            client_id,
+            subject.user_id,
+            subject.team_id,
+            IdJagAgents(
+                okta_issuers(litellm_jwtauth),
+                store.okta_agent,
+                verified_human_agent_grants,
+                store.record_authentication,
+            ),
+        )
+    except Exception:  # noqa: BLE001  # a grant lookup that cannot finish must refuse, never mint unstamped
+        return AgentIdentityFailure(code="policy_unavailable", message="Agent grants could not be checked")
+
+
+class StampAgent(Protocol):
+    def __call__(
+        self, claims: Mapping[str, object], client_id: str, subject: SubjectIdentity, /
+    ) -> Awaitable[AgentStamp | AgentIdentityFailure | None]: ...
+
+
+async def _no_agent(claims: Mapping[str, object], client_id: str, subject: SubjectIdentity, /) -> None:
+    return None
 
 
 async def identity_from_id_jag(
@@ -439,6 +489,7 @@ async def identity_from_id_jag(
     prerequisites: IdJagPrerequisites,
     decode: DecodeAssertion,
     resolve_subject: ResolveSubject,
+    stamp_agent: StampAgent = _no_agent,
 ) -> AssertionIdentity | SubjectTokenRefusal:
     """Prove an ID-JAG for the grant tail. The requesting app is checked first, the way a token
     endpoint authenticates its client before it looks at the grant, so an app the operator never
@@ -491,6 +542,13 @@ async def identity_from_id_jag(
         return _rejected("the assertion names no user the gateway knows")
     if isinstance(subject, SubjectTokenRefusal):
         return subject
+    agent: Final = await stamp_agent(verified, redemption.client_id, subject)
+    if isinstance(agent, AgentIdentityFailure):
+        return (
+            SubjectTokenRefusal(error="temporarily_unavailable", description="the gateway could not check the agent")
+            if agent.code == "policy_unavailable"
+            else _rejected(f"agent refused: {agent.message}")
+        )
     return AssertionIdentity(
         user_id=subject.user_id,
         team_id=subject.team_id,
@@ -498,6 +556,7 @@ async def identity_from_id_jag(
         replay_ttl_seconds=replay_ttl_seconds,
         scope=scope.scope,
         allowed_routes=scope.allowed_routes,
+        agent=agent,
     )
 
 
