@@ -13,18 +13,22 @@ import litellm
 from litellm._logging import (
     _ENABLE_SECRET_REDACTION,
     redact_internal_details_from_client_fields,
+    redact_internal_details_from_client_message,
     redact_internal_details_from_client_value,
     redact_secrets,
     redact_string,
     verbose_logger,
 )
+from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
     should_report_bug,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string as redact_secret_string
+from litellm.llms.base_llm.chat.transformation import RelayOnlyBodyLLMException
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -283,7 +287,7 @@ class _ProviderHTTPException(Protocol):
 _ERROR_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
-def _openai_cyber_policy_body(original_exception: _ProviderHTTPException) -> Mapping[str, object] | None:
+def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object] | None:
     raw_body: Final[object] = getattr(original_exception, "body", None)
     try:
         body: Final = (
@@ -319,7 +323,9 @@ def _decoded_openai_error(text: str) -> Mapping[str, object] | None:
         decoded: Final = as_str_mapping(_DECODED_ERROR_BODY.validate_python(json.loads(text)))
     except ValueError:
         return None
-    relayed: Final = None if decoded is None else as_str_mapping(decoded.get("error"))
+    if decoded is None or decoded.get("type") == "error":
+        return None
+    relayed: Final = as_str_mapping(decoded.get("error"))
     return relayed if relayed is not None and isinstance(relayed.get("message"), str) else None
 
 
@@ -328,6 +334,53 @@ def _relayed_openai_error(original_exception: object) -> Mapping[str, object] | 
     if isinstance(attribute_or_none(original_exception, "body"), dict) or not isinstance(message, str):
         return None
     return _decoded_openai_error(message)
+
+
+_ERROR_CODE_ATTRIBUTE: Final = "code"
+_ERROR_PARAM_ATTRIBUTE: Final = "param"
+
+
+def _carry_provider_body(source: object, mapped: Exception) -> None:
+    if attribute_or_none(mapped, "body") is not None:
+        return
+    carried: Final = as_str_mapping(attribute_or_none(source, "body")) or _relayed_openai_error(source)
+    if carried is None:
+        return
+    setattr(mapped, PROVIDER_ERROR_BODY_ATTRIBUTE, dict(carried))
+    if attribute_or_none(mapped, _ERROR_PARAM_ATTRIBUTE) is None:
+        setattr(mapped, _ERROR_PARAM_ATTRIBUTE, carried.get(_ERROR_PARAM_ATTRIBUTE))
+
+
+def _mapping_chose_the_logged_code(source: object, mapped: Exception, custom_llm_provider: str | None) -> bool:
+    if custom_llm_provider == "openrouter" or not isinstance(mapped, ContentPolicyViolationError):
+        return False
+    return custom_llm_provider in ("azure", "azure_text") or _openai_cyber_policy_body(source) is not None
+
+
+def _keep_logged_error_code(source: object, mapped: Exception, custom_llm_provider: str | None) -> None:
+    if isinstance(mapped, RateLimitError):
+        return
+    body_is_relay_only: Final = (
+        custom_llm_provider == "openrouter"
+        or isinstance(source, RelayOnlyBodyLLMException)
+        or _relayed_openai_error(source) is not None
+    )
+    if body_is_relay_only and not _mapping_chose_the_logged_code(source, mapped, custom_llm_provider):
+        setattr(mapped, _ERROR_CODE_ATTRIBUTE, None)
+
+
+def _redact_carried_param(mapped: Exception) -> None:
+    param: Final = attribute_or_none(mapped, _ERROR_PARAM_ATTRIBUTE)
+    if isinstance(param, str):
+        setattr(mapped, _ERROR_PARAM_ATTRIBUTE, redact_internal_details_from_client_message(param))
+
+
+def _carry_provider_error(source: object, mapped: Exception, custom_llm_provider: str | None) -> None:
+    if mapped is source or not isinstance(mapped, tuple(litellm.LITELLM_EXCEPTION_TYPES)):
+        return
+    _carry_provider_body(source=source, mapped=mapped)
+    _redact_carried_param(mapped)
+    _keep_logged_error_code(source=source, mapped=mapped, custom_llm_provider=custom_llm_provider)
 
 
 def _map_openai_exception(
@@ -2246,7 +2299,7 @@ def _openrouter_upstream_reason(raw: object) -> str | None:
             upstream_error: Final = _decoded_openai_error(raw)
             return raw if upstream_error is None else str(upstream_error.get("message"))
         case _:
-            return json.dumps(redact_internal_details_from_client_value(raw), default=str)
+            return safe_dumps(redact_internal_details_from_client_value(raw))
 
 
 def _openrouter_error_message(provider_message: str, body: Mapping[str, object] | None) -> str:
@@ -2270,8 +2323,9 @@ def _map_openrouter_exception(
     received_status: Final = hasattr(original_exception, "status_code") and not getattr(
         original_exception, "status_code_is_synthesized", False
     )
-    provider_message, body = _openai_style_error_message_and_body(original_exception, error_str)
-    message: Final = redact_secrets(_openrouter_error_message(provider_message, body))
+    provider_message, provider_body = _openai_style_error_message_and_body(original_exception, error_str)
+    message: Final = redact_secrets(_openrouter_error_message(provider_message, provider_body))
+    body: Final = None if provider_body is None else {**provider_body, "message": message}
     if received_status:
         if original_exception.status_code == 400:
             raise BadRequestError(
@@ -2850,6 +2904,7 @@ def exception_type(
                     request=httpx.Request(method="POST", url="https://api.openai.com/v1/"),  # stub the request
                 )
     except Exception as e:
+        _carry_provider_error(source=original_exception, mapped=e, custom_llm_provider=custom_llm_provider)
         # LOGGING
         exception_logging(
             logger_fn=None,

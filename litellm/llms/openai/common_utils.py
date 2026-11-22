@@ -32,7 +32,7 @@ import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -133,6 +133,10 @@ class OpenAIError(BaseLLMException):
             response=self.response,
             body=None if body is None else dict(body),
         )
+
+
+class RelayOnlyBodyOpenAIError(OpenAIError, RelayOnlyBodyLLMException):
+    pass
 
 
 def upstream_error_body(error: Exception) -> Mapping[str, object] | None:

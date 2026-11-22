@@ -1,7 +1,7 @@
 from collections.abc import Callable, Mapping, Sequence
 from functools import lru_cache
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -24,7 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_5_transformation import (
     is_gpt_reasoning_series_name,
@@ -265,6 +265,8 @@ def _json_object_body(response: _JsonObjectResponse) -> dict[str, object]:
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    error_exception_class: ClassVar[type[BaseLLMException]] = RelayOnlyBodyLLMException
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
@@ -1185,7 +1187,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         status_code: int,
         headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
     ) -> BaseLLMException:
-        raise BaseLLMException(
+        raise self.error_exception_class(
             status_code=status_code,
             message=error_message,
             headers=headers,

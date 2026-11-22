@@ -15,7 +15,7 @@ from litellm._logging import (
     redact_internal_details_from_client_fields,
     redact_internal_details_from_client_message,
 )
-from litellm.constants import STRINGIFIED_NONE
+from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE, STRINGIFIED_NONE
 from litellm.litellm_core_utils.core_helpers import http_error_status
 from litellm.proxy._types import ProxyException
 
@@ -79,6 +79,11 @@ def openai_error_param(exc: object) -> str | None:
     return _relayable_text(attribute_of(exc, "param")) or None
 
 
+def redacted_raw_error_param(exc: object) -> str | None:
+    carried: Final = attribute_of(exc, "param", STRINGIFIED_NONE)
+    return redact_internal_details_from_client_message(carried) if isinstance(carried, str) else None
+
+
 def _relayable_text(carried: object) -> str:
     if not isinstance(carried, str) or carried == STRINGIFIED_NONE:
         return ""
@@ -101,9 +106,10 @@ def relayed_provider_specific_fields(
 
 def _error_body_provider_specific_fields(exc: object) -> Mapping[str, object]:
     body: Final = attribute_of(exc, "body")
-    if not isinstance(body, dict):
+    carried: Final = body if isinstance(body, dict) else attribute_of(exc, PROVIDER_ERROR_BODY_ATTRIBUTE)
+    if not isinstance(carried, dict):
         return _NO_PROVIDER_SPECIFIC_FIELDS
-    error_object: Final = _ERROR_BODY.validate_python(body)
+    error_object: Final = _ERROR_BODY.validate_python(carried)
     declared: Final = error_object.get("provider_specific_fields")
     if isinstance(declared, dict):
         return _ERROR_BODY.validate_python(declared)
@@ -113,7 +119,7 @@ def _error_body_provider_specific_fields(exc: object) -> Mapping[str, object]:
 def _is_json_compliant(fields: Mapping[str, object]) -> bool:
     try:
         _ = json.dumps(fields, allow_nan=False)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         return False
     return True
 

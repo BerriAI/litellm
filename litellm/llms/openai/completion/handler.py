@@ -10,7 +10,7 @@ from litellm.types.llms.openai import AllMessageValues, OpenAITextCompletionUser
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 from litellm.utils import ProviderConfigManager
 
-from ..common_utils import BaseOpenAILLM, OpenAIError, upstream_error_body
+from ..common_utils import BaseOpenAILLM, OpenAIError, RelayOnlyBodyOpenAIError, upstream_error_body
 from ..workload_identity import build_async_openai_client, build_openai_client
 from .transformation import OpenAITextCompletionConfig
 
@@ -164,7 +164,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
+            raise RelayOnlyBodyOpenAIError(
                 status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
 
@@ -222,7 +222,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
+            raise RelayOnlyBodyOpenAIError(
                 status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
 
@@ -265,7 +265,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response: object = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
+            raise RelayOnlyBodyOpenAIError(
                 status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
         streamwrapper: Final = CustomStreamWrapper(
@@ -286,7 +286,7 @@ class OpenAITextCompletion(BaseLLM):
             error_response = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
+            raise RelayOnlyBodyOpenAIError(
                 status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )
 
@@ -339,6 +339,6 @@ class OpenAITextCompletion(BaseLLM):
             error_response: Final[object] = getattr(e, "response", None)
             if error_headers is None and error_response:
                 error_headers = getattr(error_response, "headers", None)
-            raise OpenAIError(
+            raise RelayOnlyBodyOpenAIError(
                 status_code=status_code, message=error_text, headers=error_headers, body=upstream_error_body(e)
             )

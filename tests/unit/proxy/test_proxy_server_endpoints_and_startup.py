@@ -14227,6 +14227,66 @@ async def test_moderations_reraises_proxy_exception_unwrapped():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("carried_param", "relayed_param"),
+    [("sk-test-fake-0123456789abcdefghijklmn", "REDACTED"), ("input", "input"), (None, None)],
+)
+async def test_moderations_error_never_relays_a_credential_in_its_param(
+    carried_param: str | None, relayed_param: str | None
+) -> None:
+    import httpx
+    import openai
+
+    from litellm.proxy._types import ProxyException
+
+    upstream = openai.BadRequestError(
+        message="rejected",
+        response=httpx.Response(400, request=httpx.Request("POST", "https://upstream.test/v1/moderations")),
+        body={"message": "rejected", "param": carried_param},
+    )
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+
+    with (
+        patch.object(proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=upstream)),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as caught:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert caught.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+async def test_moderations_error_without_a_param_keeps_its_wire_value() -> None:
+    from litellm.proxy._types import ProxyException
+
+    request = MagicMock()
+    request.body = AsyncMock(return_value=b'{"input": "hi"}')
+
+    with (
+        patch.object(
+            proxy_server_module, "add_litellm_data_to_request", new=AsyncMock(side_effect=ValueError("rejected"))
+        ),
+        patch.object(proxy_server_module, "proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.post_call_failure_hook = AsyncMock()
+        with pytest.raises(ProxyException) as caught:
+            await proxy_server_module.moderations(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert caught.value.param == "None"
+
+
+@pytest.mark.asyncio
 async def test_moderations_response_carries_litellm_call_id_header():
     from fastapi import Response
 

@@ -515,6 +515,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    redacted_raw_error_param,
     relayed_provider_specific_fields,
     with_litellm_call_id,
 )
@@ -12609,6 +12610,7 @@ async def completion(
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
 
 
@@ -12832,7 +12834,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -12841,7 +12843,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", 500),
             )

@@ -16,6 +16,8 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import (
+    CREDENTIAL_HEADER_NAMES,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
@@ -152,18 +154,24 @@ def _names_a_credential(key: str | None) -> bool:
     return redact_structured_value(key, _CREDENTIAL_KEY_PROBE) != _CREDENTIAL_KEY_PROBE
 
 
-def _redacted_client_field(key: str | None, value: object) -> object:
+def _names_a_credential_header(key: str | None) -> bool:
+    return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
+
+
+def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
+    if _names_a_credential_header(key):
+        return REDACTED
     if isinstance(value, str):
         return redact_internal_details(redact_structured_value(key, value))
-    if isinstance(value, (dict, list, tuple)) and _names_a_credential(key):
+    if isinstance(value, (dict, list, tuple)) and (depth > DEFAULT_MAX_RECURSE_DEPTH or _names_a_credential(key)):
         return REDACTED
     if isinstance(value, dict):
         return {
-            _redacted_client_key(child_key): _redacted_client_field(child_key, child)
+            _redacted_client_key(child_key): _redacted_client_field(child_key, child, depth + 1)
             for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
         }
     if isinstance(value, (list, tuple)):
-        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+        return [_redacted_client_field(key, child, depth + 1) for child in _CLIENT_ITEMS.validate_python(value)]
     if not isinstance(value, (int, float)):
         return value
     text: Final = str(value)
