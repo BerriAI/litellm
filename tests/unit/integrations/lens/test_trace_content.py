@@ -476,3 +476,21 @@ async def test_many_small_messages_stop_being_serialized_once_their_shared_budge
         assert 0 < counted.calls <= _LIMITS.inline_bytes // len('{"n": "1"}') + 1
     finally:
         span.end()
+
+
+@pytest.mark.asyncio
+async def test_many_empty_messages_past_the_pending_budget_are_refused_before_any_is_serialized(
+    store: _Store,
+) -> None:
+    async with _pipeline(store, max_pending_bytes=1000) as pipeline:
+        span: Final = pipeline.start()
+        counted: Final = _Counted()
+        try:
+            messages: Final[tuple[dict[str, object], ...]] = (
+                {"n": counted},
+                *(dict[str, object]() for _ in range(500)),
+            )
+            assert pipeline.spool.model_admission(span, messages, ()) is Unavailable.OVERLOADED
+            assert counted.calls == 0
+        finally:
+            span.end()

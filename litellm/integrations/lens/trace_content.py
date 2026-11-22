@@ -111,8 +111,18 @@ def serialized_messages(messages: Sequence[object], limit: int) -> str | None | 
     return Unavailable.TOO_LARGE if text is None else text
 
 
-def _kept_messages(messages: Sequence[object]) -> tuple[object, ...]:
-    return tuple(message for message in messages if is_mapping(message) and isinstance(message, dict))
+def _message_chars(messages: Sequence[object], budget: int) -> int | None:
+    """Characters in every string of the dict messages ``serialize_messages`` keeps, or None past ``budget``."""
+    total = 0  # rebind-ok: consumes a finite budget across messages
+    for message in messages:
+        if not is_mapping(message) or not isinstance(message, dict):
+            continue
+        match _string_chars(message, budget - total):
+            case None:
+                return None
+            case int() as counted:
+                total += counted
+    return total
 
 
 def _string_chars(value: object, budget: int, depth: int = 0) -> int | None:
@@ -255,9 +265,12 @@ class TraceContentSpool:
         """None when the call's content stays inline exactly as today, else the bytes to reserve or why not."""
         threshold: Final = self._threshold(span)
         content: Final = (messages_in, outputs)
-        floors: Final = tuple(_string_chars(_kept_messages(messages), threshold) for messages in content)
+        retained: Final = _retained_bytes(content, self.max_pending_bytes)
+        if retained is None:
+            return Unavailable.OVERLOADED
+        floors: Final = tuple(_message_chars(messages, threshold) for messages in content)
         if None in floors or sum(floor or 0 for floor in floors) > self.limits.inline_bytes:
-            return self._admission(content)
+            return self._admission(content, retained)
         sent: Final = serialized_messages(messages_in, threshold)
         sent_size: Final = len(sent) if isinstance(sent, str) else 0
         answer: Final = (
@@ -266,7 +279,7 @@ class TraceContentSpool:
             else serialized_messages(outputs, min(threshold, self.limits.inline_bytes - sent_size))
         )
         inline: Final = sent is not Unavailable.TOO_LARGE and answer is not Unavailable.TOO_LARGE
-        return None if inline else self._admission(content)
+        return None if inline else self._admission(content, retained)
 
     def text_admission(self, span: RecordingSpan, texts: Sequence[str]) -> int | Unavailable | None:
         """None when these attribute values stay inline exactly as today, else the bytes to reserve or why not."""
@@ -274,15 +287,15 @@ class TraceContentSpool:
         inline: Final = isinstance(check_size(tuple(texts), self.limits.inline_bytes), int) and all(
             len(text) <= threshold for text in texts
         )
-        return None if inline else self._admission(tuple(texts))
+        return None if inline else self._admission(tuple(texts), _retained_bytes(tuple(texts), self.max_pending_bytes))
 
-    def _admission(self, content: object) -> int | Unavailable:
+    def _admission(self, content: object, retained: int | None) -> int | Unavailable:
+        """The raw bytes to reserve for content that spills, measured with no copy, or why it cannot be stored."""
         measured: Final = check_size(content, self.limits.object_bytes)
         if measured is ExportFailure.TOO_LARGE:
             return Unavailable.TOO_LARGE
         if isinstance(measured, ExportFailure):
             return Unavailable.UNSERIALIZABLE
-        retained: Final = _retained_bytes(content, self.max_pending_bytes)
         return Unavailable.OVERLOADED if retained is None else retained
 
     def capture(
