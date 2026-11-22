@@ -79,6 +79,10 @@ OPT_IN_MARKERS: Final = MappingProxyType(
     }
 )
 
+OWN_STACK_MARKERS: Final = MappingProxyType(
+    {"migration_startup": "LITELLM_MIGRATION_TESTS", "lens_versions": "LITELLM_LENS_VERSION_TESTS"}
+)
+
 
 @pytest.fixture(scope="session")
 def idp() -> Keycloak:
@@ -110,6 +114,9 @@ def jwt_identity(idp: Keycloak, resources: ResourceManager, proxy: ProxyClient) 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "migration_startup: isolated container startup tests run by the migration CI workflow"
+    )
+    config.addinivalue_line(
+        "markers", "lens_versions: tests that start their own gateway against an older and the newest Lens"
     )
     config.addinivalue_line(
         "markers",
@@ -218,8 +225,10 @@ def _needs_unset_opt_in(item: pytest.Item) -> bool:
 
 def _reaches_proxy(item: pytest.Item) -> bool:
     """True for a live test that talks to the shared proxy: `e2e`-marked and not a
-    `migration_startup` test, which boots its own container instead."""
-    return item.get_closest_marker("e2e") is not None and item.get_closest_marker("migration_startup") is None
+    `migration_startup` or `lens_versions` test, which boots its own stack instead."""
+    return item.get_closest_marker("e2e") is not None and not any(
+        item.get_closest_marker(marker) is not None for marker in OWN_STACK_MARKERS
+    )
 
 
 def _uses_idle_rss(item: pytest.Item) -> bool:
@@ -247,9 +256,11 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         items[:] = [item for item in items if not _needs_unset_opt_in(item)]
     for item in items:
         attach_result_properties(item)
-    if os.environ.get("LITELLM_MIGRATION_TESTS") != "1":
-        deselected = [item for item in items if item.get_closest_marker("migration_startup") is not None]
-        items[:] = [item for item in items if item.get_closest_marker("migration_startup") is None]
+    for marker, opt_in_env in OWN_STACK_MARKERS.items():
+        if os.environ.get(opt_in_env) == "1":
+            continue
+        deselected = [item for item in items if item.get_closest_marker(marker) is not None]
+        items[:] = [item for item in items if item.get_closest_marker(marker) is None]
         if deselected:
             deselected[0].config.hook.pytest_deselected(items=deselected)
     items.sort(key=lambda item: item.get_closest_marker("perf") is not None)

@@ -1,0 +1,168 @@
+services:
+  credentials:
+    image: ${LENS_IMAGE:-ghcr.io/berriai/lens:0.2.0}
+    user: "0:0"
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        /usr/local/bin/litellm-lens init /setup
+        chown "$$(stat -c %u:%g /setup)" /setup/.env
+        cp /setup/.env /credentials/.env
+        chown 65532:65532 /credentials/.env
+        lens_host="$${LENS_PUBLIC_URL#*://}"
+        case "$$LENS_SIGN_IN_LINK $$lens_host" in
+          "true localhost" | "true localhost"[:/]* | "true 127.0.0.1" | "true 127.0.0.1"[:/]* | "true [::1]"*)
+            echo "Open $${LENS_PUBLIC_URL%/}/ui/ and paste this setup token: $$(sed -n 's/^LENS_ADMIN_TOKEN=//p' /setup/.env)"
+            ;;
+          *)
+            echo "Open $${LENS_PUBLIC_URL%/}/ui/ and paste the LENS_ADMIN_TOKEN value from .env"
+            ;;
+        esac
+    environment:
+      LENS_PUBLIC_URL: ${LENS_PUBLIC_URL:-http://localhost:4318}
+      LENS_SIGN_IN_LINK: ${LENS_SIGN_IN_LINK:-true}
+    volumes:
+      - .:/setup
+      - credentials:/credentials
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true]
+    restart: "no"
+
+  lens:
+    image: ${LENS_IMAGE:-ghcr.io/berriai/lens:0.2.0}
+    env_file:
+      - path: .env
+        required: false
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export LENS_ADMIN_TOKEN="$$(sed -n 's/^LENS_ADMIN_TOKEN=//p' /credentials/.env)"
+        export CLICKHOUSE_PASSWORD="$$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /credentials/.env)"
+        exec /usr/local/bin/node /app/agent-chat/dist/supervisor.js "$$@"
+      - lens
+    environment:
+      LENS_MODE: standalone
+      LENS_PUBLIC_URL: ${LENS_PUBLIC_URL:-http://localhost:4318}
+      LENS_SIGNAL_ALERTS_UI_URL: ${LENS_SIGNAL_ALERTS_UI_URL:-}
+      LENS_SIGN_IN_LINK: ${LENS_SIGN_IN_LINK:-true}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: lens
+      CLICKHOUSE_DATABASE: lens
+      AGENT_TRACING_RETENTION_DAYS: ${AGENT_TRACING_RETENTION_DAYS:-14}
+    volumes:
+      - credentials:/credentials:ro
+    ports:
+      - "${LENS_BIND_ADDRESS:-127.0.0.1}:${LENS_PORT:-4318}:4318"
+    depends_on:
+      credentials:
+        condition: service_completed_successfully
+      clickhouse:
+        condition: service_healthy
+    networks: [default, storage]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 128
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${LENS_TMP_SIZE:-1g}
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.6.6@sha256:eb4870e7ca7ed70c259eebfcfbee6cf797017f6b5436c2926bbbfe3d4d28486e
+    entrypoint:
+      - sh
+      - -c
+      - |
+        set -eu
+        export CLICKHOUSE_PASSWORD="$$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /credentials/.env)"
+        exec /entrypoint.sh "$$@"
+      - clickhouse
+    environment:
+      CLICKHOUSE_USER: lens
+      CLICKHOUSE_DB: lens
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - credentials:/credentials:ro
+    configs:
+      - source: keeper
+        target: /etc/clickhouse-server/config.d/lens-keeper.xml
+      - source: logging
+        target: /etc/clickhouse-server/config.d/lens-logging.xml
+    depends_on:
+      credentials:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --host clickhouse --user lens --password \"$$(sed -n 's/^CLICKHOUSE_PASSWORD=//p' /credentials/.env)\" --query 'SELECT 1' >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    restart: unless-stopped
+    networks: [storage]
+
+networks:
+  storage:
+    internal: true
+
+volumes:
+  clickhouse_data:
+  credentials:
+
+configs:
+  keeper:
+    content: |
+      <clickhouse>
+          <keeper_server>
+              <tcp_port>9181</tcp_port>
+              <server_id>1</server_id>
+              <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+              <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+              <coordination_settings>
+                  <operation_timeout_ms>10000</operation_timeout_ms>
+                  <quorum_reads>true</quorum_reads>
+                  <compress_logs>false</compress_logs>
+                  <snapshot_distance>10000</snapshot_distance>
+                  <rotate_log_storage_interval>10000</rotate_log_storage_interval>
+                  <reserved_log_items>1000</reserved_log_items>
+              </coordination_settings>
+              <raft_configuration>
+                  <server><id>1</id><hostname>127.0.0.1</hostname><port>9234</port></server>
+              </raft_configuration>
+          </keeper_server>
+          <zookeeper><node><host>127.0.0.1</host><port>9181</port></node></zookeeper>
+          <keeper_map_path_prefix>/lens/keeper-map</keeper_map_path_prefix>
+      </clickhouse>
+  logging:
+    content: |
+      <clickhouse>
+          <logger>
+              <level>information</level>
+              <console>true</console>
+              <console_log_level>warning</console_log_level>
+          </logger>
+          <text_log>
+              <level>information</level>
+              <ttl>event_date + INTERVAL 1 DAY DELETE</ttl>
+          </text_log>
+          <query_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></query_log>
+          <trace_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></trace_log>
+          <part_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></part_log>
+          <metric_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></metric_log>
+          <query_metric_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></query_metric_log>
+          <query_views_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></query_views_log>
+          <asynchronous_metric_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></asynchronous_metric_log>
+          <asynchronous_insert_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></asynchronous_insert_log>
+          <aggregated_zookeeper_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></aggregated_zookeeper_log>
+          <zookeeper_connection_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></zookeeper_connection_log>
+          <background_schedule_pool_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></background_schedule_pool_log>
+          <error_log><ttl>event_date + INTERVAL 1 DAY DELETE</ttl></error_log>
+          <processors_profile_log remove="1"/>
+      </clickhouse>
