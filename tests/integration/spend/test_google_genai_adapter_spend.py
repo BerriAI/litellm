@@ -1,4 +1,5 @@
 import json
+import uuid
 from hashlib import sha256
 from typing import Final
 
@@ -10,54 +11,45 @@ from integration._support.wire import Reply, Request, wire_server
 _CONTENTS: Final = ({"role": "user", "parts": [{"text": "adapter spend probe"}]},)
 _USAGE: Final = {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18}
 
-_CHAT_BODY: Final = {
-    "id": "chatcmpl-adapter",
-    "object": "chat.completion",
-    "created": 1,
-    "model": "adapter-upstream",
-    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
-    "usage": _USAGE,
-}
 
-_CHAT_FRAMES: Final = tuple(
-    f"data: {json.dumps(frame)}\n\n".encode()
-    for frame in (
+def _chat_body(response_id: str) -> bytes:
+    return json.dumps(
         {
-            "id": "chatcmpl-adapter",
-            "object": "chat.completion.chunk",
+            "id": response_id,
+            "object": "chat.completion",
             "created": 1,
             "model": "adapter-upstream",
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}],
-        },
-        {
-            "id": "chatcmpl-adapter",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "adapter-upstream",
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-        },
-        {
-            "id": "chatcmpl-adapter",
-            "object": "chat.completion.chunk",
-            "created": 1,
-            "model": "adapter-upstream",
-            "choices": [],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
             "usage": _USAGE,
-        },
-    )
-) + (b"data: [DONE]\n\n",)
+        }
+    ).encode()
+
+
+def _chat_frames(response_id: str) -> tuple[bytes, ...]:
+    chunk: Final = {"id": response_id, "object": "chat.completion.chunk", "created": 1, "model": "adapter-upstream"}
+    return tuple(
+        f"data: {json.dumps({**chunk, **fields})}\n\n".encode()
+        for fields in (
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}, "finish_reason": None}]},
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": _USAGE},
+        )
+    ) + (b"data: [DONE]\n\n",)
+
 
 _SPEND_ROWS: Final = 'SELECT litellm_call_id, call_type, model_group, spend FROM "LiteLLM_SpendLogs" WHERE api_key=%s'
 
 
 @pytest.mark.parametrize("stream", [False, True])
 def test_generate_content_adapter_writes_one_row_under_the_served_call_id(gateway: Gateway, stream: bool) -> None:
+    response_id: Final = f"chatcmpl-{uuid.uuid4().hex}"
+
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/chat/completions"
         if stream:
-            return Reply(content_type="text/event-stream", chunks=_CHAT_FRAMES)
-        return Reply(body=json.dumps(_CHAT_BODY).encode())
+            return Reply(content_type="text/event-stream", chunks=_chat_frames(response_id))
+        return Reply(body=_chat_body(response_id))
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
