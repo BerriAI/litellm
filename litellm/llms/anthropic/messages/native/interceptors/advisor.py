@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 ADVISOR_MAX_USES: Final[int] = _c.ADVISOR_MAX_USES
-ADVISOR_NATIVE_PROVIDERS: Final[frozenset] = _c.ADVISOR_NATIVE_PROVIDERS
+ADVISOR_NATIVE_PROVIDERS: Final[frozenset[str]] = _c.ADVISOR_NATIVE_PROVIDERS
 ADVISOR_TOOL_DESCRIPTION: Final[str] = _c.ADVISOR_TOOL_DESCRIPTION
 
 from .base import MessagesInterceptor
@@ -251,7 +251,7 @@ def _resolve_advisor_credentials(advisor_tool: dict) -> tuple[str | None, str | 
     return api_key, api_base
 
 
-def _make_synthetic_advisor_tool() -> dict:
+def _make_synthetic_advisor_tool() -> dict[str, object]:
     """Build a regular tool definition the executor provider can understand."""
     return {
         "name": "advisor",
@@ -331,7 +331,7 @@ def _build_advisor_context(
 def _inject_advisor_turn(
     messages: list[dict],
     executor_response: object,
-    advisor_use_block: dict,
+    advisor_use_block: Mapping[str, object],
     advisor_text: str,
 ) -> list[dict]:
     """
@@ -359,7 +359,7 @@ def _inject_advisor_turn(
 def _inject_max_uses_error(
     messages: list[dict],
     executor_response: object,
-    advisor_use_block: dict,
+    advisor_use_block: Mapping[str, object],
 ) -> list[dict]:
     """
     Inject a max_uses_exceeded error tool_result so the executor continues

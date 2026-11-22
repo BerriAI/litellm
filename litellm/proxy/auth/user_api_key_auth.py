@@ -1605,7 +1605,7 @@ def get_api_key(
 
 
 def _route_pass_through_endpoints(
-    route: str, pass_through_endpoints: list[dict] | None
+    route: str, pass_through_endpoints: Sequence[object] | None
 ) -> tuple[Mapping[str, object], ...]:
     return tuple(
         endpoint
@@ -1614,7 +1614,7 @@ def _route_pass_through_endpoints(
     )
 
 
-def pass_through_auth_off(route: str, pass_through_endpoints: list[dict] | None) -> bool:
+def pass_through_auth_off(route: str, pass_through_endpoints: Sequence[object] | None) -> bool:
     """A configured pass-through endpoint on ``route`` turns auth off. ``auth`` defaults to on: a raw config
     dict without the key must never become an unauthenticated forwarder."""
     return any(
@@ -1633,7 +1633,7 @@ def _endpoint_key(key: str, endpoint: Mapping[str, object]) -> str:
 def pass_through_key(
     request: Request,
     route: str,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
     api_key: str,
 ) -> str:
     """The key a pass-through route authenticates: a ``litellm_user_api_key`` header on a mapped provider
@@ -2015,7 +2015,7 @@ async def _core_outcome(
     settings: "RustAuthSettings",
     host: "PythonAuthHost",
     request: Request,
-    pass_through_endpoints: list[dict] | None,
+    pass_through_endpoints: Sequence[object] | None,
 ) -> "RustAuthOutcome":
     match path:
         case RustPlan.Key:
@@ -3704,8 +3704,8 @@ async def _lookup_end_user_and_apply_budget(
     route: str,
     parent_otel_span: Span | None,
     prisma_client,
-    user_api_key_cache,
-    proxy_logging_obj,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging | None,
 ):
     """Look up end_user from DB and apply budget limits to valid_token."""
     end_user_object = None

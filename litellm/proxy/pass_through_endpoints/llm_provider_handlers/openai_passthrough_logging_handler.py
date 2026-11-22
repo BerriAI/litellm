@@ -381,7 +381,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_image_generation_cost(
         model: str,
-        response_body: dict,
+        response_body: Mapping[str, object],
         request_body: dict,
     ) -> float:
         """Calculate cost for OpenAI image generation."""
@@ -415,7 +415,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     @staticmethod
     def _calculate_image_editing_cost(
         model: str,
-        response_body: dict,
+        response_body: Mapping[str, object],
         request_body: dict,
     ) -> float:
         """Calculate cost for OpenAI image editing."""

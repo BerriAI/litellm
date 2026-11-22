@@ -717,7 +717,7 @@ class RealTimeStreaming:
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
-    def _collect_user_input_from_backend_event(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _collect_user_input_from_backend_event(self, event_obj: Mapping[str, object]) -> None:
         """Extract user voice transcription from backend events for spend logging."""
         try:
             event_type: Final = event_obj.get("type", "")
@@ -747,7 +747,7 @@ class RealTimeStreaming:
         self.session_created_sent_to_client = True
         verbose_logger.debug("Sent synthetic session.created to client to unblock connection")
 
-    def _capture_transcription_usage(self, event_obj: dict | OpenAIRealtimeEvents) -> None:
+    def _capture_transcription_usage(self, event_obj: Mapping[str, object]) -> None:
         """
         Append a usage-only transcription completed event to the logged results so
         the cost calculator can bill it by audio duration. The default logged event
@@ -2261,7 +2261,7 @@ class RealTimeStreaming:
         return translated
 
     @staticmethod
-    def _translate_item_content_types(item: dict) -> dict:
+    def _translate_item_content_types(item: dict[str, object]) -> dict[str, object]:
         """Replace GA content type names with beta names inside a single item."""
         if "content" not in item or not isinstance(item["content"], list):
             return item

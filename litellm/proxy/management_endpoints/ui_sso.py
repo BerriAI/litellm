@@ -455,7 +455,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
 
 
 @with_service_target(CLI_SSO_SESSIONS_TARGET)
-def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
+def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: Mapping[str, object]) -> None:
     cache_key: Final = _get_cli_sso_flow_cache_key(login_id)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
@@ -464,7 +464,7 @@ def _set_cli_sso_flow(login_id: str, cache: DualCache, flow: dict) -> None:
         cache.set_cache(key=cache_key, value=flow, ttl=CLI_SSO_SESSION_TTL_SECONDS)
 
 
-def _verify_cli_sso_poll_secret(flow: dict, poll_secret: str | None) -> bool:
+def _verify_cli_sso_poll_secret(flow: Mapping[str, object], poll_secret: str | None) -> bool:
     expected_poll_secret_hash: Final = flow.get("poll_secret_hash")
     if not isinstance(expected_poll_secret_hash, str) or not isinstance(poll_secret, str):
         return False
@@ -1591,7 +1591,7 @@ def _handle_generic_sso_error(
     e: Exception,
     generic_authorization_endpoint: str | None,
     generic_token_endpoint: str | None,
-    additional_headers: dict,
+    additional_headers: object,
 ) -> NoReturn:
     """Handle errors from generic SSO verify_and_process. Always re-raises."""
     error_message: Final = str(e)
@@ -3340,7 +3340,7 @@ class SSOAuthenticationHandler:
         if control_plane_url is None:
             return False
 
-        def _origin(url: str) -> tuple:
+        def _origin(url: str) -> tuple[str, str, int]:
             parsed: Final = urlparse(url)
             scheme: Final = (parsed.scheme or "").lower()
             hostname: Final = (parsed.hostname or "").lower()

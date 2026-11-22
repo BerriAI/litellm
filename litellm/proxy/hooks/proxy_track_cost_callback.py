@@ -985,9 +985,9 @@ class _ProxyDBLogger(CustomLogger):
         self,
         kwargs,  # kwargs to completion
         completion_response: (litellm.ModelResponse | object | None),  # response from completion
-        start_time=None,
-        end_time=None,  # start/end time for completion
-    ):
+        start_time: datetime | None = None,
+        end_time: datetime | None = None,  # start/end time for completion
+    ) -> None:
         from litellm.proxy.proxy_server import (
             increment_spend_counters,
             proxy_logging_obj,
@@ -1334,7 +1334,7 @@ def is_pre_routing_rejection(exception: Exception, request_data: Mapping[str, ob
     )
 
 
-def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: dict) -> None:
+def _write_spend_metadata_to_kwargs(kwargs: dict, metadata: Mapping[str, object]) -> None:
     patch = {k: v for k, v in metadata.items() if (k.startswith("user_api_key") or k == "tags") and v is not None}
     if not patch:
         return
@@ -1417,13 +1417,13 @@ def _metadata_keys(metadata: object) -> tuple[str, ...]:
     return tuple(sorted(str(key) for key in metadata))
 
 
-def _get_budget_reservation_from_metadata(metadata: dict) -> dict[str, object] | None:
+def _get_budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     return budget_reservation_from_metadata(metadata)
 
 
 def _get_request_tags_for_cost_tracking(
     sl_object: StandardLoggingPayload | None,
-    metadata: dict,
+    metadata: Mapping[str, object],
 ) -> list[str] | None:
     if sl_object is not None:
         request_tags: Final = sl_object.get("request_tags", None)
@@ -1767,7 +1767,7 @@ async def _reconcile_budget_reservation_before_db_update(
             budget_reservation["finalized"] = True  # rebind-ok: stamps the caller's shared dict for the counter update
 
 
-async def _release_budget_reservation(budget_reservation: dict | None) -> None:
+async def _release_budget_reservation(budget_reservation: dict[str, object] | None) -> None:
     if budget_reservation is None:
         return
 
@@ -1781,7 +1781,7 @@ async def _release_budget_reservation(budget_reservation: dict | None) -> None:
 
 
 async def _invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return

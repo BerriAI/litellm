@@ -182,9 +182,9 @@ def _get_minimal_error_response() -> httpx.Response:
 class AuthenticationError(openai.AuthenticationError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: object,
+        model: object,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -237,9 +237,9 @@ class DeploymentCredentialAuthenticationError(AuthenticationError):
 class NotFoundError(openai.NotFoundError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: object,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -325,9 +325,9 @@ class BadRequestError(openai.BadRequestError):
 class ImageFetchError(BadRequestError):
     def __init__(
         self,
-        message,
-        model=None,
-        llm_provider=None,
+        message: str,
+        model: str | None = None,
+        llm_provider: str | None = None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -395,9 +395,9 @@ class EndpointNotSupportedByModelError(BadRequestError):
 class UnprocessableEntityError(openai.UnprocessableEntityError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: object,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -436,9 +436,9 @@ class Timeout(openai.APITimeoutError):
 
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: object,
+        model: str | None,
+        llm_provider: str | None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
@@ -483,9 +483,9 @@ class Timeout(openai.APITimeoutError):
 class PermissionDeniedError(openai.PermissionDeniedError):
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         response: httpx.Response,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -538,9 +538,9 @@ class RateLimitError(openai.RateLimitError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -636,9 +636,9 @@ def logged_class_name(error: BaseException) -> str:
 class ContextWindowExceededError(BadRequestError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: str,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         body: Mapping[str, object] | None = None,
@@ -723,9 +723,9 @@ class PaymentRequiredError(BadRequestError):
 class RejectedRequestError(BadRequestError):
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: object,
+        model: str | None,
+        llm_provider: str | None,
         request_data: dict,
         litellm_debug_info: str | None = None,
     ):
@@ -766,9 +766,9 @@ class ContentPolicyViolationError(BadRequestError):
     #  Error code: 400 - {'error': {'code': 'content_policy_violation', 'message': 'Your request was rejected as a result of our safety system. Image descriptions generated from your prompt may contain text that is not allowed by our safety system. If you believe this was done in error, your request may succeed if retried, or by adjusting your prompt.', 'param': None, 'type': 'invalid_request_error'}}
     def __init__(
         self,
-        message,
-        model,
-        llm_provider,
+        message: object,
+        model: str | None,
+        llm_provider: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         provider_specific_fields: dict | None = None,
@@ -853,9 +853,9 @@ class BadGatewayError(openai.APIStatusError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -899,9 +899,9 @@ class InternalServerError(openai.InternalServerError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         response: httpx.Response | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -947,9 +947,9 @@ class APIError(openai.APIError):
     def __init__(
         self,
         status_code: int,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         request: httpx.Request | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -993,9 +993,9 @@ class APIConnectionError(openai.APIConnectionError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         request: httpx.Request | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
@@ -1038,9 +1038,9 @@ class APIResponseValidationError(openai.APIResponseValidationError):
 
     def __init__(
         self,
-        message,
-        llm_provider,
-        model,
+        message: str,
+        llm_provider: str | None,
+        model: str | None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
@@ -1087,7 +1087,7 @@ class JSONSchemaValidationError(APIResponseValidationError):
 
 
 class OpenAIError(openai.OpenAIError):
-    def __init__(self, original_exception=None):
+    def __init__(self, original_exception: object = None):
         super().__init__()
         self.llm_provider = "openai"
 
@@ -1181,7 +1181,7 @@ class InvalidRequestError(openai.BadRequestError):
     response: httpx.Response  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX response
     request: httpx.Request  # pyright: ignore[reportIncompatibleVariableOverride]  # LiteLLM constructs an HTTPX request
 
-    def __init__(self, message, model, llm_provider):
+    def __init__(self, message: str, model: str | None, llm_provider: str | None):
         self.status_code = 400
         self.message = message
         self.model = model
@@ -1202,9 +1202,9 @@ class MockException(openai.APIError):
     def __init__(
         self,
         status_code: int,
-        message,
-        llm_provider,
-        model,
+        message: object,
+        llm_provider: str | None,
+        model: str | None,
         request: httpx.Request | None = None,
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,

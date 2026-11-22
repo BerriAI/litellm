@@ -220,7 +220,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
+    def _apply_config_to_params(self, config: Mapping[str, object], inference_params: dict[str, object]) -> None:
         """Apply config values to inference_params if not already set."""
         for k, v in config.items():
             if k not in inference_params:
@@ -604,7 +604,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         """
         return False
 
-    def convert_messages_to_prompt(self, model: str, messages, provider, custom_prompt_dict) -> tuple[str, list | None]:
+    def convert_messages_to_prompt(
+        self, model: str, messages, provider: object, custom_prompt_dict
+    ) -> tuple[str, list | None]:
         # handle anthropic prompts and amazon titan prompts
         prompt = ""
         chat_history: list | None = None

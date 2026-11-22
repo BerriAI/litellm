@@ -430,7 +430,7 @@ class ModelRateLimitingCheck(CustomLogger):
             return deployment
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
             await async_io_token_reconcile_success(self.usage, kwargs, response_obj)
@@ -468,13 +468,15 @@ class ModelRateLimitingCheck(CustomLogger):
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.async_log_success_event: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         # Never fail the primary logging pipeline over an io-token refund error.
         with contextlib.suppress(Exception):
             await async_io_token_refund_failure(self.usage, kwargs)
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         """
         Sync version of tracking TPM usage after successful request.
         Always tracks tokens - the pre-call check handles enforcement.
@@ -510,7 +512,9 @@ class ModelRateLimitingCheck(CustomLogger):
         except Exception as e:
             verbose_router_logger.debug("Error in ModelRateLimitingCheck.log_success_event: %s", e)
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         with contextlib.suppress(Exception):
             io_token_refund_failure(
                 self.usage,

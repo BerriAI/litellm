@@ -11,6 +11,7 @@ Has 4 methods:
 import ast
 import asyncio
 import json
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from typing import Final
@@ -29,16 +30,16 @@ class S3Cache(BaseCache):
     def __init__(
         self,
         s3_bucket_name,
-        s3_region_name=None,
-        s3_api_version=None,
+        s3_region_name: str | None = None,
+        s3_api_version: str | None = None,
         s3_use_ssl: bool | None = True,
-        s3_verify=None,
-        s3_endpoint_url=None,
-        s3_aws_access_key_id=None,
-        s3_aws_secret_access_key=None,
-        s3_aws_session_token=None,
+        s3_verify: bool | str | None = None,
+        s3_endpoint_url: str | None = None,
+        s3_aws_access_key_id: str | None = None,
+        s3_aws_secret_access_key: str | None = None,
+        s3_aws_session_token: str | None = None,
         s3_config=None,
-        s3_path=None,
+        s3_path: str | None = None,
         **kwargs,
     ):
         import boto3
@@ -65,7 +66,7 @@ class S3Cache(BaseCache):
         """Convert cache key to S3 key"""
         return self.key_prefix + key.replace(":", "/")
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         try:
             print_verbose(f"LiteLLM SET Cache - S3. Key={key}. Value={value}")
             ttl: Final = kwargs.get("ttl", None)
@@ -104,7 +105,7 @@ class S3Cache(BaseCache):
         except Exception as e:
             print_verbose(f"S3 Caching: set_cache() - Got exception from S3: {e}")
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str, value: object, **kwargs: object):
         """
         Asynchronously set cache using run_in_executor to avoid blocking the event loop.
         Compatible with Python 3.8+.
@@ -117,7 +118,7 @@ class S3Cache(BaseCache):
         except Exception as e:
             verbose_logger.error("S3 Caching: async_set_cache() - Got exception from S3: %s", e)
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: str, **kwargs: object):
         import botocore
 
         try:
@@ -161,7 +162,7 @@ class S3Cache(BaseCache):
         except Exception as e:
             verbose_logger.error("S3 Caching: get_cache() - Got exception from S3: %s", e)
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: str, **kwargs: object):
         """
         Asynchronously get cache using run_in_executor to avoid blocking the event loop.
         Compatible with Python 3.8+.
@@ -182,8 +183,6 @@ class S3Cache(BaseCache):
     async def disconnect(self):
         pass
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
-        tasks: Final = []
-        for val in cache_list:
-            tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+    async def async_set_cache_pipeline(self, cache_list: Iterable[tuple[str, object]], **kwargs: object):
+        tasks: Final = [self.async_set_cache(val[0], val[1], **kwargs) for val in cache_list]
         await asyncio.gather(*tasks)
