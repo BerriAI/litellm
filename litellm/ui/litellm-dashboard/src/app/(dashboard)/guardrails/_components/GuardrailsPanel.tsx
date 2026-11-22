@@ -2,7 +2,7 @@ import { parseAsString, useQueryState } from "nuqs";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { TabsContent } from "@/components/ui/tabs";
-import { Page, PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { ChevronDown, Code, Plus, Shield } from "lucide-react";
 import { getGuardrailsList } from "@/components/networking";
@@ -103,116 +103,114 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
   };
 
   return (
-    <Page>
-      <PageContent>
-        <PageTabs value={activeTab} onValueChange={setActiveTab}>
-          <PageHeader>
-            <PageHeaderTitle>
-              <Shield />
-              {t("shell.nav.items.guardrails")}
-            </PageHeaderTitle>
-            <PageHeaderDescription>{t("shell.pageDescriptions.guardrails")}</PageHeaderDescription>
-            <PageHeaderControls className="flex-wrap">
-              {isAdmin && activeTab === "guardrails" && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
+    <PageContent>
+      <PageTabs value={activeTab} onValueChange={setActiveTab}>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Shield />
+            {t("shell.nav.items.guardrails")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("shell.pageDescriptions.guardrails")}</PageHeaderDescription>
+          <PageHeaderControls className="flex-wrap">
+            {isAdmin && activeTab === "guardrails" && (
+              <DropdownMenu>
+                <DropdownMenuTrigger disabled={!accessToken} className={cn(buttonVariants({ variant: "default" }))}>
+                  <Plus />
+                  {t("guardrails.panel.addMenu.trigger")}
+                  <ChevronDown />
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem onClick={handleAddGuardrail}>
                     <Plus />
-                    {t("guardrails.panel.addMenu.trigger")}
-                    <ChevronDown />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuItem onClick={handleAddGuardrail}>
-                      <Plus />
-                      {t("guardrails.panel.addMenu.provider")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={handleAddCustomCodeGuardrail}>
-                      <Code />
-                      {t("guardrails.panel.addMenu.customCode")}
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    {t("guardrails.panel.addMenu.provider")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleAddCustomCodeGuardrail}>
+                    <Code />
+                    {t("guardrails.panel.addMenu.customCode")}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+              {isAdmin && (
+                <>
+                  <PageTabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</PageTabsTrigger>
+                  <PageTabsTrigger value="guardrails">{t("guardrails.panel.tabs.guardrails")}</PageTabsTrigger>
+                  <PageTabsTrigger value="playground" disabled={!accessToken}>
+                    {t("guardrails.panel.tabs.playground")}
+                  </PageTabsTrigger>
+                </>
               )}
-              <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
-                {isAdmin && (
-                  <>
-                    <PageTabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</PageTabsTrigger>
-                    <PageTabsTrigger value="guardrails">{t("guardrails.panel.tabs.guardrails")}</PageTabsTrigger>
-                    <PageTabsTrigger value="playground" disabled={!accessToken}>
-                      {t("guardrails.panel.tabs.playground")}
-                    </PageTabsTrigger>
-                  </>
-                )}
-                <PageTabsTrigger value="submitted">{t("guardrails.panel.tabs.submitted")}</PageTabsTrigger>
-              </PageTabsList>
-            </PageHeaderControls>
-          </PageHeader>
+              <PageTabsTrigger value="submitted">{t("guardrails.panel.tabs.submitted")}</PageTabsTrigger>
+            </PageTabsList>
+          </PageHeaderControls>
+        </PageHeader>
 
-          {isAdmin && (
-            <>
-              <TabsContent value="garden" keepMounted>
-                <GuardrailGarden accessToken={accessToken} onGuardrailCreated={handleSuccess} />
-              </TabsContent>
+        {isAdmin && (
+          <>
+            <TabsContent value="garden" keepMounted>
+              <GuardrailGarden accessToken={accessToken} onGuardrailCreated={handleSuccess} />
+            </TabsContent>
 
-              <TabsContent value="guardrails" keepMounted>
-                {selectedGuardrailId ? (
-                  <GuardrailInfoView
-                    guardrailId={selectedGuardrailId}
-                    onClose={closeGuardrailDetail}
-                    onDeleted={() => {
-                      closeGuardrailDetail();
-                      fetchGuardrails();
-                    }}
-                    accessToken={accessToken}
-                    isAdmin={isAdmin}
-                  />
-                ) : (
-                  <GuardrailTable
-                    guardrailsList={guardrailsList}
-                    isLoading={isLoading}
-                    onDeleteClick={handleDeleteClick}
-                    onGuardrailClick={(id) => void setSelectedGuardrailId(id)}
-                  />
-                )}
-
-                <AddGuardrailForm
-                  visible={isAddModalVisible}
-                  onClose={handleCloseModal}
+            <TabsContent value="guardrails" keepMounted>
+              {selectedGuardrailId ? (
+                <GuardrailInfoView
+                  guardrailId={selectedGuardrailId}
+                  onClose={closeGuardrailDetail}
+                  onDeleted={() => {
+                    closeGuardrailDetail();
+                    fetchGuardrails();
+                  }}
                   accessToken={accessToken}
-                  onSuccess={handleSuccess}
+                  isAdmin={isAdmin}
                 />
-
-                <CustomCodeModal
-                  visible={isCustomCodeModalVisible}
-                  onClose={handleCloseCustomCodeModal}
-                  accessToken={accessToken}
-                  onSuccess={handleSuccess}
-                />
-
-                <GuardrailDeleteModal
-                  guardrail={guardrailToDelete}
-                  accessToken={accessToken}
-                  onClose={() => setGuardrailToDelete(null)}
-                  onDeleted={fetchGuardrails}
-                />
-              </TabsContent>
-
-              <TabsContent value="playground" keepMounted>
-                <GuardrailTestPlayground
+              ) : (
+                <GuardrailTable
                   guardrailsList={guardrailsList}
                   isLoading={isLoading}
-                  accessToken={accessToken}
-                  onClose={() => {}}
+                  onDeleteClick={handleDeleteClick}
+                  onGuardrailClick={(id) => void setSelectedGuardrailId(id)}
                 />
-              </TabsContent>
-            </>
-          )}
+              )}
 
-          <TabsContent value="submitted" keepMounted>
-            <TeamGuardrailsTab accessToken={accessToken} />
-          </TabsContent>
-        </PageTabs>
-      </PageContent>
-    </Page>
+              <AddGuardrailForm
+                visible={isAddModalVisible}
+                onClose={handleCloseModal}
+                accessToken={accessToken}
+                onSuccess={handleSuccess}
+              />
+
+              <CustomCodeModal
+                visible={isCustomCodeModalVisible}
+                onClose={handleCloseCustomCodeModal}
+                accessToken={accessToken}
+                onSuccess={handleSuccess}
+              />
+
+              <GuardrailDeleteModal
+                guardrail={guardrailToDelete}
+                accessToken={accessToken}
+                onClose={() => setGuardrailToDelete(null)}
+                onDeleted={fetchGuardrails}
+              />
+            </TabsContent>
+
+            <TabsContent value="playground" keepMounted>
+              <GuardrailTestPlayground
+                guardrailsList={guardrailsList}
+                isLoading={isLoading}
+                accessToken={accessToken}
+                onClose={() => {}}
+              />
+            </TabsContent>
+          </>
+        )}
+
+        <TabsContent value="submitted" keepMounted>
+          <TeamGuardrailsTab accessToken={accessToken} />
+        </TabsContent>
+      </PageTabs>
+    </PageContent>
   );
 };
 
