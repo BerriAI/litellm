@@ -32,8 +32,10 @@ from litellm.proxy.openai_files_endpoints.common_utils import LITELLM_EXECUTED_B
 from litellm.proxy.openai_files_endpoints.storage_backend_service import StorageBackendFileService
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.managed_batch_repository import ManagedBatchRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest, OpenAIFileObject, OpenAIFilesPurpose
 from litellm.types.utils import LITELLM_EXECUTED_BATCH_PROVIDERS, ExtractedFileData, LiteLLMBatch, LlmProviders
+from litellm.utils import aresolve_api_key_secret_reference
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -103,7 +105,7 @@ class _ResultLine(TypedDict):
     error: ReadOnly[_LineError | None]
 
 
-class BatchInputLine(BaseModel):
+class BatchInputLine(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     custom_id: str
@@ -217,11 +219,7 @@ async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_clie
     try:
         response: Final = await client.get(
             f"{api_base.rstrip('/')}/files",
-            headers=(
-                {"Authorization": f"Bearer {api_key}"}  # mutable-ok: AsyncHTTPHandler.get wants a plain dict
-                if api_key
-                else None
-            ),
+            headers=({"Authorization": f"Bearer {api_key}"} if api_key else None),
             timeout=_FILES_API_PROBE_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError:
@@ -229,7 +227,7 @@ async def upstream_lacks_files_api(api_base: str, api_key: str | None, http_clie
     return response.status_code == httpx.codes.NOT_FOUND
 
 
-def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str, str | None] | None:
+async def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str, str | None] | None:
     model: Final = credentials.get("model")
     api_base: Final = credentials.get("api_base")
     api_key: Final = credentials.get("api_key")
@@ -244,7 +242,11 @@ def _upstream_of(credentials: Mapping[str, object], provider: str) -> tuple[str,
         )
     except Exception:  # noqa: BLE001  # get_llm_provider raises on a model it cannot map, which means nothing to probe
         return None
-    return None if resolved_api_base is None else (resolved_api_base, resolved_api_key)
+    if resolved_api_base is None:
+        return None
+    return resolved_api_base, await aresolve_api_key_secret_reference(
+        resolved_api_key, model=model, llm_provider=provider, upstream=credentials
+    )
 
 
 async def litellm_executed_provider_for(
@@ -253,7 +255,7 @@ async def litellm_executed_provider_for(
     provider: Final = litellm_executed_provider_of(credentials)
     if provider is None:
         return None
-    upstream: Final = _upstream_of(credentials, provider)
+    upstream: Final = await _upstream_of(credentials, provider)
     if upstream is None:
         return None
     return provider if await lacks_files_api(*upstream) else None
@@ -265,7 +267,7 @@ async def resolve_litellm_executed_provider(
     team_id: str | None,
     lacks_files_api: FilesApiProbe = upstream_lacks_files_api,
 ) -> str | None:
-    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model, team_id=team_id)
+    credentials: Final = llm_router.registry().credentials(model, form="with_provider", team_id=team_id)
     return None if credentials is None else await litellm_executed_provider_for(credentials, lacks_files_api)
 
 
@@ -450,11 +452,11 @@ class LiteLLMExecutedBatchRunner:
     ) -> LiteLLMBatch:
         endpoint: Final = _validate_endpoint(create_request.get("endpoint"))
         content: Final = await self._download_input(unified_input_file_id, user_api_key_dict)
-        parsed: Final = parse_batch_input(content, endpoint, self._body_rejection(model))
+        parsed: Final = parse_batch_input(content, endpoint, self._body_rejection(model, user_api_key_dict.team_id))
         if isinstance(parsed, InvalidBatchInput):
             raise batch_error(400, f"Invalid batch input file: {parsed.describe()}")
         llm_batch_id: Final = f"{LITELLM_EXECUTED_BATCH_ID_PREFIX}{uuid_module.uuid4().hex}"
-        model_id: Final = next(iter(self.llm_router.get_model_ids(model_name=model)), model)
+        model_id: Final = next(iter(self.llm_router.registry().names(model, kind="ids")), model)
         unified_batch_id: Final = self.managed_files.get_unified_batch_id(batch_id=llm_batch_id, model_id=model_id)
         now: Final = time.time()
         created_at: Final = int(now)
@@ -516,7 +518,7 @@ class LiteLLMExecutedBatchRunner:
 
     async def fail_abandoned(self, batch: LiteLLMBatch, user_api_key_dict: UserAPIKeyAuth) -> LiteLLMBatch:
         error: Final = BatchError(message=_RUNNER_LOST_MESSAGE, code="runner_lost")
-        errors: Final = Errors(data=[error], object="list")  # mutable-ok: Errors.data is typed as a list
+        errors: Final = Errors(data=[error], object="list")
         failed: Final = batch.model_copy(
             update=MappingProxyType({"status": "failed", "failed_at": int(time.time()), "errors": errors})
         )
@@ -531,14 +533,15 @@ class LiteLLMExecutedBatchRunner:
             return failed
         return await self.batches.load_batch(batch.id) or batch
 
-    def _body_rejection(self, model: str) -> BodyRejection:
+    def _body_rejection(self, model: str, team_id: str | None) -> BodyRejection:
         def reject(body: Mapping[str, object]) -> str | None:
             try:
                 is_request_body_safe(
-                    request_body=dict(body),  # mutable-ok: is_request_body_safe takes a dict
-                    general_settings=dict(self.general_settings),  # mutable-ok: is_request_body_safe takes a dict
+                    request_body=dict(body),
+                    general_settings=dict(self.general_settings),
                     llm_router=self.llm_router,
                     model=model,
+                    team_id=team_id,
                 )
             except ValueError as e:
                 return str(e)
@@ -569,7 +572,7 @@ class LiteLLMExecutedBatchRunner:
         except Exception as e:  # noqa: BLE001  # whatever fails, the batch must end up marked failed
             verbose_proxy_logger.exception("LiteLLM-executed batch %s failed: %s", run.unified_batch_id, e)
             error: Final = BatchError(message=str(e), code="internal_error")
-            errors: Final = Errors(data=[error], object="list")  # mutable-ok: Errors.data is typed as a list
+            errors: Final = Errors(data=[error], object="list")
             try:
                 await self._advance(run, "failed", MappingProxyType({"errors": errors}))
             except Exception as advance_error:  # noqa: BLE001  # a failed status write is logged, never raised
@@ -654,11 +657,13 @@ class LiteLLMExecutedBatchRunner:
         return method
 
     def _row_metadata(self, run: _BatchRun) -> dict[str, object]:  # mutable-ok: router updates metadata in place
-        return {  # mutable-ok: the router updates request metadata in place
+        return {
             **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(run.user_api_key_dict),
+            **LiteLLMProxyRequestSetup.get_tenant_logging_metadata(run.user_api_key_dict),
             "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(run.user_api_key_dict),
             "user_api_end_user_max_budget": run.user_api_key_dict.end_user_max_budget,
-            "tags": list(run.request_tags),  # mutable-ok: litellm types request tags as a list
+            "tags": list(run.request_tags),
+            "inherited_tags": LiteLLMProxyRequestSetup.get_inherited_tags(run.user_api_key_dict),
             "batch_id": run.unified_batch_id,
         }
 

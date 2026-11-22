@@ -1,18 +1,22 @@
 import json
 from collections.abc import Mapping
-from typing import Literal
+from typing import Final, Literal
 
 import pytest
 from pydantic import BaseModel
 
-from litellm.router_utils.add_retry_fallback_headers import (
+from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
     add_retry_headers_to_response,
     complexity_router_decision_headers,
+    ensure_response_additional_headers,
+    get_fallback_error_info,
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
+from litellm.exceptions import AuthenticationError, Timeout, UnsupportedParamsError
+from litellm.types.decisions import DecisionsResponse
 
 
 class StreamingWrapper:
@@ -151,6 +155,32 @@ def test_add_fallback_headers_to_streaming_wrapper():
     }
 
 
+def test_add_fallback_headers_updates_plain_duck_backing_storage() -> None:
+    class PlainDuckResponse:
+        def __init__(self) -> None:
+            self._hidden_params: dict[str, object] = {
+                "model_id": "deployment-1",
+                "custom_metadata": {"keep": True},
+                "additional_headers": {"x-existing": "keep"},
+            }
+
+    response: Final = PlainDuckResponse()
+    original_hidden_params: Final = response._hidden_params
+
+    result: Final = add_fallback_headers_to_response(response=response, attempted_fallbacks=2)
+
+    assert result is response
+    assert response._hidden_params is original_hidden_params
+    assert response._hidden_params == {
+        "model_id": "deployment-1",
+        "custom_metadata": {"keep": True},
+        "additional_headers": {
+            "x-existing": "keep",
+            "x-litellm-attempted-fallbacks": 2,
+        },
+    }
+
+
 def test_add_fallback_headers_serializes_fallback_errors():
     response = StreamingWrapper()
     fallback_errors = [
@@ -178,6 +208,41 @@ def test_add_fallback_headers_serializes_fallback_errors():
         )
         == fallback_errors
     )
+
+
+class _ProviderTypedError(Exception):
+    type = "invalid_request_error"
+
+
+class _UntypedError(Exception):
+    pass
+
+
+def test_get_fallback_error_info_names_an_unsupported_params_error_by_its_class():
+    error: Final = UnsupportedParamsError(
+        message="mistral does not support parameters: ['presence_penalty']",
+        llm_provider="mistral",
+        model="mistral-large-latest",
+    )
+
+    assert get_fallback_error_info(error)["type"] == "UnsupportedParamsError"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _ProviderTypedError("bad request"),
+        Timeout(message="timed out", model="gpt-5.6", llm_provider="openai"),
+        AuthenticationError(message="bad key", llm_provider="openai", model="gpt-5.6"),
+    ],
+    ids=["provider-type", "timeout-without-provider-type", "auth-without-provider-type"],
+)
+def test_get_fallback_error_info_keeps_the_type_other_errors_carry(error: Exception):
+    assert get_fallback_error_info(error)["type"] == str(getattr(error, "type", None))
+
+
+def test_get_fallback_error_info_names_an_error_without_a_type_by_its_class():
+    assert get_fallback_error_info(_UntypedError("boom"))["type"] == "_UntypedError"
 
 
 def test_add_retry_headers_to_streaming_wrapper():
@@ -228,6 +293,47 @@ def test_add_fallback_headers_when_no_existing_additional_headers():
 
     assert result is response
     assert response._hidden_params["additional_headers"]["x-litellm-attempted-fallbacks"] == 2
+
+
+def test_add_fallback_headers_to_frozen_decisions_response() -> None:
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+
+    result: Final = add_fallback_headers_to_response(response=response, attempted_fallbacks=1)
+
+    assert result is response
+    assert response.hidden_params["additional_headers"] == {"x-litellm-attempted-fallbacks": 1}
+
+
+def test_ensure_response_additional_headers_updates_frozen_decisions_response() -> None:
+    response: Final = DecisionsResponse(model="decider", answers={}, usage=None)
+
+    additional_headers: Final = ensure_response_additional_headers(response)
+
+    assert additional_headers == {}
+    assert response.hidden_params["additional_headers"] is additional_headers
+
+
+def test_ensure_response_additional_headers_preserves_plain_duck_storage() -> None:
+    class PlainDuckResponse:
+        def __init__(self) -> None:
+            self._hidden_params: dict[str, object] = {
+                "model_id": "deployment-1",
+                "custom_metadata": {"keep": True},
+                "additional_headers": {"x-existing": "keep"},
+            }
+
+    response: Final = PlainDuckResponse()
+    original_hidden_params: Final = response._hidden_params
+    additional_headers: Final = ensure_response_additional_headers(response)
+    additional_headers["x-added"] = "value"
+
+    assert response._hidden_params is original_hidden_params
+    assert additional_headers is original_hidden_params["additional_headers"]
+    assert response._hidden_params == {
+        "model_id": "deployment-1",
+        "custom_metadata": {"keep": True},
+        "additional_headers": {"x-existing": "keep", "x-added": "value"},
+    }
 
 
 def test_add_fallback_headers_returns_none_when_response_is_none():

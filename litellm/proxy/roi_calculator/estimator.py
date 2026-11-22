@@ -92,32 +92,6 @@ def cache_context(settings: ROISettings, models: tuple[EstimatorModel, ...] | No
     return hashlib.sha256(context.encode()).hexdigest()
 
 
-def pull_cache_key(
-    settings: ROISettings,
-    pull: ROIPullEvidence,
-    models: tuple[EstimatorModel, ...] | None = None,
-) -> str:
-    evidence: Final = json.dumps(
-        metadata_evidence(pull).model_dump(exclude_unset=True),
-        ensure_ascii=False,
-    )
-    key: Final = json.dumps(
-        (
-            ESTIMATE_VERSION,
-            settings.estimator_model,
-            settings.estimator_prompt,
-            RESPONSE_CONTRACT,
-            estimator_options(_configured_models(settings, models)),
-            pull["repo"],
-            pull["number"],
-            pull["head_sha"],
-            evidence,
-        ),
-        ensure_ascii=False,
-    )
-    return hashlib.sha256(key.encode()).hexdigest()
-
-
 class Estimator:
     def __init__(
         self,
@@ -138,14 +112,16 @@ class Estimator:
             missing_metadata_estimate: Final[ROIEstimate] = {
                 "status": "needs_review",
                 "hours": None,
-                "reasoning": ("GitHub did not provide all file or commit metadata. It was not sent for estimation."),
+                "reasoning": (
+                    "The repository source did not provide all file or commit metadata. It was not sent for estimation."
+                ),
             }
             return missing_metadata_estimate
         if len(evidence) > MAX_EVIDENCE_CHARS:
             oversized_evidence_estimate: Final[ROIEstimate] = {
                 "status": "needs_review",
                 "hours": None,
-                "reasoning": ("This PR exceeds the estimator's input limit. It was not truncated or scored."),
+                "reasoning": ("This change exceeds the estimator's input limit. It was not truncated or scored."),
             }
             return oversized_evidence_estimate
         system_message: Final[ROICompletionMessage] = {
@@ -157,7 +133,6 @@ class Estimator:
         response_format: Final[ROIResponseFormat] = {"type": "json_object"}
         metadata: Final[ROICompletionMetadata] = {
             "tags": ("litellm-roi-estimator",),
-            "litellm_roi_estimator": True,
         }
         request: Final = ROICompletionRequest(
             model=self.settings.estimator_model,

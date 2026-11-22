@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import pytest
 from _pytest.fixtures import SubRequest
 
-from .containers import Containers, docker, ready
+from .containers import Containers, docker, ready, seeded
 from .database import Database, Databases
 
 
@@ -44,7 +44,7 @@ def migrated_template(
     output: Final = Path(os.environ.get("MIGRATION_TEST_OUTPUT", str(tmp_path_factory.getbasetemp()))) / "seed"
     with databases.create() as database:
         with Containers(migration_image, output).start(database) as replica:
-            ready((replica,), database)
+            seeded(replica, database)
         yield database
 
 

@@ -26,28 +26,38 @@ schema.
 """
 
 from collections.abc import Sequence
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
-from pydantic import BaseModel
-
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
     UpdateKeyRequest,
 )
-from litellm.proxy.auth.auth_checks import (
-    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _delete_cache_access_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    delete_cache_access_object,  # pyright: ignore[reportPrivateUsage]  # the access-group endpoints reach for this same cache primitive
 )
 from litellm.proxy.db.routing_prisma_wrapper import writer_wrapper
-from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.repositories.access_group_repository import AccessGroupRepository
+from litellm.types.llms.base import LiteLLMBaseModel
+
+if TYPE_CHECKING:
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 
 
-class _MovedGroupRow(BaseModel):
+class _MovedGroupRow(LiteLLMBaseModel):
     access_group_id: str
 
 
 class _RawExecutor(Protocol):
     async def query_raw(self, query: str, *args: str | Sequence[str]) -> Sequence[object]: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> "PrismaWrapper | RoutingPrismaWrapper": ...
 
 
 _ATTACH_KEY_SQL: Final = (
@@ -74,8 +84,8 @@ _REPOINT_KEY_SQL: Final = (
 
 def _raw_executor(prisma_client: object) -> _RawExecutor:
     """Narrow the untyped Prisma client down to the raw-query call this module makes, pinned to the writer."""
-    db: Final = AccessGroupRepository(prisma_client).prisma_client.db  # pyright: ignore[reportAny]  # untyped Prisma client
-    return writer_wrapper(db)  # pyright: ignore[reportAny, reportReturnType]  # untyped Prisma client behind the pin
+    db: Final = require_attributes(AccessGroupRepository(prisma_client).prisma_client, _PrismaClientView, "db").db
+    return writer_wrapper(db)  # pyright: ignore[reportReturnType]  # untyped Prisma client behind the pin
 
 
 async def _invalidate_access_group_cache(access_group_id: str) -> None:
@@ -87,7 +97,7 @@ async def _invalidate_access_group_cache(access_group_id: str) -> None:
     """
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
-    await _delete_cache_access_object(
+    await delete_cache_access_object(
         access_group_id=access_group_id,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,

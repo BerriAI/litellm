@@ -1,12 +1,15 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
-from .openai import ChatCompletionToolCallChunk
+from litellm.types.llms.base import LiteLLMBaseModel
+
+from .openai import ChatCompletionFileObjectFile, ChatCompletionImageUrlObject, ChatCompletionToolCallChunk
 
 
 class CachePointBlock(TypedDict, total=False):
@@ -14,13 +17,38 @@ class CachePointBlock(TypedDict, total=False):
     ttl: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class SystemContentBlock(TypedDict, total=False):
     text: str
     cachePoint: CachePointBlock
+    guardContent: ReadOnly[GuardrailConverseContentBlock]
 
 
-class SourceBlock(TypedDict):
-    bytes: str | None  # base 64 encoded string
+class S3Location(TypedDict):
+    uri: ReadOnly[str]
+    bucketOwner: NotRequired[ReadOnly[str]]
+
+
+class SourceBlock(TypedDict, total=False):
+    bytes: ReadOnly[str | None]  # base 64 encoded string
+    s3Location: ReadOnly[S3Location]
+
+
+class S3MediaImageUrlObject(ChatCompletionImageUrlObject, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+class S3MediaFileObjectFile(ChatCompletionFileObjectFile, total=False):
+    bucket_owner: ReadOnly[object]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
@@ -65,6 +93,7 @@ class SearchResultBlock(TypedDict, total=False):
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    video: ReadOnly[VideoBlock]
     searchResult: SearchResultBlock
     json: dict
     text: str
@@ -100,16 +129,6 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 
 class BedrockConverseGptReasoningEffortBlock(TypedDict):
     effort: ReadOnly[str]
-
-
-class GuardrailConverseTextBlock(TypedDict, total=False):
-    text: str
-
-
-class GuardrailConverseContentBlock(TypedDict, total=False):
-    """Content block for selective guardrail evaluation in Bedrock Converse API"""
-
-    text: GuardrailConverseTextBlock
 
 
 class CitationWebLocationBlock(TypedDict, total=False):
@@ -241,7 +260,7 @@ class ConverseTokenUsageBlock(TypedDict, total=False):
 
 
 class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
+    type: ReadOnly[Literal["priority", "default", "flex", "reserved"]]
 
 
 class ConverseResponseBlock(TypedDict, total=False):
@@ -378,7 +397,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
 
 class PerformanceConfigBlock(TypedDict):
-    latency: Literal["optimized", "throughput"]
+    latency: Literal["standard", "optimized"]
 
 
 class JsonSchemaDefinition(TypedDict, total=False):
@@ -451,6 +470,9 @@ class Document(TypedDict):
     snippet: str
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ServerSentEvent:
     def __init__(
         self,
@@ -484,8 +506,8 @@ class ServerSentEvent:
     def data(self) -> str:
         return self._data
 
-    def json(self) -> Any:
-        return json.loads(self.data)
+    def json(self) -> object:
+        return _DECODED_JSON.validate_python(json.loads(self.data))
 
     @override
     def __repr__(self) -> str:
@@ -502,6 +524,8 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
     output_dimension: int
+    max_tokens: ReadOnly[int]
+    priority: ReadOnly[int]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -1007,13 +1031,21 @@ else:
     AWSPreparedRequest = Any
 
 
+@dataclass(frozen=True)
+class BearerPreparedRequest:
+    method: str
+    url: str
+    headers: Mapping[str, str]
+    body: bytes
+
+
 class BedrockPreparedRequest(TypedDict):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -1114,7 +1146,7 @@ class AwsSessionTag(TypedDict):
     Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
 
 
-class AwsAuthParams(BaseModel):
+class AwsAuthParams(LiteLLMBaseModel):
     """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")
@@ -1245,6 +1277,13 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # supported subset and strips the field entirely when nothing remains, so
     # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
     context_management: dict
+
+    # `compaction` ({"type": "summarize", "instructions"?: str}) is the
+    # `compact-2026-09-04` beta: one summarization call that returns a single
+    # signed compaction block. Bedrock rejects it together with
+    # `context_management`. Ref:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    compaction: ReadOnly[Mapping[str, object]]
 
 
 class BedrockBatchRecordKind(Enum):

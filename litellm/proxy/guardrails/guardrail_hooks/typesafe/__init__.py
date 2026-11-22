@@ -25,9 +25,7 @@ def _coerce_event_hook(
     if isinstance(mode, Mode):
         return mode
     if isinstance(mode, list):
-        return [  # mutable-ok: CustomGuardrail event_hook contract wants a list
-            GuardrailEventHooks(item) for item in mode
-        ]
+        return [GuardrailEventHooks(item) for item in mode]
     return GuardrailEventHooks(mode)
 
 
@@ -66,10 +64,10 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
     return _callback
 
 
-guardrail_initializer_registry: Final = {  # mutable-ok: guardrail_registry discovery checks isinstance(registry, dict)
+guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.TYPESAFE.value: initialize_guardrail,
 }
 
-guardrail_class_registry: Final = {  # mutable-ok: guardrail_registry discovery checks isinstance(registry, dict)
+guardrail_class_registry: Final = {
     SupportedGuardrailIntegrations.TYPESAFE.value: TypeSafeGuardrail,
 }

@@ -6,13 +6,15 @@ from typing import Final
 
 import click
 from InquirerPy import inquirer
-from pydantic import BaseModel
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 from .auth import CliContextObj
 from .claude_settings import (
     ClaudeSettingsError,
     UnconfigureOutcome,
     preflight_claude_settings,
+    remove_launch_settings_files,
     settings_file_owners,
     unconfigure_claude_settings,
 )
@@ -38,7 +40,7 @@ from .configure_setup import (
 )
 
 
-class _ConnectionOptions(BaseModel):
+class _ConnectionOptions(LiteLLMBaseModel):
     api_key: str | None = None
     gateway_url: str | None = None
 
@@ -209,6 +211,8 @@ def _disconnect(target: Target, forget: bool) -> None:
     settings_path: Final = settings_path_for(target)
     state_path: Final = receipt_path_for(target, settings_path)
     profile: Final = setup_profile_path(target, settings_path)
+    if target == "claude":
+        remove_launch_settings_files(settings_path.parent)
     try:
         if not state_path.exists():
             click.echo(f"No {target} undo receipt at {state_path}; nothing to undo. Agent settings were not changed.")
@@ -253,7 +257,7 @@ def unconfigure_group(ctx: click.Context, forget: bool) -> None:
             _disconnect(target, forget)
 
 
-class _UnconfigureOptions(BaseModel):
+class _UnconfigureOptions(LiteLLMBaseModel):
     forget: bool = False
 
 

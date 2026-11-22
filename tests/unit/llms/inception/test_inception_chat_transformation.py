@@ -143,7 +143,7 @@ def test_inception_get_openai_compatible_provider_info():
 
     with mock.patch.dict(os.environ, {}, clear=True):
         with mock.patch.object(litellm, "inception_key", None):
-            api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+            api_base, api_key = config.get_openai_compatible_provider_info(None, None)
             assert api_base == "https://api.inceptionlabs.ai/v1"
             assert api_key is None
 
@@ -154,7 +154,7 @@ def test_inception_get_openai_compatible_provider_info():
             "INCEPTION_API_BASE": "https://custom.inceptionlabs.ai/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = config.get_openai_compatible_provider_info(None, None)
         assert api_base == "https://custom.inceptionlabs.ai/v1"
         assert api_key == "test-key"
 
@@ -165,9 +165,7 @@ def test_inception_get_openai_compatible_provider_info():
             "INCEPTION_API_BASE": "https://env.inceptionlabs.ai/v1",
         },
     ):
-        api_base, api_key = config._get_openai_compatible_provider_info(
-            "https://param.inceptionlabs.ai/v1", "param-key"
-        )
+        api_base, api_key = config.get_openai_compatible_provider_info("https://param.inceptionlabs.ai/v1", "param-key")
         assert api_base == "https://param.inceptionlabs.ai/v1"
         assert api_key == "param-key"
 
@@ -177,7 +175,7 @@ def test_inception_key_module_attr_fallback():
     config = InceptionChatConfig()
     with mock.patch.dict(os.environ, {}, clear=True):
         with mock.patch.object(litellm, "inception_key", "module-attr-key"):
-            _, api_key = config._get_openai_compatible_provider_info(None, None)
+            _, api_key = config.get_openai_compatible_provider_info(None, None)
             assert api_key == "module-attr-key"
 
 
@@ -191,16 +189,16 @@ def test_inception_does_not_leak_key_to_caller_api_base():
     with mock.patch.dict(os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True):
         with mock.patch.object(litellm, "inception_key", "module-secret"):
             # caller overrides api_base without a key -> server key withheld
-            api_base, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", None)
+            api_base, api_key = config.get_openai_compatible_provider_info("https://attacker.example/v1", None)
             assert api_base == "https://attacker.example/v1"
             assert api_key is None
 
             # caller overrides api_base AND supplies their own key -> used as-is
-            _, api_key = config._get_openai_compatible_provider_info("https://attacker.example/v1", "caller-key")
+            _, api_key = config.get_openai_compatible_provider_info("https://attacker.example/v1", "caller-key")
             assert api_key == "caller-key"
 
             # default/server base -> server-managed key resolved
-            _, api_key = config._get_openai_compatible_provider_info(None, None)
+            _, api_key = config.get_openai_compatible_provider_info(None, None)
             assert api_key == "module-secret"
 
 

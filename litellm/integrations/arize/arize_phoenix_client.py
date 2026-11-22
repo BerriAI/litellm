@@ -3,9 +3,17 @@ Arize Phoenix API client for fetching prompt versions from Arize Phoenix.
 """
 
 import urllib.parse
-from typing import Any, Final
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict
 
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+
+class _PromptVersionResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True, frozen=True, hide_input_in_errors=True)
+
+    data: dict[str, object] | None = None
 
 
 def _sanitize_id(identifier: str) -> str:
@@ -53,7 +61,7 @@ class ArizePhoenixClient:
         # Initialize HTTPHandler
         self.http_handler = HTTPHandler(disable_default_headers=True)
 
-    def get_prompt_version(self, prompt_version_id: str) -> dict[str, Any] | None:
+    def get_prompt_version(self, prompt_version_id: str) -> dict[str, object] | None:
         """
         Fetch a prompt version from Arize Phoenix.
 
@@ -68,23 +76,23 @@ class ArizePhoenixClient:
 
         try:
             # Use the underlying httpx client directly to avoid query param extraction
-            response = self.http_handler.get(url, headers=self.headers)
+            response: Final = self.http_handler.get(url, headers=self.headers)
             response.raise_for_status()
 
-            data: Final = response.json()
-            return data.get("data")
+            return _PromptVersionResponse.model_validate(response.json()).data
 
         except Exception as e:
             # Check if it's an HTTP error
-            response = getattr(e, "response", None)
-            if response is not None and hasattr(response, "status_code"):
-                if response.status_code == 404:
+            error_response: Final[object] = getattr(e, "response", None)
+            if error_response is not None and hasattr(error_response, "status_code"):
+                status_code: Final[object] = getattr(error_response, "status_code", None)
+                if status_code == 404:
                     return None
-                elif response.status_code == 403:
+                elif status_code == 403:
                     raise Exception(
                         f"Access denied to prompt version '{prompt_version_id}'. Check your Arize Phoenix permissions."
                     )
-                elif response.status_code == 401:
+                elif status_code == 401:
                     raise Exception("Authentication failed. Check your Arize Phoenix API key and permissions.")
                 else:
                     raise Exception(f"Failed to fetch prompt version '{prompt_version_id}': {e}")

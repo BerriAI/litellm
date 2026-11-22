@@ -27,12 +27,14 @@ import pytest
 from pydantic import BaseModel
 
 from e2e_config import settle_propagation, unique_marker
+from e2e_metadata import Domain, Route, Subject, meta
 from e2e_http import NoBody, PartialBody, StreamingResponse, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import (
     KeyGenerateBody,
     OrgNewBody,
+    TeamBlockBody,
     TeamInfoParams,
     TeamMemberAddBody,
     TeamMemberDeleteBody,
@@ -48,10 +50,6 @@ TeamRole = Literal["admin", "user"]
 _TEAM_TPM_LIMIT: Final = 1000
 _TEAM_MAX_BUDGET: Final = 10.0
 _ORG_MAX_BUDGET: Final = 100.0
-
-
-class TeamBlockBody(BaseModel):
-    team_id: str
 
 
 class MemberUpdateBody(BaseModel):
@@ -79,6 +77,7 @@ class TeamMembership(BaseModel):
 class CallerEditAccess(BaseModel):
     kind: Literal["unrestricted", "team_admin", "team_admin_disabled", "none"]
     editable_fields: list[str] = []
+    may_raise_max_budget: bool = False
 
 
 class BudgetWindow(BaseModel):
@@ -241,26 +240,28 @@ def _member_delete_status(client: ManagementClient, key: str, team_id: str, user
 
 class TestTeamManagementRoutes:
     @pytest.mark.covers("mgmt.team.info.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_info_returns_created_team_fields(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         alias = f"e2e-team-info-{unique_marker()}"
-        team_id = _create_team(client, resources, alias, ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, alias, ["gemini-3.8-flash"])
 
         info = _read_team(client, team_id)
         assert info.team_id == team_id, f"/team/info echoed team_id {info.team_id!r}, requested {team_id!r}"
         assert info.team_info.team_alias == alias, (
             f"/team/info reports team_alias {info.team_info.team_alias!r}, configured {alias!r}"
         )
-        assert info.team_info.models == ["gemini-2.5-flash"], (
-            f"/team/info reports models {info.team_info.models}, configured ['gemini-2.5-flash']"
+        assert info.team_info.models == ["gemini-3.8-flash"], (
+            f"/team/info reports models {info.team_info.models}, configured ['gemini-3.8-flash']"
         )
 
     @pytest.mark.covers("mgmt.team.block.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_block_then_unblock_persists_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
-        team_id = _create_team(client, resources, f"e2e-team-block-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-block-{unique_marker()}", ["gemini-3.8-flash"])
         assert not _read_team(client, team_id).team_info.blocked, "/team/info reports the team blocked before /team/block"
 
         _set_blocked(client, team_id, blocked=True)
@@ -278,11 +279,12 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_update.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_member_update_persists_role_and_budget(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         user_id = _create_user(client, resources, f"e2e-team-mu-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-mu-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-mu-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, user_id)
         assert _member_role(_read_team(client, team_id), user_id) == "user", (
             f"member {user_id} should start as role 'user' after /team/member_add"
@@ -302,11 +304,12 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_delete.persists")
+    @meta(Subject(domain=Domain.MANAGEMENT, route=Route.TEAM_MANAGEMENT))
     def test_member_delete_persists_to_team_info(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
         user_id = _create_user(client, resources, f"e2e-team-md-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-md-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-md-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, user_id)
         assert _member_role(_read_team(client, team_id), user_id) == "user", (
             f"/team/info does not list {user_id} as a member after /team/member_add"
@@ -320,6 +323,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.new.admin_only")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_new_is_denied_to_non_admin_keys(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -334,6 +338,7 @@ class TestTeamManagementRoutes:
             )
 
     @pytest.mark.covers("mgmt.team.member_add.member_forbidden")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_member_add_forbidden_to_plain_member(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -348,6 +353,7 @@ class TestTeamManagementRoutes:
         )
 
     @pytest.mark.covers("mgmt.team.member_delete.member_forbidden")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_member_delete_forbidden_to_plain_member(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -369,7 +375,7 @@ class TestTeamManagementRoutes:
         user + team, plus a second user id the member could try to add."""
         member_id = _create_user(client, resources, f"e2e-team-fb-{unique_marker()}@example.com")
         other_id = _create_user(client, resources, f"e2e-team-fb-{unique_marker()}@example.com")
-        team_id = _create_team(client, resources, f"e2e-team-fb-{unique_marker()}", ["gemini-2.5-flash"])
+        team_id = _create_team(client, resources, f"e2e-team-fb-{unique_marker()}", ["gemini-3.8-flash"])
         client.add_team_member(team_id, member_id)
         member_key = _generate_key(client, resources, KeyGenerateBody(user_id=member_id, team_id=team_id))
         return member_id, other_id, member_key, team_id
@@ -428,6 +434,12 @@ def rpm_limit_and_max_budget_editable_by_team_admins(client: ManagementClient) -
         yield
 
 
+@pytest.fixture(scope="class")
+def max_budget_raisable_by_team_admins(client: ManagementClient) -> Generator[None]:
+    with _team_admins_may_edit(client, ["max_budget", "raise_max_budget"]):
+        yield
+
+
 def _team_with_admin(
     client: ManagementClient,
     resources: ResourceManager,
@@ -458,6 +470,7 @@ class TestTeamAdminWithNoEditableFields:
     """No proxy admin has enabled a team field for team admins, which is how every proxy starts."""
 
     @pytest.mark.covers("mgmt.team.update.team_admin_forbidden_until_enabled")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_change_any_team_setting(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -483,6 +496,7 @@ class TestTeamAdminWithTpmLimitEnabled:
     """A proxy admin has enabled tpm_limit, so a team admin may change that setting and no other."""
 
     @pytest.mark.covers("mgmt.team.update.team_admin_limited_to_enabled_fields")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_saves_the_settings_form_with_a_new_tpm_limit(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -517,11 +531,12 @@ class TestTeamAdminWithTpmLimitEnabled:
             pytest.param(TeamSettingsChange(rpm_limit=10), id="rpm_limit"),
             pytest.param(TeamSettingsChange(max_budget=0.5), id="max_budget"),
             pytest.param(TeamSettingsChange(team_alias="renamed-by-team-admin"), id="team_alias"),
-            pytest.param(TeamSettingsChange(models=["gemini-2.5-flash"]), id="models"),
+            pytest.param(TeamSettingsChange(models=["gemini-3.8-flash"]), id="models"),
             pytest.param(TeamSettingsChange(budget_duration="1d"), id="budget_duration"),
             pytest.param(TeamSettingsChange(metadata=TeamCustomMetadata(cost_center="team-admin")), id="metadata"),
         ],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_change_a_setting_that_is_not_enabled(
         self, client: ManagementClient, resources: ResourceManager, change: TeamSettingsChange
     ) -> None:
@@ -548,6 +563,7 @@ class TestTeamAdminWithTpmLimitEnabled:
         )
 
     @pytest.mark.covers("mgmt.team.update.team_admin_resend_keeps_budget_reset")
+    @meta(Subject(domain=Domain.SPEND_BUDGETS, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_resending_the_budget_settings_keeps_the_next_budget_reset(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -613,6 +629,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         "current_budget",
         [pytest.param(_TEAM_MAX_BUDGET, id="lower"), pytest.param(None, id="first-budget")],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_saves_a_new_rpm_limit_and_a_tighter_budget(
         self, client: ManagementClient, resources: ResourceManager, current_budget: float | None
     ) -> None:
@@ -649,6 +666,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
             pytest.param(None, "Only a proxy admin can remove", id="remove"),
         ],
     )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_raise_or_remove_the_budget(
         self, client: ManagementClient, resources: ResourceManager, max_budget: float | None, refusal: str
     ) -> None:
@@ -670,6 +688,7 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
         )
 
     @pytest.mark.covers("mgmt.team.update.team_admin_cannot_grow_budget")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
     def test_team_admin_cannot_raise_an_org_team_budget_under_the_org_cap(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -689,5 +708,88 @@ class TestTeamAdminWithRpmLimitAndMaxBudgetEnabled:
             f"under the org's {_ORG_MAX_BUDGET}, must be 403, got {outcome.status_code}: {outcome.body[:300]}"
         )
         assert "Only a proxy admin can raise" in outcome.body, f"403 body should say why, got: {outcome.body[:300]}"
+        after = _read_team(client, team_id).team_info
+        assert after == before, f"the refused update still wrote to the team: before {before}, after {after}"
+
+
+@pytest.mark.usefixtures("max_budget_raisable_by_team_admins")
+class TestTeamAdminWithRaiseMaxBudgetEnabled:
+    """A proxy admin has enabled max_budget and raise_max_budget, so a team admin may raise the team's budget.
+    The organization's budget still caps it, and removing the budget stays with the proxy admin."""
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_raises_budget_when_granted")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
+    def test_team_admin_raises_a_standalone_team_budget(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET)
+        access = _read_team(client, team_id, admin_key).team_info.caller_edit_access
+        assert access == CallerEditAccess(kind="team_admin", editable_fields=["max_budget"], may_raise_max_budget=True), (
+            f"/team/info should tell the team admin it may raise max_budget, got {access}"
+        )
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(client, admin_key, TeamSettingsUpdate(team_id=team_id, max_budget=_TEAM_MAX_BUDGET * 2))
+
+        assert outcome.status_code == 200, (
+            f"a team admin raising a standalone team's max_budget from {_TEAM_MAX_BUDGET} to {_TEAM_MAX_BUDGET * 2} "
+            f"must succeed, got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        after = _poll_team(
+            client,
+            team_id,
+            lambda info: info.max_budget == _TEAM_MAX_BUDGET * 2,
+            f"/team/info never reflected max_budget={_TEAM_MAX_BUDGET * 2}",
+        )
+        assert after.model_copy(update={"max_budget": before.max_budget}) == before, (
+            f"the update changed more than max_budget: before {before}, after {after}"
+        )
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_raises_budget_when_granted")
+    @pytest.mark.parametrize(
+        ("max_budget", "status_code"),
+        [pytest.param(_ORG_MAX_BUDGET, 200, id="up-to-the-org-cap"), pytest.param(_ORG_MAX_BUDGET * 2, 400, id="above-it")],
+    )
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
+    def test_team_admin_raises_an_org_team_budget_only_up_to_the_org_cap(
+        self, client: ManagementClient, resources: ResourceManager, max_budget: float, status_code: int
+    ) -> None:
+        org_id = client.create_org(
+            OrgWithBudgetNewBody(organization_alias=f"e2e-team-admin-org-{unique_marker()}", max_budget=_ORG_MAX_BUDGET)
+        )
+        resources.defer(lambda: client.delete_org(org_id))
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET, organization_id=org_id)
+
+        outcome = _update_team_as(client, admin_key, TeamSettingsUpdate(team_id=team_id, max_budget=max_budget))
+
+        assert outcome.status_code == status_code, (
+            f"a team admin raising an org team's max_budget from {_TEAM_MAX_BUDGET} to {max_budget} under an org "
+            f"cap of {_ORG_MAX_BUDGET} must be {status_code}, got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        if status_code == 400:
+            assert "exceeds organization's max_budget" in outcome.body, f"400 body should say why: {outcome.body[:300]}"
+        expected_budget = max_budget if status_code == 200 else _TEAM_MAX_BUDGET
+        _poll_team(
+            client,
+            team_id,
+            lambda info: info.max_budget == expected_budget,
+            f"/team/info never settled on max_budget={expected_budget}",
+        )
+
+    @pytest.mark.covers("mgmt.team.update.team_admin_raises_budget_when_granted")
+    @meta(Subject(domain=Domain.PROXY_AUTH, route=Route.TEAM_MANAGEMENT))
+    def test_team_admin_still_cannot_remove_the_budget(
+        self, client: ManagementClient, resources: ResourceManager
+    ) -> None:
+        team_id, admin_key = _team_with_admin(client, resources, max_budget=_TEAM_MAX_BUDGET)
+        before = _read_team(client, team_id).team_info
+
+        outcome = _update_team_as(client, admin_key, TeamSettingsUpdate(team_id=team_id, max_budget=None))
+
+        assert outcome.status_code == 403, (
+            f"a team admin removing max_budget must be 403 even with raise_max_budget enabled, "
+            f"got {outcome.status_code}: {outcome.body[:300]}"
+        )
+        assert "Only a proxy admin can remove" in outcome.body, f"403 body should say why, got: {outcome.body[:300]}"
         after = _read_team(client, team_id).team_info
         assert after == before, f"the refused update still wrote to the team: before {before}, after {after}"

@@ -18,9 +18,9 @@ import datetime
 import os
 import time
 import traceback
-from collections.abc import Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from datetime import datetime as datetimeObj
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 import httpx
 from httpx import Response
@@ -44,8 +44,8 @@ from litellm.integrations.datadog.datadog_mock_client import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
@@ -66,7 +66,7 @@ from ..additional_logging_utils import AdditionalLoggingUtils
 if TYPE_CHECKING:
     from fastapi import HTTPException
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _DatadogLoggingKwargs(TypedDict, total=False):
@@ -103,6 +103,21 @@ def _resolve_dd_batch_size() -> int:
 def _span_attribute(span: object, name: str) -> object:
     """Read an optional attribute off whatever span object the active tracer hands back."""
     return getattr(span, name, None)
+
+
+class _V0LoggedResponse(Protocol):
+    def __getitem__(self, key: Literal["usage"], /) -> Iterable[tuple[str, object]]: ...
+
+    def get(self, key: Literal["id"], default: str, /) -> object: ...
+
+    def __iter__(self) -> Iterator[tuple[str, object]]: ...
+
+
+def _v0_response_fields(response_obj: _V0LoggedResponse) -> Mapping[str, object] | _V0LoggedResponse:
+    try:
+        return dict(response_obj)
+    except Exception:
+        return response_obj
 
 
 class DataDogLogger(
@@ -180,7 +195,7 @@ class DataDogLogger(
             dd_base_url: Final = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/v2/logs"
-            self.sync_client = _get_httpx_client()
+            self.sync_client = get_httpx_client()
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
@@ -397,7 +412,7 @@ class DataDogLogger(
                 verbose_logger.debug("[DATADOG MOCK] Batch of %s events successfully mocked", len(batch_to_send))
 
         except BatchSendCancelled as cancelled:
-            self.log_queue = list(cancelled.undelivered) + self.log_queue  # mutable-ok: logger queue remains appendable
+            self.log_queue = list(cancelled.undelivered) + self.log_queue
             raise asyncio.CancelledError() from cancelled
         except Exception as e:
             self.log_queue = batch_to_send + self.log_queue
@@ -425,7 +440,7 @@ class DataDogLogger(
             drop_error_message=DD_ERRORS.DATADOG_413_ERROR.value,
             non_success_handler=requeue_after_http_error,
         )
-        return list(undelivered)  # mutable-ok: caller prepends records to the logger queue
+        return list(undelivered)
 
     @staticmethod
     def _exceeds_intake_limits(chunk: Sequence[DatadogPayload]) -> bool:
@@ -453,7 +468,7 @@ class DataDogLogger(
                 if not self.log_queue:
                     self.last_flush_time = time.time()
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj, start_time: datetime.datetime, end_time: datetime.datetime):
         """
         Sync Log success events to Datadog
 
@@ -680,7 +695,7 @@ class DataDogLogger(
     def _create_v0_logging_payload(
         self,
         kwargs: dict,
-        response_obj: Any,
+        response_obj: _V0LoggedResponse,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
     ) -> DatadogPayload:
@@ -697,18 +712,15 @@ class DataDogLogger(
         optional_params: Final = kwargs.get("optional_params", {})
         call_type: Final = kwargs.get("call_type", "litellm.completion")
         cache_hit: Final = kwargs.get("cache_hit", False)
-        usage = response_obj["usage"]
+        raw_usage: Final = response_obj["usage"]
         id: Final = response_obj.get("id", str(uuid.uuid4()))
-        usage = dict(usage)
+        usage: Final = dict(raw_usage)
         try:
             response_time = (end_time - start_time).total_seconds() * 1000
         except Exception:
             response_time = None
 
-        try:
-            response_obj = dict(response_obj)
-        except Exception:
-            response_obj = response_obj
+        response_fields: Final = _v0_response_fields(response_obj)
 
         # Clean Metadata before logging - never log raw metadata
         # the raw metadata can contain circular references which leads to infinite recursion
@@ -739,7 +751,7 @@ class DataDogLogger(
             "model_parameters": optional_params,
             "spend": kwargs.get("response_cost", 0),
             "messages": messages,
-            "response": response_obj,
+            "response": response_fields,
             "usage": usage,
             "metadata": clean_metadata,
         }

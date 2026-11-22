@@ -9,9 +9,9 @@ gzip JSONEachRow insert, either every `CLICKHOUSE_FLUSH_INTERVAL_SECONDS` or as 
 """
 
 import asyncio
-import os
 from collections.abc import Mapping, Sequence
-from typing import Any, ClassVar
+from contextlib import suppress
+from typing import ClassVar, Final
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -21,20 +21,17 @@ from litellm.constants import (
     CLICKHOUSE_MAX_RETRIES,
 )
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
-from litellm.rust_bridge.traces import TraceStorage
+from litellm.rust_bridge.clickhouse import ClickHouseSpendStorage, spend_storage_config
 
 
-def clickhouse_storage_from_env() -> TraceStorage:
-    return TraceStorage(
-        database=os.getenv("CLICKHOUSE_DATABASE", "litellm"),
-        url=os.getenv("CLICKHOUSE_URL", ""),
-    )
+def clickhouse_storage_from_env() -> ClickHouseSpendStorage:
+    return ClickHouseSpendStorage(spend_storage_config())
 
 
 class ClickHouseBatchLogger(CustomBatchLogger):
     table: ClassVar[str]
 
-    def __init__(self, storage: TraceStorage | None = None) -> None:
+    def __init__(self, storage: ClickHouseSpendStorage | None = None) -> None:
         self.storage = storage or clickhouse_storage_from_env()
         self.rows_written = 0
         self.rows_dropped = 0
@@ -45,10 +42,26 @@ class ClickHouseBatchLogger(CustomBatchLogger):
             flush_interval=CLICKHOUSE_FLUSH_INTERVAL_SECONDS,
         )
         self._flush_task: asyncio.Task[None] | None = None
+        self._stop: Final = asyncio.Event()
 
     def start(self) -> None:
         if self._flush_task is None or self._flush_task.done():
             self._flush_task = asyncio.get_running_loop().create_task(self.periodic_flush())
+
+    async def aclose(self) -> None:
+        self._stop.set()
+        if self._flush_task is not None:
+            await self._flush_task
+        while self.log_queue:
+            await self.flush_queue()
+
+    async def periodic_flush(self) -> None:
+        while True:
+            with suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=self.flush_interval)
+            if self._stop.is_set():
+                return
+            await self.flush_queue()
 
     def is_full(self) -> bool:
         """Backpressure signal: producers should reject (429) instead of enqueueing."""
@@ -75,7 +88,7 @@ class ClickHouseBatchLogger(CustomBatchLogger):
     async def async_send_batch(self) -> None:
         await self.flush_queue()
 
-    async def _insert(self, batch: list[dict[str, Any]]) -> bool:
+    async def _insert(self, batch: list[dict[str, object]]) -> bool:
         try:
             await self.storage.insert_rows(self.table, batch)
             self.rows_written += len(batch)

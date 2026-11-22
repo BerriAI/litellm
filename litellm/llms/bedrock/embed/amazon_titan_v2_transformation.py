@@ -10,6 +10,7 @@ Docs - https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-tit
 """
 
 import types
+from collections.abc import Mapping
 from typing import Final
 
 from litellm.types.llms.bedrock import (
@@ -31,16 +32,17 @@ class AmazonTitanV2Config:
     dimensions: int | None = None
 
     def __init__(self, normalize: bool | None = None, dimensions: int | None = None) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -75,6 +77,13 @@ class AmazonTitanV2Config:
 
     def _transform_request(self, input: str, inference_params: dict) -> AmazonTitanV2EmbeddingRequest:
         return AmazonTitanV2EmbeddingRequest(inputText=input, **inference_params)
+
+    def transform_request(
+        self,
+        input: str,
+        inference_params: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> AmazonTitanV2EmbeddingRequest:
+        return self._transform_request(input, inference_params)
 
     def _transform_response(self, response_list: list[dict], model: str) -> EmbeddingResponse:
         total_prompt_tokens = 0
@@ -115,3 +124,10 @@ class AmazonTitanV2Config:
             total_tokens=total_prompt_tokens,
         )
         return EmbeddingResponse(model=model, usage=usage, data=transformed_responses)
+
+    def transform_response(
+        self,
+        response_list: list[dict[str, object]],  # mutable-ok: mirrors override contract
+        model: str,
+    ) -> EmbeddingResponse:
+        return self._transform_response(response_list, model)

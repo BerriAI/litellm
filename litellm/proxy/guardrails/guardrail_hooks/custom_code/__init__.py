@@ -39,7 +39,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         raise ValueError("Custom code guardrail requires a guardrail_name")
 
     # Get the custom code from litellm_params
-    custom_code: Final = getattr(litellm_params, "custom_code", None)
+    custom_code: Final = litellm_params.custom_code
     if not custom_code:
         raise ValueError("Custom code guardrail requires 'custom_code' in litellm_params")
 

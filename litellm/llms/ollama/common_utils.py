@@ -1,11 +1,71 @@
 import base64
 import io
-from typing import Any, Final
+from collections.abc import Iterable
+from typing import Final, Protocol, overload
 
 import httpx
+from openai.types.chat import ChatCompletionChunk
+from pydantic import BaseModel, TypeAdapter
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.utils import ModelResponse, ModelResponseStream
+
+_PROVIDER_FIELDS: Final = TypeAdapter(dict[str, object])
+_THINK_ON_EFFORTS: Final = frozenset({"low", "medium", "high"})
+_THINK_OFF_REASON: Final = "Ollama takes think only as on or off, and litellm maps this level to off."
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _JsonLookup(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
+
+
+class _JsonItems(Protocol):
+    def items(self) -> Iterable[tuple[str, object]]: ...
+
+
+class OllamaResponseIdNormalizer:
+    def __init__(self) -> None:
+        self.response_id: str | None = None
+        self.original_response_id: str | None = None
+
+    def observe(self, response: object) -> None:
+        if self.response_id is not None:
+            return
+        if not isinstance(response, (ModelResponse, ModelResponseStream, ChatCompletionChunk)):
+            return
+        if response.system_fingerprint != "fp_ollama":
+            return
+        fields: Final = _PROVIDER_FIELDS.validate_python(
+            BaseModel.model_dump(response).get("provider_specific_fields") or {}
+        )
+        original_id: Final = fields.get("original_response_id")
+        self.original_response_id = original_id if isinstance(original_id, str) else response.id
+        self.response_id = response.id if isinstance(original_id, str) else f"chatcmpl-{uuid.uuid4()}"
+
+    @overload
+    def apply(self, response: ModelResponse) -> ModelResponse: ...
+
+    @overload
+    def apply(self, response: ModelResponseStream) -> ModelResponseStream: ...
+
+    def apply(self, response: ModelResponse | ModelResponseStream) -> ModelResponse | ModelResponseStream:
+        if self.response_id is None:
+            return response
+        fields: Final = _PROVIDER_FIELDS.validate_python(
+            BaseModel.model_dump(response).get("provider_specific_fields") or {}
+        )
+        return response.model_copy(
+            update={
+                "id": self.response_id,
+                "provider_specific_fields": {**fields, "original_response_id": self.original_response_id},
+            }
+        )
 
 
 class OllamaError(BaseLLMException):
@@ -31,7 +91,7 @@ def _reencode_as_jpeg(raw_image: bytes, original: str) -> str:
     return base64.b64encode(jpeg_image.getvalue()).decode("utf-8")
 
 
-def _convert_image(image: str) -> str:
+def convert_image(image: str) -> str:
     payload: Final = image.split(",")[-1] if image.startswith("data:") else image
     try:
         raw_image: Final = base64.b64decode(payload)
@@ -41,6 +101,8 @@ def _convert_image(image: str) -> str:
         return payload
     return _reencode_as_jpeg(raw_image, original=image)
 
+
+_convert_image = convert_image
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 
@@ -102,9 +164,9 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         names: Final[set[str]] = set()
         try:
-            resp: Final = httpx.get(f"{base}/api/tags", headers=headers)
+            resp: Final = httpx.get(join_api_base(base, "api/tags"), headers=headers)
             resp.raise_for_status()
-            data: Final = resp.json()
+            data: Final = _DECODED_JSON.validate_python(resp.json())
             # Expecting a dict with a 'models' list
             models_list = []
             if isinstance(data, dict) and "models" in data and isinstance(data["models"], list):
@@ -150,19 +212,19 @@ class OllamaModelInfo(BaseLLMModelInfo):
             "ollama/" + stripped_model,
             "ollama_chat/" + stripped_model,
         }
-        model_cost_keys: Final = {key.lower() for key in model_cost}
+        model_cost_keys: Final = {key.lower() for key in (*model_cost,)}
         return any(name.lower() in model_cost_keys for name in potential_model_names)
 
     @staticmethod
-    def _supports_function_calling(ollama_model_info: dict) -> bool:
-        _template: Final[str] = str(ollama_model_info.get("template", "") or "")
+    def _supports_function_calling(ollama_model_info: object) -> bool:
+        _template: Final[str] = str(require_attributes(ollama_model_info, _JsonLookup, "get").get("template", "") or "")
         return "tools" in _template.lower()
 
     @staticmethod
-    def _get_max_tokens(ollama_model_info: dict) -> int | None:
-        _model_info: Final[dict] = ollama_model_info.get("model_info", {})
+    def _get_max_tokens(ollama_model_info: object) -> object:
+        _model_info: Final = require_attributes(ollama_model_info, _JsonLookup, "get").get("model_info", {})
 
-        for key, value in _model_info.items():
+        for key, value in require_attributes(_model_info, _JsonItems, "items").items():
             if "context_length" in key:
                 return value
         return None
@@ -172,7 +234,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         from litellm import module_level_client
 
         model = self._strip_ollama_model_prefix(model)
@@ -183,7 +245,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
 
         try:
             response: Final = module_level_client.post(
-                url=f"{api_base}/api/show",
+                url=join_api_base(api_base, "api/show"),
                 json={"name": model},
                 headers=headers,
             )
@@ -201,7 +263,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 "max_output_tokens": None,
             }
 
-        model_info: Final = response.json()
+        model_info: Final = _DECODED_JSON.validate_python(response.json())
         max_tokens: Final = self._get_max_tokens(model_info)
 
         return {
@@ -221,7 +283,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
         model: str,
         api_base: str | None = None,
         api_key: str | None = None,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         if self._is_static_ollama_model(model):
             return None
         return self.get_runtime_model_info(model=model, api_base=api_base, api_key=api_key)
@@ -247,3 +309,12 @@ class OllamaModelInfo(BaseLLMModelInfo):
         Return the base model name for Ollama (no-op).
         """
         return model
+
+
+def ollama_think(model: str, reasoning_effort: object) -> object:
+    if model.startswith("gpt-oss"):
+        return reasoning_effort
+    think: Final = reasoning_effort in _THINK_ON_EFFORTS
+    if isinstance(reasoning_effort, str) and not think and reasoning_effort != "none":
+        warn_dropped_reasoning("reasoning_effort", reasoning_effort, model, _THINK_OFF_REASON, drop_params_gated=False)
+    return think

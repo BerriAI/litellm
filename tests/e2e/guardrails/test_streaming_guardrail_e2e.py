@@ -22,6 +22,7 @@ import os
 import pytest
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from guardrails_client import (
     BedrockGuardrailParamsBody,
     GuardrailsClient,
@@ -31,13 +32,21 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 
 class TestBedrockDuringCallStreaming:
     @pytest.mark.covers(
         "guardrail.bedrock.during.blocks",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.STREAM,
+        )
     )
     def test_during_call_blocks_stream_before_first_chunk(
         self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str

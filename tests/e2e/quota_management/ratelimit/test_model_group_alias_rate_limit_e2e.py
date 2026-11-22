@@ -21,6 +21,7 @@ import time
 import pytest
 from e2e_config import unique_marker
 from e2e_http import StreamingResponse, require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from quota_client import QuotaClient
 
 pytestmark = pytest.mark.e2e
@@ -75,11 +76,27 @@ def _assert_blocked_inside_window(
 
 class TestModelGroupAliasRateLimit:
     @pytest.mark.covers("quota_management.ratelimit.model_group_alias.shares_bucket")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL_GROUP, MODEL_ALIAS),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_alias_shares_rpm_bucket_with_model_group(self, client: QuotaClient, scoped_key: str) -> None:
         opened_at = _exhaust_rpm(client, scoped_key, MODEL_GROUP)
         _assert_blocked_inside_window(client, scoped_key, MODEL_ALIAS, opened_at)
 
     @pytest.mark.covers("quota_management.ratelimit.model_group_alias.shares_bucket")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            providers=(Provider.ANTHROPIC,),
+            models=(MODEL_GROUP, MODEL_ALIAS),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_model_group_shares_rpm_bucket_with_alias(self, client: QuotaClient, scoped_key: str) -> None:
         opened_at = _exhaust_rpm(client, scoped_key, MODEL_ALIAS)
         _assert_blocked_inside_window(client, scoped_key, MODEL_GROUP, opened_at)

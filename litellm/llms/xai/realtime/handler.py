@@ -8,9 +8,11 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from litellm.constants import XAI_API_BASE
+from litellm.litellm_core_utils.realtime_streaming import RealtimeUsageMeter
 
 from ...openai.realtime.handler import OpenAIRealtime
 from .transformation import XAIRealtimeNormalizer
+from .usage_meter import XAIRealtimeUsageMeter
 
 
 class XAIRealtime(OpenAIRealtime):
@@ -32,6 +34,10 @@ class XAIRealtime(OpenAIRealtime):
     def _make_event_normalizer(self) -> XAIRealtimeNormalizer:
         """Return a fresh per-session XAI normalizer instance."""
         return XAIRealtimeNormalizer()
+
+    def _make_usage_meter(self) -> RealtimeUsageMeter:
+        """xAI bills realtime audio per second and text per client message."""
+        return XAIRealtimeUsageMeter()
 
     def _get_additional_headers(
         self,

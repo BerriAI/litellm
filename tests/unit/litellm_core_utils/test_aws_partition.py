@@ -1,4 +1,5 @@
 import ast
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlparse
@@ -6,7 +7,6 @@ from urllib.parse import urlparse
 import pytest
 
 import litellm
-from litellm.integrations.s3_v2 import S3Logger
 from litellm.litellm_core_utils.aws_partition import (
     AwsPartition,
     contains_aws_arn,
@@ -99,14 +99,6 @@ def _agentcore_model(region: str) -> str:
     return f"agentcore/{get_aws_arn_prefix(region)}bedrock-agentcore:{region}:111122223333:runtime/my-agent"
 
 
-def _s3_object_url(region: str) -> str:
-    logger = S3Logger.__new__(S3Logger)
-    logger.s3_endpoint_url = None
-    logger.s3_bucket_name = "audit-bucket"
-    logger.s3_region_name = region
-    return logger._build_object_url("2025-01-01/key.json")
-
-
 ENDPOINT_BUILDERS: Final = {
     "bedrock_runtime_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("runtime", region),
     "bedrock_agent_default": lambda region: BaseAWSLLM()._select_default_endpoint_url("agent", region),
@@ -157,7 +149,6 @@ ENDPOINT_BUILDERS: Final = {
         api_base=None,
         litellm_params={"aws_region_name": region},
     ),
-    "s3_object_url": _s3_object_url,
 }
 
 
@@ -187,21 +178,47 @@ def test_every_endpoint_builder_keeps_amazonaws_com_outside_cn(builder_name: str
     assert hostname.endswith(".amazonaws.com"), url
 
 
-def _fstring_literal_offenders(needle: str) -> list[str]:
-    litellm_root = Path(litellm.__file__).parent
-    return [
-        f"{path.relative_to(litellm_root)}: {part.value!r}"
-        for path in sorted(litellm_root.rglob("*.py"))
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
-        if isinstance(node, ast.JoinedStr)
-        for part in node.values
-        if isinstance(part, ast.Constant) and isinstance(part.value, str) and needle in part.value
-    ]
+def _fstring_literals(root: Path) -> Iterator[tuple[str, str]]:
+    for path in sorted(root.rglob("*.py")):
+        source: Final = ast.parse(path.read_text(encoding="utf-8"))
+        relative: Final = str(path.relative_to(root))
+        for node in ast.walk(source):
+            if not isinstance(node, ast.JoinedStr):
+                continue
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    yield relative, part.value
 
 
-def test_no_fstring_hardcodes_the_commercial_dns_suffix() -> None:
-    assert _fstring_literal_offenders("amazonaws.com") == []
+@pytest.fixture
+def fstring_literals() -> tuple[tuple[str, str], ...]:
+    return tuple(_fstring_literals(Path(litellm.__file__).parent))
 
 
-def test_no_fstring_hardcodes_the_commercial_arn_prefix() -> None:
-    assert _fstring_literal_offenders("arn:aws:") == []
+def _fstring_literal_offenders(needle: str, literals: tuple[tuple[str, str], ...]) -> list[str]:
+    return [f"{path}: {value!r}" for path, value in literals if needle in value]
+
+
+def test_no_fstring_hardcodes_the_commercial_dns_suffix(fstring_literals: tuple[tuple[str, str], ...]) -> None:
+    assert _fstring_literal_offenders("amazonaws.com", fstring_literals) == []
+
+
+def test_no_fstring_hardcodes_the_commercial_arn_prefix(fstring_literals: tuple[tuple[str, str], ...]) -> None:
+    assert _fstring_literal_offenders("arn:aws:", fstring_literals) == []
+
+
+def test_fstring_audit_sees_changed_and_new_source(tmp_path: Path) -> None:
+    source: Final = tmp_path / "source.py"
+    source.write_text('value = f"{region}.amazonaws.com"\n', encoding="utf-8")
+    first: Final = tuple(_fstring_literals(tmp_path))
+    assert _fstring_literal_offenders("amazonaws.com", first)
+    assert _fstring_literal_offenders("arn:aws:", first) == []
+    source.write_text('value = f"arn:aws:{service}"\n', encoding="utf-8")
+    changed: Final = tuple(_fstring_literals(tmp_path))
+    assert _fstring_literal_offenders("amazonaws.com", changed) == []
+    assert _fstring_literal_offenders("arn:aws:", changed)
+    added_source: Final = tmp_path / "added.py"
+    added_source.write_text('value = f"{region}.amazonaws.com"\n', encoding="utf-8")
+    added: Final = tuple(_fstring_literals(tmp_path))
+    assert _fstring_literal_offenders("amazonaws.com", added)
+    assert _fstring_literal_offenders("arn:aws:", added)

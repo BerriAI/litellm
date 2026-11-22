@@ -1,0 +1,516 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from typing import Final
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
+    LiteLLM_EndUserTable,
+    LiteLLM_OrganizationTable,
+    LiteLLM_TagTable,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.spend_tracking.budget_reservation import (
+    _get_model_access_group_budget_counters,
+    estimate_request_max_cost,
+    get_budget_window_start,
+    release_budget_reservation_on_cancel,
+    reserve_budget_for_request,
+)
+from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.connection import connect
+from litellm.redis.stores.spend_counters import SpendCounterStore, model_access_group_counter
+from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
+from tests.unit.proxy.spend_tracking.native_budgets_replica import install_native_owner
+from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
+
+
+@pytest.fixture()
+def spend_counter_state():
+    import litellm.proxy.proxy_server as ps
+
+    original_counter_store = ps.spend_counter_store
+    original_key_cache = ps.user_api_key_cache
+    original_prisma_client = ps.prisma_client
+
+    counter_cache = FakeSpendCounters(redis=None)
+    key_cache = UserApiKeyCache()
+    ps.spend_counter_store = counter_cache.store()
+    ps.user_api_key_cache = key_cache
+    ps.prisma_client = None
+
+    try:
+        yield counter_cache, key_cache
+    finally:
+        ps.spend_counter_store = original_counter_store
+        ps.user_api_key_cache = original_key_cache
+        ps.prisma_client = original_prisma_client
+
+
+def _request_body() -> dict:
+    return {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 10,
+    }
+
+
+def test_should_not_serialize_budget_reservation_on_user_api_key_auth():
+    auth = UserAPIKeyAuth(
+        token="key-budget-runtime-state",
+        budget_reservation={
+            "reserved_cost": 0.5,
+            "entries": [{"counter_key": "spend:key:key-budget-runtime-state"}],
+        },
+    )
+
+    assert "budget_reservation" not in auth.model_dump()
+    assert "budget_reservation" not in auth.model_dump(exclude_none=True)
+    assert "budget_reservation" not in auth.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_should_seed_and_update_end_user_and_tag_counters_without_reservation(
+    spend_counter_state,
+):
+    counter_cache, key_cache = spend_counter_state
+    await key_cache.async_set_cache(
+        key=AuthObject.end_user("customer-1"),
+        value=LiteLLM_EndUserTable(
+            user_id="customer-1",
+            blocked=False,
+            spend=4.0,
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+        ).model_dump(),
+    )
+    await key_cache.async_set_cache(
+        key=AuthObject.tag("paid-tag"),
+        value=LiteLLM_TagTable(
+            tag_name="paid-tag",
+            spend=7.0,
+        ).model_dump(),
+    )
+    await key_cache.async_set_cache(
+        key=AuthObject.tag("other-tag"),
+        value=LiteLLM_TagTable(
+            tag_name="other-tag",
+            spend=2.0,
+        ).model_dump(),
+    )
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        response_cost=0.50,
+        end_user_id="customer-1",
+        tags=["paid-tag", "paid-tag", "other-tag", ""],
+    )
+
+    assert counter_cache.get_local("spend:end_user:customer-1") == pytest.approx(4.50)
+    assert counter_cache.get_local("spend:tag:paid-tag") == pytest.approx(7.50)
+    assert counter_cache.get_local("spend:tag:other-tag") == pytest.approx(2.50)
+
+
+@pytest.mark.asyncio
+async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await key_cache.async_set_cache(
+        key=AuthObject.org_with_budget("org-counter-with-budget"),
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-counter-with-budget",
+            organization_alias="shared-org",
+            budget_id="org-budget-id",
+            spend=2.0,
+            models=[],
+            created_by="test",
+            updated_by="test",
+            litellm_budget_table=LiteLLM_BudgetTable(max_budget=10.0),
+        ).model_dump(),
+    )
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        org_id="org-counter-with-budget",
+        response_cost=0.25,
+    )
+
+    assert counter_cache.get_local("spend:org:org-counter-with-budget") == pytest.approx(2.25)
+
+
+@pytest.mark.asyncio
+async def test_should_seed_org_counter_from_plain_org_cache(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    await key_cache.async_set_cache(
+        key=AuthObject.org("org-counter-plain"),
+        value=LiteLLM_OrganizationTable(
+            organization_id="org-counter-plain",
+            organization_alias="shared-org",
+            budget_id="org-budget-id",
+            spend=2.0,
+            models=[],
+            created_by="test",
+            updated_by="test",
+        ).model_dump(),
+    )
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    await increment_spend_counters(
+        token=None,
+        team_id=None,
+        user_id=None,
+        org_id="org-counter-plain",
+        response_cost=0.25,
+    )
+
+    assert counter_cache.get_local("spend:org:org-counter-plain") == pytest.approx(2.25)
+
+
+def test_tiered_reservation_is_all_or_nothing_with_output_tier_from_input_length():
+    """Dashscope tiered pricing is all-or-nothing: the tier is chosen by the total
+    input tokens and every token (input and output) is billed at that tier's rate.
+
+    A long-context request with a large output allowance must reserve the output at
+    the input-selected tier, not at the cheapest tier picked from the output volume.
+    The earlier graduated calculation under-reserved such requests, letting a caller
+    slip past a depleted budget."""
+    tiered_pricing = [
+        {"range": [0, 32000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06},
+        {"range": [32000, 128000], "input_cost_per_token": 4e-06, "output_cost_per_token": 8e-06},
+    ]
+    input_tokens = 100000  # falls entirely in the second tier
+    output_tokens = 1000
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 4e-06) + (output_tokens * 8e-06)
+    assert estimated == pytest.approx(expected)
+
+    # What the old graduated math (with the output tier taken from output volume)
+    # would have reserved. The all-or-nothing estimate must be strictly larger.
+    graduated_under_reserve = (32000 * 1e-06) + (68000 * 4e-06) + (output_tokens * 2e-06)
+    assert estimated > graduated_under_reserve
+
+
+def test_tiered_reservation_uses_higher_reasoning_output_rate():
+    """Some tiered models price reasoning output above standard output. The
+    reasoning-token share is unknown before the request runs, so reservation must
+    charge every output token at the higher of the two rates to avoid under-reserving
+    reasoning-heavy requests."""
+    tiered_pricing = [
+        {
+            "range": [0, 32000],
+            "input_cost_per_token": 1e-06,
+            "output_cost_per_token": 1.2e-06,
+            "output_cost_per_reasoning_token": 4e-06,
+        }
+    ]
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"tiered_pricing": tiered_pricing, "max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+
+    # Reserving output at the plain rate would under-reserve reasoning-heavy calls.
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
+def test_flat_reservation_uses_higher_reasoning_output_rate():
+    """The same reasoning under-reservation gap exists for flat-rate models that
+    declare output_cost_per_reasoning_token above output_cost_per_token."""
+    input_tokens = 1000
+    output_tokens = 500
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 1.2e-06,
+                "output_cost_per_reasoning_token": 4e-06,
+                "max_output_tokens": 200000,
+            },
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected = (input_tokens * 1e-06) + (output_tokens * 4e-06)
+    assert estimated == pytest.approx(expected)
+    under_reserve = (input_tokens * 1e-06) + (output_tokens * 1.2e-06)
+    assert estimated > under_reserve
+
+
+def test_reservation_uses_most_expensive_deployment_in_group():
+    """When a model group mixes deployments with different tiered rates, reservation
+    must estimate against the most expensive one. Reserving the cheaper sibling would
+    let a caller repeatedly hit the alias and exceed the budget once routed to the
+    costlier deployment."""
+    cheap = [{"range": [0, 32000], "input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}]
+    expensive = [{"range": [0, 32000], "input_cost_per_token": 5e-06, "output_cost_per_token": 1e-05}]
+    input_tokens = 1000
+    output_tokens = 10
+
+    with (
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+            return_value={"max_output_tokens": 200000},
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._get_deployment_tiered_pricing_tables",
+            return_value=[cheap, expensive],
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_input_tokens",
+            return_value=input_tokens,
+        ),
+        patch(
+            "litellm.proxy.spend_tracking.budget_reservation._estimate_output_tokens",
+            return_value=output_tokens,
+        ),
+    ):
+        estimated = estimate_request_max_cost(
+            request_body=_request_body(),
+            route="/chat/completions",
+            llm_router=None,
+        )
+
+    expected_expensive = (input_tokens * 5e-06) + (output_tokens * 1e-05)
+    expected_cheap = (input_tokens * 1e-06) + (output_tokens * 2e-06)
+    assert expected_expensive > expected_cheap
+    assert estimated == pytest.approx(expected_expensive)
+
+
+@pytest.mark.asyncio
+async def test_should_skip_reservation_for_per_pixel_image_model(spend_counter_state, native_budgets_on, monkeypatch):
+    """DALL-E 2-style per-pixel pricing depends on the requested ``size``,
+    which we don't decode here. Fall through to read-time enforcement
+    rather than guess."""
+    import litellm.proxy.proxy_server as ps
+
+    counter_cache, key_cache = spend_counter_state
+    monkeypatch.setattr(ps, "spend_counter_store", SpendCounterStore(connect(None).spend_counters()))
+    install_native_owner(ps.spend_counter_store)
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-image-per-pixel",
+        spend=0.0,
+        max_budget=1.0,
+    )
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-per-pixel"), value=valid_token)
+
+    request_body = {"model": "dall-e-2", "prompt": "a cat", "size": "256x256"}
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation._get_model_cost_info",
+        return_value={
+            "mode": "image_generation",
+            "input_cost_per_pixel": 2.4414e-07,
+            "output_cost_per_pixel": 0.0,
+        },
+    ):
+        reservation = await reserve_budget_for_request(
+            request_body=request_body,
+            route="/v1/images/generations",
+            llm_router=None,
+            valid_token=valid_token,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    assert reservation is None
+
+
+@pytest.mark.parametrize("microsecond", (0, 123456, 999999))
+def test_should_start_window_without_reset_at_at_duration_boundary(microsecond: int) -> None:
+    now: Final = datetime(2026, 11, 15, 5, 48, 2, microsecond, tzinfo=timezone.utc)
+    with patch("litellm.proxy.spend_tracking.budget_reservation.datetime") as clock:
+        clock.now.return_value = now
+        window_start: Final = get_budget_window_start({"budget_duration": "1h"})
+
+    assert window_start == now.replace(microsecond=microsecond // 1000 * 1000) - timedelta(hours=1)
+
+
+@pytest.mark.asyncio
+async def test_release_budget_reservation_on_cancel_swallows_release_errors():
+    # If the release itself fails (e.g. Redis unavailable) it must not escape
+    # the helper: doing so would replace the in-flight CancelledError /
+    # GeneratorExit at the call site and disrupt the disconnect teardown.
+    reservation = {
+        "reserved_cost": 3.0,
+        "entries": [{"counter_key": "spend:key:key-cancel-error"}],
+        "finalized": False,
+        "input_cost": 0.5,
+    }
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reconcile_budget_reservation",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        # must return without raising
+        await release_budget_reservation_on_cancel(reservation)
+
+
+class _ExplodingPrismaClient:
+    """Model access group budget rows come from the Rust store; a Prisma read is a bug."""
+
+    def __getattr__(self, name: str) -> object:
+        raise AssertionError(f"unexpected database access: {name}")
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
+
+def _seed_model_access_group_budgets(stores: RustAuthStores, **max_budget_by_group: float | None) -> None:
+    """``LiteLLM_ModelAccessGroupBudgetTable`` rows as the Rust model access group store serves them."""
+    stores.model_access_group.groups.update(
+        {group: GroupBudget(spend=7.0, max_budget=max_budget) for group, max_budget in max_budget_by_group.items()}
+    )
+
+
+async def _model_access_group_counters(stores: RustAuthStores, matched, **max_budget_by_group):
+    _seed_model_access_group_budgets(stores, **max_budget_by_group)
+    return await _get_model_access_group_budget_counters(
+        valid_token=UserAPIKeyAuth(api_key="hashed", matched_model_access_groups=matched),
+        prisma_client=_ExplodingPrismaClient(),
+        user_api_key_cache=UserApiKeyCache(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_counter_key(rust_auth_stores: RustAuthStores):
+    counters = await _model_access_group_counters(rust_auth_stores, ["premium"], premium=25.0)
+
+    assert len(counters) == 1
+    counter = counters[0]
+    assert counter.counter_key == _model_access_group_counter_key(SimpleNamespace(access_group_name="premium"))
+    assert counter.source_cache_key == AuthObject.model_access_group("premium")
+    assert counter.max_budget == 25.0
+    assert counter.fallback_spend == 7.0
+    assert counter.entity_type == "Model access group"
+    assert counter.entity_id == "premium"
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_without_a_budget_reserves_nothing(rust_auth_stores: RustAuthStores):
+    assert await _model_access_group_counters(rust_auth_stores, ["premium"], premium=None) == []
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_with_a_zero_budget_reserves_nothing(rust_auth_stores: RustAuthStores):
+    """Zero is how a budget is cleared, not a ceiling that blocks every request."""
+    assert await _model_access_group_counters(rust_auth_stores, ["premium"], premium=0.0) == []
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_counters_come_from_the_auth_object(rust_auth_stores: RustAuthStores):
+    """Auth already resolved which granted groups serve the model; re-deriving it here would drift."""
+    assert await _model_access_group_counters(rust_auth_stores, None, premium=25.0) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_model_access_group_reserves_once(rust_auth_stores: RustAuthStores):
+    counters = await _model_access_group_counters(rust_auth_stores, ["premium", "premium"], premium=25.0)
+
+    assert [counter.entity_id for counter in counters] == ["premium"]
+
+
+async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
+    await key_cache.async_set_cache(
+        key=AuthObject.model_access_group(group),
+        value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
+        model_type=ModelAccessGroupBudget,
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_access_group_counter_accumulates_across_calls_without_a_reservation(spend_counter_state):
+    """With reservations disabled nothing writes the counter up front, so the cost callback must.
+
+    Otherwise the read-time budget check enforces against the DB row's spend, which the cache
+    holds for the full TTL, and a caller runs past the ceiling for that whole window.
+    """
+    counter_cache, key_cache = spend_counter_state
+    await _cache_model_access_group_budget(key_cache, "premium", spend=1.0, max_budget=25.0)
+
+    from litellm.proxy.proxy_server import increment_spend_counters
+
+    counter_key = model_access_group_counter("premium")
+
+    await increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.25, model_access_groups=["premium"]
+    )
+    assert counter_cache.get_local(counter_key) == pytest.approx(1.25)
+
+    await increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.75, model_access_groups=["premium", "premium", ""]
+    )
+    assert counter_cache.get_local(counter_key) == pytest.approx(2.0)
+    assert counter_cache.get_local(model_access_group_counter("")) is None

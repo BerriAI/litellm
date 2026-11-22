@@ -15,19 +15,25 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamTransformSink,
 )
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
+_DECODED_JSON: Final = TypeAdapter(object)
+_OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 
 
 def _field(container: object, name: str) -> object | None:
@@ -96,7 +102,7 @@ def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:
 def _texts_payload(
     texts: Sequence[str],
 ) -> list[str]:  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
-    return list(texts)  # mutable-ok: GenericGuardrailAPIInputs.texts is declared list[str]
+    return list(texts)
 
 
 def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[str] | None) -> None:
@@ -108,18 +114,16 @@ def _write_back_texts(text_parts: Sequence[object], guardrailed_texts: Sequence[
 
 def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
     try:
-        parsed: Final = json.loads(payload)
+        parsed: Final = _DECODED_JSON.validate_python(json.loads(payload))
     except json.JSONDecodeError:
         return None
-    if isinstance(parsed, dict):
-        return parsed
-    return None
+    return as_str_mapping(parsed)
 
 
 def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
     return tuple(
         text
-        for line in sse_text.splitlines()
+        for line in split_sse_lines(sse_text)
         if line.startswith("data:")
         for payload in (line[len("data:") :].strip(),)
         if payload and payload != "[DONE]"
@@ -146,6 +150,62 @@ def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
     )
     sse_text: Final = "".join(sse for chunk in responses_so_far for sse in (_chunk_sse_text(chunk),) if sse is not None)
     return "".join(object_texts) + "".join(_sse_payload_texts(sse_text))
+
+
+_SSE_FIELD_PREFIXES: Final = (":", "event:", "id:", "retry:")
+
+
+def _is_sequence(value: object) -> bool:
+    return isinstance(value, (list, tuple))
+
+
+def _object_sequence(value: object) -> Sequence[object] | None:
+    return _OBJECT_SEQUENCE.validate_python(value) if _is_sequence(value) else None
+
+
+def _is_response_shaped(item: object) -> bool:
+    """What ``_field`` can read: a wire-format dict or an SDK response object."""
+    return isinstance(item, dict) or hasattr(item, "candidates")
+
+
+def _candidate_carries_function_call(candidate: object) -> bool:
+    parts: Final = _field(_field(candidate, "content"), "parts")
+    if parts is None:
+        return False
+    part_list: Final = _object_sequence(parts)
+    if part_list is None:
+        return True
+    return any(
+        _field(part, "functionCall") is not None or _field(part, "function_call") is not None for part in part_list
+    )
+
+
+def _response_carries_function_call(response: object) -> bool:
+    """Whether a generateContent response chunk carries a ``functionCall`` part, the tool call its client runs.
+    A chunk shaped another way than candidates of content parts counts as carrying one."""
+    candidates: Final = _field(response, "candidates")
+    if candidates is None:
+        return False
+    candidate_list: Final = _object_sequence(candidates)
+    if candidate_list is None:
+        return True
+    return any(_candidate_carries_function_call(candidate) for candidate in candidate_list)
+
+
+def _sse_carries_function_call(sse_text: str) -> bool:
+    """The same for raw SSE frames. A line that is not an SSE field, or a data payload that is not a JSON
+    object, cannot be read for a function call, so it counts as carrying one."""
+    return any(_sse_line_carries_function_call(line) for line in split_sse_lines(sse_text) if line.strip())
+
+
+def _sse_line_carries_function_call(line: str) -> bool:
+    if not line.startswith("data:"):
+        return not line.startswith(_SSE_FIELD_PREFIXES)
+    payload: Final = line[len("data:") :].strip()
+    if not payload or payload == "[DONE]":
+        return False
+    parsed: Final = _parse_json_dict_or_none(payload)
+    return parsed is None or _response_carries_function_call(parsed)
 
 
 class GoogleGenAIGenerateContentHandler(BaseTranslation):
@@ -239,6 +299,15 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         )
         return responses_so_far
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        """A ``functionCall`` part is the tool call a generateContent client runs, and every stream item that
+        carries one, or a piece of one, has that part: the proxy hands this translation one SSE event per item.
+        An item this cannot read for a function call counts as carrying one, so it waits for the verdict."""
+        sse_text: Final = _chunk_sse_text(item)
+        if sse_text is not None:
+            return _sse_carries_function_call(sse_text)
+        return not _is_response_shaped(item) or _response_carries_function_call(item)
+
     def _merged_request_data(
         self,
         request_data: Mapping[str, object] | None,
@@ -252,4 +321,4 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         metadata_pairs: Final = (
             (("litellm_metadata", user_metadata),) if user_metadata and "litellm_metadata" not in base else ()
         )
-        return dict((*base.items(), *context_pairs, *metadata_pairs))  # mutable-ok: apply_guardrail takes a plain dict
+        return dict((*base.items(), *context_pairs, *metadata_pairs))

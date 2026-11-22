@@ -234,6 +234,9 @@ class CustomCodeGuardrail(CustomGuardrail):
                 self._compile_error = f"Failed to compile custom code: {e}"
                 raise CustomCodeCompilationError(self._compile_error) from e
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -439,11 +442,11 @@ class CustomCodeGuardrail(CustomGuardrail):
             )
             end_time: Final = time.time()
             self.add_standard_logging_guardrail_information_to_request_data(
-                guardrail_json_response={  # mutable-ok: logging helper requires a dict
+                guardrail_json_response={
                     "action": "flag",
                     "reason": flag_reason,
                     "input_type": input_type,
-                    "metadata": result.get("metadata") or {},  # mutable-ok: logging helper requires a dict
+                    "metadata": result.get("metadata") or {},
                 },
                 request_data=request_data,
                 guardrail_status="guardrail_flagged",

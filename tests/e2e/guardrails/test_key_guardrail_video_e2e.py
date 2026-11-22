@@ -3,13 +3,14 @@ from __future__ import annotations
 import pytest
 from e2e_config import unique_marker
 from e2e_http import Success, UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from guardrails_client import GuardrailsClient, poll_until_blocked
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 
 pytestmark = pytest.mark.e2e
 
-CHAT_MODEL = "gemini-2.5-flash"
+CHAT_MODEL = "gemini-3.8-flash"
 VIDEO_BACKEND = "vertex_ai/veo-3.1-fast-generate-001"
 
 
@@ -37,6 +38,14 @@ class TestKeyAttachedGuardrailOnVideos:
     @pytest.mark.covers(
         "guardrail.litellm_content_filter.pre_call.blocks_video",
         exercised_on=["videos"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            providers=(Provider.GEMINI, Provider.VERTEX_AI,),
+            models=(CHAT_MODEL, VIDEO_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_key_attached_content_filter_blocks_banned_video_prompt(
         self, client: GuardrailsClient, resources: ResourceManager

@@ -1,4 +1,5 @@
 import atexit
+import hashlib
 import sys
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
@@ -16,7 +17,9 @@ MASTER_KEY_SETTING: Final = "master_key"
 MASTER_KEY_ENV_VAR: Final = "LITELLM_MASTER_KEY"
 SALT_KEY_ENV_VAR: Final = "LITELLM_SALT_KEY"
 MIGRATE_FROM_MASTER_KEY_ENV_VAR: Final = "LITELLM_MIGRATE_FROM_MASTER_KEY"
-PUBLICLY_KNOWN_MASTER_KEYS: Final = frozenset({"sk-1234"})
+PUBLICLY_KNOWN_MASTER_KEY_SHA256_DIGESTS: Final = frozenset(
+    {"88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"}
+)
 ROTATION_DOCS_URL: Final = "https://docs.litellm.ai/docs/proxy/master_key_rotations#proxy-refuses-to-start"
 _NEW_MASTER_KEY: Final = "sk-$(openssl rand -hex 32)"
 GENERATE_MASTER_KEY_COMMAND: Final = f'echo "{MASTER_KEY_ENV_VAR}={_NEW_MASTER_KEY}" | tee -a .env'
@@ -203,7 +206,7 @@ def _unsafe_reason(master_key: str | None) -> UnsafeMasterKeyReason | None:
     stripped: Final = master_key.strip()
     if not stripped:
         return UnsafeMasterKeyReason.EMPTY
-    if stripped in PUBLICLY_KNOWN_MASTER_KEYS:
+    if hashlib.sha256(stripped.encode()).hexdigest() in PUBLICLY_KNOWN_MASTER_KEY_SHA256_DIGESTS:
         return UnsafeMasterKeyReason.PUBLICLY_KNOWN
     return None
 

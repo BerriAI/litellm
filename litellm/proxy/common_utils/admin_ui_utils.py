@@ -1,4 +1,11 @@
+import os
 from typing import Final
+
+from litellm.secret_managers.main import str_to_bool
+
+
+def is_admin_ui_disabled() -> bool:
+    return bool(str_to_bool(value=os.getenv("DISABLE_ADMIN_UI")))
 
 
 def show_missing_vars_in_env():

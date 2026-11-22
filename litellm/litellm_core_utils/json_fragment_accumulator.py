@@ -1,4 +1,5 @@
 import json
+from json.scanner import NUMBER_RE
 from typing import Final, cast  # noqa: TID251  # raw_decode returns tuple[Any, int]; no cast-free unpack
 
 
@@ -50,7 +51,7 @@ class JSONFragmentAccumulator:
         unconsumed: Final = self._buffer[self._offset :]
         self._buffer = unconsumed + "".join(self._chunks)
         self._offset = 0
-        self._chunks = []  # mutable-ok: see __init__
+        self._chunks = []
 
     def pop_next_value(self) -> tuple[bool, object]:
         """
@@ -59,7 +60,10 @@ class JSONFragmentAccumulator:
         unconsumed tail, e.g. a second concatenated value, in place rather
         than copying it) and returns (True, value). If the buffer is empty
         or holds no complete value yet, it is left untouched and this
-        returns (False, None).
+        returns (False, None). A number too long to convert is stepped over
+        and returned as (True, None), keeping any value behind it. Any other
+        value json cannot finish (nested too deep) never decodes, so the
+        buffer is dropped and this returns (False, None).
         """
         self._materialize()
         length: Final = len(self._buffer)
@@ -74,13 +78,29 @@ class JSONFragmentAccumulator:
             raw_value: Final = decoder.raw_decode(self._buffer, start)
         except json.JSONDecodeError:
             return False, None
+        except (ValueError, RecursionError):
+            return self._step_over_unconvertible_number(start)
         decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode returns tuple[Any, int]
+        self._advance_to(end_index)
+        return True, decoded
+
+    def _step_over_unconvertible_number(self, start: int) -> tuple[bool, object]:
+        number: Final = NUMBER_RE.match(self._buffer, start)
+        if number is None:
+            self._clear()
+            return False, None
+        self._advance_to(number.end())
+        return True, None
+
+    def _advance_to(self, end_index: int) -> None:
         self._offset = end_index
         if self._offset >= len(self._buffer):
-            self._buffer = ""
-            self._offset = 0
-            self._could_close = False
-        return True, decoded
+            self._clear()
+
+    def _clear(self) -> None:
+        self._buffer = ""
+        self._offset = 0
+        self._could_close = False
 
     def snapshot(self) -> str:
         self._materialize()
@@ -88,7 +108,7 @@ class JSONFragmentAccumulator:
 
     def set(self, value: str) -> None:
         """Replace the buffer's contents with a single fragment."""
-        self._chunks = []  # mutable-ok: see __init__
+        self._chunks = []
         self._buffer = value
         self._offset = 0
         stripped: Final = value.rstrip()
