@@ -93,22 +93,7 @@ async def test_construct_request_headers_project_id_from_env(monkeypatch):
 
 
 def _authorized_user_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, project_id: str) -> str:
-    credentials_path: Final = tmp_path / "google-auth.json"
-    credentials_path.write_text(
-        json.dumps(
-            {
-                "type": "authorized_user",
-                "client_id": "unit-client",
-                "client_secret": "unit-secret",
-                "refresh_token": "unit-refresh-token",
-                "token": "unit-access-token",
-                "token_uri": "https://oauth2.googleapis.com/token",
-                "quota_project_id": "unit-project",
-                "expiry": "2099-01-01T00:00:00Z",
-            }
-        )
-    )
-    credentials_path_string: Final = str(credentials_path)
+    credentials_path_string: Final = str(tmp_path / "google-auth.json")
     credentials: Final = _CachedVertexCredentials(token="unit-access-token", quota_project_id=project_id)
     vertex_chat_completion: Final = litellm.vertex_chat_completion
     monkeypatch.setitem(

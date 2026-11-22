@@ -16,6 +16,7 @@ from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, an
 from litellm.llms.anthropic.messages.native.utils import openai_chat_refusal_text
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_output_item
+from litellm.responses.litellm_completion_transformation.compaction_trigger import CompactionSummaryStream
 from litellm.responses.litellm_completion_transformation.custom_tools import (
     build_tool_call_item_kwargs,
     extract_custom_tool_names,
@@ -183,14 +184,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         custom_llm_provider: str | None = None,
         litellm_metadata: dict | None = None,
         tool_call_provider_fields: bool = False,
+        compaction_summary: CompactionSummaryStream | None = None,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = litellm_custom_stream_wrapper
         self.request_input: str | ResponseInputParam = request_input
         self.responses_api_request: ResponsesAPIOptionalRequestParams = responses_api_request
         self.custom_llm_provider: str | None = custom_llm_provider
-        self.litellm_metadata: dict | None = litellm_metadata or {}
+        self.litellm_metadata: dict[str, object] | None = litellm_metadata or {}
         self.tool_call_provider_fields: Final = tool_call_provider_fields
+        self._compaction_summary: Final = compaction_summary
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: list[dict[str, object]] = []
@@ -254,6 +257,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_search_executions: Mapping[str, ToolSearchExecution] = MappingProxyType({})
         self._tool_search_output_index_by_call_id: Mapping[str, int] = MappingProxyType({})
         self._done_tool_search_call_ids: frozenset[str] = frozenset()
+
+    def close(self) -> None:
+        self.litellm_custom_stream_wrapper.close()
 
     async def aclose(self) -> None:
         await self.litellm_custom_stream_wrapper.aclose()
@@ -808,6 +814,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._queue_compaction_item_added()
         return ordered
 
+    def _received_and_client_chunks(
+        self, chunk: ModelResponseStream
+    ) -> tuple[ModelResponseStream, ModelResponseStream]:
+        received: Final = self._ordered_chunk(chunk)
+        return received, received if self._compaction_summary is None else self._compaction_summary.take(received)
+
     def _with_encoded_response_id(self, response: ResponsesAPIResponse) -> ResponsesAPIResponse:
         return ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
             responses_api_response=response,
@@ -1246,9 +1258,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             return True
         return False
 
+    def _with_compaction_summary(self, response: ModelResponse | None) -> ModelResponse | None:
+        if self._compaction_summary is None or response is None:
+            return response
+        reply: Final = self._compaction_summary.reply(response)
+        self._merge_provider_specific_fields(dict(self._compaction_summary.provider_specific_fields(reply.model)))
+        return reply
+
     def common_done_event_logic(self, sync_mode: bool = True) -> BaseLiteLLMOpenAIResponseObject:
         if not self.litellm_model_response or isinstance(self.litellm_model_response, TextCompletionResponse):
-            self.litellm_model_response = self.create_litellm_model_response()
+            self.litellm_model_response = self._with_compaction_summary(self.create_litellm_model_response())
         if self.litellm_model_response:
             self._queue_compaction_item_added()
             self._queue_compaction_item_done()
@@ -1290,7 +1309,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if not chunk.choices:
             return
         delta: Final = chunk.choices[0].delta
-        if chunk.choices[0].finish_reason is None and not _delta_carries_output(delta):
+        opens_on_finish: Final = chunk.choices[0].finish_reason is not None and self._compaction_summary is None
+        if not opens_on_finish and not _delta_carries_output(delta):
             return
 
         self.sent_output_item_added_event = True
@@ -1367,7 +1387,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def _stamp_sequence_number(self, event: BaseLiteLLMOpenAIResponseObject) -> BaseLiteLLMOpenAIResponseObject:
         stamped: Final = event.model_copy(update={"sequence_number": self._sequence_number})
         self._sequence_number += 1
-        return stamped
+        affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
+        return (
+            stamped
+            if affinity_model_id is None
+            else ResponsesAPIRequestUtils.encode_stream_event_for_affinity(stamped, affinity_model_id)
+        )
 
     async def __anext__(
         self,
@@ -1400,7 +1425,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             raise StopAsyncIteration
                         chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
-                        chunk = self._ordered_chunk(cast(ModelResponseStream, chunk))
+                        received, chunk = self._received_and_client_chunks(cast(ModelResponseStream, chunk))
                         for src in (
                             getattr(chunk, "provider_specific_fields", None),
                             getattr(
@@ -1416,7 +1441,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(
-                            self._snapshot_chunk_for_stream_chunk_builder(chunk)
+                            self._snapshot_chunk_for_stream_chunk_builder(received)
                         )
                         self._queue_reasoning_done_events_on_reasoning_end(chunk)
                         self._queue_chunk_events(chunk)
@@ -1459,12 +1484,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     return self._pending_tool_events.pop(0)
                 try:
                     buffered_chunk = self._take_buffered_chunk()
-                    if buffered_chunk is not None:
-                        chunk = self._ordered_chunk(buffered_chunk)
-                    elif self._upstream_exhausted:
+                    if buffered_chunk is None and self._upstream_exhausted:
                         raise StopIteration
-                    else:
-                        chunk = self._ordered_chunk(self.litellm_custom_stream_wrapper.__next__())
+                    received, chunk = self._received_and_client_chunks(
+                        self.litellm_custom_stream_wrapper.__next__() if buffered_chunk is None else buffered_chunk
+                    )
                     for src in (
                         getattr(chunk, "provider_specific_fields", None),
                         getattr(
@@ -1483,7 +1507,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     # _ensure_output_item_for_chunk queues events on the same chunk.
                     # This mirrors the async path (see __anext__).
                     self.collected_chat_completion_chunks.append(
-                        self._snapshot_chunk_for_stream_chunk_builder(cast(ModelResponseStream, chunk))
+                        self._snapshot_chunk_for_stream_chunk_builder(received)
                     )
                     self._queue_reasoning_done_events_on_reasoning_end(chunk)
                     self._queue_chunk_events(chunk)

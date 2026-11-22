@@ -397,8 +397,12 @@ class CohereV2ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
-        return self.chunk_parser(chunk=data_json)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line))
+        if isinstance(data_json, dict):
+            return self.chunk_parser(chunk=data_json)
+        raise ValueError(
+            f"Failed to parse v2 chunk: {type(data_json).__name__!r} object has no attribute 'get', chunk: {data_json}"
+        )
 
     # Async iterator
     def __aiter__(self):

@@ -327,16 +327,12 @@ async def aget_user_provider_credentials(
             if (connection := _connection_from_ciphertext(ciphertext)) is not None
         }
 
-    try:
-        rows: Final = await find_many_in(
-            _table(prisma_client),
-            "credential_name",
-            misses,
-            where={"user_id": user_id},
-        )
-    except Exception:  # noqa: BLE001  # a DB outage reads as not connected so the caller gets a 401, never a 500
-        verbose_proxy_logger.exception("aget_user_provider_credentials: DB read failed")
-        return {}
+    rows: Final = await find_many_in(
+        _table(prisma_client),
+        "credential_name",
+        misses,
+        where={"user_id": user_id},
+    )
     found: Final = {row.credential_name: row.credential_b64 for row in rows}
     for name in misses:
         if token_cache is not None:
@@ -354,4 +350,8 @@ def _connection_from_ciphertext(ciphertext: str) -> Mapping[str, str] | None:
     payload: Final = decode_user_provider_credential(ciphertext)
     if payload is None:
         return None
-    return {"access_token": payload.access_token, "github_host": payload.github_host}
+    return {
+        "access_token": payload.access_token,
+        "github_host": payload.github_host,
+        "github_login": payload.github_login,
+    }

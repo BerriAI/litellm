@@ -32,7 +32,6 @@ test.describe("Internal Viewer", () => {
       "Usage",
       "Logs",
       "Teams",
-      "API Reference",
       "AI Hub",
     ];
     for (const label of expectedVisible) {
@@ -43,7 +42,7 @@ test.describe("Internal Viewer", () => {
     }
 
     // Items that must NOT be visible (admin-only surface)
-    const expectedHidden = ["Internal Users", "Organizations", "Models + Endpoints"];
+    const expectedHidden = ["Internal Users", "Organizations", "Model Management"];
     for (const label of expectedHidden) {
       await expect(
         nav.getByRole("link", { name: label, exact: true }),

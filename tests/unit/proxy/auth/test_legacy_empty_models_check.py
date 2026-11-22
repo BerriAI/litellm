@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from litellm.proxy.auth.legacy_empty_models_check import (
     DEPRECATION_DISCUSSION_URL,
     CountTableRepository,
     LegacyEmptyModelsCounts,
+    count_legacy_empty_models_rows,
     legacy_empty_models_warning,
     warn_about_legacy_empty_models,
 )
@@ -154,6 +156,44 @@ class _FixedCountTable:
 class _UnreachableTable:
     async def count(self, *, where: Mapping[str, object]) -> int:
         raise ConnectionError("database is down")
+
+
+class _CountConcurrency:
+    def __init__(self) -> None:
+        self.active = 0
+        self.peak = 0
+
+
+class _YieldingCountTable:
+    def __init__(self, counts: tuple[int, ...], concurrency: _CountConcurrency) -> None:
+        self._counts = iter(counts)
+        self._concurrency = concurrency
+
+    async def count(self, *, where: Mapping[str, object]) -> int:
+        value: Final = next(self._counts)
+        self._concurrency.active += 1
+        self._concurrency.peak = max(self._concurrency.peak, self._concurrency.active)
+        try:
+            await asyncio.sleep(0)
+            return value
+        finally:
+            self._concurrency.active -= 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("counts", [(2, 3, 5, 7, 11, 13), (0, 0, 0, 0, 0, 0)])
+async def test_boot_counts_use_only_one_database_connection_at_a_time(
+    counts: tuple[int, int, int, int, int, int],
+) -> None:
+    concurrency: Final = _CountConcurrency()
+    keys: Final = _YieldingCountTable((counts[0], counts[1], counts[2], counts[4]), concurrency)
+    teams: Final = _YieldingCountTable((counts[3], counts[5]), concurrency)
+
+    result: Final = await count_legacy_empty_models_rows(keys=keys, teams=teams)
+
+    assert result == LegacyEmptyModelsCounts(*counts)
+    assert concurrency.peak == 1
+    assert concurrency.active == 0
 
 
 @dataclass(frozen=True, slots=True)

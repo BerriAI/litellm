@@ -121,6 +121,17 @@ def _blocked_reset_updates(table: str) -> int:
     return int(str(rows[0]["blocked"]))
 
 
+def _reset_committed(table: str, column: str, identity: str) -> bool:
+    with psycopg.connect(os.environ["DATABASE_URL"]) as observer:
+        row: Final = observer.execute(
+            sql.SQL("SELECT budget_reset_at > now() FROM {} WHERE {} = %s").format(
+                sql.Identifier(table), sql.Identifier(column)
+            ),
+            (identity,),
+        ).fetchone()
+    return row is not None and row[0] is True
+
+
 @pytest.mark.parametrize("entity", ("key", "user", "team"))
 @pytest.mark.parametrize(
     ("workers", "spend", "increment", "rollover", "reset_timezone"),
@@ -213,6 +224,9 @@ def test_scheduled_reset_preserves_new_spend_and_never_leaves_roundoff(
                     )
                     gate.commit()
                     eventually(lambda: _blocked_reset_updates(table), lambda count: count == 0, seconds=30)
+                    eventually(
+                        lambda: _reset_committed(table, column, identity), lambda committed: committed, seconds=30
+                    )
                     with psycopg.connect(os.environ["DATABASE_URL"]) as observer:
                         result: Final = observer.execute(
                             sql.SQL(

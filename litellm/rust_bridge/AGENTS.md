@@ -21,8 +21,13 @@
   - `tests/test_litellm_rust/test_public_entries.py` marks such a route `python=None`, so dropping a route's Python changes its entries, its rules and that field together
 - A detector reads the same inputs the legacy Python path reads, so the catalog and the fallback agree on which requests need Python
   - A route's context, its target as well as its features, reads `NativeCall.resolved`, so an argument counts the same whether it came by position, by keyword or as a signature default
-  - A route's sync and async dispatches read different detector maps when the legacy handlers differ: Messages runs pre-request hooks, web search interception and interceptors only on async calls, and the sync Responses handler runs the deployment hook itself
+  - A route's sync and async dispatches read different detector maps when the legacy handlers differ, as the sync Responses handler runs the deployment hook itself. Messages reads one map for both, since Rust serves its async-only pre-request hooks, web search short-circuit and interceptors through host calls
 - A detector that raises keeps the call on Python. `PublicDispatch` logs it and never fails the call over routing
+- Messages for providers `anthropic` and `azure_ai` is `RUST_REQUIRED` and has no Python path
+  - their Python request code (`AnthropicMessagesConfig`, `AzureAnthropicMessagesConfig`) stays as the live reference the parity suite runs the Python leg through, as Vertex and Bedrock keep theirs
+  - a call the rules would send to Python (a `MESSAGES_PYTHON_FEATURES` feature or a raising detector) raises `UnsupportedParamsError` from the Python fallback in `litellm/messages/dispatch.py`, which names the detected features
+  - other Messages providers keep the Python fallback
+- A Messages call targets `MESSAGES` only when its provider's own Messages config serves it. A deployment with no such config that lists `/v1/messages` in `model_info.supported_endpoints`, like a non-Claude `azure_ai` model, targets `MESSAGES_PASSTHROUGH`, which Python's OpenAI-compatible config forwards untranslated and which stays on Python. An `azure_ai` call bridged to Chat Completions or Responses stays on Python the same way
 - `catalog.RULES` is rollout policy with no tests of its own. Tests pass the rules they need, so check these invariants by review whenever `RULES` changes
 
 # Public entries
@@ -43,8 +48,14 @@
 # Fallback
 
 - Native admission may pick Python before execution starts
+- A caller or deployment `api_base` the native URL parser reads otherwise than httpx and aiohttp (no host, credentials in the URL, a port Python cannot read, a missing http(s) scheme, whitespace, control or non-ASCII characters) goes to Python's client through `_unsendable_api_base` in `host/routes/messages.py`. The native parser can read a host out of such a base where Python refuses it, sending the operator's key to a host the configuration did not name or mean
 - A failure after execution starts is terminal and never triggers fallback
 - Creating an unstarted native coroutine acquires no clients or credentials and captures no execution context
+
+# The `LITELLM_RUST` switch
+
+- `decision` treats a blank or invalid `LITELLM_RUST` as unset and caches the parse by raw value. It runs inside SDK calls, so it never fails one over a switch and never validates per call
+- It does not put the Rust gateway in front of Python. That is `LITELLM_RUST_FIRST`, which `litellm/proxy/rust_forward/mode.py` reads strictly at startup with this same `RustSwitch` type, stopping the CLI with one line naming the variable
 
 # Native extension
 
@@ -56,4 +67,8 @@
 
 - Check cross-language behavior against a freshly installed extension, covering unstarted-call release, setup ordering, exception identity, sync and async streams, cancellation and GC
 - Keep `_native.pyi` accurate about which APIs return a Future and which return a coroutine
+- `_native.pyi` is hand-written, so declare what PyO3 builds at runtime, not what reads nicer ([classes](https://pyo3.rs/v0.29.2/class.html), [typing](https://pyo3.rs/v0.29.2/python-typing-hints.html))
+  - A fieldless `#[pyclass]` enum is a plain class, never an `enum.Enum`. Stub each variant as `Variant: ClassVar[Cls]`, and match it with value patterns, which pyright cannot check for exhaustiveness
+  - An enum with fields exposes each variant as a nested subclass of the enum class, with getters for its fields, `__match_args__`, and a `__new__` that takes the fields in order
+  - `eq` without `hash` makes instances unhashable, so stub `__hash__: ClassVar[None]  # type: ignore[assignment]`, the way typeshed does. `make test-rust-extension` runs mypy stubtest over the stub, and it stops at the first mypy error
 - Unit tests of this package live in `tests/unit/rust_bridge/`, end-to-end Rust path tests in `tests/test_litellm_rust/`

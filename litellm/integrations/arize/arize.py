@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.types.integrations.arize import Protocol as _Protocol
 
     Protocol = _Protocol
-    Span = _Span | Any
+    Span = _Span
 else:
     Protocol = Any
     Span = Any
