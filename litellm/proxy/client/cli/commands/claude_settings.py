@@ -523,8 +523,7 @@ def _content_defaults(current_env: Mapping[str, JsonValue]) -> tuple[tuple[str, 
         key in current_env and current_env[key] != TELEMETRY_ENV[key] for key in _CONTENT_SWITCHES_IN_RAW_BODIES
     )
     return tuple(
-        (key, "0" if opted_out and key == RAW_API_BODIES_KEY else TELEMETRY_ENV[key])
-        for key in TELEMETRY_CONTENT_KEYS
+        (key, "0" if opted_out and key == RAW_API_BODIES_KEY else TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS
     )
 
 
