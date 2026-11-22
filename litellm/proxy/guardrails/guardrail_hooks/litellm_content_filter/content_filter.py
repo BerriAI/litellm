@@ -85,7 +85,7 @@ from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, ge
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
-_StreamItemT: Final = TypeVar("_StreamItemT")
+_StreamItemT = TypeVar("_StreamItemT")
 _JSON_ENTRIES: Final = TypeAdapter(list[object])
 GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")

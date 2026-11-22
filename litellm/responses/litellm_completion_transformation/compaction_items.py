@@ -17,7 +17,7 @@ from .tool_search import chat_config_builds_anthropic_request, provider_chat_con
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
-_Item: Final = TypeVar("_Item")
+_Item = TypeVar("_Item")
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
