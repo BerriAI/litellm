@@ -1,13 +1,21 @@
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping, Sequence
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
-from openai.types.responses import EasyInputMessageParam, ResponseInputContentParam, ResponseInputItemParam
+from openai.types.responses import (
+    EasyInputMessageParam,
+    ResponseInputContentParam,
+    ResponseInputItemParam,
+    ResponseInputTextParam,
+)
 
-from litellm.llms.base_llm.base_utils import hoisted_instruction_indices
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.llms.base_llm.base_utils import hoisted_instruction_indices, leading_instruction_block_length
 from litellm.types.llms.openai import ResponseInputParam
 
 UnfoldedDeveloperRole: TypeAlias = Literal["system", "user"]
+_ConversationItemKind: TypeAlias = Literal["system", "tool_output", "other"]
 
 _INSTRUCTION_ROLES: Final = frozenset({"system", "developer"})
 
@@ -96,3 +104,65 @@ def instruction_items_folded(
             )
         }
     )
+
+
+def _conversation_item_kind(item: ResponseInputItemParam) -> _ConversationItemKind:
+    match item:
+        case {"role": "system"}:
+            return "system"
+        case {"type": "function_call_output" | "custom_tool_call_output"}:
+            return "tool_output"
+        case _:
+            return "other"
+
+
+def _system_item_as_user(item: ResponseInputItemParam) -> ResponseInputItemParam:
+    if "role" not in item or item["role"] != "system" or "content" not in item:
+        return item
+    content: Final = item["content"]
+    parts: Final = (
+        (ResponseInputTextParam(type="input_text", text=content),) if isinstance(content, str) else tuple(content)
+    )
+    return EasyInputMessageParam(
+        role="user",
+        content=[ResponseInputTextParam(type="input_text", text=CONVERTED_SYSTEM_NOTE), *parts],
+        type="message",
+    )
+
+
+def _system_run_as_user(run: Sequence[ResponseInputItemParam]) -> tuple[ResponseInputItemParam, ...]:
+    return tuple(map(_system_item_as_user, run))
+
+
+def _conversation_with_system_items_as_user(
+    conversation: Sequence[ResponseInputItemParam],
+) -> Iterator[ResponseInputItemParam]:
+    runs: Final = tuple((kind, tuple(run)) for kind, run in groupby(conversation, key=_conversation_item_kind))
+
+    def emit(index: int) -> tuple[ResponseInputItemParam, ...]:
+        kind, run = runs[index]
+        follower: Final = runs[index + 1][0] if index + 1 < len(runs) else None
+        if kind == "system":
+            return () if follower == "tool_output" else _system_run_as_user(run)
+        if kind == "tool_output" and index > 0 and runs[index - 1][0] == "system":
+            return (*run, *_system_run_as_user(runs[index - 1][1]))
+        return run
+
+    return chain.from_iterable(map(emit, range(len(runs))))
+
+
+def later_system_items_as_user(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    """
+    For a model whose chat template takes a single leading system message, every `system` item after the
+    leading instruction block sent as a user turn in its original position, prefixed with the operator note,
+    so each request stays a prefix of the next. A run of them right before tool outputs is sent after those
+    outputs, which have to follow their call.
+    """
+    if isinstance(input, str):
+        return input
+    items: Final = tuple(input)
+    conversation_start: Final = leading_instruction_block_length(tuple(map(_role, items)))
+    conversation: Final = items[conversation_start:]
+    if not any(_conversation_item_kind(item) == "system" for item in conversation):
+        return input
+    return [*items[:conversation_start], *_conversation_with_system_items_as_user(conversation)]
