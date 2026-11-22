@@ -623,6 +623,7 @@ model LiteLLM_MCPServerTable {
   timeout               Float?
   max_concurrent_requests Int?
   rpm                   Int?
+  events                Json?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?

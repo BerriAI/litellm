@@ -38334,6 +38334,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -41610,6 +41611,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -42858,6 +42882,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -53995,6 +54020,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */

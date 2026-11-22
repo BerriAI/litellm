@@ -241,6 +241,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    MCPServerEventsConfig,
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
@@ -1829,6 +1830,22 @@ def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
     )
 
 
+def _stored_events_config(value: object) -> MCPServerEventsConfig | None:
+    if isinstance(value, MCPServerEventsConfig):
+        return value
+    if not isinstance(value, (str, Mapping)) or not value:
+        return None
+    try:
+        return (
+            MCPServerEventsConfig.model_validate_json(value)
+            if isinstance(value, str)
+            else MCPServerEventsConfig.model_validate(value)
+        )
+    except ValidationError:
+        verbose_logger.warning("Ignoring an unreadable MCP server events configuration")
+        return None
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -2983,6 +3000,7 @@ class MCPServerManager:
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                events=_stored_events_config(server_config.get("events", None)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
                 rpm=server_config.get("rpm", None),
@@ -3590,6 +3608,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
             rpm=mcp_server.rpm,
+            events=_stored_events_config(getattr(mcp_server, "events", None)),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -7996,6 +8015,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -8120,6 +8140,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     _build_mcp_server_table = build_mcp_server_table

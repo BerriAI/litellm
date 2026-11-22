@@ -527,6 +527,8 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
+    if "events" in data_dict:
+        data_dict["events"] = safe_dumps(data_dict["events"])  # None is stored as JSON null, which clears it
     # mcp_access_groups is already List[str], no serialization needed
 
     # On create, force is_byok so a False value is always written to the DB. On

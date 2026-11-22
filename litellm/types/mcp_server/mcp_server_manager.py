@@ -83,6 +83,19 @@ class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     require_email_verified: bool = True
 
 
+class MCPServerEventsConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    allowed_events: tuple[str, ...] | None = Field(
+        default=None,
+        min_length=1,
+        description="Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+    )
+    min_poll_interval_ms: int = Field(default=1000, ge=0)
+    legacy_webhook_id_equals_event_id: bool = False
+
+
 class PinnedMCPTool(LiteLLMBaseModel):
     """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
 
@@ -271,6 +284,7 @@ class MCPServer(LiteLLMBaseModel):
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    events: MCPServerEventsConfig | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:

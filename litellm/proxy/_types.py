@@ -77,7 +77,7 @@ from litellm.types.mcp import (
     MCPUpstreamProtocol,
     validate_mcp_protocol_transport,
 )
-from litellm.types.mcp_server.mcp_server_manager import MCPInfo
+from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServerEventsConfig
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
@@ -1512,6 +1512,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: str | None = Field(
@@ -1620,6 +1621,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     timeout: float | None = None
     max_concurrent_requests: int | None = None
     rpm: int | None = Field(default=None, ge=0)
+    events: MCPServerEventsConfig | None = None
 
     @model_validator(mode="after")
     def validate_protocol_transport(self) -> "UpdateMCPServerRequest":
