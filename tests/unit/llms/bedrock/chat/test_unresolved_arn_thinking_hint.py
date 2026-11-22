@@ -60,6 +60,7 @@ def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_en
     assert error.status_code == 400
     assert _ENABLED_THINKING_REJECTION in error.message
     assert error.message.endswith(f"\n\n{UNRESOLVED_ARN_THINKING_HINT}")
+    assert "Set `base_model` on the deployment" in error.message
 
 
 @pytest.mark.parametrize(
