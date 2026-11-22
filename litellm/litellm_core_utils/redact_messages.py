@@ -12,7 +12,7 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
@@ -112,6 +112,15 @@ def redacted_response_obj_for_custom_logger(response_obj: object, custom_logger:
     if not _opted_out_of_message_logging(custom_logger) or not _is_redactable_response(response_obj):
         return response_obj
     return perform_redaction({}, response_obj)
+
+
+def redacted_stream_chunk_for_custom_logger(completion_chunk: object, custom_logger: CustomLogger) -> object:
+    """Redacted copy of one streamed chunk for a logger that opted out of message
+    logging. The original chunk is left untouched so the client-visible stream is
+    unchanged."""
+    if not _opted_out_of_message_logging(custom_logger):
+        return completion_chunk
+    return cast(object, _redact_streaming_response(copy.deepcopy(completion_chunk)))
 
 
 def _is_redactable_response(response_obj: object) -> bool:
