@@ -8,7 +8,7 @@ import os
 import copy
 import uuid
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 
 from unittest.mock import AsyncMock, patch, Mock, MagicMock
 
@@ -946,6 +946,42 @@ class TestSnowflakeChatCompletion:
 
         assert len(chunks_received) > 0
         content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
+
+    @pytest.mark.parametrize(
+        "undecodable_payload",
+        ["5", '{"a": ' * 100_000 + "1" + "}" * 100_000],
+        ids=["number", "deep-object"],
+    )
+    def test_claude_stream_skips_a_data_line_it_cannot_read_as_an_object(self, undecodable_payload):
+        events = (
+            '{"type": "message_start", "message": {"id": "msg_1", "model": "claude-sonnet-5-5", '
+            '"usage": {"input_tokens": 5, "output_tokens": 0}}}',
+            undecodable_payload,
+            '{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+            '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Paris"}}',
+            '{"type": "content_block_stop", "index": 0}',
+            '{"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}',
+            '{"type": "message_stop"}',
+        )
+        mock_resp: Final = MagicMock()
+        mock_resp.iter_lines.return_value = iter([f"data: {event}" for event in events])
+        mock_resp.status_code = 200
+        mock_resp.headers = {"content-type": "text/event-stream"}
+
+        with patch.object(HTTPHandler, "post", return_value=mock_resp):
+            chunks_received: Final = list(
+                completion(
+                    model="snowflake/claude-sonnet-5-5",
+                    messages=self.messages,
+                    stream=True,
+                    api_key="fake-jwt",
+                    account_id="FAKE-ACCOUNT",
+                    api_base=FAKE_API_BASE,
+                )
+            )
+
+        assert "".join(c.choices[0].delta.content or "" for c in chunks_received) == "Paris"
+        assert chunks_received[-1].choices[0].finish_reason == "stop"
 
 
 async def test_snowflake_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):

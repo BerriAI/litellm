@@ -142,8 +142,20 @@ TOOL_USE_STREAM: Final = (
         b"data: some words\n\n",
         b"data: " + b"9" * 5000 + b"\n\n",
         b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+        b'event: ping\ndata: {"type": "ping", "n": ' + b"9" * 5000 + b"}\n\n",
     ],
-    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
+    ids=[
+        "number",
+        "null",
+        "string",
+        "array",
+        "not-json",
+        "huge-number",
+        "deep-array",
+        "deep-object",
+        "huge-number-in-object",
+    ],
 )
 def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
     assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))

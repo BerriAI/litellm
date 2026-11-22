@@ -309,6 +309,49 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert "event: message_start" in raw and "event: message_stop" in raw
         assert '"stop_reason": "end_turn"' in raw
 
+    @pytest.mark.parametrize("undecodable_payload", ["5", "[" * 100_000 + "]" * 100_000], ids=["number", "deep-array"])
+    def test_a_data_line_that_is_not_an_object_neither_cuts_the_text_scan_nor_hides_the_stop_reason(
+        self, undecodable_payload
+    ):
+        text_delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}}
+        message_delta = {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}}
+        chunk = (
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            f"event: content_block_delta\ndata: {undecodable_payload}\n\n"
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            f"event: message_delta\ndata: {undecodable_payload}\n\n"
+            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n"
+        ).encode()
+        handler = AnthropicMessagesHandler()
+
+        scan_key = handler.get_streaming_scan_key([chunk])
+
+        assert handler.get_streaming_string_so_far([chunk]) == "abcabc"
+        assert scan_key is not None
+        assert scan_key.stream_ended is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "undecodable_payload",
+        [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
+        ids=["deep-array", "deep-object"],
+    )
+    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self, undecodable_payload):
+        undecodable_chunk = b"event: ping\ndata: " + undecodable_payload + b"\n\n"
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:2], undecodable_chunk, *ended_chunks[2:]]
+
+        result = await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[2] == undecodable_chunk
+        assert self._delta_texts([*chunks[:2], *chunks[3:]]) == ["hello [MASKED]", ""]
+
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
         events = [

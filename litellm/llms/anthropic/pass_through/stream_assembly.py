@@ -161,7 +161,7 @@ def collapse_pure_text_chunks(
             continue
         try:
             data = json.loads(json_str)
-        except (json.JSONDecodeError, ValueError):
+        except (ValueError, RecursionError):
             return None
 
         etype = data.get("type")
@@ -287,7 +287,7 @@ def extract_sse_data(event_str: str) -> dict | None:
         return None
     try:
         decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     return decoded if is_str_keyed_dict(decoded) else None
 

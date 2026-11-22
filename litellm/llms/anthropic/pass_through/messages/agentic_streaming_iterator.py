@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -70,13 +70,7 @@ def _parse_sse_events(raw: bytes) -> list[tuple]:
             continue
         named_event_type = current_event_type
         current_event_type = None
-        data_str = stripped[len("data:") :].strip()
-        if not data_str.startswith("{"):
-            continue
-        try:
-            data = as_str_mapping(json.loads(data_str))
-        except (json.JSONDecodeError, ValueError):
-            continue
+        data = loads_json_object(stripped[len("data:") :])
         if data is None:
             continue
         events.append((named_event_type or data.get("type", ""), data))

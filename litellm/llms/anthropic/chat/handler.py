@@ -84,7 +84,13 @@ def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
     if not payload.lstrip().startswith("{"):
         verbose_logger.debug("Skipping an Anthropic stream data line that is not a JSON object: %.100s", payload)
         return None
-    decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except json.JSONDecodeError:
+        raise
+    except (ValueError, RecursionError):
+        verbose_logger.debug("Skipping an Anthropic stream data line that cannot be decoded: %.100s", payload)
+        return None
     return decoded if is_str_keyed_dict(decoded) else None
 
 

@@ -255,8 +255,13 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     assert is_provider_error_chunk(malformed_frame) is False
 
 
-def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it():
-    deep_array_frame: Final = b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+@pytest.mark.parametrize(
+    "deep_payload",
+    [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
+    ids=["array", "object"],
+)
+def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it(deep_payload: bytes):
+    deep_array_frame: Final = b"data: " + deep_payload + b"\n\n"
     error_frame: Final = (
         b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
     )
