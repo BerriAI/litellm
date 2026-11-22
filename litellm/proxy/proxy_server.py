@@ -97,6 +97,7 @@ from litellm.constants import (
     SPEND_LOG_QUEUE_MAX_BACKOFF_SECONDS,
     VLLM_CHOICE_FIELDS,
 )
+from litellm.cost_calculator import base_model_for_pricing
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
@@ -11287,10 +11288,11 @@ def _pricing_override_stamps(
 
 def get_litellm_model_info(model: dict = {}) -> Mapping[str, object]:
     model_info: Final = model.get("model_info", {})
+    priced_base_model: Final = base_model_for_pricing(model_info.get("base_model"))
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or priced_base_model:
+            model_to_lookup = priced_base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:

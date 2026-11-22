@@ -1440,7 +1440,11 @@ def test_bedrock_model_id_deployment_takes_the_price_its_profile_row_declares(
             {
                 "model_name": "by-model-id",
                 "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
-                "model_info": {"id": "priced-profile-deployment", "input_cost_per_token": 0.01, "output_cost_per_token": 0.02},
+                "model_info": {
+                    "id": "priced-profile-deployment",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.02,
+                },
             }
         ]
     )
@@ -1552,7 +1556,6 @@ def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_besid
     assert cost() == pytest.approx(alone)
 
 
-
 def test_bedrock_deployment_with_its_profile_as_unpriced_base_model_bills_served_model_rates_beside_an_arn_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1596,6 +1599,272 @@ def test_bedrock_deployment_with_its_profile_as_unpriced_base_model_bills_served
 
     assert isinstance(response, litellm.ModelResponse)
     assert response._hidden_params["response_cost"] == pytest.approx(100 * 0.03 + 3 * 0.04)
+
+
+def _bedrock_served_model_cost(model: str) -> dict[str, object]:
+    return {
+        **litellm.model_cost,
+        model: {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "input_cost_per_token": 0.03,
+            "output_cost_per_token": 0.04,
+            "cache_read_input_token_cost": 0.001,
+        },
+    }
+
+
+def _mock_completion(router: Router, model_group: str, model: str, cached_tokens: int = 0) -> float:
+    from litellm.types.utils import PromptTokensDetailsWrapper
+
+    response: Final = router.completion(
+        model=model_group,
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response=litellm.ModelResponse(
+            model=model,
+            usage=litellm.Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+            ),
+        ),
+    )
+    assert isinstance(response, litellm.ModelResponse)
+    return response._hidden_params["response_cost"]
+
+
+@pytest.mark.parametrize("base_model_field", ("model_info", "litellm_params"))
+def test_bedrock_deployment_with_its_unpriced_profile_as_base_model_shows_served_prices_on_every_surface(
+    monkeypatch: pytest.MonkeyPatch, base_model_field: str
+) -> None:
+    from litellm.proxy.proxy_server import get_litellm_model_info
+    from litellm.proxy.spend_tracking.budget_reservation import estimate_request_max_cost
+    from litellm.proxy.utils import _estimated_input_cost
+
+    model: Final = "anthropic.unpriced-profile-surfaces-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/surfaces-test"
+    base_model: Final = f"bedrock/{profile}"
+    monkeypatch.setattr(litellm, "model_cost", _bedrock_served_model_cost(model))
+    router: Final = Router(
+        model_list=[
+            {"model_name": "by-arn", "litellm_params": {"model": base_model}, "model_info": {"id": "surfaces-arn"}},
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "surfaces-model-id"},
+            },
+            {
+                "model_name": "by-base-model",
+                "litellm_params": {
+                    "model": f"bedrock/converse/{model}",
+                    "model_id": profile,
+                    **({"base_model": base_model} if base_model_field == "litellm_params" else {}),
+                },
+                "model_info": {
+                    "id": "surfaces-base-model",
+                    **({"base_model": base_model} if base_model_field == "model_info" else {}),
+                },
+            },
+        ]
+    )
+
+    def surfaces(model_group: str, deployment_id: str, deployment_base_model: str | None) -> tuple[float, ...]:
+        group: Final = router.registry().group(model_group)
+        deployment: Final = router.registry().deployment(deployment_id)
+        assert group is not None and deployment is not None
+        model_info: Final = get_litellm_model_info(deployment.to_json(exclude_none=True))
+        max_cost: Final = estimate_request_max_cost(
+            {"model": model_group, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100},
+            "/chat/completions",
+            router,
+        )
+        assert max_cost is not None
+        return (
+            group.input_cost_per_token or 0.0,
+            group.output_cost_per_token or 0.0,
+            cast(float, model_info.get("input_cost_per_token")),
+            cast(float, model_info.get("output_cost_per_token")),
+            max_cost,
+            _estimated_input_cost(
+                {"model": f"bedrock/converse/{model}", "custom_llm_provider": "bedrock", "call_type": "completion"},
+                100,
+                deployment_id,
+                deployment_base_model,
+            ),
+        )
+
+    served: Final = surfaces("by-model-id", "surfaces-model-id", None)
+    assert served[:4] == pytest.approx((0.03, 0.04, 0.03, 0.04))
+    assert served[5] == pytest.approx(100 * 0.03)
+    assert surfaces("by-base-model", "surfaces-base-model", base_model) == pytest.approx(served)
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    (
+        ("openai/served-beside-unpriced-base-model-test", "openai/unpriced-base-model-test"),
+        (
+            "bedrock/converse/anthropic.served-beside-unpriced-base-model-test",
+            "bedrock/anthropic.unpriced-base-model-test",
+        ),
+    ),
+    ids=("openai", "bedrock_non_arn"),
+)
+def test_deployment_whose_base_model_is_an_unpriced_row_other_than_a_bedrock_arn_bills_that_row(
+    monkeypatch: pytest.MonkeyPatch, model: str, base_model: str
+) -> None:
+    provider: Final = model.split("/", 1)[0]
+    served: Final = model.rsplit("/", 1)[-1]
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            served: {
+                "litellm_provider": provider,
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+            },
+            base_model: {"litellm_provider": provider, "mode": "chat"},
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "by-base-model",
+                "litellm_params": {"model": model, "api_key": "sk-test"},
+                "model_info": {"id": "unpriced-row-base-model-deployment", "base_model": base_model},
+            }
+        ]
+    )
+
+    assert _mock_completion(router, "by-base-model", served) == 0.0
+
+
+@pytest.mark.parametrize("profile_mode", ({}, {"mode": "image_edit"}), ids=("no_mode", "image_edit_mode"))
+def test_bedrock_profile_row_outside_chat_mode_bills_its_declared_prices_with_registered_served_prices(
+    monkeypatch: pytest.MonkeyPatch, profile_mode: dict[str, object]
+) -> None:
+    model: Final = "anthropic.non-chat-profile-request-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/non-chat-request-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            f"bedrock/{profile}": {
+                "litellm_provider": "bedrock",
+                **profile_mode,
+                "input_cost_per_token": 0.05,
+                "cache_read_input_token_cost": 0.005,
+            },
+        },
+    )
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "non-chat-profile-deployment"},
+            }
+        ]
+    )
+
+    assert _mock_completion(router, "by-model-id", model, cached_tokens=80) == pytest.approx(
+        20 * 0.03 + 80 * 0.005 + 3 * 0.04
+    )
+
+
+def test_bedrock_model_id_deployment_bills_a_zero_price_its_profile_row_declares(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
+
+    model: Final = "anthropic.zero-price-profile-row-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/zero-price-row-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **_bedrock_served_model_cost(model),
+            f"bedrock/{profile}": {"litellm_provider": "bedrock", "mode": "chat", "cache_read_input_token_cost": 0},
+        },
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {
+                    "id": "zero-price-profile-deployment",
+                    "input_cost_per_token": 0.01,
+                    "output_cost_per_token": 0.02,
+                },
+            }
+        ]
+    )
+
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model,
+            usage=Usage(
+                prompt_tokens=100,
+                completion_tokens=3,
+                total_tokens=103,
+                prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=80),
+            ),
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="zero-price-profile-deployment",
+    ) == pytest.approx(20 * 0.01 + 3 * 0.02)
+
+
+def test_bedrock_deployment_with_a_zero_priced_profile_as_base_model_bills_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model: Final = "anthropic.zero-priced-profile-base-model-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/zero-priced-base-model-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **_bedrock_served_model_cost(model),
+            f"bedrock/{profile}": {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+            },
+        },
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "by-base-model",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "zero-priced-profile-base-model-deployment", "base_model": f"bedrock/{profile}"},
+            }
+        ]
+    )
+
+    assert _mock_completion(router, "by-base-model", model) == 0.0
+
 
 def test_partial_custom_pricing_inherits_builtin_cache_pricing():
     """A deployment that overrides only input/output cost on a cache-supporting

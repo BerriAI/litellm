@@ -61,7 +61,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
-from litellm.cost_calculator import cost_map_key_declared_prices
+from litellm.cost_calculator import bedrock_profile_pricing, cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
@@ -137,7 +137,6 @@ from litellm.utils import (
     get_secret,
     lookup_model_info_for_registration,
     model_cost_registration_key,
-    pricing_with_overrides,
 )
 
 if TYPE_CHECKING:
@@ -456,9 +455,7 @@ def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -
     profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
     if isinstance(profile_info, ModelInfoLookupMiss):
         return {}
-    return pricing_with_overrides(
-        cost_map_key_declared_prices(profile_info["key"]), _MODEL_INFO_ADAPTER.validate_python(priced)
-    )
+    return bedrock_profile_pricing(profile_info["key"], _MODEL_INFO_ADAPTER.validate_python(priced))
 
 
 def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:

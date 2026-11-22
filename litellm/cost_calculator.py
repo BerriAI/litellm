@@ -24,6 +24,7 @@ from litellm.constants import (
     REALTIME_METERED_USAGE_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
+from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_or_none,
@@ -169,7 +170,7 @@ from litellm.utils import (
     cached_cost_map_key,
     cached_get_model_info_helper,
     mapped_model_fill_missing,
-    model_info_with_pricing_overrides,
+    pricing_with_overrides,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -994,7 +995,13 @@ def _bedrock_pricing_info(
         return _cost_map_model_info(registration[0], None) if registration is not None else None
     if registration is None or registration[0] == profile["key"]:
         return profile
-    return model_info_with_pricing_overrides(profile, registration[1])
+    return cast(  # cast-ok: the profile's own model info, its prices swapped for the declared-prices merge
+        ModelInfo,
+        {
+            **{field: value for field, value in profile.items() if not is_server_derived_pricing_key(field)},
+            **bedrock_profile_pricing(profile["key"], registration[1]),
+        },
+    )
 
 
 def cost_map_key_prices_anything(key: str) -> bool:
@@ -1013,16 +1020,17 @@ def _declares_rates(model_info: ModelInfo | None) -> bool:
     return model_info is not None and cost_map_key_prices_anything(model_info["key"])
 
 
-def _maps_to_row_without_prices(model: str, custom_llm_provider: str | None) -> bool:
-    key: Final = cached_cost_map_key(model, custom_llm_provider)
-    return (
-        key is not None
-        and _raw_cost_map_entry(key) is not None
-        and not any(
-            value is not None and is_server_derived_pricing_key(field)
-            for field, value in declared_cost_map_pricing(key, model, custom_llm_provider).items()
-        )
-    )
+def bedrock_profile_pricing(profile_key: str, overrides: Mapping[str, object]) -> Mapping[str, object]:
+    return pricing_with_overrides(cost_map_key_declared_prices(profile_key), overrides)
+
+
+def unpriced_bedrock_arn(model: str) -> bool:
+    key: Final = cached_cost_map_key(model, "bedrock") if is_bedrock_arn(model.removeprefix("bedrock/")) else None
+    return key is not None and not cost_map_key_declared_prices(key)
+
+
+def base_model_for_pricing(base_model: object) -> str | None:
+    return base_model if isinstance(base_model, str) and not unpriced_bedrock_arn(base_model) else None
 
 
 def _base_model_pricing_provider(base_model: str, custom_llm_provider: str | None) -> str | None:
@@ -1068,7 +1076,7 @@ def select_model_name_for_cost_calc(
 ) -> str | None:
     """
     1. If custom pricing is true, return received model name
-    2. If base_model is set (e.g. for azure models), return that, unless its cost-map row sets no price
+    2. If base_model is set (e.g. for azure models), return that, unless it is an unpriced Bedrock ARN
     3. If completion response has model set return that, unless only the requested model's cost-map row has rates
     4. Check if model is passed in return that
     """
@@ -1094,11 +1102,7 @@ def select_model_name_for_cost_calc(
         if not explicit_pricing and priced_from_response
         else None
     )
-    priced_base_model: Final = (
-        base_model
-        if base_model is not None and not _maps_to_row_without_prices(base_model, custom_llm_provider)
-        else None
-    )
+    priced_base_model: Final = base_model_for_pricing(base_model)
 
     if custom_pricing is True:
         if router_model_id is not None and router_model_id in litellm.model_cost:
