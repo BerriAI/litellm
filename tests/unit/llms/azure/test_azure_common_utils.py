@@ -2,10 +2,12 @@ import json
 import os
 import traceback
 from typing import Callable, Final, Literal, Optional
+from urllib.parse import parse_qs
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from respx import MockRouter
 from typing_extensions import assert_never
 
 import litellm
@@ -15,6 +17,7 @@ from litellm.llms.azure.common_utils import (
     _cached_entra_id_token_provider,
     get_azure_ad_token,
     get_azure_ad_token_from_entra_id,
+    get_azure_ad_token_from_oidc,
 )
 from litellm.secret_managers.get_azure_ad_token_provider import (
     get_azure_ad_token_provider,
@@ -1386,6 +1389,34 @@ def test_get_azure_ad_token_with_oidc_token(setup_mocks, monkeypatch):
     assert token == "mock-oidc-token"
 
 
+def _token_for_requested_scope(request: httpx.Request) -> httpx.Response:
+    scope: Final = parse_qs(request.content.decode())["scope"][0]
+    return httpx.Response(200, json={"access_token": f"token-for-{scope}", "expires_in": 3600})
+
+
+def test_oidc_tokens_for_different_scopes_are_not_shared(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("AZURE_AUTHORITY_HOST", raising=False)
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN", "shared-oidc-assertion")
+    respx_mock.post("https://login.microsoftonline.com/scope-cache-tenant/oauth2/v2.0/token").mock(
+        side_effect=_token_for_requested_scope
+    )
+    scopes: Final = ("https://ai.azure.com/.default", "https://cognitiveservices.azure.com/.default")
+
+    tokens: Final = tuple(
+        get_azure_ad_token_from_oidc(
+            azure_ad_token="oidc/circleci/",
+            azure_client_id="scope-cache-client",
+            azure_tenant_id="scope-cache-tenant",
+            scope=scope,
+        )
+        for scope in scopes
+    )
+
+    assert tokens == tuple(f"token-for-{scope}" for scope in scopes)
+
+
 def test_get_azure_ad_token_with_token_refresh(setup_mocks, monkeypatch):
     """Test get_azure_ad_token with token refresh enabled."""
     # Reset mocks to ensure clean state
@@ -1700,6 +1731,92 @@ def test_azure_v1_api_client_targets_openai_v1_once_whatever_the_api_base_ends_i
     )
 
     assert str(client.base_url) == "https://test.openai.azure.com/openai/v1/"
+
+
+@pytest.fixture
+def no_azure_api_key(monkeypatch):
+    for env_var in (
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_AI_API_KEY",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+    ):
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "azure_key", None)
+
+
+def test_azure_v1_base_without_an_azure_credential_never_sends_the_openai_api_key(
+    no_azure_api_key, respx_mock, monkeypatch
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-key-meant-for-api-openai-com")
+    route: Final = respx_mock.post(
+        host="no-credential-resource.openai.azure.com", path="/openai/v1/chat/completions"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            },
+        )
+    )
+
+    litellm.completion(
+        model="azure/gpt-4.1-mini",
+        api_base="https://no-credential-resource.openai.azure.com/openai/v1",
+        messages=[{"role": "user", "content": "hi"}],
+    )
+
+    assert "authorization" not in route.calls.last.request.headers
+
+
+def _embed_on(api_base: str) -> object:
+    return litellm.embedding(model="azure/text-embedding-3-small", api_base=api_base, api_key="k", input=["hi"])
+
+
+def _draw_on(api_base: str) -> object:
+    return litellm.image_generation(model="azure/gpt-image-1", api_base=api_base, api_key="k", prompt="a dot")
+
+
+@pytest.mark.parametrize(
+    ("call", "route_path", "upstream_body"),
+    [
+        pytest.param(
+            _embed_on,
+            "/openai/v1/embeddings",
+            {
+                "object": "list",
+                "data": [{"object": "embedding", "embedding": [0.1], "index": 0}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            id="embedding",
+        ),
+        pytest.param(
+            _draw_on, "/openai/v1/images/generations", {"created": 1, "data": [{"b64_json": "aGk="}]}, id="image"
+        ),
+    ],
+)
+def test_azure_openai_v1_base_with_no_api_version_uses_the_v1_api_beyond_chat(
+    respx_mock, monkeypatch, call: Callable[[str], object], route_path: str, upstream_body: dict[str, object]
+):
+    monkeypatch.setenv("AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION)
+    route: Final = respx_mock.post(host="v1-default-resource.openai.azure.com", path=route_path).mock(
+        return_value=httpx.Response(200, json=upstream_body)
+    )
+
+    call("https://v1-default-resource.openai.azure.com/openai/v1")
+
+    assert route.calls.last.request.url.params.get("api-version") != litellm.AZURE_DEFAULT_API_VERSION
 
 
 @pytest.mark.parametrize("api_version", ["v1", "latest", "preview"])
