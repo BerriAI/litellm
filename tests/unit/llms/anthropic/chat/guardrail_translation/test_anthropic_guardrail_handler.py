@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
@@ -272,6 +273,14 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
 
     @staticmethod
+    def _guardrail_that_must_not_run() -> CustomGuardrail:
+        class MustNotRun(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                raise AssertionError("the guardrail ran on a stream it could not read")
+
+        return MustNotRun(guardrail_name="test")
+
+    @staticmethod
     def _masking_guardrail() -> CustomGuardrail:
         class MaskWorld(CustomGuardrail):
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -331,13 +340,8 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert scan_key.stream_ended is True
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        "undecodable_payload",
-        [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
-        ids=["deep-array", "deep-object"],
-    )
-    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self, undecodable_payload):
-        undecodable_chunk = b"event: ping\ndata: " + undecodable_payload + b"\n\n"
+    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self):
+        undecodable_chunk = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
         ended_chunks = self._ended_sse_chunks()
         chunks = [*ended_chunks[:2], undecodable_chunk, *ended_chunks[2:]]
 
@@ -351,6 +355,33 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         assert result is chunks
         assert chunks[2] == undecodable_chunk
         assert self._delta_texts([*chunks[:2], *chunks[3:]]) == ["hello [MASKED]", ""]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("read_size", [None, 500], ids=["one-read", "500-byte-reads"])
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    @pytest.mark.parametrize("padding", [b"[" * 100_000 + b"]" * 100_000, b"9" * 5000], ids=["deep", "huge-number"])
+    async def test_a_text_event_the_guardrail_cannot_decode_is_refused_before_the_guardrail_runs(
+        self, padding, stream_ended, read_size
+    ):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "world"}, "padding": ' + padding + b"}\n\n"
+        )
+        step = read_size or len(hidden_text_chunk)
+        hidden_text_reads = [hidden_text_chunk[start : start + step] for start in range(0, len(hidden_text_chunk), step)]
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:3], *hidden_text_reads, *(ended_chunks[4:] if stream_ended else ())]
+
+        with pytest.raises(GuardrailRaisedException) as refusal:
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+        assert refusal.value.guardrail_name == "test"
+        assert refusal.value.blocked_content is False
 
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:

@@ -2494,6 +2494,53 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("padding", [b"[" * 100_000 + b"]" * 100_000, b"9" * 5000], ids=["deep", "huge-number"])
+async def test_apply_to_output_streaming_anthropic_sse_refuses_a_text_event_it_cannot_decode(padding):
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    hidden_card_chunk = (
+        b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+        b'"delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}, "padding": ' + padding + b"}\n\n"
+    )
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        hidden_card_chunk,
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+
+    async def collect():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        ):
+            collected.append(chunk)
+
+    with pytest.raises(GuardrailRaisedException):
+        await collect()
+
+    assert b"4111" not in b"".join(collected)
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_forwarded_unchanged():
     guardrail = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,

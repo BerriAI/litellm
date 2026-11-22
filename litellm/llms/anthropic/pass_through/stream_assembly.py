@@ -7,7 +7,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import is_undecodable_json_object, map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
@@ -459,6 +459,17 @@ def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
     )
 
 
+def _has_undecodable_object_event(sse_stream: str) -> bool:
+    return any(
+        is_undecodable_json_object(_sse_data_payload(event) or "") for event in split_sse_chunk_into_events(sse_stream)
+    )
+
+
+def has_undecodable_object_event(all_chunks: Sequence[object]) -> bool:
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    return sse_stream is not None and _has_undecodable_object_event(sse_stream)
+
+
 def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
     """Whether raw SSE frames are Anthropic Messages events.
 
@@ -484,7 +495,7 @@ def assemble_anthropic_sse_stream(
     freshly built object that is unreachable from caller state until returned.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
+    if sse_stream is None or _has_undecodable_object_event(sse_stream):
         return None
     message_start: Final = _anthropic_message_start(sse_stream)
     if message_start is None:

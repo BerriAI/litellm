@@ -42,6 +42,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.anthropic.pass_through.stream_assembly import has_undecodable_object_event
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
@@ -1523,6 +1524,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         chunks: Final = (first_chunk, *rest_chunks)
         assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
+            if has_undecodable_object_event(chunks):
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name,
+                    message="Presidio could not read the upstream stream; cannot verify PII when PII protection is configured",
+                    should_wrap_with_default_message=False,
+                )
             verbose_proxy_logger.warning(
                 "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
                 "Output PII masking was skipped for this response."

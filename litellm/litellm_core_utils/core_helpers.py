@@ -75,6 +75,18 @@ def loads_json_object(payload: str | bytes) -> Mapping[str, object] | None:
         return None
 
 
+def is_undecodable_json_object(payload: str) -> bool:
+    if not payload.lstrip().startswith("{"):
+        return False
+    try:
+        json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    except (ValueError, RecursionError):
+        return True
+    return False
+
+
 def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
