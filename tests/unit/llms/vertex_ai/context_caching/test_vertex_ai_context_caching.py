@@ -2593,9 +2593,9 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "plain system prefix " * 3000, "cache_control": {"type": "ephemeral"}},
-                    {"type": "text", "text": "Reply with OK only."},
                 ],
             },
+            {"role": "user", "content": "Reply with OK only."},
         ],
         api_key="test-key",
         client=_recording_gemini_client(calls),
@@ -2610,3 +2610,29 @@ def test_a_plain_system_prompt_goes_into_the_gemini_cache_instead_of_beside_it(l
     assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
     assert generated["cachedContent"] == "cachedContents/created"
     assert "system_instruction" not in generated
+
+
+def test_a_mark_on_the_latest_turn_sends_the_whole_conversation_uncached_in_order(local_model_cost_map) -> None:
+    calls: Final[list[httpx.Request]] = []
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What's the weather in Tokyo today?"},
+            {"role": "assistant", "content": "Sunny."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "And Nagoya tomorrow? " * 3000, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+        ],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert not any(call.url.path.endswith("/cachedContents") for call in calls)
+    assert "cachedContent" not in generated
+    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert [content["role"] for content in generated["contents"]] == ["user", "model", "user"]
