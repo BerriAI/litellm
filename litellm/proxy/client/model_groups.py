@@ -1,8 +1,13 @@
 from typing import Final
 
 import requests
+from pydantic import TypeAdapter
+
+from litellm.litellm_core_utils.core_helpers import subscript
 
 from .exceptions import UnauthorizedError
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class ModelGroupsManagementClient:
@@ -31,7 +36,7 @@ class ModelGroupsManagementClient:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
-    def info(self, return_request: bool = False) -> list[dict[str, object]] | requests.Request:
+    def info(self, return_request: bool = False) -> object | requests.Request:
         """
         Get detailed information about all model groups from the server.
 
@@ -57,7 +62,7 @@ class ModelGroupsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return response.json()["data"]
+            return subscript(_DECODED_JSON.validate_python(response.json()), "data")
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

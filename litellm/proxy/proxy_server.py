@@ -2625,6 +2625,11 @@ class _ConfigParamValueRow(Protocol):
     def param_value(self) -> object: ...
 
 
+class _LitellmSettingsConfigRow(Protocol):
+    @property
+    def param_value(self) -> str | _SemanticToolFilterLitellmSettings | None: ...
+
+
 class _ConfigOverridesRow(Protocol):
     config_value: Mapping[str, JsonValue] | None
 
@@ -8989,7 +8994,9 @@ class ProxyConfig:
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
         try:
-            config_record: Final = await get_config_param(prisma_client, "litellm_settings")
+            config_record: Final[_LitellmSettingsConfigRow | None] = await get_config_param(
+                prisma_client, "litellm_settings"
+            )
 
             if config_record is None:
                 return

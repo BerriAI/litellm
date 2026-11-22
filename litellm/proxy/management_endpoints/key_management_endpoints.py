@@ -216,7 +216,7 @@ from litellm.redis.stores.spend_counters import (
     key_counter,
     key_window_counter,
 )
-from litellm.repositories.base_repository import BaseRepository, record_to_dict
+from litellm.repositories.base_repository import BaseRepository, SupportsDict, SupportsModelDump, record_to_dict
 from litellm.repositories.budget_limits_repository import (
     BudgetLimitsTransaction,
     lock_budget_limits,
@@ -4693,15 +4693,15 @@ async def bulk_update_keys(
 
             key_info = None
             try:
-                existing_key_row = await prisma_client.get_data(
+                existing_key_row: object = await prisma_client.get_data(
                     token=key_update_item.key,
                     table_name="key",
                     query_type="find_unique",
                 )
                 if existing_key_row is not None:
-                    if hasattr(existing_key_row, "model_dump"):
+                    if has_attributes(existing_key_row, SupportsModelDump, "model_dump"):
                         key_info = existing_key_row.model_dump()
-                    elif hasattr(existing_key_row, "dict"):
+                    elif has_attributes(existing_key_row, SupportsDict, "dict"):
                         key_info = existing_key_row.dict()
                     if key_info:
                         key_info.pop("token", None)

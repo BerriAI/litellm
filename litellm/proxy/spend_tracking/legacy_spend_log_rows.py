@@ -712,6 +712,10 @@ def _get_status_for_spend_log(
     return "success"
 
 
+def _logging_kwargs_view(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return kwargs
+
+
 def logging_payload(
     kwargs: dict[str, Any],  # mutable-ok: the logging kwargs as litellm hands them over, untyped as they were
     response_obj: object,
@@ -746,7 +750,7 @@ def logging_payload(
         kwargs.get("completion_start_time", end_time)
     )
     call_type: Final = kwargs.get("call_type")
-    cache_hit: Final = kwargs.get("cache_hit", False)
+    cache_hit: Final = _logging_kwargs_view(kwargs).get("cache_hit", False)
 
     # Convert response_obj to dict first
     if isinstance(response_obj, dict):
@@ -1042,7 +1046,7 @@ def logging_payload(
     elif litellm_params.get("preset_cache_key") is not None:
         cache_key = litellm_params["preset_cache_key"]
     else:
-        cache_key = litellm.cache.get_cache_key(**kwargs)
+        cache_key = litellm.cache.get_cache_key(**_logging_kwargs_view(kwargs))
     if cache_hit is True or response_served_from_cache:
         import time
 
