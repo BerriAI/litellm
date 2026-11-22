@@ -13175,7 +13175,6 @@
         "input_cost_per_token": 1.25e-06,
         "input_cost_per_token_above_200k_tokens": 2.5e-06,
         "litellm_provider": "azure_ai",
-        "token_count_framing": 0,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
