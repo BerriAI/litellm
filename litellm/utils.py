@@ -10357,7 +10357,7 @@ class ProviderConfigManager:
             )
 
             return VertexAIGPTOSSTransformation()
-        elif model in litellm.vertex_mistral_models:
+        elif model in litellm.vertex_mistral_models or "mistral" in model:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
             return litellm.VertexAIMistralConfig()
