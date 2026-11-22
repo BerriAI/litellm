@@ -1680,11 +1680,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream.
-        The output is built from the chat completion chunks relayed so far, and the usage
+        The output is built from the chat completion chunks relayed so far (none yet means no output), and the usage
         from every chunk the provider sent, so a usage-only chunk such as Anthropic's
         message_start bills its input count instead of LiteLLM's estimate.
         """
-        if self.completed_response is not None or not self.collected_chat_completion_chunks:
+        relayed_or_kept: Final = self.collected_chat_completion_chunks or self.litellm_custom_stream_wrapper.chunks
+        if self.completed_response is not None or not relayed_or_kept:
             return None
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
             input=self.request_input,
@@ -1692,7 +1693,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             only_since_compaction=True,
         )
         built: Final = stream_chunk_builder(
-            chunks=self.collected_chat_completion_chunks,
+            chunks=relayed_or_kept,
             messages=messages,
             logging_obj=self.litellm_logging_obj,
         )

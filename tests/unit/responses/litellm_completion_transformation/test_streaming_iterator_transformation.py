@@ -10,9 +10,10 @@ before response.completed, and that every event of a bridged stream carries the 
 spend tracking stores, so a follow-up previous_response_id still finds the conversation.
 """
 
+import asyncio
 import itertools
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from itertools import accumulate, chain, islice, product
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
@@ -93,7 +94,9 @@ class _FakeStreamWrapper:
         return self._next_chunk()
 
 
-def _build_iterator(chunks, litellm_metadata: dict[str, object] | None = None) -> LiteLLMCompletionStreamingIterator:
+def _build_iterator(
+    chunks: Iterable[ModelResponseStream], litellm_metadata: dict[str, object] | None = None
+) -> LiteLLMCompletionStreamingIterator:
     return LiteLLMCompletionStreamingIterator(
         model="claude-haiku-4-5",
         litellm_custom_stream_wrapper=_FakeStreamWrapper(chunks),
@@ -2380,6 +2383,77 @@ def test_a_cut_stream_bills_the_input_and_cache_tokens_the_provider_reported_bef
     assert usage.input_tokens == 4321
     assert (usage.input_tokens_details.cached_tokens, usage.input_tokens_details.cache_write_tokens) == (4000, 300)
     assert usage.output_tokens == litellm.token_counter(model="claude-haiku-4-5", text=first_delta.delta)
+
+
+class _MessageStartThenSilence:
+    def __init__(self, message_start: ModelResponseStream) -> None:
+        self._message_start: Final = message_start
+        self._sent = False
+
+    def __aiter__(self) -> AsyncIterator[ModelResponseStream]:
+        return self
+
+    async def __anext__(self) -> ModelResponseStream:
+        if self._sent:
+            await asyncio.Event().wait()
+        self._sent = True
+        return self._message_start
+
+
+@pytest.mark.asyncio
+async def test_a_stream_cut_before_the_first_relayed_chunk_bills_the_input_the_provider_reported() -> None:
+    logging_obj: Final = Logging(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "What is the weather in San Francisco?"}],
+        stream=True,
+        call_type="completion",
+        start_time=1.0,
+        litellm_call_id="cut-before-first-chunk",
+        function_id="test",
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="claude-haiku-4-5", custom_llm_provider="anthropic"
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=_MessageStartThenSilence(
+            ModelResponseStream(
+                id=CHAT_COMPLETION_ID,
+                created=1748575031,
+                model="claude-haiku-4-5",
+                choices=[],
+                usage=Usage(prompt_tokens=4321, completion_tokens=1, total_tokens=4322, cache_read_input_tokens=4000),
+            )
+        ),
+        model="claude-haiku-4-5",
+        logging_obj=logging_obj,
+        custom_llm_provider="anthropic",
+        stream_options={"include_usage": True},
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+
+    async def relay() -> None:
+        async for _ in iterator:
+            pass
+
+    relaying: Final = asyncio.ensure_future(relay())
+    while not wrapper.chunks:
+        await asyncio.sleep(0)
+    relaying.cancel()
+    await asyncio.gather(relaying, return_exceptions=True)
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None
+    usage: Final = incomplete.response.usage
+    assert usage is not None and usage.input_tokens_details is not None
+    assert (usage.input_tokens, usage.input_tokens_details.cached_tokens) == (4321, 4000)
+    assert incomplete.response.output == []
 
 
 def test_a_cut_stream_logs_the_cost_of_the_usage_it_bills() -> None:
