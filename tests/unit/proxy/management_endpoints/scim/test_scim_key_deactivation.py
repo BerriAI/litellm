@@ -589,7 +589,7 @@ async def test_scim_status_write_refreshes_user_cache(
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
         patch(  # test-quality-ok: observe the Redis publication boundary
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             new_callable=AsyncMock,
         ) as broadcast,
     ):
@@ -637,7 +637,7 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
         patch("litellm.proxy.proxy_server.user_api_key_cache", cache),  # test-quality-ok: exercise a real isolated cache
         patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),  # test-quality-ok: isolate the logging dependency
         patch(  # test-quality-ok: observe the Redis publication boundary
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             new_callable=AsyncMock,
         ) as broadcast,
     ):

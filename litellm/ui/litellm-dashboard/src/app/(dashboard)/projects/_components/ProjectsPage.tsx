@@ -61,23 +61,32 @@ export function ProjectsPage() {
 
   if (!premiumUser) {
     return (
-      <div className="mx-4 mt-4">
-        <p className="text-sm text-muted-foreground">
-          <Trans
-            i18nKey="projects.page.enterpriseNotice"
-            components={{
-              pricing: (
-                <a
-                  href="https://www.litellm.ai/#pricing"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary underline-offset-4 hover:underline"
-                />
-              ),
-            }}
-          />
-        </p>
-      </div>
+      <Page>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Folder />
+            {t("projects.page.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("projects.page.description")}</PageHeaderDescription>
+        </PageHeader>
+        <PageContent>
+          <p className="text-sm text-muted-foreground">
+            <Trans
+              i18nKey="projects.page.enterpriseNotice"
+              components={{
+                pricing: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary underline-offset-4 hover:underline"
+                  />
+                ),
+              }}
+            />
+          </p>
+        </PageContent>
+      </Page>
     );
   }
 

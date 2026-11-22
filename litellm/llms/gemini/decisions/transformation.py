@@ -1,7 +1,9 @@
 from collections.abc import Mapping
+from dataclasses import replace
 from itertools import chain
 from typing import Final
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import assert_never
 
@@ -140,6 +142,9 @@ class GeminiDecisionsConfig(BaseDecisionsConfig):
     max_images = 16
     max_total_image_bytes = 20 * 1024 * 1024
 
+    def systemone_config(self) -> BaseDecisionsConfig:
+        return GeminiSystemOneConfig()
+
     def get_default_api_base(self) -> str | None:
         return "https://generativelanguage.googleapis.com"
 
@@ -212,3 +217,17 @@ class GeminiDecisionsConfig(BaseDecisionsConfig):
             },
             request,
         )
+
+
+class GeminiSystemOneConfig(GeminiDecisionsConfig):
+    def transform_decisions_response(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        raw_response: httpx.Response,
+        request: DecisionsIRRequest,
+    ) -> DecisionsIRResponse:
+        response: Final = super().transform_decisions_response(model, custom_llm_provider, raw_response, request)
+        if response.model is not None:
+            return response
+        return replace(response, model=f"{custom_llm_provider}/{model}")

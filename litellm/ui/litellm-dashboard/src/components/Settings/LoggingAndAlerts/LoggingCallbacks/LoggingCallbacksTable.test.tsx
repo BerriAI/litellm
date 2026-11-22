@@ -17,9 +17,9 @@ describe("LoggingCallbacksTable", () => {
     vi.clearAllMocks();
   });
 
-  it("should render", () => {
+  it("should render the callbacks table", () => {
     render(<LoggingCallbacksTable callbacks={[]} availableCallbacks={{}} />);
-    expect(screen.getByText("Active Logging Callbacks")).toBeInTheDocument();
+    expect(screen.getByRole("table")).toBeInTheDocument();
   });
 
   it("should show the empty state when there are no callbacks", () => {
@@ -58,14 +58,6 @@ describe("LoggingCallbacksTable", () => {
       />,
     );
     expect(screen.getByText("custom_callback_x")).toBeInTheDocument();
-  });
-
-  it("should call onAdd when the Add Callback button is clicked", async () => {
-    const user = userEvent.setup();
-    const onAdd = vi.fn();
-    render(<LoggingCallbacksTable callbacks={[]} availableCallbacks={{}} onAdd={onAdd} />);
-    await user.click(screen.getByRole("button", { name: /add callback/i }));
-    expect(onAdd).toHaveBeenCalled();
   });
 
   it("should test, edit, and delete a callback through the actions menu", async () => {

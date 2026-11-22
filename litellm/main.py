@@ -1399,6 +1399,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    serves_only_responses,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1575,6 +1576,13 @@ def _dispatch_metadata(ctx: CompletionDispatchContext) -> Mapping[str, object] |
 
 def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
     return ctx.client
+
+
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
 
 
 def _dispatch_client_azure(
@@ -5860,7 +5868,9 @@ def completion(
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
     # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
+    # Responses API config (get_provider_responses_api_config -> None). A route
+    # with no chat endpoint bridges anyway, since its native Responses config
+    # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
@@ -6243,8 +6253,11 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        may_bridge_to_responses_api: Final = not skip_responses_api_bridge or serves_only_responses(
+            model, custom_llm_provider
+        )
         bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+            responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
         allowed_openai_params: Final[list[str] | None] = (
             [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
@@ -6346,7 +6359,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
@@ -6579,7 +6594,7 @@ def completion(
         replay_as_stream: Final = (
             partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
         )
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
@@ -9522,6 +9537,27 @@ def speech(
             timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
+            _is_async=aspeech or False,
+            stream=stream_audio,
+        )
+    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
             stream=stream_audio,
         )

@@ -95,6 +95,14 @@ class RemoteTraceStore:
     def __init__(self, client: httpx.AsyncClient) -> None:
         self.client: Final = client
 
+    async def forward(self, path: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
+        """Hand an agent's own OTLP export to Lens unchanged; None when Lens cannot be reached."""
+        try:
+            response: Final = await self.client.post(path, content=body, headers=dict(headers))
+        except httpx.HTTPError:
+            return None
+        return response.status_code, response.content
+
     async def _read(self, request: Mapping[str, object]) -> JsonValue:
         result: Final = await self._read_result(request)
         if isinstance(result, _ReadFailure):

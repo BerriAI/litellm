@@ -85,9 +85,10 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     evict_and_broadcast,
 )
 from litellm.proxy.common_utils.callback_config_validation import (
@@ -489,6 +490,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_METADATA_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _HASHED_TOKEN: Final = re.compile(r"[0-9a-f]{64}")
 
 
@@ -1001,6 +1003,7 @@ def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None
     """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
+    validate_required_customer_headers_metadata(metadata)
 
 
 def raise_on_logging_credential_change(
@@ -2006,10 +2009,10 @@ def _check_key_model_specific_limits(
     Generic function to check if a key is allocating model specific limits.
     Raises an error if we're overallocating.
     """
-    model_rpm_limit: Final = data.model_rpm_limit or (
+    model_rpm_limit: Final = attribute_or_none(data, "model_rpm_limit") or (
         _DECODED_JSON.validate_python(data.metadata.get("model_rpm_limit", None)) if data.metadata else None
     )
-    model_tpm_limit: Final = data.model_tpm_limit or (
+    model_tpm_limit: Final = attribute_or_none(data, "model_tpm_limit") or (
         _DECODED_JSON.validate_python(data.metadata.get("model_tpm_limit", None)) if data.metadata else None
     )
     if model_rpm_limit is None and model_tpm_limit is None:
@@ -3212,6 +3215,34 @@ async def _update_key_row(
     return cast("_KeyUpdateResult", response)  # cast-ok: key update_data returns token and data
 
 
+async def _check_customer_header_team_change(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing: LiteLLM_VerificationToken,
+    actor: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    from litellm.proxy._types import REQUIRED_CUSTOMER_HEADERS_ADAPTER, REQUIRED_CUSTOMER_HEADERS_SETTING
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    if actor.user_role == LitellmUserRoles.PROXY_ADMIN or existing.team_id is None:
+        return
+    if "team_id" not in data.model_fields_set or data.team_id == existing.team_id:
+        return
+    team: Final = await get_team_object(
+        team_id=existing.team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+    metadata: Final = _METADATA_OBJECT.validate_python(getattr(team, "metadata", None) or {})
+    required: Final = metadata.get(REQUIRED_CUSTOMER_HEADERS_SETTING)
+    if required is not None and REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(required):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Only proxy admins can move a key out of a team with required_customer_headers."},
+        )
+
+
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3220,6 +3251,8 @@ async def prepare_key_update_data(
     llm_router: Router | None = None,
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
+    if user_api_key_dict is not None:
+        await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (
         "router_settings" not in data.model_fields_set
         and "team_id" in data.model_fields_set

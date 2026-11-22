@@ -127,13 +127,14 @@ from litellm.proxy.auth.auth_utils import (
     enforce_output_token_estimates_are_admin_only,
     enforce_vector_store_index_grants_are_admin_only,
 )
+from litellm.proxy.auth.customer_hierarchy_auth import validate_required_customer_headers_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
     evict_and_broadcast,
     evict_local,
     evict_shared,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
@@ -661,9 +662,9 @@ async def refresh_cached_team(
     batches: Final = active_request_redis_batches()
     if batches is not None:
         await batches.flush_pre_call()
-    await publish_auth_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
+    await publish_cache_invalidation(cache_key=f"team_id:{team_row.team_id}")
     if team_table.team_alias is not None:
-        await publish_auth_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
+        await publish_cache_invalidation(cache_key=f"team_alias:{team_table.team_alias}")
     await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.TEAM, entity_id=team_row.team_id)
 
 
@@ -1843,6 +1844,10 @@ async def new_team(
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
+        validate_required_customer_headers_metadata(
+            _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
+        )
+
         # Validate budget values are not negative
         if data.max_budget is not None and (not math.isfinite(data.max_budget) or data.max_budget < 0):
             raise HTTPException(
@@ -2725,6 +2730,9 @@ async def update_team(
         )
 
         _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
+        validate_required_customer_headers_metadata(
+            _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
+        )
         enforce_output_token_estimates_are_admin_only(
             data=data,
             existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
@@ -3906,7 +3914,7 @@ async def team_member_add(
 
     ```
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
     from litellm.proxy.proxy_server import (
         litellm_proxy_admin_name,
         premium_user,

@@ -53,7 +53,7 @@ from litellm.proxy.auth.password_policy import (
     validate_passwords_bulk,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
@@ -2475,14 +2475,14 @@ async def _authorize_user_list_request(
 _NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _user_search_where(search: str | None) -> Mapping[str, object]:
-    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+def _user_search_where(search: str | None, *, include_alias: bool = False) -> Mapping[str, object]:
     if not search:
         return _NO_SEARCH_WHERE
     search_where: Final[UserSearchWhere] = {
         "OR": (
             {"user_id": {"contains": search, "mode": "insensitive"}},
             {"user_email": {"contains": search, "mode": "insensitive"}},
+            *(({"user_alias": {"contains": search, "mode": "insensitive"}},) if include_alias else ()),
         )
     }
     return search_where
@@ -3029,7 +3029,7 @@ async def ui_view_users(
     user_email: str | None = fastapi.Query(default=None, description="User email in the request parameters"),
     search: str | None = fastapi.Query(
         default=None,
-        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+        description="Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers.",
     ),
     team_id: str | None = fastapi.Query(
         default=None,
@@ -3041,6 +3041,7 @@ async def ui_view_users(
 ):
     """
     Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+    Proxy admins and admin viewers can also search by alias and receive the alias in results.
 
     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
     (stored in the ``litellm_uisettings`` table):
@@ -3092,9 +3093,13 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
+        include_alias: Final = user_api_key_has_admin_view(user_api_key_dict)
         where: Final[Mapping[str, object]] = {
             key: value
-            for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+            for key, value in (
+                *where_conditions.items(),
+                *_user_search_where(search, include_alias=include_alias).items(),
+            )
             if value is not None
         }
 
@@ -3109,7 +3114,12 @@ async def ui_view_users(
         if not users:
             return []
 
-        return [LiteLLM_UserTableFiltered.model_validate(user.model_dump()) for user in users]
+        return [
+            LiteLLM_UserTableFiltered(
+                user_id=user.user_id, user_email=user.user_email, user_alias=user.user_alias if include_alias else None
+            )
+            for user in users
+        ]
 
     except HTTPException:
         raise

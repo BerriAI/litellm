@@ -196,32 +196,23 @@ async def test_new_user_returns_conflict_when_id_is_taken_after_duplicate_check(
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
+    from litellm.proxy.utils import PrismaClient
 
 
 @pytest.mark.asyncio
-async def test_ui_view_users_with_null_email(mocker, caplog):
-    """
-    Test that /user/filter/ui endpoint returns users even when they have null email fields.
-    Uses proxy admin so no org filtering is applied.
-    """
-    # Mock the prisma client
+@pytest.mark.parametrize(
+    ("role", "expected_alias"),
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "Acme Developer"),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, "Acme Developer"),
+        (LitellmUserRoles.INTERNAL_USER, None),
+    ],
+)
+async def test_ui_view_users_returns_the_alias_only_to_admins(mocker, role, expected_alias):
     mock_prisma_client = mocker.MagicMock()
-
-    # Create mock user data with null email
-    mock_user = mocker.MagicMock()
-    mock_user.model_dump.return_value = {
-        "user_id": "test-user-null-email",
-        "user_email": None,
-        "user_role": "proxy_admin",
-        "created_at": "2024-01-01T00:00:00Z",
-    }
-
-    async def mock_find_many(*args, **kwargs):
-        return [mock_user]
-
-    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
-
-    # Flag OFF by default
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[LiteLLM_UserTableFiltered(user_id="no-email", user_alias="Acme Developer")]
+    )
     mocker.patch(
         "litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints.get_ui_settings_cached",
         return_value={},
@@ -229,17 +220,19 @@ async def test_ui_view_users_with_null_email(mocker, caplog):
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    # Proxy admin: no org filter, no get_user_object call
     response = await ui_view_users(
-        user_api_key_dict=UserAPIKeyAuth(user_id="test_user", user_role=LitellmUserRoles.PROXY_ADMIN),
-        user_id="test_user",
+        user_api_key_dict=UserAPIKeyAuth(user_id="caller", user_role=role),
+        user_id="no-email",
         user_email=None,
+        search=None,
         team_id=None,
         page=1,
         page_size=50,
     )
 
-    assert response == [LiteLLM_UserTableFiltered(user_id="test-user-null-email", user_email=None)]
+    assert [user.model_dump() for user in response] == [
+        {"user_id": "no-email", "user_email": None, "user_alias": expected_alias}
+    ]
 
 
 @pytest.mark.asyncio
@@ -284,7 +277,7 @@ def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, User
     def matches(field: str, condition: UserWhereCondition) -> bool:
         if not isinstance(condition, Mapping):
             return any(_matches_user_where(row, branch) for branch in condition)
-        value: Final = {"user_id": row.user_id, "user_email": row.user_email}[field]
+        value: Final = {"user_id": row.user_id, "user_email": row.user_email, "user_alias": row.user_alias}[field]
         return value is not None and condition["contains"].lower() in value.lower()
 
     return all(matches(field, condition) for field, condition in where.items())
@@ -297,23 +290,24 @@ def _matches_user_where(row: LiteLLM_UserTableFiltered, where: Mapping[str, User
         ({"search": "ali"}, ["alice-admin"]),
         ({"search": "example.com"}, ["alice-admin"]),
         ({"search": "admin"}, ["alice-admin"]),
+        ({"search": "acme dev"}, ["svc-bot"]),
         ({"user_email": "svc"}, []),
         ({"user_id": "svc"}, ["svc-bot"]),
         ({"search": "ali", "user_id": "svc"}, []),
     ],
 )
-def test_ui_view_users_search_matches_user_id_or_email(
+def test_ui_view_users_admin_search_matches_user_id_email_or_alias(
     mocker: MockerFixture, params: Mapping[str, str], expected_user_ids: list[str]
 ):
     """
-    search= returns users whose user_id or user_email contains the value (case-insensitive),
+    search= returns users whose ID, email, or alias contains the value (case-insensitive),
     including users with no email; user_id=/user_email= keep filtering a single field and AND with search.
     """
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
     users = (
         LiteLLM_UserTableFiltered(user_id="alice-admin", user_email="alice@example.com"),
-        LiteLLM_UserTableFiltered(user_id="svc-bot", user_email=None),
+        LiteLLM_UserTableFiltered(user_id="svc-bot", user_email=None, user_alias="Acme Developer"),
         LiteLLM_UserTableFiltered(user_id="bob", user_email="bob@corp.io"),
     )
 
@@ -2537,7 +2531,7 @@ async def test_user_model_budget_update_by_email_refreshes_cached_user(mocker: M
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2580,7 +2574,7 @@ async def test_user_status_update_refreshes_cached_user(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2640,7 +2634,7 @@ async def test_user_update_keeps_existing_budget_reset_when_the_duration_is_rese
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2704,7 +2698,7 @@ async def test_user_window_edit_keeps_running_and_owed_resets(mocker: MockerFixt
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2774,7 +2768,7 @@ async def test_bulk_user_windows_keep_each_users_resets_inside_the_all_users_tra
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2833,7 +2827,7 @@ async def test_bulk_user_spend_reset_clears_every_users_spend_counters(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
     invalidated: Final = mocker.patch(  # test-quality-ok: observe the spend counter boundary
@@ -2879,7 +2873,7 @@ async def test_bulk_user_update_that_expires_inside_the_transaction_changes_no_u
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
     mocker.patch(  # test-quality-ok: keep the Redis publication boundary offline
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2917,7 +2911,7 @@ async def test_bulk_user_model_budget_clear_serializes_and_refreshes_cache(mocke
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -2974,7 +2968,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: exercise a real isolated cache
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
     admin: Final = UserAPIKeyAuth(user_id="admin-spruce", user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -3023,26 +3017,14 @@ async def test_user_update_reaches_cached_user_on_every_worker(
 ) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import AuthCacheInvalidationSubscriber
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.management_endpoints.internal_user_endpoints import bulk_user_update, user_update
+    from litellm.proxy.proxy_server import proxy_config
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
     from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
         BulkUpdateUserRequest,
         UpdateUserRequestNoUserIDorEmail,
     )
-
-    published: Final[list[tuple[str, str]]] = []  # mutable-ok: captures messages from the async Redis publisher
-
-    class _RecordingRedisClient:
-        async def publish(self, channel: str, message: str) -> int:
-            published.append((channel, message))
-            return 1
-
-    class _FakeRedisCache:
-        namespace: str | None = None
-
-        def init_pubsub_client(self) -> _RecordingRedisClient:
-            return _RecordingRedisClient()
 
     class _UserTableMocks:
         def __init__(
@@ -3126,10 +3108,8 @@ async def test_user_update_reaches_cached_user_on_every_worker(
     mocker.patch(  # test-quality-ok: exercise a real isolated cache for the endpoint's worker
         "litellm.proxy.proxy_server.user_api_key_cache", handling_worker_cache
     )
-    mocker.patch(  # test-quality-ok: inject an in-memory pub/sub client without live Redis
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_FakeRedisCache(),
-    )
+    invalidation, _ = channel(Worker(other_worker_cache))
+    mocker.patch.object(proxy_config, "cache_invalidation", invalidation)
 
     handling_user_before: Final = await get_user_object(
         user_id=saved_user.user_id,
@@ -3166,15 +3146,6 @@ async def test_user_update_reaches_cached_user_on_every_worker(
         )
         assert prisma_client.update_data_payload is not None
         assert prisma_client.update_data_payload[field] == new_value
-
-    remote_subscriber: Final = AuthCacheInvalidationSubscriber(
-        redis_cache=cast("RedisCache", _FakeRedisCache()),
-        user_api_key_cache=other_worker_cache,
-    )
-    for _, message in published:
-        remote_subscriber._apply_message(  # pyright: ignore[reportPrivateUsage]  # exercising the real cross-worker message handler, not a public API
-            {"type": "message", "data": message}
-        )
 
     handling_user_after: Final = await get_user_object(
         user_id=saved_user.user_id,
@@ -5122,7 +5093,7 @@ async def test_user_update_broadcasts_the_entitlement_invalidation_to_other_work
         "litellm.proxy.proxy_server.user_api_key_cache", cache
     )  # test-quality-ok: substitute the cache dependency
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 
@@ -5731,7 +5702,7 @@ async def test_delete_user_evicts_cached_user_rows(mocker: MockerFixture) -> Non
         "litellm.proxy.proxy_server.proxy_logging_obj", None
     )  # test-quality-ok: delete_user reads it off proxy_server at call time
     broadcast: Final = mocker.patch(  # test-quality-ok: observe the Redis publication boundary
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new_callable=mocker.AsyncMock,
     )
 

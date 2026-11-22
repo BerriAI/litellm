@@ -159,6 +159,10 @@ class UserApiKeyCache:
             _ = self._decoded_models.pop(next(iter(self._decoded_models)))
         return decoded.model_copy()
 
+    def void_lease(self, key: str) -> None:
+        """Another worker evicted ``key``; the store already dropped this worker's copy."""
+        self._void_leases((key,))
+
     def _void_leases(self, keys: Sequence[str]) -> None:
         for key in keys:
             _ = self._leases.pop(key, None)

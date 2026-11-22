@@ -10,7 +10,7 @@ from litellm.caching.redis_batch import Batch, active_request_redis_batches
 from litellm.redis.stores._route import route
 from litellm.redis.stores.auth_cache.handle import AuthCacheHandle
 from litellm.redis.stores.auth_cache.types import AUTH_CACHE_TARGET, AuthCacheSettings, WriteBack
-from litellm.rust_bridge._native import AuthObject, LocalSizes, NativeRequestRedis
+from litellm.rust_bridge._native import AuthObject, LocalSizes, NativeAuthCache, NativeRequestRedis
 
 if TYPE_CHECKING:
     from litellm.redis.stores.connection import RedisStores
@@ -56,6 +56,14 @@ class AuthCacheStore:
     @property
     def has_redis(self) -> bool:
         return self._handle.has_redis
+
+    @property
+    def native(self) -> NativeAuthCache:
+        """The native store behind this one, which the native invalidation channel applies evictions to. Raises for
+        any other handle, such as a test double, since evictions would never reach it."""
+        if not isinstance(self._handle, NativeAuthCache):
+            raise TypeError(f"the auth cache is backed by {type(self._handle).__name__}, not the native store")
+        return self._handle
 
     def reconfigure(self, settings: AuthCacheSettings) -> None:
         """Both memory partitions keep what they hold, as ``update_cache_ttl`` and ``update_in_memory_max_size`` do."""

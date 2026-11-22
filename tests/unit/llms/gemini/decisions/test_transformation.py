@@ -3,6 +3,7 @@ from typing import Final
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.base_llm.decisions.transformation import (
@@ -367,3 +368,31 @@ def test_message_captions_keep_their_position_next_to_each_image() -> None:
         {"type": "image", "data": "Yg==", "mime_type": "image/png"},
         {"type": "text", "text": "Done"},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("api", "request_kwargs"),
+    [
+        ("systemone", {"state": "cracked mug", "questions": {"damaged": {"type": "noul", "instructions": "Damaged?"}}}),
+        (
+            "decisions",
+            {"input": "cracked mug", "questions": [{"type": "predicate", "name": "damaged", "instructions": "Damaged?"}]},
+        ),
+    ],
+    ids=("systemone", "decisions"),
+)
+async def test_both_request_shapes_name_the_model_gemini_leaves_out_of_its_answer(
+    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx_mock.post("https://generativelanguage.googleapis.com/v1beta/decisions").respond(
+        json={"answers": {"damaged": {"type": "noul", "noul": 0.9, "confidence": 0.9}}}
+    )
+
+    response: Final = await getattr(litellm, f"a{api}")(
+        model="gemini/gemini-decision-1", api_key="test-key", **request_kwargs
+    )
+
+    assert response.model == "gemini/gemini-decision-1"
