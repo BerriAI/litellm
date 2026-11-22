@@ -3247,7 +3247,7 @@
       "endpoints": {
         "chat_completions": true,
         "responses": true,
-        "text_completion": false,
+        "text_completion": true,
         "embeddings": false,
         "image_generations": false,
         "image_edits": false,
@@ -3261,10 +3261,10 @@
         "video_generations": false,
         "batches": false,
         "messages": true,
-        "interactions": false,
+        "interactions": true,
         "systemone": false,
-        "a2a": false,
-        "generateContent": false
+        "a2a": true,
+        "generateContent": true
       }
     },
     "petals": {
