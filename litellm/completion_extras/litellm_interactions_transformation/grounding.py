@@ -1,12 +1,15 @@
 """Rebuilds the generateContent grounding fields chat callers read from what the Interactions API returns."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from itertools import chain
+from typing import Final, TypeAlias, TypeVar
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
+_Item = TypeVar("_Item")
 
 _SEARCH_CALL: Final = "google_search_call"
 _SEARCH_RESULT: Final = "google_search_result"
@@ -16,8 +19,8 @@ GROUNDING_STEP_TYPES: Final = frozenset({_SEARCH_CALL, _SEARCH_RESULT, _URL_CONT
 
 @dataclass(frozen=True, slots=True)
 class VertexMetadata:
-    grounding: tuple[dict[str, JsonValue], ...]
-    url_context: tuple[dict[str, JsonValue], ...]
+    grounding: tuple[JsonMapping, ...]
+    url_context: tuple[JsonMapping, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +47,7 @@ def _queries(arguments: JsonValue | None) -> tuple[str, ...]:
 def _block_citations(block: JsonMapping, byte_offset: int) -> tuple[_Citation, ...]:
     encoded: Final = str(block.get("text") or "").encode()
     spans: Final = tuple(
-        (anno, anno.get("start_index"), anno.get("end_index"), anno.get("url") or anno.get("uri"))
+        (anno, anno.get("start_index"), anno.get("end_index"), anno.get("url") or anno.get("uri") or anno.get("source"))
         for anno in _dicts(block.get("annotations"))
     )
     return tuple(
@@ -60,70 +63,75 @@ def _block_citations(block: JsonMapping, byte_offset: int) -> tuple[_Citation, .
     )
 
 
+def _typed(steps: Sequence[JsonMapping], step_type: str) -> tuple[JsonMapping, ...]:
+    return tuple(step for step in steps if step.get("type") == step_type)
+
+
+def _flat(groups: Iterable[Sequence[_Item]]) -> tuple[_Item, ...]:
+    return tuple(chain.from_iterable(groups))
+
+
 def _citations(steps: Sequence[JsonMapping]) -> tuple[_Citation, ...]:
-    blocks: Final = tuple(
-        block
-        for step in steps
-        if step.get("type") == "model_output"
-        for block in _dicts(step.get("content"))
-        if block.get("type") == "text"
-    )
+    content: Final = _flat(_dicts(step.get("content")) for step in _typed(steps, "model_output"))
+    blocks: Final = _typed(content, "text")
     lengths: Final = tuple(len(str(block.get("text") or "").encode()) for block in blocks)
     offsets: Final = tuple(sum(lengths[:position]) for position in range(len(blocks)))
-    return tuple(cited for block, offset in zip(blocks, offsets) for cited in _block_citations(block, offset))
+    return _flat(_block_citations(block, offset) for block, offset in zip(blocks, offsets))
 
 
-def _grounding(steps: Sequence[JsonMapping]) -> dict[str, JsonValue]:
-    citations: Final = _citations(steps)
-    sources: Final = tuple(dict.fromkeys((cited.uri, cited.title) for cited in citations))
-    spans: Final = tuple(dict.fromkeys((cited.start, cited.end, cited.text) for cited in citations))
-    queries: Final = tuple(
-        query for step in steps if step.get("type") == _SEARCH_CALL for query in _queries(step.get("arguments"))
-    )
-    suggestions: Final = tuple(
-        suggestion
-        for step in steps
-        if step.get("type") == _SEARCH_RESULT
-        for found in _dicts(step.get("result"))
-        if isinstance(suggestion := found.get("search_suggestions"), str) and suggestion
-    )
-    supports: Final[list[JsonValue]] = [
-        {
-            "segment": {"startIndex": start, "endIndex": end, "text": text},
-            "groundingChunkIndices": [
-                sources.index((cited.uri, cited.title))
-                for cited in citations
-                if (cited.start, cited.end, cited.text) == (start, end, text)
-            ],
-        }
-        for start, end, text in spans
-    ]
+def _support(
+    span: tuple[int, int, str], citations: Sequence[_Citation], sources: Sequence[tuple[str, str]]
+) -> Mapping[str, object]:
+    start, end, text = span
     return {
-        **({"searchEntryPoint": {"renderedContent": suggestions[-1]}} if suggestions else {}),
-        **({"groundingChunks": [{"web": {"uri": uri, "title": title}} for uri, title in sources]} if sources else {}),
-        **({"groundingSupports": supports} if supports else {}),
-        **({"webSearchQueries": list(queries)} if queries else {}),
+        "segment": {"startIndex": start, "endIndex": end, "text": text},
+        "groundingChunkIndices": tuple(
+            sources.index((cited.uri, cited.title))
+            for cited in citations
+            if (cited.start, cited.end, cited.text) == span
+        ),
     }
 
 
-def _url_context(steps: Sequence[JsonMapping]) -> dict[str, JsonValue]:
-    retrieved: Final[list[JsonValue]] = [
+def _grounding(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
+    citations: Final = _citations(steps)
+    sources: Final = tuple(dict.fromkeys((cited.uri, cited.title) for cited in citations))
+    spans: Final = tuple(dict.fromkeys((cited.start, cited.end, cited.text) for cited in citations))
+    queries: Final = _flat(_queries(step.get("arguments")) for step in _typed(steps, _SEARCH_CALL))
+    found: Final = _flat(_dicts(step.get("result")) for step in _typed(steps, _SEARCH_RESULT))
+    suggestions: Final = tuple(
+        suggestion for result in found if isinstance(suggestion := result.get("search_suggestions"), str) and suggestion
+    )
+    return {
+        **({"searchEntryPoint": {"renderedContent": suggestions[-1]}} if suggestions else {}),
+        **(
+            {"groundingChunks": tuple({"web": {"uri": uri, "title": title}} for uri, title in sources)}
+            if sources
+            else {}
+        ),
+        **({"groundingSupports": tuple(_support(span, citations, sources) for span in spans)} if spans else {}),
+        **({"webSearchQueries": queries} if queries else {}),
+    }
+
+
+def _url_context(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
+    fetched: Final = _flat(_dicts(step.get("result")) for step in _typed(steps, _URL_CONTEXT_RESULT))
+    retrieved: Final = tuple(
         {
             "retrievedUrl": url,
-            "urlRetrievalStatus": f"URL_RETRIEVAL_STATUS_{str(fetched.get('status') or 'unspecified').upper()}",
+            "urlRetrievalStatus": f"URL_RETRIEVAL_STATUS_{str(page.get('status') or 'unspecified').upper()}",
         }
-        for step in steps
-        if step.get("type") == _URL_CONTEXT_RESULT
-        for fetched in _dicts(step.get("result"))
-        if isinstance(url := fetched.get("url"), str)
-    ]
+        for page in fetched
+        if isinstance(url := page.get("url"), str)
+    )
     return {"urlMetadata": retrieved} if retrieved else {}
 
 
 def vertex_metadata_of(steps: Sequence[JsonValue]) -> VertexMetadata:
     step_maps: Final = tuple(step for step in steps if isinstance(step, dict))
-    grounding: Final = _grounding(step_maps)
-    url_context: Final = _url_context(step_maps)
+    as_json: Final = TypeAdapter(dict[str, JsonValue])
+    grounding: Final = as_json.validate_python(to_jsonable_python(_grounding(step_maps)))
+    url_context: Final = as_json.validate_python(to_jsonable_python(_url_context(step_maps)))
     return VertexMetadata(
         grounding=(grounding,) if grounding else (),
         url_context=(url_context,) if url_context else (),

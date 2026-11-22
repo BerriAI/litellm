@@ -632,13 +632,11 @@ class InteractionsChatStreamingIterator:
                 self._pending_hop_body = hop_body
                 self._pending_hop_token = str(hop_body["continuation_token"])
                 return ()
-        final_chunk: Final = self._final_chunk(finish_reason, client_continuation_token(interaction_map))
-        attach_vertex_metadata(final_chunk, self._vertex_metadata(), keeps_empty=False)
-        return (final_chunk,)
+        return (self._final_chunk(finish_reason, client_continuation_token(interaction_map)),)
 
     def _final_chunk(self, finish_reason: FinishReason, continuation_token: str | None) -> ModelResponseStream:
         raw_usage: Final = merge_hop_usage(self._hop_usages)
-        return self._build_chunk(
+        final_chunk: Final = self._build_chunk(
             Delta(provider_specific_fields={"continuation_token": continuation_token})
             if continuation_token is not None
             else Delta(),
@@ -650,6 +648,8 @@ class InteractionsChatStreamingIterator:
             if raw_usage is not None
             else None,
         )
+        attach_vertex_metadata(final_chunk, self._vertex_metadata(), keeps_empty=False)
+        return final_chunk
 
     def _take_pending_hop(self) -> HopBody | None:
         hop_body: Final = self._pending_hop_body
