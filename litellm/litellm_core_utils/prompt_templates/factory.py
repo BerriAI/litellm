@@ -4961,6 +4961,8 @@ def _append_bedrock_tool_result_media_block(
     processed_block: BedrockContentBlock,
     content: Mapping[str, object],
     content_type: str,
+    *,
+    drop_params: bool,
 ) -> None:
     if "image" in processed_block:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(image=processed_block["image"]))
@@ -4968,6 +4970,15 @@ def _append_bedrock_tool_result_media_block(
         tool_result_content_blocks.append(BedrockToolResultContentBlock(document=processed_block["document"]))
     elif "video" in processed_block and "s3Location" in processed_block["video"]["source"]:
         tool_result_content_blocks.append(BedrockToolResultContentBlock(video=processed_block["video"]))
+    elif "video" in processed_block and not drop_params:
+        raise litellm.BadRequestError(
+            message=(
+                "Bedrock tool results take a video only from S3. "
+                "Use an s3:// URL, move the video to a user message, or set drop_params=True."
+            ),
+            model="",
+            llm_provider="bedrock",
+        )
     else:
         verbose_logger.warning(
             "Bedrock Converse: unrecognized BedrockContentBlock keys %s for %s tool-result block %s; dropping.",
@@ -4994,6 +5005,8 @@ def _s3_bucket_owner(media: object, url: str) -> str | None:
 def _append_bedrock_tool_result_image_url_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     content: ChatCompletionImageObject,
+    *,
+    drop_params: bool,
 ) -> None:
     format: str | None = None
     if isinstance(content["image_url"], dict):
@@ -5006,12 +5019,16 @@ def _append_bedrock_tool_result_image_url_block(
         format=format,
         bucket_owner=_s3_bucket_owner(content["image_url"], image_url),
     )
-    _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "image_url")
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "image_url", drop_params=drop_params
+    )
 
 
 def _append_bedrock_tool_result_file_block(
     tool_result_content_blocks: list[BedrockToolResultContentBlock],
     content: ChatCompletionFileObject,
+    *,
+    drop_params: bool,
 ) -> None:
     # Match the user-message path (_process_file_message): accept either
     # file_data (base64 data URI) or file_id (server-side reference / URL).
@@ -5030,20 +5047,24 @@ def _append_bedrock_tool_result_file_block(
         format=file_obj.get("format"),
         bucket_owner=_s3_bucket_owner(file_obj, url),
     )
-    _append_bedrock_tool_result_media_block(tool_result_content_blocks, processed_block, content, "file")
+    _append_bedrock_tool_result_media_block(
+        tool_result_content_blocks, processed_block, content, "file", drop_params=drop_params
+    )
 
 
 def _parse_bedrock_tool_result_content_list(
     content_list: list,
+    *,
+    drop_params: bool,
 ) -> list[BedrockToolResultContentBlock]:
     tool_result_content_blocks: Final[list[BedrockToolResultContentBlock]] = []
     for content in content_list:
         if content["type"] == "text":
             tool_result_content_blocks.append(BedrockToolResultContentBlock(text=content["text"]))
         elif content["type"] == "image_url":
-            _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
+            _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content, drop_params=drop_params)
         elif content["type"] == "file":
-            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+            _append_bedrock_tool_result_file_block(tool_result_content_blocks, content, drop_params=drop_params)
         elif content["type"] == "tool_reference":
             content_map = cast(dict[str, object], content)  # cast-ok: untyped anthropic json
             tool_name = content_map.get("tool_name")
@@ -5054,6 +5075,8 @@ def _parse_bedrock_tool_result_content_list(
 
 def _build_bedrock_tool_result_content_blocks(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
+    *,
+    drop_params: bool,
 ) -> tuple[list[BedrockToolResultContentBlock], bool]:
     # Optional OpenAI tool-message extension:
     # allow structured Bedrock search results on tool messages and map them
@@ -5077,12 +5100,13 @@ def _build_bedrock_tool_result_content_blocks(
     if isinstance(message_content, str):
         return [BedrockToolResultContentBlock(text=message_content)], False
     if isinstance(message_content, list):
-        return _parse_bedrock_tool_result_content_list(message_content), False
+        return _parse_bedrock_tool_result_content_list(message_content, drop_params=drop_params), False
     return [], False
 
 
 def _convert_to_bedrock_tool_call_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
+    drop_params: bool = False,
 ) -> BedrockContentBlock:
     """
     OpenAI message with a tool result looks like:
@@ -5124,7 +5148,9 @@ def _convert_to_bedrock_tool_call_result(
     """
     - 
     """
-    tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(message)
+    tool_result_content_blocks, used_search_results = _build_bedrock_tool_result_content_blocks(
+        message, drop_params=drop_params
+    )
 
     message.get("name", "")
     id: Final = _sanitize_bedrock_tool_use_id(str(message.get("tool_call_id", str(uuid.uuid4()))))
@@ -5857,7 +5883,7 @@ class BedrockConverseMessagesProcessor:
             tool_content: list[BedrockContentBlock] = []
             while msg_i < message_count and messages[msg_i]["role"] == "tool":
                 current_message = messages[msg_i]
-                tool_call_result = _convert_to_bedrock_tool_call_result(current_message)
+                tool_call_result = _convert_to_bedrock_tool_call_result(current_message, drop_params=drop_params)
                 tool_content.append(tool_call_result)
                 tool_content.extend(
                     _bedrock_tool_results_for_split_ids(
@@ -6340,7 +6366,7 @@ def _bedrock_converse_messages_pt(
         ## MERGE CONSECUTIVE TOOL CALL MESSAGES ##
         tool_content: list[BedrockContentBlock] = []
         while msg_i < message_count and messages[msg_i]["role"] == "tool":
-            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i])
+            tool_call_result = _convert_to_bedrock_tool_call_result(messages[msg_i], drop_params=drop_params)
             current_message = messages[msg_i]
 
             # Add the tool result first

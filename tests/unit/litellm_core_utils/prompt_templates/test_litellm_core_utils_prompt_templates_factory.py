@@ -4267,40 +4267,70 @@ def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapp
     ]
 
 
-@pytest.mark.parametrize(
-    "file, expected_media",
-    [
-        pytest.param(
-            {"file_id": "s3://media-bucket/clips/demo.mp4"},
-            [{"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}}],
-            id="s3-video-is-forwarded",
-        ),
-        pytest.param(
-            {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"},
-            [],
-            id="inline-video-is-dropped",
-        ),
-    ],
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
 )
-def test_bedrock_converse_tool_result_video_is_forwarded_only_from_s3(
-    file: Mapping[str, object], expected_media: list[Mapping[str, object]]
-):
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
     messages: Final = [
         {"role": "user", "content": "Describe the clip."},
         {
             "tool_call_id": "tooluse_video_1",
             "role": "tool",
             "name": "fetch_clip",
-            "content": [{"type": "text", "text": "clip:"}, {"type": "file", "file": file}],
+            "content": [{"type": "text", "text": "clip:"}, part],
         },
     ]
-
-    with respx.mock:
-        converted: Final = _bedrock_converse_messages_pt(
-            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
         )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
 
-    assert converted[-1]["content"][-1]["toolResult"]["content"] == [{"text": "clip:"}, *expected_media]
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
 
 
 @pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
