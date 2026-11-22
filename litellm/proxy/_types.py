@@ -338,6 +338,9 @@ class LiteLLMRoutes(enum.Enum):
         "/live/sessions",
         "/v1/live/sessions",
         "/openai/v1/live/sessions",
+        "/live/sessions/{session_id}/attach",
+        "/v1/live/sessions/{session_id}/attach",
+        "/openai/v1/live/sessions/{session_id}/attach",
         "/realtime?{model}",
         "/v1/realtime?{model}",
         "/openai/v1/realtime?{model}",
@@ -2616,6 +2619,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_spend_logs_ledger: bool = Field(
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
+    )
+
+    meter_webrtc_calls: bool = Field(
+        True,
+        description="Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.",
     )
 
     reject_unregistered_guardrails: bool = Field(
