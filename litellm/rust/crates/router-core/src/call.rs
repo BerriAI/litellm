@@ -1509,21 +1509,21 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
-        let skips_batch_only = skips_batch_only(request, &candidates.all);
         let shape = GroupShape {
             // The deployment's own group decides, also when the call named the deployment by id.
             single_deployment: snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(candidates.routable(request) == 1, |group| {
-                    deployment.peers_in(&group, skips_batch_only) == 1
+                .map_or(deployment.peers_in(&candidates.all) == 1, |group| {
+                    deployment.peers_in(&group) == 1
                 })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
-                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.routable(request) > 1)
+                && !(candidates.kind == ResolveKind::RoutingGroup
+                    && deployment.peers_in(&candidates.all) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment, skips_batch_only),
+                && !team_model_has_alternatives(&snapshot.registry, deployment),
             has_fallback_group: snapshot
                 .settings
                 .dynamic

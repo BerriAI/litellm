@@ -5324,9 +5324,7 @@ class _Driver:
             deployment_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
             if isinstance(deployment_id, str):
                 failure: Final = {**attempt_failure(error), "caller_scoped": core.per_user_deployment(deployment_id)}
-                report: Final = core._handle.report_failure(  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-                    deployment_id, failure, uncounted=True, batch_api=_is_batch_api_call(self._plan)
-                )
+                report: Final = core._handle.report_failure(deployment_id, failure, uncounted=True)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
                 done: Final = await core._drive_cache_steps(report)  # pyright: ignore[reportPrivateUsage]  # see above
                 _ = core.cooled_down(done, deployment_id, error.status_code)
         return {**self._failed(step, deployment, call, error), "recorded": True}

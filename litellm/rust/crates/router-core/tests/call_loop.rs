@@ -2895,23 +2895,6 @@ async fn a_rate_limited_chat_deployment_stays_up_and_is_retried(#[case] config: 
     );
 }
 
-#[rstest]
-#[case::alone(azure_chat_alone())]
-#[case::beside_a_batch_only_one(azure_chat_beside_batch())]
-#[tokio::test]
-async fn a_reported_rate_limit_leaves_a_chat_deployment_up(#[case] config: RouterConfig) {
-    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
-    let cooldown = router
-        .report_failure(
-            "c1",
-            &failure(FailureKind::RateLimit, 429),
-            FailureReport::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(cooldown, None);
-}
-
 fn azure_team_chat_beside_batch() -> RouterConfig {
     serde_json::from_value(json!({
         "model_list": [
@@ -2937,28 +2920,31 @@ fn azure_chat_and_batch_groups_in_a_routing_group() -> RouterConfig {
     .unwrap()
 }
 
+fn azure_chat_beside_chat_and_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat-2"}, "model_info": {"id": "c2", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b3", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
 #[rstest]
-#[case::a_chat_call_in_its_group(azure_chat_beside_batch(), None, false, false)]
-#[case::a_batch_or_file_call_in_its_group(azure_chat_beside_batch(), None, true, true)]
-#[case::a_chat_call_under_a_team_name(azure_team_chat_beside_batch(), None, false, false)]
-#[case::a_batch_or_file_call_under_a_team_name(azure_team_chat_beside_batch(), None, true, true)]
-#[case::a_chat_call_through_a_routing_group(
+#[case::alone(azure_chat_alone(), None, false)]
+#[case::beside_a_batch_only_one(azure_chat_beside_batch(), None, false)]
+#[case::beside_a_batch_only_one_under_a_team_name(azure_team_chat_beside_batch(), None, false)]
+#[case::beside_a_batch_only_group_in_a_routing_group(
     azure_chat_and_batch_groups_in_a_routing_group(),
     Some("rg"),
-    false,
     false
 )]
-#[case::a_batch_or_file_call_through_a_routing_group(
-    azure_chat_and_batch_groups_in_a_routing_group(),
-    Some("rg"),
-    true,
-    true
-)]
+#[case::beside_another_chat_one(azure_chat_beside_chat_and_batch(), None, true)]
 #[tokio::test]
-async fn a_reported_rate_limit_cools_a_chat_deployment_only_when_a_batch_only_peer_could_take_the_call(
+async fn a_reported_rate_limit_cools_a_chat_deployment_only_beside_another_that_serves_chat(
     #[case] config: RouterConfig,
     #[case] requested_group: Option<&str>,
-    #[case] batch_api: bool,
     #[case] cooled: bool,
 ) {
     let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
@@ -2968,7 +2954,6 @@ async fn a_reported_rate_limit_cools_a_chat_deployment_only_when_a_batch_only_pe
             &failure(FailureKind::RateLimit, 429),
             FailureReport {
                 requested_group: requested_group.map(str::to_owned),
-                batch_api,
                 ..FailureReport::default()
             },
         )
@@ -2978,12 +2963,11 @@ async fn a_reported_rate_limit_cools_a_chat_deployment_only_when_a_batch_only_pe
 }
 
 #[rstest]
-#[case::a_chat_call(false, 0)]
-#[case::a_batch_or_file_call(true, 1)]
+#[case::a_chat_call(false)]
+#[case::a_batch_or_file_call(true)]
 #[tokio::test]
-async fn a_rate_limit_cools_a_chat_deployment_only_for_calls_a_batch_only_peer_could_take(
+async fn a_rate_limit_on_any_call_leaves_a_chat_deployment_beside_a_batch_only_one_up(
     #[case] batch_api: bool,
-    #[case] cooled: usize,
 ) {
     let host = Arc::new(ScriptedHost::default());
     *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
@@ -3004,7 +2988,7 @@ async fn a_rate_limit_cools_a_chat_deployment_only_for_calls_a_batch_only_peer_c
         .unwrap();
     assert_eq!(
         (host.selected().first().cloned(), cooldowns.len()),
-        (Some("c1".to_owned()), cooled)
+        (Some("c1".to_owned()), 0)
     );
 }
 

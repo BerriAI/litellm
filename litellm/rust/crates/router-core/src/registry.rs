@@ -262,16 +262,17 @@ impl Deployment {
         self.is_azure() && self.is_batch_capable()
     }
 
-    /// Whether `peer` could take a call this deployment failed: a call that skips the deployments
-    /// serving only batches never reaches one, unless it reached this one.
-    pub(crate) fn shares_calls_with(&self, peer: &Deployment, skips_batch_only: bool) -> bool {
-        !skips_batch_only || self.serves_only_batches() || !peer.serves_only_batches()
+    /// Whether `peer` could stand in for this deployment on every call it serves: a deployment
+    /// serving only batches takes none of the calls outside the batch and file APIs, so it stands
+    /// in only for another deployment serving only batches.
+    pub(crate) fn shares_calls_with(&self, peer: &Deployment) -> bool {
+        self.serves_only_batches() || !peer.serves_only_batches()
     }
 
-    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>], skips_batch_only: bool) -> usize {
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>]) -> usize {
         group
             .iter()
-            .filter(|peer| self.shares_calls_with(peer, skips_batch_only))
+            .filter(|peer| self.shares_calls_with(peer))
             .count()
     }
 
