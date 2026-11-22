@@ -4,8 +4,8 @@ from typing import Final
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE
 
 TRUNCATION_MARKER: Final = re.compile(
-    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
-    rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
+    rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars"
+    rf"(?:\. {re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)})?\) \.\.\."
 )
 
 

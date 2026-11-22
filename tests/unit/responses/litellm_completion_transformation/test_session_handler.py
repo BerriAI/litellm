@@ -890,6 +890,44 @@ async def test_a_turn_stored_whole_replays_its_signed_thinking_block_silently(ca
 
 
 @pytest.mark.asyncio
+async def test_a_turn_whose_stored_input_only_cut_the_id_its_tool_output_answers_replays_silently(
+    caplog: pytest.LogCaptureFixture,
+):
+    signed_id: Final = f"call_1__thought__{_LONG_SIGNATURE}"
+    stored: Final = _stored_cut({"input": [{"type": "function_call_output", "call_id": signed_id, "output": "14"}]})
+    turn: Final = _answered_turn({"content": "954"}, turn_input=stored["input"])
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    assert message_field(session["messages"][0], "tool_call_id") == "call_1"
+    assert not [record for record in caplog.records if "resp_signed" in record.getMessage()]
+
+
+@pytest.mark.parametrize("place", ["response", "input"])
+@pytest.mark.asyncio
+async def test_a_turn_whose_stored_tool_call_lost_its_signature_to_the_cut_says_so(
+    place: str, caplog: pytest.LogCaptureFixture
+):
+    signed_id: Final = f"call_1__thought__{_LONG_SIGNATURE}"
+    function: Final = {"name": "get_weather", "arguments": "{}"}
+    asked: Final = _stored_cut({"tool_calls": [{"id": signed_id, "type": "function", "function": function}]})
+    resent: Final = _stored_cut({"input": [{"type": "function_call", "call_id": signed_id, **function}]})
+    turn: Final = (
+        _answered_turn({"content": None, **asked})
+        if place == "response"
+        else _answered_turn({"content": "954"}, turn_input=resent["input"])
+    )
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        session: Final = await _history_from_stored_turns((turn,), "resp_signed")
+
+    calls: Final = [call for message in session["messages"] for call in message_field(message, "tool_calls") or ()]
+    assert [message_field(call, "id") for call in calls] == ["call_1"]
+    assert [record.levelname for record in caplog.records if "resp_signed" in record.getMessage()] == ["WARNING"]
+
+
+@pytest.mark.asyncio
 async def test_a_tool_call_stored_with_a_cut_thought_signature_replays_unsigned():
     call: Final = _stored_cut(
         {

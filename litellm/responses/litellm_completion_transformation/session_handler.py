@@ -7,7 +7,10 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.responses.litellm_completion_transformation.provider_signed_state import without_altered_provider_state
+from litellm.responses.litellm_completion_transformation.provider_signed_state import (
+    holds_altered_provider_state,
+    without_altered_provider_state,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -56,7 +59,7 @@ def _stored_response(spend_log: Mapping[str, object]) -> object:
 
 def _replayable(stored: object, spend_log: "SpendLogsPayload") -> object:
     replayable: Final = without_altered_provider_state(stored)
-    if replayable != stored:
+    if replayable != stored and holds_altered_provider_state(stored):
         verbose_proxy_logger.warning(
             "previous_response_id replay leaves out reasoning the stored turn %s holds cut",
             spend_log.get("request_id"),

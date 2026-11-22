@@ -78,3 +78,26 @@ def without_altered_provider_state(stored: object, depth: int = 0) -> object:
         for key, value in fields.items()
         if key not in altered
     }
+
+
+def _lost_the_signature_of_its_call(fields: Mapping[str, object]) -> bool:
+    return "output" not in fields and any(
+        is_provider_signed(fields, key, fields.get(key)) and _is_altered_text(fields.get(key))
+        for key in SIGNED_TOOL_CALL_ID_KEYS
+    )
+
+
+def holds_altered_provider_state(stored: object, depth: int = 0) -> bool:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return False
+    items: Final = as_object_list(stored)
+    if items is not None:
+        return any(holds_altered_provider_state(item, depth + 1) for item in items)
+    fields: Final = as_str_mapping(stored)
+    if fields is None:
+        return False
+    return (
+        bool(_altered_signed_keys(fields))
+        or _lost_the_signature_of_its_call(fields)
+        or any(holds_altered_provider_state(value, depth + 1) for value in fields.values())
+    )
