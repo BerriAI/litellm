@@ -398,7 +398,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return "databricks"
 
     @classmethod
-    def get_config(cls, *, model: str | None = None, configured_max_output_tokens: int | None = None):
+    def get_config(
+        cls,
+        *,
+        model: str | None = None,
+        configured_max_output_tokens: int | None = None,
+        custom_llm_provider: str | None = None,
+    ):
         return super().get_config()
 
     def get_json_schema_from_pydantic_object(
@@ -470,6 +476,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
         return join_api_base(self._get_api_base(api_base, use_ai_gateway=use_ai_gateway), "chat/completions")
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
 
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
@@ -949,7 +964,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = DatabricksResponse(**raw_response.json())
+            decoded_response: Final[DatabricksResponse] = raw_response.json()
+            completion_response: Final = DatabricksResponse(**decoded_response)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise DatabricksException(

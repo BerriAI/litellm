@@ -14,6 +14,7 @@ import respx
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.anthropic.messages.native import handler as python_messages
 from litellm.router import Router
 
 
@@ -729,6 +730,43 @@ async def test_aembedding_with_silent_model_sends_provider_body_without_it(
     assert response.data[0]["embedding"] == [0.1, 0.2]
 
 
+def _mirrored_groups_are_logged(logger: _RecordingLogger) -> bool:
+    return _silent_flag_by_group(logger).keys() >= {"primary-model", "shadow-a"}
+
+
+def test_a_caller_sent_silent_experiment_flag_does_not_turn_off_mirroring_on_the_sync_path(
+    sync_and_async_recording_logger: _SyncAndAsyncRecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list("shadow-a"))
+    response: Final = router.completion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    assert response.choices[0].message.content == "pong"
+    sync_and_async_recording_logger.wait_until(lambda: _mirrored_groups_are_logged(sync_and_async_recording_logger))
+
+    assert _silent_flag_by_group(sync_and_async_recording_logger) == {"primary-model": None, "shadow-a": True}
+
+
+@pytest.mark.asyncio
+async def test_a_caller_sent_silent_experiment_flag_does_not_turn_off_mirroring_on_the_async_path(
+    recording_logger: _RecordingLogger,
+) -> None:
+    router: Final = Router(model_list=_streaming_model_list("shadow-a"))
+    response: Final = await router.acompletion(
+        model="primary-model",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="pong",
+        metadata={"is_silent_experiment": True},
+    )
+    assert response.choices[0].message.content == "pong"
+    await asyncio.to_thread(recording_logger.wait_until, lambda: _mirrored_groups_are_logged(recording_logger))
+
+    assert _silent_flag_by_group(recording_logger) == {"primary-model": None, "shadow-a": True}
+
+
 def _judged_router(shadow_outcome: str) -> Router:
     return Router(
         model_list=[
@@ -819,13 +857,19 @@ def _generic_shadow_reply(surface: str, text: str) -> dict[str, object]:
     }
 
 
+@pytest.fixture
+def respx_provider_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "anthropic_messages", python_messages.anthropic_messages)
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("respx_provider_transport")
 @pytest.mark.parametrize("surface", ["responses", "messages"])
 @pytest.mark.parametrize("retry", [False, True])
 async def test_generic_silent_model_mirrors_once_across_retries(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str, retry: bool
+    respx_mock: respx.MockRouter, surface: str, retry: bool
 ) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     shadow_seen: Final = asyncio.Event()
 
     def shadow_response(request: httpx.Request) -> httpx.Response:
@@ -886,11 +930,9 @@ async def test_generic_silent_model_mirrors_once_across_retries(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("respx_provider_transport")
 @pytest.mark.parametrize("surface", ["responses", "messages"])
-async def test_generic_silent_model_mirrors_once_across_fallbacks(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, surface: str
-) -> None:
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+async def test_generic_silent_model_mirrors_once_across_fallbacks(respx_mock: respx.MockRouter, surface: str) -> None:
     shadow_seen: Final = asyncio.Event()
 
     def shadow_response(request: httpx.Request) -> httpx.Response:

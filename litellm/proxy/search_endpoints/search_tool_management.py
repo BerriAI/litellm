@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any, Final, TypeAlias
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
@@ -68,7 +69,18 @@ async def _refresh_router_search_tools() -> None:
         verbose_proxy_logger.exception("Search tool router refresh failed after a management write: %s", e)
 
 
-def _with_loaded_tools_where_undecryptable(db_search_tools: Sequence[dict[str, object]]) -> list[dict[str, Any]]:
+class _ListedSearchTool(TypedDict, total=False):
+    search_tool_id: ReadOnly[str | None]
+    search_tool_name: ReadOnly[Required[str]]
+    litellm_params: ReadOnly[Required[Mapping[str, object]]]
+    search_tool_info: ReadOnly[dict[object, object] | None]
+    created_at: ReadOnly[str | None]
+    updated_at: ReadOnly[str | None]
+
+
+def _with_loaded_tools_where_undecryptable(
+    db_search_tools: Sequence[_ListedSearchTool],
+) -> Sequence[_ListedSearchTool]:
     from litellm.proxy.proxy_server import llm_router
 
     kept_search_tools: Final = keep_loaded_search_tools_that_do_not_decrypt(

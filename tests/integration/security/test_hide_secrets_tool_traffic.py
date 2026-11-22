@@ -161,7 +161,7 @@ def tool_rig(
             "ANTHROPIC_API_KEY": "synthetic-provider-key",
             "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS": "True",
             "PYTHONPATH": os.pathsep.join(
-                (str(product_root / "enterprise"), str(product_root), os.environ.get("PYTHONPATH", ""))
+                (str(product_root / "litellm" / "enterprise"), str(product_root), os.environ.get("PYTHONPATH", ""))
             ),
             **(environment or {}),
         }

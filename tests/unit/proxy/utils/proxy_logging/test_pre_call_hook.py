@@ -447,7 +447,6 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
         "ENTERPRISE_BlockedUserList",
     }
     counts_or_shapes_the_request = {
-        "_PROXY_MaxParallelRequestsHandler_v3",
         "_PROXY_MaxIterationsHandler",
         "_PROXY_MaxBudgetPerSessionHandler",
         "_PROXY_CacheControlCheck",
@@ -464,8 +463,8 @@ def test_every_pre_call_customlogger_is_deliberately_classified():
 
     registered = dict(PROXY_HOOKS)
     for name, cls in (
-        ("banned_keywords", _load("enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
-        ("blocked_user_check", _load("enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
+        ("banned_keywords", _load("litellm.enterprise.enterprise_hooks.banned_keywords", "ENTERPRISE_BannedKeywords")),
+        ("blocked_user_check", _load("litellm.enterprise.enterprise_hooks.blocked_user_list", "ENTERPRISE_BlockedUserList")),
         ("detect_prompt_injection", _load("litellm.proxy.hooks.prompt_injection_detection", "OPTIONAL_PromptInjectionDetection")),
         ("azure_content_safety", _load("litellm.proxy.hooks.azure_content_safety", "PROXY_AzureContentSafety")),
     ):
