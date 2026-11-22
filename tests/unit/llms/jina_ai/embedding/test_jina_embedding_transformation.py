@@ -1,3 +1,4 @@
+import datetime
 import json
 from typing import Final
 from unittest.mock import MagicMock
@@ -8,8 +9,7 @@ import respx
 from pydantic import ValidationError
 
 import litellm
-
-
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
 
@@ -289,3 +289,40 @@ def test_get_complete_url_ignores_a_trailing_slash_on_api_base(api_base: str):
         )
         == "https://gateway.example.com/jina/v1/embeddings"
     )
+
+
+def test_transform_embedding_response_logs_the_input_sent_to_jina() -> None:
+    logging_obj: Final = Logging(
+        model="jina-embeddings-v4",
+        messages=None,
+        stream=False,
+        call_type="embedding",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    request_data: Final = {
+        "model": "jina-embeddings-v4",
+        "input": [{"text": "A picture of a cat"}, {"image": _PIXEL_PNG}],
+    }
+
+    JinaAIEmbeddingConfig().transform_embedding_response(
+        model="jina-embeddings-v4",
+        raw_response=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "jina-embeddings-v4",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+            },
+        ),
+        model_response=EmbeddingResponse(),
+        logging_obj=logging_obj,
+        api_key="jina-test-key",
+        request_data=request_data,
+        optional_params={},
+        litellm_params={},
+    )
+
+    assert logging_obj.model_call_details["input"] == request_data["input"]

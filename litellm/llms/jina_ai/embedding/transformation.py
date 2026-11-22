@@ -148,14 +148,14 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
+        request_data: Mapping[str, object],
         optional_params: dict,
         litellm_params: dict,
     ) -> EmbeddingResponse:
         response_json: Final = _json_body(raw_response)
         ## LOGGING
         logging_obj.post_call(
-            input=input,
+            input=request_data.get("input"),
             api_key=api_key,
             additional_args={"complete_input_dict": request_data},
             original_response=response_json,
