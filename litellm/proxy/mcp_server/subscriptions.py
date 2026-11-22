@@ -196,35 +196,39 @@ class _ListenerBus(InMemorySubscriptionBus):
         return unsubscribe
 
 
+async def prepare_target(
+    context: OperationContext, server: MCPServer, allowed: tuple[MCPServer, ...]
+) -> SubscriptionTarget:
+    manager: Final = operations.global_mcp_server_manager
+    auth, token, _servers, server_headers, oauth_headers, headers, ip = context.legacy_auth()
+    server_auth, extra = operations._prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=server_headers,
+        mcp_auth_header=token,
+        oauth2_headers=oauth_headers,
+        raw_headers=headers,
+        user_api_key_auth=auth,
+        scope_servers=list(allowed),
+    )
+    client: Final = await manager.create_mcp_client(
+        server,
+        mcp_auth_header=server_auth,
+        extra_headers={**(extra or {}), **(server.static_headers or {})},
+        stdio_env=manager.build_stdio_env(server, headers),
+        subject_token=manager._obo_subject_token(server, headers, auth),  # pyright: ignore[reportPrivateUsage]  # reuse the manager-owned OBO policy
+        user_api_key_auth=auth,
+        raw_headers=headers,
+        client_ip=ip,
+    )
+    return SubscriptionTarget(server, client, await client.subscription_auth_fingerprint())
+
+
 async def _targets(context: OperationContext) -> tuple[SubscriptionTarget, ...]:
     manager: Final = operations.global_mcp_server_manager
-    auth, token, servers, server_headers, oauth_headers, headers, ip = context.legacy_auth()
+    auth, _token, servers, _server_headers, _oauth_headers, _headers, ip = context.legacy_auth()
     async with manager.catalog.operation():
-        allowed: Final = await operations._get_allowed_mcp_servers(auth, servers, ip)
-
-        async def prepare(server: MCPServer) -> SubscriptionTarget:
-            server_auth, extra = operations._prepare_mcp_server_headers(
-                server=server,
-                mcp_server_auth_headers=server_headers,
-                mcp_auth_header=token,
-                oauth2_headers=oauth_headers,
-                raw_headers=headers,
-                user_api_key_auth=auth,
-                scope_servers=list(allowed),
-            )
-            client: Final = await manager.create_mcp_client(
-                server,
-                mcp_auth_header=server_auth,
-                extra_headers={**(extra or {}), **(server.static_headers or {})},
-                stdio_env=manager.build_stdio_env(server, headers),
-                subject_token=manager._obo_subject_token(server, headers, auth),  # pyright: ignore[reportPrivateUsage]  # reuse the manager-owned OBO policy
-                user_api_key_auth=auth,
-                raw_headers=headers,
-                client_ip=ip,
-            )
-            return SubscriptionTarget(server, client, await client.subscription_auth_fingerprint())
-
-        return tuple([await prepare(server) for server in allowed])
+        allowed: Final = tuple(await operations._get_allowed_mcp_servers(auth, servers, ip))
+        return tuple([await prepare_target(context, server, allowed) for server in allowed])
 
 
 async def subscription_capabilities(context: OperationContext) -> tuple[frozenset[str], ServerCapabilities]:
