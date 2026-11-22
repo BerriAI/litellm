@@ -1856,6 +1856,19 @@ def test_json_schema_builders_pin_only_scalar_consts_their_declared_type_can_hol
     }
 
 
+@pytest.mark.parametrize("build", [build_vertex_schema, build_json_schema], ids=["parameters", "response-json-schema"])
+def test_schema_builders_keep_a_const_out_of_a_branch_another_property_shares(
+    build: Callable[[dict[str, JsonValue]], dict[str, object]],
+) -> None:
+    shared: Final[dict[str, JsonValue]] = {"type": "string"}
+    sent: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {"kind": {"anyOf": [shared, {"type": "null"}], "const": "card"}, "memo": shared},
+    }
+
+    assert build(sent)["properties"] == {"kind": {"anyOf": [_PINNED_CARD]}, "memo": {"type": "string"}}
+
+
 def _kind_beside_a_leaf_at_depth(kind: JsonValue, depth: int, leaf: JsonValue) -> dict[str, JsonValue]:
     nested: Final = reduce(lambda inner, _: {"type": "object", "properties": {"next": inner}}, range(depth - 1), leaf)
     return {"type": "object", "properties": {"kind": kind, "next": nested}}

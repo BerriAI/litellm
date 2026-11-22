@@ -953,10 +953,9 @@ def _push_const_into_branches(schema: JsonValue) -> None:
     if not holding:
         return
     del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
-    schema[keyword] = list(holding)  # rebind-ok: the schema builders edit their own copy in place
-    for branch in holding:
-        if isinstance(branch, dict):
-            branch.setdefault("const", const)
+    schema[keyword] = [  # rebind-ok: the schema builders edit their own copy in place
+        {"const": const, **branch} if isinstance(branch, dict) else branch for branch in holding
+    ]
 
 
 def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
