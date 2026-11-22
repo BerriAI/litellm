@@ -1343,3 +1343,60 @@ async def test_an_agent_session_reaches_lens_as_one_named_run_with_its_tool_call
         "lens.task": "list the files",
     }
     assert tool_step.start_time_unix_nano == tool_step.end_time_unix_nano
+
+
+class _ContentObjects:
+    def __init__(self, body: str) -> None:
+        self.body: Final = body
+
+    def object_key(self, name: str) -> str | None:
+        return name
+
+    async def upload(self, key: str, body: str) -> bool:
+        raise AssertionError("retrieval never uploads")
+
+    async def download(self, key: str, max_bytes: int) -> str | None:
+        return self.body if key == "logs/object.json" else None
+
+
+def test_lens_content_route_requires_the_service_token_and_a_bounded_owner_bound_request() -> None:
+    import hashlib
+
+    from litellm.integrations.lens.content import (
+        MAX_CONTENT_REQUEST_BYTES,
+        ContentReader,
+        Owner,
+        Stored,
+        content_signing_key,
+        signed_reference,
+    )
+
+    token: Final = "test-service-token-with-32-characters"
+    body: Final = '{"gen_ai.input.messages":"[]"}'
+    owner: Final = Owner(
+        team_id="team-a", api_key="hash-a", trace_id="0af7651916cd43dd8448eb211c80319c", span_id="b7ad6b7169203331"
+    )
+    stored: Final = Stored("logs/object.json", len(body.encode()), hashlib.sha256(body.encode()).hexdigest())
+    request: Final = {
+        "team_id": "team-a",
+        "api_key": "hash-a",
+        "trace_id": "0af7651916cd43dd8448eb211c80319c",
+        "span_id": "b7ad6b7169203331",
+        "reference": dict(signed_reference(content_signing_key(token), owner, stored)),
+    }
+    storage: Final = MagicMock(spec=LensTraceStorage)
+    app: Final = FastAPI()
+    app.include_router(tracing_endpoints.router)
+    client: Final = TestClient(app)
+    app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage)
+    assert client.post("/lens/content", json=request).status_code == 404
+    reader: Final = ContentReader(_ContentObjects(body), token)
+    app.dependency_overrides[tracing_endpoints.provide_receiver] = lambda: TraceReceiver(storage, reader)
+    authorized: Final = {"Authorization": f"Bearer {token}"}
+    assert client.post("/lens/content", json=request).status_code == 401
+    for other in ({"team_id": "team-b"}, {"span_id": "0" * 16}):
+        assert client.post("/lens/content", json={**request, **other}, headers=authorized).status_code == 404
+    oversized: Final = client.post("/lens/content", content=b"x" * (MAX_CONTENT_REQUEST_BYTES + 1), headers=authorized)
+    assert oversized.status_code == 413
+    served: Final = client.post("/lens/content", json=request, headers=authorized)
+    assert (served.status_code, served.content) == (200, body.encode())

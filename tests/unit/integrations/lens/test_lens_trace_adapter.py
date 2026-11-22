@@ -1,20 +1,27 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Final
 
 import pytest
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import get_current_span
+from pydantic import TypeAdapter
 
+from litellm.integrations.lens.content import ContentLimits, content_signing_key
 from litellm.integrations.lens.lens_trace_adapter import (
     AgentCall,
     ToolExchange,
-    agent_trace_of,
     agent_call,
     agent_name,
+    agent_trace_of,
     as_user_saw_it,
     tool_exchanges,
     user_task,
 )
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.plumbing.providers import build_tracer_provider
+from litellm.types.utils import CaptureMessageContent
 
 _LS = ToolExchange(call_id="call-ls", name="Bash", arguments='{"command": "ls"}', result="a.txt")
 _PWD = ToolExchange(call_id="call-pwd", name="Bash", arguments='{"command": "pwd"}', result="/work")
@@ -412,3 +419,83 @@ def test_a_call_whose_request_names_the_agents_span_is_placed_under_it() -> None
 )
 def test_a_call_that_names_no_agent_span_keeps_the_gateways_own_trace(kwargs: dict[str, object]) -> None:
     assert agent_trace_of(kwargs) is None
+
+
+_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+class _ContentStore:
+    def __init__(self) -> None:
+        self.uploads: Final = asyncio.Queue[tuple[str, "asyncio.Future[bool]"]]()
+
+    def object_key(self, name: str) -> str | None:
+        return f"logs/{name}"
+
+    def upload(self, key: str, body: str) -> "asyncio.Future[bool]":
+        acked: Final = asyncio.get_running_loop().create_future()
+        self.uploads.put_nowait((body, acked))
+        return acked
+
+    def download(self, key: str, max_bytes: int) -> "asyncio.Future[str | None]":
+        raise AssertionError("the gateway never reads content back while tracing")
+
+
+@pytest.mark.asyncio
+async def test_oversized_model_and_tool_content_reach_lens_as_references_stored_before_the_span_is_exported() -> None:
+    import litellm
+    from litellm.integrations.lens.lens_trace_adapter import (
+        _LensTraceLogger,  # pyright: ignore[reportPrivateUsage]  # the Lens-only logger under test
+    )
+    from litellm.integrations.lens.trace_content import TraceContentSpool
+
+    store: Final = _ContentStore()
+    spool: Final = TraceContentSpool(
+        store, content_signing_key("test-service-token-with-32-characters"), asyncio.get_running_loop(),
+        ContentLimits(inline_bytes=1024, object_bytes=1 << 20),
+    )  # fmt: skip
+    exported: Final = InMemorySpanExporter()
+    config: Final = OpenTelemetryV2Config(exporter="in_memory", capture_message_content=CaptureMessageContent.SPAN_ONLY)
+    provider: Final = build_tracer_provider(
+        config, exporter=exported, use_simple_processor=True, wrap_processor=spool.processor
+    )
+    trace_logger: Final = _LensTraceLogger(config, provider, spool)
+    litellm.logging_callback_manager.add_litellm_callback(trace_logger)
+    result: Final = "界" * 2000
+    try:
+        await litellm.acompletion(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": "list the files"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-ls", "type": "function", "function": {"name": "Bash", "arguments": '{"c": "ls"}'}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call-ls", "content": result},
+            ],
+            mock_response="one file",
+            litellm_session_id="session-1",
+        )
+        uploads: Final = tuple([await asyncio.wait_for(store.uploads.get(), timeout=5) for _ in range(2)])
+        assert exported.get_finished_spans() == ()
+        for _, acked in uploads:
+            acked.set_result(True)
+        await asyncio.gather(*spool.tasks)
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(trace_logger)
+        await spool.aclose()
+        provider.shutdown()
+    bodies: Final = tuple(_OBJECT.validate_json(body) for body, _ in uploads)
+    model_body: Final = next(body for body in bodies if "gen_ai.input.messages" in body)
+    tool_body: Final = next(body for body in bodies if "gen_ai.tool.call.result" in body)
+    assert result in json.loads(str(model_body["gen_ai.input.messages"]))[2]["content"]
+    assert tool_body["gen_ai.tool.call.result"] == result
+    spans: Final = {span.name: dict(span.attributes or {}) for span in exported.get_finished_spans()}
+    assert sorted(spans) == ["chat gpt-4o-mini", "execute_tool Bash"]
+    for attributes in spans.values():
+        assert '"state":"stored"' in str(attributes["litellm.lens.content"])
+        assert result not in str(attributes)
+    assert spans["execute_tool Bash"]["gen_ai.tool.name"] == "Bash"
+    assert spool.pending_bytes == 0
