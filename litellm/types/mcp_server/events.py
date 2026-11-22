@@ -90,11 +90,11 @@ class PollEventsParams(_SubscriptionParams):
 
 
 class PollEventsResult(_Wire):
-    events: tuple[EventOccurrence, ...] = ()
-    cursor: str | None = None
-    truncated: bool = False
-    has_more: bool = False
-    next_poll_ms: int | None = Field(default=None, ge=0)
+    events: tuple[EventOccurrence, ...]
+    cursor: str | None
+    truncated: bool
+    has_more: bool
+    next_poll_ms: int = Field(ge=0)
 
 
 class StreamEventsParams(_SubscriptionParams):
