@@ -324,6 +324,11 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "modapi": {
+    "base_url": "https://modapi.ai/v1",
+    "api_key_env": "MODAPI_API_KEY",
+    "api_base_env": "MODAPI_API_BASE"
+  },
   "wally": {
     "base_url": "https://inference.runanywhere.ai/v1",
     "api_key_env": "WALLY_API_KEY",
