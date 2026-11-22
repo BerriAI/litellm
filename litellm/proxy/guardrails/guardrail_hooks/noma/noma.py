@@ -54,7 +54,7 @@ SENSITIVE_DATA_DETECTOR_KEYS: Final[list[str]] = ["sensitiveData", "dataDetector
 # Type aliases
 MessageRole = Literal["user", "assistant"]
 LLMResponse = object
-_LLMResponseT: Final = TypeVar("_LLMResponseT")
+_LLMResponseT = TypeVar("_LLMResponseT")
 _LEGACY_NOMA_DEPRECATION_WARNED = False
 _DECODED_JSON: Final = TypeAdapter(object)
 

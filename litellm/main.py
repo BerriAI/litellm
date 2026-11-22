@@ -1578,6 +1578,13 @@ def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | Async
     return ctx.client
 
 
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
+
+
 def _dispatch_client_azure(
     ctx: CompletionDispatchContext,
 ) -> openai.AzureOpenAI | openai.AsyncAzureOpenAI | HTTPHandler | AsyncHTTPHandler | None:
@@ -3489,6 +3496,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params: Final = ctx.optional_params
+    timeout: Final = ctx.timeout
 
     maritalk_key: Final = api_key or litellm.maritalk_key or get_secret("MARITALK_API_KEY") or litellm.api_key
 
@@ -3506,6 +3514,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
         encoding=_get_encoding(),
         api_key=maritalk_key,
         logging_obj=logging,
+        timeout=timeout,
         custom_llm_provider="maritalk",
         custom_prompt_dict=custom_prompt_dict,
     )
@@ -6352,7 +6361,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
