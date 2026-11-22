@@ -10,12 +10,13 @@ export const LOGS_EXPORT_LIMIT = 10_000;
 export async function exportLogsCsv(options: Parameters<typeof uiSpendLogsCall>[0]) {
   const logs: LogEntry[] = [];
   for (let page = 1; logs.length < LOGS_EXPORT_LIMIT; page += 1) {
-    const response: PaginatedResponse = await uiSpendLogsCall({
+    const requestOptions = {
       ...options,
       page,
       page_size: 100,
       params: { ...options.params, group_by_session: false, session_cursor: undefined },
-    });
+    };
+    const response: PaginatedResponse = await uiSpendLogsCall(requestOptions);
     logs.push(...response.data.slice(0, LOGS_EXPORT_LIMIT - logs.length));
     if (response.data.length === 0 || page >= response.total_pages) break;
   }

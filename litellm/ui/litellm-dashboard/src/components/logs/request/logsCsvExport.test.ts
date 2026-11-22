@@ -41,12 +41,13 @@ it("exports every page with frozen filters and escapes spreadsheet formulas", as
   await expect(exportLogsCsv(options)).resolves.toEqual({ count: 2, capped: false });
   expect(uiSpendLogsCall).toHaveBeenCalledTimes(2);
   for (const page of [1, 2]) {
-    expect(uiSpendLogsCall).toHaveBeenNthCalledWith(page, {
+    const expectedOptions = {
       ...options,
       page,
       page_size: 100,
       params: { ...options.params, group_by_session: false, session_cursor: undefined },
-    });
+    };
+    expect(uiSpendLogsCall).toHaveBeenNthCalledWith(page, expectedOptions);
   }
   const csv = vi.mocked(downloadCsv).mock.calls[0][0];
   const rows = Papa.parse<Record<string, string>>(csv, { header: true }).data;

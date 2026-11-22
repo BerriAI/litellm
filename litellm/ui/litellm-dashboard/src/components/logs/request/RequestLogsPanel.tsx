@@ -343,8 +343,7 @@ export default function RequestLogsPanel({ accessToken, token, userRole, userID,
                 setIsExporting(true);
                 try {
                   const result = await exportLogsCsv(getRequestOptions());
-                  if (result.capped)
-                    toast.info(t("logs.request.toolbar.exportCapped", { count: LOGS_EXPORT_LIMIT }));
+                  if (result.capped) toast.info(t("logs.request.toolbar.exportCapped", { count: LOGS_EXPORT_LIMIT }));
                   else if (result.count === 0) toast.info(t("logs.request.toolbar.exportEmpty"));
                 } catch (error) {
                   toast.fromError(error);
