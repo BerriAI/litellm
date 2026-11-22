@@ -133,7 +133,7 @@ async def test_read_request_body_rejects_non_objects_from_json_fallback(body: by
 async def test_pass_through_body_validation_preserves_bytes(dispatch: str, body: bytes, invalid_unicode: bool) -> None:
     from fastapi.routing import APIRoute
 
-    from litellm.integrations.lens.proxy.adapter import lens_request
+    from litellm.integrations.lens.proxy.pages import lens_request
     from litellm.integrations.lens.proxy.buffering import LensRoute
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import vertex_proxy_route
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import create_pass_through_route

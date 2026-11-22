@@ -1,37 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl } from "@/components/networking";
 import { buttonVariants } from "@/components/ui/button";
 import { lensWorkspaceAvailability, type LensWorkspaceAvailability } from "@/lib/http/lensWorkspace";
-import { getAuthToken } from "@/lib/http/runtime";
 import { serverRootPath } from "@/lib/serverRootPath";
 
-const EMBED_PROTOCOL = 1;
-
 type Workspace = "checking" | LensWorkspaceAvailability;
-
-type EmbeddedLensProps = {
-  readonly accessToken: string;
-  readonly userRole: string;
-  readonly readOnly: boolean;
-};
 
 const gatewayUrl = (path: string): string =>
   `${getProxyBaseUrl().replace(/\/$/, "")}${serverRootPath.replace(/\/$/, "")}${path}`;
 
-type FrameMessage = { type?: unknown; protocol?: unknown; search?: unknown };
-
-const isFrameMessage = (data: unknown, type: string): data is FrameMessage => {
-  if (typeof data !== "object" || data === null) return false;
-  const message: FrameMessage = data;
-  return message.type === type && message.protocol === EMBED_PROTOCOL;
-};
-
-export function EmbeddedLens({ accessToken, userRole, readOnly }: EmbeddedLensProps) {
+/**
+ * The Lens page is the UI of the Lens this gateway is connected to, framed as that Lens serves it. The gateway
+ * forwards the UI and the APIs its pages call under /lens/, signed in with the dashboard login the browser holds.
+ */
+export function EmbeddedLens() {
   const { t } = useTranslation();
-  const frame = useRef<HTMLIFrameElement>(null);
   const [workspace, setWorkspace] = useState<Workspace>("checking");
   const [source] = useState(() => gatewayUrl("/lens/ui/") + window.location.search);
 
@@ -43,34 +29,6 @@ export function EmbeddedLens({ accessToken, userRole, readOnly }: EmbeddedLensPr
     return () => controller.abort();
   }, []);
 
-  useEffect(() => {
-    const origin = new URL(source, window.location.href).origin;
-    const receive = (event: MessageEvent) => {
-      const target = frame.current?.contentWindow;
-      if (!target || event.source !== target || event.origin !== origin) return;
-      if (isFrameMessage(event.data, "lens:ready")) {
-        const host = {
-          type: "lens:host",
-          protocol: EMBED_PROTOCOL,
-          apiBaseUrl: getProxyBaseUrl(),
-          authToken: getAuthToken() ?? accessToken,
-          authHeaderName: getGlobalLitellmHeaderName(),
-          serverRootPath,
-          userRole,
-          readOnly,
-        };
-        target.postMessage(host, origin);
-        return;
-      }
-      if (isFrameMessage(event.data, "lens:location") && typeof event.data.search === "string") {
-        const search = event.data.search ? `?${event.data.search}` : "";
-        window.history.replaceState(window.history.state, "", window.location.pathname + search);
-      }
-    };
-    window.addEventListener("message", receive);
-    return () => window.removeEventListener("message", receive);
-  }, [accessToken, readOnly, source, userRole]);
-
   if (workspace === "checking")
     return (
       <p role="status" className="p-8 text-sm text-muted-foreground">
@@ -80,7 +38,6 @@ export function EmbeddedLens({ accessToken, userRole, readOnly }: EmbeddedLensPr
   if (workspace === "served")
     return (
       <iframe
-        ref={frame}
         title={t("lensWorkspace.frameTitle")}
         src={source}
         className="h-full w-full flex-1 border-0"

@@ -1,0 +1,234 @@
+from collections.abc import Mapping
+from typing import Final
+
+import httpx
+import pytest
+from fastapi import HTTPException
+from starlette.requests import Request
+
+from litellm.integrations.lens.proxy.buffering import BufferBudget
+from litellm.integrations.lens.proxy.pages import lens_ui_asset, page_auth, same_origin, ui_mount
+from litellm.integrations.lens.remote import LensConnection
+from litellm.proxy._types import UserAPIKeyAuth
+
+SECRET: Final = "gateway-delegated-identity-fixture-32"
+UNSUPPORTED: Final = "The connected Lens does not serve a UI this gateway can show. Update Lens to use it here"
+
+LENS: Final = LensConnection("http://lens.test", SECRET)
+
+
+@pytest.mark.asyncio
+async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_frame_them() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "http://lens.test/ui/_next/static/app%20v2.js"
+        assert request.headers["x-lens-ui-mount"] == "/team-a/lens/ui"
+        assert "authorization" not in request.headers
+        return httpx.Response(
+            200,
+            content=b"console.log('lens')",
+            headers={
+                "content-type": "text/javascript",
+                "cache-control": "no-cache",
+                "x-content-type-options": "nosniff",
+                "set-cookie": "lens_session=leaked",
+                "x-internal": "private",
+                "x-lens-ui-mount": "/team-a/lens/ui",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        response: Final = await lens_ui_asset("_next/static/app v2.js", LENS, client, ui_mount("/team-a/"))
+    assert response.status_code == 200
+    assert response.body == b"console.log('lens')"
+    assert {name: value for name, value in response.headers.items() if name != "content-length"} == {
+        "content-type": "text/javascript",
+        "cache-control": "no-cache",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "SAMEORIGIN",
+        "content-security-policy": "frame-ancestors 'self'",
+    }
+
+
+@pytest.mark.parametrize(("root_path", "mount"), (("", "/lens/ui"), ("/", "/lens/ui"), ("/team-a", "/team-a/lens/ui")))
+def test_ui_mount_follows_the_gateway_root_path(root_path: str, mount: str) -> None:
+    assert ui_mount(root_path) == mount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "reported", "detail"),
+    (
+        (404, 404, UNSUPPORTED),
+        (401, 503, "Lens service is unavailable"),
+        (302, 503, "Lens service is unavailable"),
+        (500, 503, "Lens service is unavailable"),
+    ),
+    ids=("older_lens", "refused", "redirect", "broken"),
+)
+async def test_only_a_lens_with_no_ui_route_reads_as_older_and_its_body_is_dropped(
+    status: int, reported: int, detail: str
+) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=b"lens internal detail", headers={"location": "http://lens.test/ui/"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset("", LENS, client, "/lens/ui")
+    assert (error.value.status_code, error.value.detail) == (reported, detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("../internal/spend", "_next/../../auth/session", "a/./b", "..\\internal"))
+async def test_ui_path_cannot_reach_another_lens_route(path: str) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"Lens was asked for {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset(path, LENS, client, "/lens/ui")
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ui_is_not_served_by_a_gateway_with_no_lens_connection() -> None:
+    with pytest.raises(HTTPException) as error:
+        await lens_ui_asset("", None, None, "/lens/ui")
+    assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ui_reports_an_unreachable_lens_apart_from_an_older_one() -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("Fixture Lens is down", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset("", LENS, client, "/lens/ui")
+    assert error.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_ui_asset_is_charged_to_the_buffer_budget_until_it_is_sent() -> None:
+    asset: Final = b"x" * 600
+
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=asset, headers={"x-lens-ui-mount": "/lens/ui"})
+
+    async def receive() -> dict[str, str]:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Mapping[str, object]) -> None:
+        return None
+
+    budget: Final = BufferBudget(1000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        held: Final = await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+        with pytest.raises(HTTPException) as busy:
+            await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+        assert (busy.value.status_code, busy.value.headers) == (503, {"Retry-After": "1"})
+        await held({"type": "http", "method": "GET"}, receive, send)
+        after_send: Final = await lens_ui_asset("", LENS, client, "/lens/ui", budget=budget)
+    assert after_send.body == asset
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named", (None, "/ui", "/other/lens/ui"), ids=("ignored", "its_own_path", "another_mount"))
+async def test_ui_from_a_lens_that_does_not_mount_it_here_reads_as_older(named: str | None) -> None:
+    def transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'<script src="/ui/_next/static/app.js"></script>',
+            headers={"x-lens-ui-mount": named} if named else {},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(HTTPException) as error:
+            await lens_ui_asset("", LENS, client, "/lens/ui")
+    assert (error.value.status_code, error.value.detail) == (404, UNSUPPORTED)
+
+
+def _request(method: str, headers: Mapping[str, str]) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/lens/datasets",
+            "query_string": b"",
+            "headers": [(name.encode(), value.encode()) for name, value in headers.items()],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("headers", "allowed"),
+    (
+        ({"sec-fetch-site": "same-origin"}, True),
+        ({"sec-fetch-site": "same-site", "origin": "http://gateway.test", "host": "gateway.test"}, False),
+        ({"sec-fetch-site": "cross-site"}, False),
+        ({"origin": "http://gateway.test", "host": "gateway.test"}, True),
+        ({"origin": "http://evil.test", "host": "gateway.test"}, False),
+        ({"host": "gateway.test"}, False),
+    ),
+    ids=("same_origin", "sibling_site", "cross_site", "matching_origin", "other_origin", "no_browser_proof"),
+)
+def test_only_a_page_on_the_gateway_address_counts_as_same_origin(headers: Mapping[str, str], allowed: bool) -> None:
+    assert same_origin(_request("POST", headers)) is allowed
+
+
+async def _signed_in(request: Request) -> UserAPIKeyAuth | None:
+    return UserAPIKeyAuth(user_id="alice")
+
+
+async def _signed_out(request: Request) -> UserAPIKeyAuth | None:
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "headers"),
+    (
+        ("GET", {}),
+        ("POST", {"sec-fetch-site": "same-origin"}),
+        ("DELETE", {"origin": "http://gateway.test", "host": "gateway.test"}),
+    ),
+    ids=("read", "dashboard_write", "dashboard_delete"),
+)
+async def test_the_dashboard_login_is_enough_for_pages_the_dashboard_loads(
+    method: str, headers: Mapping[str, str]
+) -> None:
+    auth: Final = await page_auth(_request(method, headers), session=_signed_in)
+    assert auth.user_id == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "headers"),
+    (("POST", {}), ("PUT", {"sec-fetch-site": "cross-site"}), ("DELETE", {"origin": "http://evil.test"})),
+    ids=("no_browser_proof", "cross_site", "other_origin"),
+)
+async def test_another_site_cannot_change_lens_with_the_dashboard_login(
+    method: str, headers: Mapping[str, str]
+) -> None:
+    with pytest.raises(HTTPException) as error:
+        await page_auth(_request(method, headers), session=_signed_in)
+    assert error.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_pages_need_a_dashboard_login_when_no_key_is_sent() -> None:
+    with pytest.raises(HTTPException) as error:
+        await page_auth(_request("GET", {"sec-fetch-site": "same-origin"}), session=_signed_out)
+    assert error.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_key_is_used_instead_of_the_dashboard_login_when_one_is_sent() -> None:
+    async def keyed(request: Request, key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id=f"owner-of-{key}")
+
+    auth: Final = await page_auth(
+        _request("POST", {"authorization": "Bearer sk-cli", "sec-fetch-site": "cross-site"}),
+        session=_signed_in,
+        key=keyed,
+    )
+    assert auth.user_id == "owner-of-Bearer sk-cli"

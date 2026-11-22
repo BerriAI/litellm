@@ -3,27 +3,20 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
-from types import MappingProxyType
 from typing import Annotated, Final
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import RedirectResponse
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.integrations.lens.proxy.buffering import (
-    FORWARD_BUFFER_BUDGET,
-    AdmittedBody,
-    BodyReservation,
-    BufferBudget,
-    BufferedResponse,
     LensRoute,
-    request_body,
 )
-from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
+from litellm.integrations.lens.remote import LensConnection, bounded_response
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.authorization import OwnedRows, resolve_trace_read_scope
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
@@ -32,18 +25,10 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 PUBLIC_CONTRACT: Final = 1
-_REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempotency-key"})
-_RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
 _REQUEST_AUDIENCE: Final = "litellm-lens"
 _LOGIN_AUDIENCE: Final = "litellm-lens-login"
 _LOGIN_TOKEN_SECONDS: Final = 60
 _PASSWORD_CHANGE_ROUTE: Final = "/user/password/change"
-_UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
-_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
-_UI_SAME_ORIGIN_FRAME: Final = MappingProxyType(
-    {"x-frame-options": "SAMEORIGIN", "content-security-policy": "frame-ancestors 'self'"}
-)
-_UI_UNAVAILABLE: Final = "The connected Lens does not serve a workspace for the dashboard"
 _LOGIN_UNAVAILABLE: Final = (
     "Configure LITELLM_LENS_URL, LENS_GATEWAY_SECRET and LITELLM_LENS_PUBLIC_URL to sign in to Lens"
 )
@@ -145,10 +130,7 @@ async def service_status(connection: Connection, client: httpx.AsyncClient) -> S
     return ServiceStatus()
 
 
-@router.get("/service", response_model=ServiceConnection)
-async def service_connection(
-    identity: Annotated[Identity, Depends(delegated_identity)],
-) -> ServiceConnection:
+async def service_connection(identity: Identity) -> ServiceConnection:
     connection: Final = Connection.from_env()
     status: Final = (
         await service_status(connection, connection.remote.control_client()) if connection else ServiceStatus()
@@ -255,138 +237,3 @@ async def lens_login(request: Request, log_team_lookup: LogTeamLookupDependency)
         f"{base_url}/ui/login?{urlencode({'redirect_to': route})}",
         int(time.time()),
     )
-
-
-def ui_mount(root_path: str) -> str:
-    return root_path.rstrip("/") + "/lens/ui"
-
-
-def _leaves_workspace(path: str) -> bool:
-    return "\\" in path or any(part in (".", "..") for part in path.split("/"))
-
-
-async def lens_ui_asset(
-    path: str,
-    remote: LensConnection | None,
-    client: httpx.AsyncClient | None,
-    mount: str,
-    *,
-    budget: BufferBudget = FORWARD_BUFFER_BUDGET,
-) -> Response:
-    """The Lens workspace is served by the connected Lens, so it follows that Lens's version and not the gateway's."""
-    if remote is None or client is None or _leaves_workspace(path):
-        raise HTTPException(404, _UI_UNAVAILABLE)
-    reservation: Final = BodyReservation(budget)
-    try:
-        async with client.stream(
-            "GET", remote.endpoint("/embedded/" + quote(path, safe="/")), headers={_UI_MOUNT_HEADER: mount}
-        ) as response:
-            if response.status_code == 404:
-                raise HTTPException(404, _UI_UNAVAILABLE)
-            if response.status_code != 200:
-                raise HTTPException(503, "Lens service is unavailable")
-            return BufferedResponse(
-                await bounded_response(response, MAX_RESPONSE_BYTES, reserve=reservation.reserve),
-                status_code=200,
-                headers={
-                    **{name: value for name, value in response.headers.items() if name in _UI_RESPONSE_HEADERS},
-                    **_UI_SAME_ORIGIN_FRAME,
-                },
-                reservation=reservation,
-            )
-    except (httpx.HTTPError, RuntimeError) as error:
-        reservation.release()
-        raise HTTPException(503, "Lens service is unavailable") from error
-    except BaseException:
-        reservation.release()
-        raise
-
-
-def _remote() -> LensConnection | None:
-    try:
-        return LensConnection.from_env()
-    except ValueError:
-        return None
-
-
-@router.get("/ui", include_in_schema=False)
-async def lens_ui_entry(request: Request) -> Response:
-    return RedirectResponse(str(request.url.replace(path=request.url.path + "/")), status_code=307)
-
-
-@router.get("/ui/{path:path}", include_in_schema=False)
-async def lens_ui(path: str = "") -> Response:
-    from litellm.proxy.utils import get_server_root_path
-
-    remote: Final = _remote()
-    client: Final = remote.control_client() if remote else None
-    return await lens_ui_asset(path, remote, client, ui_mount(get_server_root_path()))
-
-
-async def forward(
-    request: Request,
-    identity: Identity,
-    path: str,
-    connection: Connection | None,
-    client: httpx.AsyncClient,
-    now: int,
-    *,
-    budget: BufferBudget = FORWARD_BUFFER_BUDGET,
-) -> Response:
-    if connection is None:
-        raise HTTPException(503, "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service")
-    if path.endswith("/"):
-        return Response(
-            status_code=307, headers={"location": str(request.url.replace(path=request.url.path.rstrip("/")))}
-        )
-    if any(part in (".", "..") for part in path.split("/")) or "\\" in path:
-        raise HTTPException(400, "Invalid Lens path")
-    if len(request.headers.getlist("x-lens-contract")) > 1:
-        return JSONResponse({"detail": "contract_version", "code": "contract_version"}, status_code=409)
-    token: Final = connection.identity_token(identity, now)
-    if token is None:
-        raise HTTPException(403, "Lens requires an authenticated user or key")
-    headers: Final = {
-        "x-lens-contract": str(PUBLIC_CONTRACT),
-        **{name: value for name, value in request.headers.items() if name in _REQUEST_HEADERS},
-        "authorization": f"Bearer {token}",
-        "accept": "application/json",
-    }
-    endpoint: Final = connection.remote.endpoint("/lens" + ("/" + quote(path, safe="/") if path else ""))
-    reservation: Final = BodyReservation(budget)
-    try:
-        async with client.stream(
-            request.method,
-            endpoint,
-            params=tuple(request.query_params.multi_items()),
-            content=request.receive.body
-            if isinstance(request.receive, AdmittedBody)
-            else await request_body(request, reservation=reservation),
-            headers=headers,
-        ) as response:
-            body: Final = await bounded_response(response, MAX_RESPONSE_BYTES, reserve=reservation.reserve)
-            return BufferedResponse(
-                body,
-                status_code=response.status_code,
-                headers={name: value for name, value in response.headers.items() if name in _RESPONSE_HEADERS},
-                reservation=reservation,
-            )
-    except (httpx.HTTPError, RuntimeError) as error:
-        reservation.release()
-        raise HTTPException(503, "Lens service is unavailable") from error
-    except BaseException:
-        reservation.release()
-        raise
-
-
-@router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-@router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-async def lens_request(
-    request: Request,
-    identity: Annotated[Identity, Depends(delegated_identity)],
-    path: str = "",
-) -> Response:
-    connection: Final = Connection.from_env()
-    if connection is None:
-        raise HTTPException(503, "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service")
-    return await forward(request, identity, path, connection, connection.remote.control_client(), int(time.time()))
