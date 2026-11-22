@@ -2054,8 +2054,9 @@ def _post_realtime_call(proxy_app, mock_add_litellm_data, mock_pre_call_hook, to
         )
 
 
+@pytest.mark.parametrize("setting", [False, "false", " False "], ids=["a-boolean", "a-string", "a-padded-string"])
 def test_realtime_calls_start_without_a_sideband_when_webrtc_metering_is_turned_off(
-    proxy_app, monkeypatch: pytest.MonkeyPatch, mock_add_litellm_data, mock_pre_call_hook
+    proxy_app, monkeypatch: pytest.MonkeyPatch, mock_add_litellm_data, mock_pre_call_hook, setting: bool | str
 ) -> None:
     from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
 
@@ -2066,7 +2067,7 @@ def test_realtime_calls_start_without_a_sideband_when_webrtc_metering_is_turned_
         return False
 
     monkeypatch.setattr(realtime_endpoints, "_start_realtime_billing_sideband", _record)
-    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"meter_webrtc_calls": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"meter_webrtc_calls": setting})
 
     response: Final = _post_realtime_call(
         proxy_app,
@@ -2107,6 +2108,57 @@ def test_a_token_minted_by_a_stored_key_carries_the_key_and_only_what_the_reques
 
     assert _caller_auth_for_token(caller, stored) == {"end_user_id": "customer-7"}
     assert _caller_auth_for_token(caller)["rpm_limit"] == 10, "a caller with no stored key is carried whole"
+
+
+class _UnreachableDatabase:
+    def __getattr__(self, name: str) -> object:
+        raise ConnectionError(f"the database is down, so {name} cannot be read")
+
+
+@pytest.mark.asyncio
+async def test_a_key_the_proxy_has_cached_is_read_for_a_realtime_call_while_the_database_is_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.realtime_endpoints.endpoints import _caller_auth_from_token
+    from litellm.redis.stores.auth_cache import AuthObject
+
+    key_cache: Final = UserApiKeyCache()
+    await key_cache.async_set_cache(
+        AuthObject.virtual_key("caller-key-hash"),
+        UserAPIKeyAuth(token="caller-key-hash", team_id="team-a", rpm_limit=3),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _UnreachableDatabase())
+
+    caller: Final = await _caller_auth_from_token(
+        {"key": "caller-key-hash", "caller_auth": {"end_user_id": "customer-7"}}, None, None
+    )
+
+    assert caller is not None
+    assert (caller.token, caller.team_id, caller.rpm_limit, caller.end_user_id) == (
+        "caller-key-hash",
+        "team-a",
+        3,
+        "customer-7",
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_token_carries_its_whole_caller_when_the_minting_key_cannot_be_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.realtime_endpoints.endpoints import _caller_auth_for_token, _stored_key_to_mint_from
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _UnreachableDatabase())
+    caller: Final = UserAPIKeyAuth(token="caller-key-hash", team_id="team-a", rpm_limit=3)
+
+    stored: Final = await _stored_key_to_mint_from("caller-key-hash")
+
+    assert stored is None
+    assert _caller_auth_for_token(caller, stored)["rpm_limit"] == 3
 
 
 @pytest.mark.parametrize(

@@ -327,7 +327,7 @@ _REVOKED_KEY_REFUSAL: Final = json.dumps({"error": "The key that created this to
 
 
 async def _stored_key(key_hash: str | None) -> UserAPIKeyAuth | None:
-    """The key as the database holds it now, or None when the database holds no such key."""
+    """The key as the proxy authenticates it now, from the key cache before the database, or None when it is gone."""
     from litellm.proxy.proxy_server import master_key, prisma_client, proxy_logging_obj, user_api_key_cache
     from litellm.proxy.utils import hash_token
 
@@ -340,12 +340,20 @@ async def _stored_key(key_hash: str | None) -> UserAPIKeyAuth | None:
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
-            check_db_only=True,
         )
     except ProxyException as e:
         if e.type == ProxyErrorTypes.token_not_found_in_db:
             return None
         raise
+
+
+async def _stored_key_to_mint_from(key_hash: str | None) -> UserAPIKeyAuth | None:
+    """The stored key a token can name instead of carrying, or None to carry the whole caller when it cannot be read."""
+    try:
+        return await _stored_key(key_hash)
+    except Exception:  # noqa: BLE001  # any failed key read must still mint a token, as when no read was made
+        verbose_proxy_logger.warning("Could not read the key that is minting a realtime token, so the token carries it")
+        return None
 
 
 def _caller_auth_for_token(
@@ -622,7 +630,7 @@ async def create_realtime_client_secret(
     # can recover model without requiring query params.
     raw_value: Final = upstream_json.get("value", "")
     expires_at: Final = upstream_json.get("expires_at")
-    stored_key: Final = await _stored_key(user_api_key_dict.token)
+    stored_key: Final = await _stored_key_to_mint_from(user_api_key_dict.token)
     token_payload: Final = _encode_realtime_token_payload(
         ephemeral_key=raw_value if isinstance(raw_value, str) else "",
         model_id=model,

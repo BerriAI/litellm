@@ -47,7 +47,8 @@ def _says_call_is_gone(data: str) -> bool:
 
 
 def webrtc_calls_are_metered(general_settings: Mapping[str, object]) -> bool:
-    return general_settings.get("meter_webrtc_calls") is not False
+    setting: Final = general_settings.get("meter_webrtc_calls")
+    return setting is not False and not (isinstance(setting, str) and setting.strip().lower() == "false")
 
 
 SESSION_NOT_ADMITTED_CODE: Final = "session_not_admitted"

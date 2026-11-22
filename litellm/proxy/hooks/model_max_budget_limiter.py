@@ -915,7 +915,7 @@ def _names_provider_model(deployment_model: object, provider_model: str) -> bool
     )
 
 
-def _budget_names_of(provider_model: str) -> tuple[str, ...]:
+def budget_names_of(provider_model: str) -> tuple[str, ...]:
     """Every name a budget can know a provider's model by. The provider reports only its own name for a delegated
     response, so each budgeted name is charged, which can over-count but never lets a delegation skip its budget."""
     router: Final = _proxy_router()
@@ -1372,7 +1372,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         )
         charges: Final = (
             ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
-            *((_budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
+            *((budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
         )
 
         def _counters(budget_names: tuple[str, ...]) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:

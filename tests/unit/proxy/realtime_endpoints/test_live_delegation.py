@@ -222,15 +222,48 @@ async def test_a_relayed_client_frame_names_the_delegated_model_as_the_provider_
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+async def test_a_relayed_client_frame_keeps_a_tools_schema_as_the_caller_wrote_it() -> None:
+    tool: Final = {
+        "type": "function",
+        "name": "pick_model",
+        "parameters": {
+            "type": "object",
+            "properties": {"choice": {"type": "object", "enum": [{"model": "text-group"}]}},
+            "default": {"model": "text-group", "parameters": {"model": ["text-group"]}},
+        },
+    }
+
+    relayed: Final = await live_client_frame(
+        json.dumps({"type": "session.update", "session": _session({"model": "text-group", "tools": [tool]})}),
+        "openai",
+        _key(["all-proxy-models"]),
+    )
+
+    assert relayed.denial is None, relayed.denial
+    assert json.loads(relayed.frame) == {
+        "type": "session.update",
+        "session": _session({"model": "gpt-6-luna", "tools": [tool]}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
 @pytest.mark.parametrize(
-    ("spend", "denied"), [(0.5, False), (1.0, True)], ids=["under-the-model-budget", "at-the-model-budget"]
+    ("delegated", "spend", "denied"),
+    [("text-group", 0.5, False), ("text-group", 1.0, True), ("gpt-6-luna", 0.5, False), ("gpt-6-luna", 1.0, True)],
+    ids=[
+        "under-the-model-budget",
+        "at-the-model-budget",
+        "by-the-provider-name-under-the-budget-it-is-charged-to",
+        "by-the-provider-name-at-the-budget-it-is-charged-to",
+    ],
 )
-async def test_a_delegation_to_a_model_over_its_budget_is_refused(spend: float, denied: bool) -> None:
+async def test_a_delegation_to_a_model_over_its_budget_is_refused(delegated: str, spend: float, denied: bool) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import Litellm_EntityType
     from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
 
-    key: Final = _key(["live-group", "text-group"]).model_copy(
+    key: Final = _key(["all-proxy-models"]).model_copy(
         update={"model_max_budget": {"text-group": {"budget_limit": 1.0, "time_period": "1d"}}}
     )
     spend_key: Final = model_budget_spend_cache_key(
@@ -239,7 +272,7 @@ async def test_a_delegation_to_a_model_over_its_budget_is_refused(spend: float, 
     await proxy_server.model_max_budget_limiter.dual_cache.async_set_cache(spend_key, spend)
     try:
         relayed: Final = await live_client_frame(
-            json.dumps({"type": "session.update", "session": _session({"model": "text-group"})}), "openai", key
+            json.dumps({"type": "session.update", "session": _session({"model": delegated})}), "openai", key
         )
     finally:
         await proxy_server.model_max_budget_limiter.dual_cache.async_delete_cache(spend_key)

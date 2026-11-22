@@ -1,6 +1,7 @@
 """Access and budget checks for what a GPT-Live session delegates to, and the provider names of its models."""
 
 import json
+import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, takewhile
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 _DELEGATION_KEY: Final = "delegation"
+_TOOL_SCHEMA_KEY: Final = "parameters"
 _JSON_ESCAPE: Final = "\\u"
 _DELEGATED_TOOLS_ROUTE: Final = "/v1/responses"
 _MAX_DELEGATION_DEPTH: Final = 64
@@ -102,21 +104,39 @@ def _proxy_model_list() -> Sequence[object] | None:
     return proxy_server.llm_model_list  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # proxy_server declares a bare list
 
 
+def _budgeted_names(model: str, team_id: str | None) -> tuple[str, ...]:
+    """`model` and every other name its delegated spend is charged under, so admission reads the budgets it draws down."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.hooks.model_max_budget_limiter import budget_names_of
+
+    router: Final = proxy_server.llm_router
+    deployments: Final = () if router is None else router.registry().deployments(model, team_id=team_id) or ()
+    provider_models: Final = sorted(
+        {
+            provider_model.rsplit("/", 1)[-1]
+            for deployment in deployments
+            if isinstance(provider_model := (as_str_mapping(deployment["litellm_params"]) or {}).get("model"), str)
+        }
+    )
+    return tuple(dict.fromkeys((model, *chain.from_iterable(map(budget_names_of, provider_models or (model,))))))
+
+
 async def _refuse_a_model_over_its_budget(model: str, caller: UserAPIKeyAuth) -> None:
     from litellm.proxy.auth.user_api_key_auth import (
         _is_within_every_model_budget,  # pyright: ignore[reportPrivateUsage]  # the same per-model budget walk a request's own model gets
     )
     from litellm.proxy.proxy_server import model_max_budget_limiter
 
-    if not await _is_within_every_model_budget(
-        valid_token=caller, model_max_budget_limiter=model_max_budget_limiter, model=model
-    ):
-        raise ProxyException(
-            message=f"Budget exceeded for model={model}, so this session cannot delegate to it",
-            type=ProxyErrorTypes.budget_exceeded,
-            param="model",
-            code=400,
-        )
+    for budgeted in _budgeted_names(model, caller.team_id):
+        if not await _is_within_every_model_budget(
+            valid_token=caller, model_max_budget_limiter=model_max_budget_limiter, model=budgeted
+        ):
+            raise ProxyException(
+                message=f"Budget exceeded for model={budgeted}, so this session cannot delegate to {model}",
+                type=ProxyErrorTypes.budget_exceeded,
+                param="model",
+                code=400,
+            )
 
 
 async def authorize_live_delegation(session: object, caller: UserAPIKeyAuth) -> None:
@@ -184,23 +204,34 @@ def _renamed(model: JsonValue, name: Callable[[str], str]) -> JsonValue:
 
 
 def with_provider_model_names(session: Mapping[str, object], name: Callable[[str], str]) -> Mapping[str, object]:
-    """`session` with every model under its delegation renamed by `name`."""
+    """`session` with every model its delegation selects renamed by `name`, leaving tool schemas as the caller wrote them."""
     if _DELEGATION_KEY not in session:
         return session
 
+    seal: Final = uuid.uuid4().hex
+
+    def _with_sealed_schema(node: dict[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: json's object_hook type
+        return (
+            {**node, _TOOL_SCHEMA_KEY: {seal: json.dumps(node[_TOOL_SCHEMA_KEY])}} if _TOOL_SCHEMA_KEY in node else node
+        )
+
     def _with_renamed_model(node: dict[str, JsonValue]) -> dict[str, JsonValue]:  # mutable-ok: json's object_hook type
         return {**node, "model": _renamed(node["model"], name)} if "model" in node else node
+
+    def _with_schema(node: dict[str, JsonValue]) -> JsonValue:  # mutable-ok: json's object_hook type
+        return _JSON.validate_json(str(node[seal])) if node.keys() == {seal} else node
 
     try:
         delegation: Final = _JSON.validate_python(session[_DELEGATION_KEY])
     except ValidationError:
         return session
-    return {
-        **session,
-        _DELEGATION_KEY: _JSON.validate_json(
-            json.dumps(json.loads(json.dumps(delegation), object_hook=_with_renamed_model))
-        ),
-    }
+    sealed: Final = json.loads(json.dumps(delegation), object_hook=_with_sealed_schema)
+    renamed: Final = json.dumps(json.loads(json.dumps(sealed), object_hook=_with_renamed_model))
+    # A schema sealed inside another one comes out a level per pass, and the text has at most its own length of levels
+    opened: Final = accumulate(
+        range(len(renamed)), lambda text, _: json.dumps(json.loads(text, object_hook=_with_schema)), initial=renamed
+    )
+    return {**session, _DELEGATION_KEY: _JSON.validate_json(next(text for text in opened if seal not in text))}
 
 
 def deployment_delegation(
