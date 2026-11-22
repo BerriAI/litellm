@@ -6,10 +6,12 @@ import litellm
 from litellm.router_utils.request_priority import (
     InvalidPriority,
     parse_default_priority,
+    priority_error,
     request_drops_params,
     resolve_request_priority,
     unqueueable_priority_message,
 )
+from litellm.router_rust.core import _raised_before_provider
 
 
 @pytest.mark.parametrize(
@@ -110,3 +112,12 @@ def test_any_other_default_priority_is_invalid(configured: object) -> None:
     assert isinstance(parsed, InvalidPriority)
     assert parsed.value == configured
     assert parsed.message.startswith("priority must be an integer, got ")
+
+
+def test_only_litellm_own_priority_refusal_counts_as_raised_before_the_provider() -> None:
+    provider_rate_limit: Final = litellm.RateLimitError(
+        message="busy", llm_provider="openrouter", model="m", body={"message": "busy", "param": "priority"}
+    )
+
+    assert _raised_before_provider(priority_error("m", "priority must be an integer")) is True
+    assert _raised_before_provider(provider_rate_limit) is False

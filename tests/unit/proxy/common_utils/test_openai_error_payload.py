@@ -1,5 +1,7 @@
+import functools
 import json
 import sys
+from collections.abc import Callable
 from typing import Final
 
 import httpx
@@ -672,3 +674,76 @@ def test_relayed_provider_specific_fields_redact_a_structured_value_under_a_cred
     assert relayed is not None
     assert relayed["upstream"] == {"region": "eu"}
     assert "opaque-upstream-credential" not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize("header", ["Cookie", "set-cookie", "Proxy-Authorization", "x_amz_security_token"])
+@pytest.mark.parametrize(
+    "nesting",
+    [
+        lambda credential: credential,
+        lambda credential: {"request_headers": credential},
+        lambda credential: {"sent": [credential]},
+    ],
+    ids=["top_level", "nested", "inside_a_list"],
+)
+def test_relayed_provider_specific_fields_redact_a_credential_header(
+    header: str,
+    nesting: Callable[[dict[str, str]], dict[str, object]],
+) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "region": "eu", **nesting({header: "opaque-upstream-credential"})},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert relayed["region"] == "eu"
+    assert "opaque-upstream-credential" not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize(
+    ("redaction_enabled", "expected_region"),
+    [(True, "eu"), (False, None)],
+    ids=["redaction_on", "redaction_off"],
+)
+def test_relayed_provider_specific_fields_survive_a_body_nested_past_the_recursion_limit(
+    redaction_enabled: bool,
+    expected_region: str | None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", redaction_enabled)
+    nested: Final = functools.reduce(
+        lambda inner, _: {"inner": inner},
+        range(50_000),
+        "deep-leaf",
+    )
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "region": "eu", "upstream": nested},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert (relayed or {}).get("region") == expected_region
+    assert "deep-leaf" not in json.dumps(relayed)
+
+
+def test_relayed_provider_specific_fields_survive_a_zero_recursion_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm._logging.DEFAULT_MAX_RECURSE_DEPTH", 0)
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "trace_ref": "trace_1", "detail": {"inner": "value"}},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert relayed["trace_ref"] == "trace_1"
+    assert "value" not in json.dumps(relayed)

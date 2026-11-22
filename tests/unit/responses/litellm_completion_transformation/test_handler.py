@@ -35,7 +35,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
 
 
@@ -52,6 +52,16 @@ _UPSTREAM_PARAM_CASES: Final = [
     pytest.param("user", "user", id="shared_field"),
     pytest.param(["body", "max_tokens"], None, id="non_string_param"),
 ]
+
+
+def _request_sending_every_renamed_field() -> ResponsesAPIOptionalRequestParams:
+    return {
+        "max_output_tokens": 16,
+        "reasoning": {"effort": "low"},
+        "text": {"format": {"type": "text"}, "verbosity": "low"},
+        "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        "user": "user-1",
+    }
 
 
 def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: object) -> respx.Route:
@@ -75,7 +85,7 @@ def test_sync_bridged_turn_names_an_upstream_param_as_the_responses_field_the_ca
         LiteLLMCompletionTransformationHandler().response_api_handler(
             model="gpt-5.6",
             input="hi",
-            responses_api_request={"max_output_tokens": 16, "user": "user-1"},
+            responses_api_request=_request_sending_every_renamed_field(),
             custom_llm_provider="openai",
             api_key="sk-bridge-test",
         )
@@ -93,7 +103,7 @@ async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field
     bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
         model="gpt-5.6",
         input="hi",
-        responses_api_request={"max_output_tokens": 16, "user": "user-1"},
+        responses_api_request=_request_sending_every_renamed_field(),
         custom_llm_provider="openai",
         _is_async=True,
         api_key="sk-bridge-test",
@@ -104,6 +114,29 @@ async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field
 
     assert upstream.call_count == 1
     assert raised.value.param == relayed_param
+
+
+@pytest.mark.parametrize(
+    "upstream_param",
+    ["max_tokens", "max_completion_tokens", "reasoning_effort", "response_format", "tools[0].function.name"],
+)
+def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request={"user": "user-1"},
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+            max_tokens=100000,
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param is None
 
 
 @pytest.mark.parametrize(
