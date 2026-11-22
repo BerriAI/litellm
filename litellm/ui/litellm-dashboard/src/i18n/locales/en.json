@@ -315,6 +315,14 @@
       },
       "loading": "Loading",
       "regionLabel": "Agent Identity",
+      "okta": {
+        "title": "Agent Identity: Okta",
+        "issuer": "Authorization server:",
+        "clientId": "Client ID:",
+        "requiredScopes": "Required scopes:",
+        "anyScope": "Any scope",
+        "evidenceNote": "Recent evidence comes from a validated Okta token matching this binding. It is persisted across restarts and cleared when the binding changes. Tool and model permissions are checked separately."
+      },
       "title": "Agent Identity: Microsoft Entra ID",
       "tenant": "Tenant:",
       "clientId": "Application (Client) ID:",

@@ -40,4 +40,34 @@ describe("agent identity evidence", () => {
     expect(screen.queryByRole("region", { name: "Agent Identity" })).not.toBeInTheDocument();
     expect(apiClient.get).not.toHaveBeenCalled();
   });
+
+  it("shows an Okta binding's authorization server, client ID and scopes", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue(status);
+    const okta = {
+      provider: "okta",
+      issuer: "https://example.okta.com/oauth2/aus1agents",
+      client_id: "0oa1AgentClient",
+      required_scopes: ["agents:invoke"],
+    };
+    renderWithProviders(<AgentIdentityDetails agentId="okta" identity={okta} accessToken="admin" isAdmin />);
+    expect(await screen.findByText(/Last authenticated identity match:/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Agent Identity: Okta" })).toBeInTheDocument();
+    expect(screen.getByText(okta.issuer)).toBeInTheDocument();
+    expect(screen.getByText(okta.client_id)).toBeInTheDocument();
+    expect(screen.getByText(/Required scopes: agents:invoke/)).toBeInTheDocument();
+    expect(screen.queryByText(/Enterprise application Object ID:/)).not.toBeInTheDocument();
+    expect(screen.getByText(/validated Okta token matching this binding/)).toBeInTheDocument();
+  });
+
+  it("describes an Okta binding without required scopes as accepting any scope", async () => {
+    vi.mocked(apiClient.get).mockResolvedValue(status);
+    const okta = {
+      provider: "okta",
+      issuer: "https://example.okta.com/oauth2/aus1agents",
+      client_id: "0oa1AgentClient",
+      required_scopes: [],
+    };
+    renderWithProviders(<AgentIdentityDetails agentId="okta" identity={okta} accessToken="admin" isAdmin />);
+    expect(await screen.findByText("Required scopes: Any scope")).toBeInTheDocument();
+  });
 });
