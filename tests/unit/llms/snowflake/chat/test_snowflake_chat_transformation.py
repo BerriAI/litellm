@@ -963,22 +963,26 @@ class TestSnowflakeChatCompletion:
             '{"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}',
             '{"type": "message_stop"}',
         )
-        mock_resp: Final = MagicMock()
-        mock_resp.iter_lines.return_value = iter([f"data: {event}" for event in events])
-        mock_resp.status_code = 200
-        mock_resp.headers = {"content-type": "text/event-stream"}
-
-        with patch.object(HTTPHandler, "post", return_value=mock_resp):
-            chunks_received: Final = list(
-                completion(
-                    model="snowflake/claude-sonnet-5-5",
-                    messages=self.messages,
-                    stream=True,
-                    api_key="fake-jwt",
-                    account_id="FAKE-ACCOUNT",
-                    api_base=FAKE_API_BASE,
+        body: Final = "".join(f"data: {event}\n\n" for event in events).encode()
+        client: Final = HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
                 )
             )
+        )
+
+        chunks_received: Final = list(
+            completion(
+                model="snowflake/claude-sonnet-5-5",
+                messages=self.messages,
+                stream=True,
+                api_key="fake-jwt",
+                account_id="FAKE-ACCOUNT",
+                api_base=FAKE_API_BASE,
+                client=client,
+            )
+        )
 
         assert "".join(c.choices[0].delta.content or "" for c in chunks_received) == "Paris"
         assert chunks_received[-1].choices[0].finish_reason == "stop"
