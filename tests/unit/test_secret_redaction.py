@@ -978,6 +978,30 @@ def test_redact_string_drops_a_private_key_whose_end_line_survives_the_tail_cut(
     assert _PEM_BODY_LINE not in redact_string(value)
 
 
+@pytest.mark.parametrize("offset", range(-60, 12))
+def test_redact_string_leaves_no_fragment_of_a_bearer_token_whose_prefix_the_tail_cut_severs(offset: int) -> None:
+    token: Final = "ABCDEFGHIJKLMNOP1234"
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + "Bearer " + token + suffix
+    assert _surviving_fragments(redact_string(value), token) == ()
+
+
+@pytest.mark.parametrize("offset", range(-80, 12))
+def test_redact_string_leaves_no_fragment_of_a_quoted_api_key_value_whose_name_the_tail_cut_severs(offset: int) -> None:
+    secret: Final = "Zq8Xv3Lm9Pw2Rt5Yb7N"
+    suffix: Final = " y" * ((MAX_REDACTION_SCAN_CHARS // 2 + offset) // 2)
+    value: Final = "head " * MAX_REDACTION_SCAN_CHARS + '{"api_key": "' + secret + '"}' + suffix
+    assert _surviving_fragments(redact_string(value), secret) == ()
+
+
+@pytest.mark.parametrize("offset", range(-45, 10))
+def test_redact_string_drops_a_private_key_whose_end_line_is_cut_in_half_by_the_head_cut(offset: int) -> None:
+    begin_and_body: Final = "-----BEGIN PRIVATE KEY-----\n" + "\n".join([_PEM_BODY_LINE] * 60) + "\n"
+    prefix: Final = " " * (MAX_REDACTION_SCAN_CHARS // 2 - len(begin_and_body) + offset)
+    value: Final = prefix + begin_and_body + "-----END PRIVATE KEY-----" + " tail" * MAX_REDACTION_SCAN_CHARS
+    assert _PEM_BODY_LINE not in redact_string(value)
+
+
 def test_redact_internal_details_output_never_exceeds_the_scan_limit() -> None:
     value: Final = "echoed prompt " * MAX_REDACTION_SCAN_CHARS
     assert len(redact_internal_details(value)) <= MAX_REDACTION_SCAN_CHARS

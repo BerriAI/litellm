@@ -102,28 +102,33 @@ _python_redact_string = python_redact_string
 
 _TRUNCATION_MARKER: Final = "...[truncated]"
 _TRUNCATION_BOUNDARY_WINDOW: Final = 4096
+_TRUNCATION_CONTEXT_SKIP: Final = 256
 _TRUNCATION_DELIMITERS: Final = (" ", "\t", "\r", "\n", "'", '"', ",", ";", "(", ")", "{", "}", "[", "]", "<", ">")
 _PEM_BEGIN: Final = "-----begin"
 _PEM_END: Final = "-----end"
 _PEM_FENCE: Final = "-----"
+_PEM_PRIVATE_KEY_BLOCK_RE: Final = re.compile(_PEM_PRIVATE_KEY_BLOCK, re.IGNORECASE)
 
 
 def _cut_head_at_boundary(head: str) -> str:
     window_start: Final = max(len(head) - _TRUNCATION_BOUNDARY_WINDOW, 0)
     boundary: Final = max(head.rfind(delimiter, window_start) for delimiter in _TRUNCATION_DELIMITERS)
-    return head if boundary == -1 else head[:boundary]
+    return head[:boundary] if boundary != -1 else head[:window_start]
 
 
 def _cut_tail_at_boundary(tail: str) -> str:
     window: Final = tail[:_TRUNCATION_BOUNDARY_WINDOW]
-    found: Final = tuple(index for delimiter in _TRUNCATION_DELIMITERS if (index := window.find(delimiter)) != -1)
-    return tail if not found else tail[min(found) + 1 :]
+    found: Final = tuple(
+        index
+        for delimiter in _TRUNCATION_DELIMITERS
+        if (index := window.find(delimiter, _TRUNCATION_CONTEXT_SKIP)) != -1
+    )
+    return tail[min(found) + 1 :] if found else tail[_TRUNCATION_BOUNDARY_WINDOW:]
 
 
 def _drop_unterminated_pem(head: str) -> str:
-    lowered: Final = head.lower()
-    begin: Final = lowered.rfind(_PEM_BEGIN)
-    return head if begin == -1 or lowered.find(_PEM_END, begin) != -1 else head[:begin]
+    begin: Final = head.lower().rfind(_PEM_BEGIN)
+    return head if begin == -1 or _PEM_PRIVATE_KEY_BLOCK_RE.match(head, begin) else head[:begin]
 
 
 def _drop_orphan_pem_end(tail: str) -> str:
@@ -138,8 +143,9 @@ def _drop_orphan_pem_end(tail: str) -> str:
 def bound_scan_input(value: str) -> str:
     """Cap *value* at MAX_REDACTION_SCAN_CHARS by keeping its head and tail, so redaction cost stays bounded.
 
-    Both cuts back off to a token boundary and drop a PEM block split by the cut, so a secret
-    straddling a cut is removed instead of left half visible.
+    The head backs off to a token boundary. The tail skips past the context a cut may have severed, such as
+    "Bearer " or a key name, and then to a token boundary, so a value that lost its context is dropped, not
+    kept unrecognized. A PEM block split by either cut is dropped.
     """
     if len(value) <= MAX_REDACTION_SCAN_CHARS:
         return value
