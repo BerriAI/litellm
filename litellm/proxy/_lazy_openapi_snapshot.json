@@ -46687,6 +46687,62 @@
           "title": "SubscriptionView",
           "type": "object"
         },
+        "TestDeliveryResult": {
+          "properties": {
+            "delivered": {
+              "title": "Delivered",
+              "type": "boolean"
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "connection_refused",
+                    "timeout",
+                    "tls_error",
+                    "http_4xx",
+                    "http_5xx",
+                    "challenge_failed"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            },
+            "status": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          "required": [
+            "delivered"
+          ],
+          "title": "TestDeliveryResult",
+          "type": "object"
+        },
+        "TestEventRequest": {
+          "properties": {
+            "data": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              "title": "Data",
+              "type": "object"
+            }
+          },
+          "title": "TestEventRequest",
+          "type": "object"
+        },
         "UpdateMCPServerRequest": {
           "properties": {
             "alias": {
@@ -47456,6 +47512,118 @@
             }
           ],
           "summary": "List Subscriptions",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions/{subscription_id}": {
+        "delete": {
+          "operationId": "delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "subscription_id",
+              "required": true,
+              "schema": {
+                "title": "Subscription Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SubscriptionView"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Delete Subscription",
+          "tags": [
+            "mcp_management"
+          ]
+        }
+      },
+      "/v1/mcp/events/subscriptions/{subscription_id}/test": {
+        "post": {
+          "description": "Send one signed test event to an active webhook subscription's callback URL.\n\nThe event carries `data` from the body, or `{\"test\": true}` when the body is empty, and is signed with\nthe subscription's secret like a real delivery. The response reports whether the callback answered 2xx.",
+          "operationId": "send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "subscription_id",
+              "required": true,
+              "schema": {
+                "title": "Subscription Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/TestEventRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Request"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/TestDeliveryResult"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Send Test Event",
           "tags": [
             "mcp_management"
           ]

@@ -1,3 +1,5 @@
+import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Final
@@ -10,9 +12,9 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import EventGrant, principal_of
-from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router
+from litellm.proxy.mcp_server.events.admin import AdminServices, admin_services, router, terminate_key_subscriptions
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
-from litellm.proxy.mcp_server.events.webhooks.signing import new_secret
+from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_secret, verify
 from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow, SubscriptionStatus
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import CallbackFailure, EventType
@@ -97,6 +99,86 @@ async def test_callers_list_only_their_own_subscriptions_and_admins_list_all(
     assert {item["callback_host"] for item in response.json()["subscriptions"]} == {"client.example"}
 
 
+@pytest.mark.parametrize(
+    ("caller", "status"),
+    ((ALICE, 200), (ADMIN, 200), (BOB, 404), (VIEWER, 403)),
+)
+async def test_only_the_owner_or_an_admin_terminates_a_subscription(caller: UserAPIKeyAuth, status: int) -> None:
+    store: Final = _store()
+    callback: Final = Callback()
+    async with _client(caller, store, callback) as client:
+        response = await client.delete("/events/subscriptions/sub_a")
+    assert response.status_code == status
+    terminated: Final = status == 200
+    assert (store.rows["sub_a"].status == "terminated") is terminated
+    assert [json.loads(body)["type"] for _, body, _ in callback.sent] == (["terminated"] if terminated else [])
+
+
+async def test_a_test_event_is_signed_with_the_subscription_secret_and_carries_the_body_data() -> None:
+    callback: Final = Callback()
+    async with _client(ALICE, _store(), callback) as client:
+        response = await client.post("/events/subscriptions/sub_a/test", json={"data": {"build": 7}})
+    assert response.json() == {"delivered": True, "status": 200, "error": None}
+    url, body, headers = callback.sent[0]
+    secret: Final = parse_secret(SECRET)
+    assert secret is not None
+    assert url == "https://client.example/hook"
+    assert verify((secret,), headers, body, int(time.time()))
+    assert json.loads(body)["data"] == {"build": 7}
+    assert json.loads(body)["name"] == "ci-build.failed"
+    assert "cursor" not in json.loads(body)
+
+
+async def test_a_test_event_without_a_body_sends_the_default_payload() -> None:
+    callback: Final = Callback()
+    async with _client(ALICE, _store(), callback) as client:
+        response = await client.post("/events/subscriptions/sub_a/test")
+    assert response.status_code == 200
+    assert json.loads(callback.sent[0][1])["data"] == {"test": True}
+
+
+@pytest.mark.parametrize(
+    ("callback", "expected"),
+    (
+        (Callback(status=500), {"delivered": False, "status": 500, "error": None}),
+        (Callback(failure="timeout"), {"delivered": False, "status": None, "error": "timeout"}),
+    ),
+)
+async def test_a_failing_callback_is_reported_not_raised(callback: Callback, expected: dict[str, object]) -> None:
+    async with _client(ALICE, _store(), callback) as client:
+        response = await client.post("/events/subscriptions/sub_a/test")
+    assert response.json() == expected
+
+
+@pytest.mark.parametrize(
+    ("caller", "row_status", "status"),
+    ((ALICE, "terminated", 409), (ALICE, "pending", 409), (BOB, "active", 404), (VIEWER, "active", 403)),
+)
+async def test_test_events_need_an_active_subscription_the_caller_may_manage(
+    caller: UserAPIKeyAuth, row_status: SubscriptionStatus, status: int
+) -> None:
+    callback: Final = Callback()
+    store: Final = MemoryStore(rows={"sub_a": _row("sub_a", ALICE, row_status)})
+    async with _client(caller, store, callback) as client:
+        response = await client.post("/events/subscriptions/sub_a/test")
+    assert response.status_code == status
+    assert callback.sent == []
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    (
+        ("GET", "/events/subscriptions"),
+        ("DELETE", "/events/subscriptions/sub_a"),
+        ("POST", "/events/subscriptions/sub_a/test"),
+    ),
+)
+async def test_subscription_routes_need_a_database(method: str, path: str) -> None:
+    async with _client(ADMIN, None, Callback()) as client:
+        response = await client.request(method, path)
+    assert response.status_code == 503
+
+
 @pytest.mark.parametrize(("server_id", "status", "count"), (("srv-ci", 200, 1), ("srv-other", 404, None)))
 async def test_event_types_come_from_servers_the_caller_may_reach(
     server_id: str, status: int, count: int | None
@@ -106,6 +188,21 @@ async def test_event_types_come_from_servers_the_caller_may_reach(
     assert response.status_code == status
     if count is not None:
         assert len(response.json()) == count
+
+
+@pytest.mark.parametrize(("notify", "envelopes"), ((True, ["terminated"]), (False, [])))
+@pytest.mark.asyncio
+async def test_a_revoked_key_ends_its_subscriptions_and_notifies_only_while_events_are_on(
+    notify: bool, envelopes: list[str]
+) -> None:
+    store: Final = _store()
+    callback: Final = Callback()
+    services: Final = AdminServices(
+        store=store, runtime=runtime((server(),)), post=callback.post, lookup=_lookup, key_for_alias=_no_alias
+    )
+    await terminate_key_subscriptions((ALICE.token, None), notify=notify, services=services)
+    assert (store.rows["sub_a"].status, store.rows["sub_b"].status) == ("terminated", "active")
+    assert [json.loads(body)["type"] for _, body, _ in callback.sent] == envelopes
 
 
 @pytest.mark.parametrize(
