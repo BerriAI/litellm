@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO \"LiteLLM_TeamMembership\" AS tm (user_id, team_id, budget_id)\nVALUES ($1, $2, $3)\nON CONFLICT (user_id, team_id) DO UPDATE SET user_id = EXCLUDED.user_id\nRETURNING tm.user_id,\n          tm.team_id,\n          tm.budget_id,\n          tm.spend,\n          tm.total_spend,\n          (SELECT to_jsonb(b) FROM \"LiteLLM_BudgetTable\" AS b WHERE b.budget_id = tm.budget_id)\n              AS \"litellm_budget_table?: Json<Budget>\"\n",
+  "query": "SELECT tm.user_id,\n       tm.team_id,\n       tm.budget_id,\n       tm.spend,\n       tm.rollover_credit,\n       tm.total_spend,\n       to_jsonb(b) AS \"litellm_budget_table?: Json<Budget>\"\nFROM \"LiteLLM_TeamMembership\" AS tm\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = tm.budget_id\nWHERE tm.user_id = $1 AND tm.team_id = $2\n",
   "describe": {
     "columns": [
       {
@@ -49,6 +49,17 @@
       },
       {
         "ordinal": 4,
+        "name": "rollover_credit",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "rollover_credit"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "total_spend",
         "type_info": "Float8",
         "origin": {
@@ -59,7 +70,7 @@
         }
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "litellm_budget_table?: Json<Budget>",
         "type_info": "Jsonb",
         "origin": "Expression"
@@ -67,7 +78,6 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
         "Text",
         "Text"
       ]
@@ -77,9 +87,10 @@
       false,
       true,
       false,
+      true,
       false,
       null
     ]
   },
-  "hash": "a66b83d5b16b1903bb2e5b9f548f8765d26a8c07220029701076e35520488268"
+  "hash": "39011042073cf075591a91e0d069f59685702de216c14dd8fe00930c57837144"
 }
