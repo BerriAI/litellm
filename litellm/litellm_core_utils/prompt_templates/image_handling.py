@@ -377,6 +377,11 @@ def _is_readable_file_part_or_other_part(part: object) -> bool:
     return file is not None and (not file_id or isinstance(file_id, str))
 
 
+def has_remote_media(messages: Iterable[AllMessageValues], matches: Callable[[RemoteMedia], bool]) -> bool:
+    remotes: Final = (remote for part in _message_parts(messages) if (remote := _parse_remote_part(part)) is not None)
+    return any(matches(_remote_media(remote)) for remote in remotes)
+
+
 def has_file_id_urls(messages: Iterable[AllMessageValues], url_starts: tuple[str, ...]) -> bool:
     return any(_file_id_url(part, url_starts) is not None for part in _message_parts(messages))
 

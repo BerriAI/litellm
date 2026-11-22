@@ -18,6 +18,7 @@ from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionImageUrlObject,
     ChatCompletionSystemMessage,
     ChatCompletionUserMessage,
 )
@@ -2666,28 +2667,40 @@ def missing_images(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     return _serve_images(monkeypatch, 404)
 
 
+_CACHED_NOTES: Final[AllMessageValues] = {
+    "role": "user",
+    "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
+}
+
+
+def _conversation_cached_through_notes(*opening: AllMessageValues) -> list[AllMessageValues]:
+    return [
+        *opening,
+        _CACHED_NOTES,
+        {"role": "assistant", "content": "Noted."},
+        {"role": "user", "content": "What color was the button?"},
+    ]
+
+
+def _button_question(image_url: ChatCompletionImageUrlObject) -> AllMessageValues:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "What does this button say?"},
+            {"type": "image_url", "image_url": image_url},
+        ],
+    }
+
+
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 async def test_a_web_image_before_the_mark_reaches_the_gemini_cache_inlined(
-    local_model_cost_map, served_images: list[str], use_async: bool
+    local_model_cost_map: None, served_images: list[str], use_async: bool
 ) -> None:
     image_url: Final = f"https://images.example.com/button-{use_async}.png"
     calls: Final = await _gemini_calls(
-        [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What does this button say?"},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            },
-            {"role": "assistant", "content": "Deploy."},
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
-            },
-            {"role": "assistant", "content": "Noted."},
-            {"role": "user", "content": "What color was the button?"},
-        ],
+        _conversation_cached_through_notes(
+            _button_question({"url": image_url}), {"role": "assistant", "content": "Deploy."}
+        ),
         use_async,
     )
 
@@ -2706,26 +2719,87 @@ async def test_a_web_image_before_the_mark_reaches_the_gemini_cache_inlined(
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_a_web_image_the_proxy_cannot_fetch_leaves_the_vertex_request_uncached_with_its_tools(
-    local_model_cost_map, missing_images: list[str], use_async: bool
+async def test_a_web_image_the_proxy_cannot_fetch_fails_the_gemini_request_after_one_fetch(
+    local_model_cost_map: None, missing_images: list[str], use_async: bool
 ) -> None:
     image_url: Final = f"https://images.example.com/missing-{use_async}.png"
-    messages: Final[list[AllMessageValues]] = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "What does this button say?"},
-                {"type": "image_url", "image_url": {"url": image_url}},
-            ],
-        },
-        {"role": "assistant", "content": "Deploy."},
-        {
-            "role": "user",
-            "content": [{"type": "text", "text": "Background notes. " * 3000, "cache_control": {"type": "ephemeral"}}],
-        },
-        {"role": "assistant", "content": "Noted."},
-        {"role": "user", "content": "What color was the button?"},
-    ]
+
+    with pytest.raises(litellm.BadRequestError):
+        await _gemini_calls(
+            _conversation_cached_through_notes(
+                _button_question({"url": image_url}), {"role": "assistant", "content": "Deploy."}
+            ),
+            use_async,
+        )
+
+    assert missing_images == [image_url]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_an_image_in_a_cached_system_message_is_never_downloaded(
+    local_model_cost_map: None, missing_images: list[str], use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "You are terse."},
+                    {"type": "image_url", "image_url": {"url": f"https://images.example.com/logo-{use_async}.png"}},
+                ],
+            }
+        ),
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert missing_images == []
+    assert created["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["cachedContent"] == "cachedContents/created"
+    assert [content["role"] for content in generated["contents"]] == ["model", "user"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_link(
+    local_model_cost_map: None, served_images: list[str], use_async: bool
+) -> None:
+    file_uri: Final = f"https://generativelanguage.googleapis.com/v1beta/files/button-{use_async}"
+    calls: Final = await _gemini_calls(
+        _conversation_cached_through_notes(
+            _button_question({"url": file_uri, "format": "image/png"}), {"role": "assistant", "content": "Deploy."}
+        ),
+        use_async,
+    )
+
+    created: Final = next(
+        json.loads(call.content)
+        for call in calls
+        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert served_images == []
+    assert created["contents"][0]["parts"][1] == {"file_data": {"mime_type": "image/png", "file_uri": file_uri}}
+
+
+@pytest.mark.parametrize(
+    "image_url",
+    [
+        {"url": "https://images.example.com/button.png"},
+        {"url": "https://www.youtube.com/watch?v=jNQXAC9IVRw", "format": "video/mp4"},
+    ],
+    ids=["image-link", "youtube-link"],
+)
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_web_link_vertex_fetches_itself_leaves_the_request_uncached_with_its_tools(
+    local_model_cost_map: None, served_images: list[str], image_url: ChatCompletionImageUrlObject, use_async: bool
+) -> None:
+    messages: Final = _conversation_cached_through_notes(
+        _button_question(image_url), {"role": "assistant", "content": "Deploy."}
+    )
     tools: Final = [{"function_declarations": [{"name": "get_weather", "parameters": {"type": "object"}}]}]
     optional_params: Final[dict[str, object]] = {"tools": tools}
     calls: Final[list[httpx.Request]] = []
@@ -2745,7 +2819,9 @@ async def test_a_web_image_the_proxy_cannot_fetch_leaves_the_vertex_request_unca
     }
 
     result: Final = (
-        await ContextCachingEndpoints().async_check_and_create_cache(client=AsyncHTTPHandler(transport=transport), **request)
+        await ContextCachingEndpoints().async_check_and_create_cache(
+            client=AsyncHTTPHandler(transport=transport), **request
+        )
         if use_async
         else ContextCachingEndpoints().check_and_create_cache(
             client=HTTPHandler(client=httpx.Client(transport=transport)), **request
@@ -2753,5 +2829,5 @@ async def test_a_web_image_the_proxy_cannot_fetch_leaves_the_vertex_request_unca
     )
 
     assert result == (messages, {"tools": tools}, None)
-    assert missing_images == [image_url]
-    assert [call.method for call in calls if call.url.path.endswith("/cachedContents")] == ["GET"]
+    assert served_images == []
+    assert calls == []
