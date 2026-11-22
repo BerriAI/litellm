@@ -883,6 +883,17 @@ describe("classifier prompt and fallback", () => {
     });
   });
 
+  it.each([{}, { system_prompt: "x" }])(
+    "normalizeClassifierLlmConfig keeps an operator's classifier output cap through %o",
+    (extra) => {
+      const base = { model: "m", timeout_ms: 1, ...extra };
+      expect(normalizeClassifierLlmConfig({ ...base, max_output_tokens: 64 })).toEqual({
+        ...base,
+        max_output_tokens: 64,
+      });
+    },
+  );
+
   it.each([{}, { system_prompt: "x" }])("normalizeClassifierLlmConfig carries vision through %o", (extra) => {
     const base = { model: "m", timeout_ms: 1, ...extra };
     const vision = { enabled: true, max_images: 2 };
@@ -1342,6 +1353,15 @@ describe("buildComplexityRouterConfig with an edited tier set", () => {
     expect(payload.tier_model_configs?.SECURITY_REVIEW).toEqual([
       { model_name: "o1-preview", litellm_params: { max_completion_tokens: 700 } },
     ]);
+  });
+
+  it.each([undefined, null, 1, 64, 8192])("preserves classifier output cap %s when saving edited tiers", (cap) => {
+    const classifierLlmConfig = {
+      model: "classifier",
+      timeout_ms: 3000,
+      ...(cap !== undefined && { max_output_tokens: cap }),
+    };
+    expect(build({ classifierLlmConfig }).classifier_llm_config).toEqual(classifierLlmConfig);
   });
 
   it("forces the LLM classifier even when the form still holds heuristic, which the backend rejects", () => {

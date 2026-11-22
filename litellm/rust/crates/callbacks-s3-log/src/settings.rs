@@ -338,6 +338,7 @@ impl Settings {
                 external_id: None,
                 session_tags: None,
                 session_policy: None,
+                require_session_attribution: false,
             },
             use_team_prefix: truthy_param("s3_use_team_prefix"),
             use_key_prefix: truthy_param("s3_use_key_prefix"),

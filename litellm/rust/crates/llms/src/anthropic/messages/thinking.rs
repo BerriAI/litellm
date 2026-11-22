@@ -7,7 +7,7 @@ use litellm_llms_types::{
             MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
-    recognized::Recognized,
+    recognized::{Recognized, is_one, python_str},
 };
 use litellm_python_compat::{
     BigInt, Value as PythonValue,
@@ -15,11 +15,11 @@ use litellm_python_compat::{
     number,
     repr::repr,
     reprlib::reprlib,
+    scalar::{python_number, python_value},
     truthy::truthy,
 };
 use serde_json::Value;
 
-use super::scalar::{is_one, python_number, python_str, python_value};
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };
@@ -345,6 +345,12 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
         || !matches!(known_thinking(&request), Some(ThinkingConfig::Disabled(_)))
     {
         return request;
+    }
+    if context.warns_dropped_disabled_thinking {
+        litellm_tracing::warn!(
+            "Dropping `thinking={{'type': 'disabled'}}` for model={}: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.",
+            request.model
+        );
     }
     MessagesRequest {
         params: MessagesOptionalParams {

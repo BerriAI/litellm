@@ -8,6 +8,7 @@ import pytest
 from pydantic import JsonValue
 
 from integration._support.client import Gateway
+from integration._support.responses_prompt import with_leading_system_message
 from integration._support.wire import wire_server
 from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _BREAKPOINT,
@@ -29,6 +30,7 @@ from integration.providers._responses_bridge_prompt_cache_breakpoint import (
     _simple_expected_input,
 )
 
+
 @pytest.mark.parametrize("client_kind", ("openai_sync", "openai_async", "httpx"))
 @pytest.mark.parametrize("stream", (False, True))
 async def test_caller_prompt_cache_breakpoints_survive_chat_to_responses_bridge(
@@ -48,27 +50,59 @@ async def test_caller_prompt_cache_breakpoints_survive_chat_to_responses_bridge(
         assert peer_body["input"] == _expected_multimodal_input(marker), peer_body
         assert peer_body["prompt_cache_options"] == {"mode": "explicit"}, peer_body
 
+
 def _expected_uninjected_system_bridge_body(
     marker: str,
     prompt_cache_options: dict[str, JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
-    return {
-        "input": _simple_expected_input(marker, marked=False),
-        "instructions": _prompt(marker, "system"),
-        "model": "gpt-5.6",
-        "reasoning": {"effort": "low"},
-        "stream": False,
-        "tools": [
-            {
-                "type": "function",
-                "name": "synthetic_tool",
-                "parameters": {"type": "object", "properties": {}},
-                "strict": None,
-                "description": "Synthetic bridge test tool",
-            }
-        ],
-        **({"prompt_cache_options": prompt_cache_options} if prompt_cache_options is not None else {}),
-    }
+    return with_leading_system_message(
+        {
+            "input": _simple_expected_input(marker, marked=False),
+            "instructions": _prompt(marker, "system"),
+            "model": "gpt-5.6",
+            "reasoning": {"effort": "low"},
+            "stream": False,
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "synthetic_tool",
+                    "parameters": {"type": "object", "properties": {}},
+                    "strict": None,
+                    "description": "Synthetic bridge test tool",
+                }
+            ],
+            **({"prompt_cache_options": prompt_cache_options} if prompt_cache_options is not None else {}),
+        }
+    )
+
+
+@pytest.mark.parametrize("store", [None, False, True], ids=["default-store", "no-store", "store"])
+@pytest.mark.parametrize("truncation", [None, "auto"], ids=["first-turn", "auto-truncation"])
+async def test_stored_system_prompt_placement_preserves_truncation(
+    gateway: Gateway, store: bool | None, truncation: str | None
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_responses_reply) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url + "/v1")
+        body: Final = _simple_chat_body(model, marker, system_as_string=True, marked=False)
+        forwarded: Final[dict[str, JsonValue]] = {
+            **({"store": store} if store is not None else {}),
+            **({"truncation": truncation} if truncation is not None else {}),
+        }
+        response: Final = gateway.request("POST", "/v1/chat/completions", {**body, **forwarded})
+        assert response.status_code == 200, response.text
+        (request,) = wire.drain()
+        expected: Final = _expected_uninjected_system_bridge_body(marker)
+        assert _request_body(request) == {
+            **expected,
+            **forwarded,
+            **(
+                {"instructions": _prompt(marker, "system"), "input": _simple_expected_input(marker, marked=False)}
+                if truncation == "auto"
+                else {}
+            ),
+        }, request.body
+
 
 async def test_deployment_cache_control_injection_without_options_is_unchanged(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
@@ -94,6 +128,7 @@ async def test_deployment_cache_control_injection_without_options_is_unchanged(g
         assert not _contains_breakpoint(peer_body), peer_body
         assert "prompt_cache_options" not in peer_body, peer_body
 
+
 async def test_deployment_prompt_cache_options_override_is_unchanged(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     options: Final[dict[str, JsonValue]] = {"mode": "implicit", "ttl": "30m"}
@@ -117,6 +152,7 @@ async def test_deployment_prompt_cache_options_override_is_unchanged(gateway: Ga
         peer_body: Final = _request_body(peer_request)
         assert peer_body == _expected_uninjected_system_bridge_body(marker, options), peer_body
         assert not _contains_breakpoint(peer_body), peer_body
+
 
 async def test_unmarked_bridge_and_direct_responses_marker_are_forwarded_unchanged(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
@@ -173,6 +209,7 @@ async def test_unmarked_bridge_and_direct_responses_marker_are_forwarded_unchang
         _assert_spend_for_result(direct, model)
         (direct_peer,) = wire.drain()
         assert _request_body(direct_peer)["input"] == direct_input, _request_body(direct_peer)
+
 
 @pytest.mark.parametrize("stream", (False, True))
 async def test_unsupported_model_drops_breakpoints_without_rejecting_the_request(
