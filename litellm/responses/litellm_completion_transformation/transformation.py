@@ -332,16 +332,6 @@ _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
 
 
-def _tool_choice_without_mcp_when_dropping_params(
-    tool_choice: ToolChoice | None, drop_params: object
-) -> ToolChoice | None:
-    match tool_choice:
-        case {"type": "mcp"} if drops_unsupported_params(drop_params):
-            return None
-        case _:
-            return tool_choice
-
-
 def _tool_mapping(entry: object) -> Mapping[str, object] | None:
     try:
         return _STR_KEY_DICT_ADAPTER.validate_python(entry)
@@ -1535,8 +1525,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "model": model,
             "tool_choice": LiteLLMCompletionResponsesConfig._chat_tool_choice(
-                _tool_choice_without_mcp_when_dropping_params(responses_api_request.get("tool_choice"), drop_params),
-                request_tools,
+                responses_api_request.get("tool_choice"), request_tools
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),

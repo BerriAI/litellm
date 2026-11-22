@@ -22,7 +22,6 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.constants import DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET
-from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY
 from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.bedrock.files.transformation import BedrockFilesConfig, BedrockJsonlFilesTransformation
 from tests.unit.proxy.conftest import httpx_transport
@@ -5176,10 +5175,20 @@ def test_batch_row_drops_a_hosted_mcp_tool_and_its_tool_choice_under_drop_params
 
 @pytest.mark.parametrize("model", _BATCH_MODELS)
 @pytest.mark.parametrize(
-    ("row_drop_params", "deployment_drop_params"), [(None, None), (False, True)], ids=["unset", "row_false_wins"]
+    ("row_drop_params", "deployment_drop_params", "advice", "misleading_advice"),
+    [
+        (None, None, "`router_settings.default_litellm_params`", "this row sets"),
+        (False, True, "this row sets `drop_params: false`", "deployment when the upload names a model"),
+    ],
+    ids=["unset", "row_false_wins"],
 )
-def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can_follow(
-    monkeypatch: pytest.MonkeyPatch, model: str, row_drop_params: bool | None, deployment_drop_params: bool | None
+def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_that_matches_why_it_was_refused(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    row_drop_params: bool | None,
+    deployment_drop_params: bool | None,
+    advice: str,
+    misleading_advice: str,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
 
@@ -5188,7 +5197,8 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
 
     assert exc_info.value.status_code == 400
     assert "`deepwiki`" in exc_info.value.message
-    assert HOSTED_MCP_BATCH_ROW_REMEDY in exc_info.value.message
+    assert advice in exc_info.value.message
+    assert misleading_advice not in exc_info.value.message
     assert "litellm_proxy/mcp" not in exc_info.value.message
 
 

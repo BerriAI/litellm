@@ -45,7 +45,7 @@ from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
     extract_file_metadata,
 )
-from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
@@ -826,7 +826,7 @@ def _openai_batch_jsonl_entry_to_vertex_anthropic_row(
         model=bare_model,
         route="vertex_ai",
         drop_params=drop_params,
-        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+        remedy=hosted_mcp_batch_row_remedy(request_params.get("drop_params")),
     )
     if any(map(_names_the_response_format_tool, iter_items(chat_params.get("tools") or ()))):
         raise ValueError(
@@ -1059,7 +1059,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     if not isinstance(entry_body, dict):
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(entry_body, custom_llm_provider="vertex_ai")
+        responses_batch_body_to_chat_body(
+            entry_body,
+            custom_llm_provider="vertex_ai",
+            drop_params=row_or_deployment_drop_params(entry_body, deployment_params.get("drop_params")),
+        )
         if _is_responses_batch_entry(openai_entry)
         else entry_body
     )
@@ -1532,7 +1536,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 model=model,
                 route="vertex_ai",
                 drop_params=drop_params,
-                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                remedy=hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params")),
             ),
             optional_params={},
             drop_params=drop_params,

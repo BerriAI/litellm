@@ -17,7 +17,6 @@ from pydantic import TypeAdapter
 from unittest.mock import MagicMock
 
 import litellm
-from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
 from litellm.llms.vertex_ai.files.transformation import (
     VertexAIFilesConfig,
@@ -2584,7 +2583,7 @@ def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can
 
     assert exc_info.value.status_code == 400
     assert "`deepwiki`" in exc_info.value.message
-    assert HOSTED_MCP_BATCH_ROW_REMEDY in exc_info.value.message
+    assert "A batch row cannot reach the LiteLLM MCP gateway" in exc_info.value.message
     assert "litellm_proxy/mcp" not in exc_info.value.message
 
 
@@ -2614,6 +2613,33 @@ def test_batch_responses_row_drops_a_hosted_mcp_tool_under_its_own_drop_params(
     assert "get_weather" in json.dumps(row)
     assert "deepwiki" not in json.dumps(row)
     assert "drop_params" not in json.dumps(row)
+
+
+def test_batch_responses_row_drops_an_mcp_tool_choice_under_its_deployments_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {
+        "custom_id": "r1",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "gemini-3.8-flash",
+            "input": "hi",
+            "max_output_tokens": 10,
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+            "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+        },
+    }
+
+    (row,) = _uploaded_rows(
+        config,
+        {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.8-flash", "drop_params": True},
+        [entry],
+    )
+
+    assert "toolConfig" not in row["request"]
+    assert "get_weather" in json.dumps(row)
 
 
 @pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])

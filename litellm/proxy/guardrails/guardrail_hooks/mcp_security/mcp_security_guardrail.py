@@ -27,6 +27,28 @@ if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
 
 
+def _servers_whose_toolset_read(unregistered: Mapping[str, Exception | None], failed: bool) -> tuple[str, ...]:
+    return tuple(sorted(name for name, error in unregistered.items() if (error is not None) is failed))
+
+
+def _violation_message(missing: tuple[str, ...], unverified: tuple[str, ...]) -> str:
+    findings: Final = (
+        (
+            f"request references unregistered MCP server(s): {', '.join(missing)}. "
+            "Only servers registered on this gateway are allowed."
+            if missing
+            else ""
+        ),
+        (
+            f"could not read the saved toolset of MCP server(s): {', '.join(unverified)}, "
+            "so the gateway cannot verify them."
+            if unverified
+            else ""
+        ),
+    )
+    return "MCP Security: " + " ".join(filter(None, findings))
+
+
 class MCPSecurityGuardrail(CustomGuardrail):
     def __init__(
         self,
@@ -56,11 +78,9 @@ class MCPSecurityGuardrail(CustomGuardrail):
         if not unregistered:
             return data
 
-        message: Final = (
-            f"MCP Security: request references unregistered MCP server(s): "
-            f"{', '.join(sorted(unregistered))}. "
-            f"Only servers registered on this gateway are allowed."
-        )
+        missing: Final = _servers_whose_toolset_read(unregistered, failed=False)
+        unverified: Final = _servers_whose_toolset_read(unregistered, failed=True)
+        message: Final = _violation_message(missing, unverified)
 
         if self.on_violation == "block":
             raise HTTPException(
@@ -68,7 +88,8 @@ class MCPSecurityGuardrail(CustomGuardrail):
                 detail={
                     "error": "Violated guardrail policy",
                     "guardrail": "mcp_security",
-                    "unregistered_servers": sorted(unregistered),
+                    "unregistered_servers": list(missing),
+                    "unverified_servers": list(unverified),
                     "detection_message": message,
                 },
             ) from next((error for error in unregistered.values() if error is not None), None)

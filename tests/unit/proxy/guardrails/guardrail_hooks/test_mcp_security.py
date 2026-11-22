@@ -281,7 +281,10 @@ async def test_blocks_the_name_with_the_policy_result_when_the_toolset_read_fail
     ):
         await guardrail.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
     assert exc.value.status_code == 400
-    assert exc.value.detail["unregistered_servers"] == ["research"]
+    assert exc.value.detail["unregistered_servers"] == []
+    assert exc.value.detail["unverified_servers"] == ["research"]
+    assert "could not read the saved toolset of MCP server(s): research" in exc.value.detail["detection_message"]
+    assert "unregistered" not in exc.value.detail["detection_message"]
 
 
 @pytest.mark.asyncio
@@ -306,7 +309,10 @@ async def test_alert_mode_lets_the_request_through_when_the_toolset_read_fails(c
     ):
         result: Final = await alerting.async_pre_call_hook(UserAPIKeyAuth(), MagicMock(), data, call_type)
     assert result == data
-    assert any("unregistered MCP server(s): research" in record.getMessage() for record in caplog.records)
+    assert any(
+        "could not read the saved toolset of MCP server(s): research" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def _batch_record_naming(server: str) -> io.BytesIO:
@@ -377,4 +383,4 @@ async def test_a_batch_upload_is_refused_instead_of_dropping_a_record_when_the_t
             proxy_logging_obj=_proxy_logging_running(guardrail),
         )
     assert exc.value.status_code == 400
-    assert exc.value.detail["unregistered_servers"] == ["research"]
+    assert exc.value.detail["unverified_servers"] == ["research"]

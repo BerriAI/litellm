@@ -139,6 +139,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_servers_to_drop
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -6167,6 +6168,10 @@ def completion(
             ),
             custom_llm_provider=custom_llm_provider,
             model=model,
+            mcp_servers_to_drop=hosted_mcp_servers_to_drop(
+                cast(object, tools),  # cast-ok: widening an untyped list to object is always sound
+                drop_unsupported_reasoning,
+            ),
         )
 
         if provider_specific_header is not None:

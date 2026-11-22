@@ -48,7 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     extract_file_data,
 )
-from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import REQUEST_PARAMS, BaseLLMException
@@ -1149,6 +1149,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         request_params: Final[Mapping[str, object]] = openai_request_body
         optional_params: Final = {k: v for k, v in request_params.items() if k not in ["model", "messages"]}
         drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
+        hosted_mcp_remedy: Final = hosted_mcp_batch_row_remedy(request_params.get("drop_params"))
         requested_service_tier: Final = REQUEST_PARAMS.validate_python(optional_params).get("service_tier")
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
@@ -1185,7 +1186,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         model=model,
                         route="bedrock",
                         drop_params=drop_params,
-                        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                        remedy=hosted_mcp_remedy,
                     )
                 ),
             )
@@ -1221,7 +1222,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=model,
                 route="bedrock",
                 drop_params=drop_params,
-                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                remedy=hosted_mcp_remedy,
             )
             mapped_params = converse_config.map_openai_params(
                 non_default_params=converse_params,
@@ -1246,7 +1247,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=model,
                 route="bedrock",
                 drop_params=drop_params,
-                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                remedy=hosted_mcp_remedy,
             ),
             **_openai_format_batch_record_service_tier(requested_service_tier, model, drop_params),
         }

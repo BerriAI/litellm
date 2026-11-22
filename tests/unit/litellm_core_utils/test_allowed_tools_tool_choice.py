@@ -623,6 +623,26 @@ def test_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(provider: 
     assert f"custom_llm_provider={provider}" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    ("tool_choice", "explanation", "untrue_explanation"),
+    [
+        (
+            {"type": "mcp", "server_label": "docs"},
+            "drop_params drops an mcp tool_choice only together with the hosted MCP tool it names",
+            "drop_params does not drop it",
+        ),
+        ({"type": "file_search"}, "drop_params does not drop it", "hosted MCP tool"),
+    ],
+)
+def test_the_hosted_tool_choice_400_says_whether_drop_params_can_drop_the_choice(
+    tool_choice: Mapping[str, object], explanation: str, untrue_explanation: str
+):
+    with pytest.raises(BadRequestError) as exc:
+        raise_if_hosted_tool_choice_unsupported(tool_choice, custom_llm_provider="gemini", model="m")
+    assert explanation in str(exc.value)
+    assert untrue_explanation not in str(exc.value)
+
+
 def test_a_function_tool_choice_is_not_a_hosted_tool_anywhere():
     assert (
         raise_if_hosted_tool_choice_unsupported(
