@@ -9521,3 +9521,126 @@ async def test_converse_fallback_prices_the_current_attempt(
     else:
         client.close()
     configuration.reset_rust_configuration()
+
+
+_WEB_SEARCH_BRIDGE_ANSWER: Final = json.dumps(
+    {
+        "id": "resp_web_search",
+        "object": "response",
+        "created_at": 1734366691,
+        "status": "completed",
+        "model": "web-search-bridge-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        "tool_choice": "auto",
+        "tools": [],
+    }
+).encode()
+
+
+@pytest.fixture
+def web_search_responses_bridge(
+    restore_model_registry, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[str], tuple[str, Mapping[str, str], respx.Route]]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.register_model(
+        {
+            "perplexity/web-search-bridge-model": {
+                "litellm_provider": "perplexity",
+                "mode": "responses",
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+            },
+        },
+        persist_across_reloads=False,
+    )
+    backends: Final = {
+        "azure": (
+            "azure/responses/web-search-bridge-model",
+            "https://test.openai.azure.com/",
+            {"api_base": "https://test.openai.azure.com", "api_key": "fake-key"},
+        ),
+        "perplexity": (
+            "perplexity/web-search-bridge-model",
+            "https://api.perplexity.ai/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+        "fireworks_ai": (
+            "fireworks_ai/responses/accounts/fireworks/models/web-search-bridge-model",
+            "https://api.fireworks.ai/inference/v1/responses",
+            {"api_key": "fake-key"},
+        ),
+    }
+
+    def route_backend(backend: str) -> tuple[str, Mapping[str, str], respx.Route]:
+        model, url, kwargs = backends[backend]
+        route: Final = respx_mock.post(url__startswith=url).respond(
+            content=_WEB_SEARCH_BRIDGE_ANSWER, headers={"content-type": "application/json"}
+        )
+        return model, kwargs, route
+
+    return route_backend
+
+
+@pytest.mark.parametrize("drop_params", [True, False])
+def test_azure_responses_bridge_sends_web_search_options_as_the_web_search_tool(
+    drop_params: bool,
+    web_search_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = web_search_responses_bridge("azure")
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        web_search_options={"search_context_size": "low"},
+        drop_params=drop_params,
+        **kwargs,
+    )
+
+    assert json.loads(route.calls[0].request.content)["tools"] == [{"type": "web_search", "search_context_size": "low"}]
+
+
+@pytest.mark.parametrize("backend", ["perplexity", "fireworks_ai"])
+def test_responses_bridge_drops_web_search_options_under_drop_params_where_web_search_is_unverified(
+    backend: str,
+    web_search_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = web_search_responses_bridge(backend)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        web_search_options={"search_context_size": "low"},
+        drop_params=True,
+        **kwargs,
+    )
+
+    assert "tools" not in json.loads(route.calls[0].request.content)
+
+
+@pytest.mark.parametrize("backend", ["perplexity", "fireworks_ai"])
+def test_responses_bridge_rejects_web_search_options_without_drop_params_where_web_search_is_unverified(
+    backend: str,
+    web_search_responses_bridge: Callable[[str], tuple[str, Mapping[str, str], respx.Route]],
+):
+    model, kwargs, route = web_search_responses_bridge(backend)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="web_search_options") as raised:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            web_search_options={"search_context_size": "low"},
+            **kwargs,
+        )
+
+    assert raised.value.status_code == 400
+    assert route.called is False

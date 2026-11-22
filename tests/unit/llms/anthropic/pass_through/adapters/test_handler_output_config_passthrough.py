@@ -312,6 +312,40 @@ def test_mcp_servers_reach_routes_that_carry_them_and_answer_400_elsewhere(
     assert completion_kwargs["mcp_servers"] == [_DEEPWIKI_SERVER]
 
 
+@pytest.mark.parametrize(
+    ("route", "request_drop_params", "global_drop_params", "forwards"),
+    [
+        ("azure", True, False, False),
+        ("groq", False, True, False),
+        ("azure", False, False, True),
+        ("litellm_proxy", True, False, True),
+        ("litellm_proxy", False, True, True),
+    ],
+)
+def test_inference_geo_drops_only_under_drop_params_and_always_reaches_litellm_proxy(
+    monkeypatch: pytest.MonkeyPatch, route: str, request_drop_params: bool, global_drop_params: bool, forwards: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={"inference_geo": "us", "custom_llm_provider": route, "drop_params": request_drop_params},
+        model="some-model",
+    )
+
+    assert completion_kwargs.get("inference_geo") == ("us" if forwards else None)
+
+
+@pytest.mark.parametrize("route", ["azure", "litellm_proxy"])
+def test_speed_reaches_the_shared_chat_param_check(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    completion_kwargs, _ = _call_prepare(
+        extra_kwargs={"speed": "fast", "custom_llm_provider": route, "drop_params": True}, model="some-model"
+    )
+
+    assert completion_kwargs["speed"] == "fast"
+
+
 _DEEPWIKI_TOOLSET: Final = {"type": "mcp_toolset", "mcp_server_name": "deepwiki"}
 _WEATHER_TOOL: Final = {
     "name": "get_weather",

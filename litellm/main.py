@@ -1101,7 +1101,8 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
 from litellm.responses.bridge_check import (
-    bridge_check_request_params,  # noqa: E402  # imported at the old definition site, same as its neighbours
+    RESPONSES_WEB_SEARCH_PROVIDERS,  # noqa: E402  # imported at the old definition site, same as its neighbours
+    bridge_check_request_params,
     bridge_reasoning_effort,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -5845,7 +5846,7 @@ def completion(
             [
                 *allowed_openai_param_names(kwargs.get("allowed_openai_params")),
                 "reasoning_effort",
-                "web_search_options",
+                *(("web_search_options",) if custom_llm_provider in RESPONSES_WEB_SEARCH_PROVIDERS else ()),
             ]
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
