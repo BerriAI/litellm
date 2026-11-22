@@ -1678,7 +1678,7 @@ def _gemini_tool_media_part(
     drop_params: bool = False,
 ) -> VertexPartType | None:
     from litellm.llms.vertex_ai.common_utils import gemini_fetches_url_itself
-    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_media_source
+    from litellm.llms.vertex_ai.gemini.transformation import changes_gemini_media_settings, encode_gemini_media_source
 
     source: Final = gemini_media_source(content)
     if source is None:
@@ -1691,7 +1691,9 @@ def _gemini_tool_media_part(
         return None
     vertex_nested: Final = nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
     drops_video_settings: Final = (
-        vertex_nested and content.get("type") == "video_url" and bool(source.detail or source.video_metadata)
+        vertex_nested
+        and content.get("type") == "video_url"
+        and changes_gemini_media_settings(source.detail, source.video_metadata)
     )
     if drops_video_settings and not drop_params:
         raise litellm.BadRequestError(
@@ -1704,8 +1706,14 @@ def _gemini_tool_media_part(
         )
     inline_only: Final = nested and not vertex_nested
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
+        if drop_params:
+            verbose_logger.warning("Dropped a media link from a Gemini tool result, which takes inline data only")
+            return None
         raise litellm.BadRequestError(
-            message="Gemini tool results require inline media data. Use a data URL or input_audio for this file reference.",
+            message=(
+                "Gemini tool results require inline media data. "
+                "Use a data URL, move the link to a user message, or set drop_params=True."
+            ),
             model=model or "",
             llm_provider=custom_llm_provider or "gemini",
         )

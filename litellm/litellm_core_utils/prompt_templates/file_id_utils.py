@@ -515,7 +515,7 @@ _get_image_mime_type_from_url = get_image_mime_type_from_url
 
 
 _MP4_VIDEO_BRANDS: Final = frozenset(
-    (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash")
+    (b"isom", b"iso2", b"iso4", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"M4V ", b"dash", b"XAVC", b"MSNV")
 )
 
 

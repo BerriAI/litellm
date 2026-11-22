@@ -2894,3 +2894,45 @@ def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
 
     assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
     assert _generation_config(dropped_row) == {"max_output_tokens": 5}
+
+
+_SYSTEM_VIDEO_MESSAGES: Final = (
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "be terse"},
+            {"type": "video_url", "video_url": {"url": "gs://my-bucket/clip.mp4"}},
+        ],
+    },
+    {"role": "user", "content": "hi"},
+)
+
+
+def test_a_gemini_batch_row_with_a_system_video_answers_400_without_drop_params(config, monkeypatch) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"messages": list(_SYSTEM_VIDEO_MESSAGES)}))
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*system instructions take text only") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [entry])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("deployment", "body"),
+    [({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}), (_GEMINI_DEPLOYMENT, {"drop_params": True})],
+    ids=["deployment", "request"],
+)
+def test_drop_params_drops_a_system_video_from_a_gemini_batch_row(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"messages": list(_SYSTEM_VIDEO_MESSAGES), **body}))
+
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(_uploaded_rows(config, deployment, [entry]))
+
+    assert _request_of(row)["system_instruction"] == {"parts": [{"text": "be terse"}]}
