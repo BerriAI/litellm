@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ItemSelect } from "@/components/shared/ItemSelect";
 import { createApiClient } from "@/lib/http/client";
 import { getAuthHeaderName } from "@/lib/http/runtime";
 import { buildSkillInstallCommand, findPublicSkill, SKILL_AGENTS, type SkillAgent } from "./skillInstall";
@@ -81,18 +81,13 @@ export default function SkillInstallDialog({ name, archivePath, open, onOpenChan
         <div className="grid min-w-0 gap-5 sm:grid-cols-2">
           <div className="space-y-2">
             <Label htmlFor="skill-install-agent">{t("skills.install.agent")}</Label>
-            <Select<SkillAgent> items={SKILL_AGENTS} value={agent} onValueChange={(value) => value && setAgent(value)}>
-              <SelectTrigger id="skill-install-agent" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SKILL_AGENTS.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <ItemSelect
+              id="skill-install-agent"
+              className="w-full"
+              items={SKILL_AGENTS}
+              value={agent}
+              onValueChange={setAgent}
+            />
           </div>
           <div className="space-y-2">
             <p className="text-sm font-medium">{t("skills.install.scope")}</p>
