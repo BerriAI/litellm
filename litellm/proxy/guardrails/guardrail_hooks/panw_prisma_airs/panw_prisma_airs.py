@@ -902,7 +902,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 )
             try:
                 data = json.loads(line[6:])
-            except (json.JSONDecodeError, ValueError):
+            except (ValueError, RecursionError):
                 continue
             if not isinstance(data, dict):
                 continue
