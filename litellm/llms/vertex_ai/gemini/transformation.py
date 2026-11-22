@@ -504,6 +504,7 @@ def process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    max_download_bytes: int | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -597,7 +598,7 @@ def process_gemini_media(
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            image: Final = convert_to_anthropic_image_obj(image_url, format=format)
+            image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
@@ -623,6 +624,7 @@ def encode_gemini_media_source(
         vertex_credentials=vertex_credentials,
         media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
         video_metadata=source.video_metadata,
+        max_download_bytes=source.max_download_bytes,
     )
 
 

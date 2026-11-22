@@ -22,7 +22,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, REDACTED_BY_LITELLM
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import (
@@ -883,7 +883,9 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) -> GenericImageParsingChunk:
+def convert_to_anthropic_image_obj(
+    openai_image_url: str, format: str | None, *, max_bytes: int | None = None
+) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -897,7 +899,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
     """
     try:
         if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+            openai_image_url = convert_url_to_base64(url=openai_image_url, max_bytes=max_bytes)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
@@ -1546,6 +1548,7 @@ class GeminiMediaSource:
     detail: str | None = None
     video_metadata: Mapping[str, object] | None = None
     inline_in_tool_result: bool = False
+    max_download_bytes: int | None = None
 
 
 def gemini_tool_media_needs_download(source: GeminiMediaSource) -> bool:
@@ -1609,11 +1612,16 @@ def _gemini_url_media_source(url: str, fields: Mapping[str, object]) -> GeminiMe
     )
 
 
+_MAX_VIDEO_DOWNLOAD_BYTES: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+
+
 def _gemini_video_url_source(content: Mapping[str, object]) -> GeminiMediaSource | None:
     video_url: Final = content.get("video_url")
     video_fields: Final = {**content, **(as_str_mapping(video_url) or {})}
     url: Final = video_url if isinstance(video_url, str) else video_fields.get("url")
-    return _gemini_url_media_source(url, video_fields) if isinstance(url, str) and url else None
+    if not isinstance(url, str) or not url:
+        return None
+    return replace(_gemini_url_media_source(url, video_fields), max_download_bytes=_MAX_VIDEO_DOWNLOAD_BYTES)
 
 
 def gemini_media_source(content: Mapping[str, object], *, prefer_file_id: bool = False) -> GeminiMediaSource | None:
@@ -1723,7 +1731,9 @@ def _gemini_tool_media_part(
             replace(
                 kept_source,
                 url=convert_generic_image_chunk_to_openai_image_obj(
-                    convert_to_anthropic_image_obj(kept_source.url, format=kept_source.format)
+                    convert_to_anthropic_image_obj(
+                        kept_source.url, format=kept_source.format, max_bytes=kept_source.max_download_bytes
+                    )
                 ),
             )
             if gemini_tool_media_needs_download(kept_source)

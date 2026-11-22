@@ -1,8 +1,10 @@
 
+import itertools
 import json
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from typing import Final
 from unittest.mock import Mock
 
@@ -12,6 +14,7 @@ import respx
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -767,6 +770,50 @@ def _turns_with_a_url_less_video(role: str) -> list[Mapping[str, object]]:
             "content": [{"type": "text", "text": '{"ok":true}'}, _URL_LESS_VIDEO],
         },
     ]
+
+
+_MIB: Final = 1024 * 1024
+
+
+@dataclass(slots=True)
+class _OversizedVideoHost:
+    sent_bytes: int = 0
+
+    def body(self) -> Iterator[bytes]:
+        for chunk in itertools.repeat(b"\0" * _MIB, int(2 * MAX_IMAGE_URL_DOWNLOAD_SIZE_MB)):
+            self.sent_bytes += len(chunk)
+            yield chunk
+
+
+def _turns_with_a_linked_video(role: str, url: str) -> list[Mapping[str, object]]:
+    video: Final = {"type": "video_url", "video_url": {"url": url}}
+    if role == "user":
+        return [{"role": "user", "content": [{"type": "text", "text": "Describe the clip"}, video]}]
+    return [
+        {"role": "user", "content": "Find the clip"},
+        {"role": "assistant", "content": None, "tool_calls": [_FIND_CLIP_CALL]},
+        {"role": "tool", "tool_call_id": "call_1", "content": [video]},
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_an_oversized_linked_video_stops_downloading_at_the_size_limit(role: str, custom_llm_provider: str) -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+    host: Final = _OversizedVideoHost()
+
+    with respx.mock as router:
+        router.get(video_url).mock(
+            side_effect=lambda _: httpx.Response(200, headers={"content-type": "video/mp4"}, content=host.body())
+        )
+        with pytest.raises(litellm.BadRequestError):
+            transformation.gemini_convert_messages_with_history(
+                _turns_with_a_linked_video(role, video_url),
+                model="gemini-3.8-flash",
+                custom_llm_provider=custom_llm_provider,
+            )
+
+    assert 0 < host.sent_bytes <= MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * _MIB + _MIB
 
 
 @pytest.mark.parametrize("role", ["system", "assistant", "tool"])
