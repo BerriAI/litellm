@@ -10,6 +10,7 @@ from integration.translation.chat_completions.bases.vertex_ai import (
     CLAUDE_FABLE_5_1_TEST_CASE,
     CLAUDE_FABLE_5_TEST_CASE,
     CLAUDE_HAIKU_4_5_TEST_CASE,
+    CLAUDE_HAIKU_5_5_TEST_CASE,
     CLAUDE_OPUS_5_5_TEST_CASE,
     CLAUDE_OPUS_5_TEST_CASE,
     CLAUDE_SONNET_5_5_TEST_CASE,
@@ -3261,5 +3262,519 @@ GEMINI_4_ARGON_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
         "total_tokens": 630,
         "prompt_tokens_details": {"text_tokens": 582},
         "completion_tokens_details": {"text_tokens": 48},
+    },
+)
+
+
+CLAUDE_HAIKU_5_5_AGENT_THINKING_SIGNATURE_0: Final = (
+    "CAQSngQKEggUEAIYAjgBQgh0aGlua2luZxIMthjSPjbGvkQwajr1Ggw4/6aFDwAkpuOnZ+QiMMfUWgzA+BpQDXm119LLWPpJ"
+    "LXukwp5fjhvrRHZJb7tKQFbHyZulUlTRF8naEHTdiyq5A2gJnxb1CDQwJNxJ0ED8F3NUyjoit7sOeLcrpu6vEkiaI9KB6j0V"
+    "bRdOrBC7yJxw1avaJbxzxTznBxGpx6/xx5fx85NQaF1gsgKbEtwb0kehn9LC4s1GN+dAvziXDPtkvo7wKa4HQD86SASdG4UG"
+    "Bg3cykpBpLZmjQaY5Yd/ygXfWJrEfSjdC19pT8JSao8EEiS40WMNW5HsLe0333cxIduYNEXhBB7IWc8Fuuw2sjK06aqPDwYe"
+    "VRFPKDOe+jYQ51H6FFtEZqF0L8m6Gs3yXxbDimL1+xXpqpKGIO7Cbc9m/6DNCY4tqdQQL1Voih16APV44k3Og0BmERkiXATK"
+    "Sg5tL6kX6v1M78BNnWCjObJmesSSNIy6MQzB41QzgrTOnoOSjaYwIwJlCN1EiUrnZVjymQQW3ljV+miIzXLTzikW3aC/YuQp"
+    "3sXnmqtRDGzZo74q4RrBy9uQcu6U5y2O1Lh0QJN7S3sAlvnufsejV2o+93HrQdUKo6QZNOGHM2mladgMWs/9SnrkaD5tgJF9"
+    "Tjaxv63Ss2AhS1sD7Z8Rnnl/S+e9d+Sd6nVx86pRG5C4bI5ScSu1Sf17lxgB"
+)
+
+CLAUDE_HAIKU_5_5_AGENT_TEST_CASE: Final = replace(
+    CLAUDE_HAIKU_5_5_TEST_CASE,
+    scenario="agent_tools",
+    litellm_request={**CODING_AGENT_REQUEST, "model": "vertex_ai/claude-haiku-5-5@default"},
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default:rawPredict",
+    expected_provider_headers=CLAUDE_HAIKU_4_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-haiku-5-5",
+        "id": "msg_vrtx_011ChJFAsiyyMr4BS4a2DD4R",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": "I'm going to run the search and the tests together in one batch, then wait for both results.\n\n",
+                "signature": CLAUDE_HAIKU_5_5_AGENT_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01ALpeozHHPyCfRP9uEngTjK",
+                "name": "search_code",
+                "input": {"query": "retries_remaining"},
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_vrtx_01EsebyGHZWxE8X5WkdVXTcb",
+                "name": "run_tests",
+                "input": {"path": "tests/test_retry.py"},
+            },
+        ],
+        "stop_reason": "tool_use",
+        "usage": {
+            "input_tokens": 1184,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 131,
+            "output_tokens_details": {"thinking_tokens": 25},
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-haiku-5-5@default",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 1,
+                            "function": {"arguments": '{"query": "retries_remaining"}', "name": "search_code"},
+                            "id": "toolu_vrtx_01ALpeozHHPyCfRP9uEngTjK",
+                            "type": "function",
+                        },
+                        {
+                            "index": 2,
+                            "function": {"arguments": '{"path": "tests/test_retry.py"}', "name": "run_tests"},
+                            "id": "toolu_vrtx_01EsebyGHZWxE8X5WkdVXTcb",
+                            "type": "function",
+                        },
+                    ],
+                    "reasoning_content": "I'm going to run the search and the tests together in one batch, then wait for both results.\n\n",
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "I'm going to run the search and the tests together in one batch, then wait for both results.\n\n",
+                            "signature": CLAUDE_HAIKU_5_5_AGENT_THINKING_SIGNATURE_0,
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "citations": None,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": "I'm going to run the search and the tests together in one batch, then wait for both results.\n\n",
+                                "signature": CLAUDE_HAIKU_5_5_AGENT_THINKING_SIGNATURE_0,
+                            }
+                        ],
+                    },
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 131,
+            "prompt_tokens": 1184,
+            "total_tokens": 1315,
+            "completion_tokens_details": {"reasoning_tokens": 25, "text_tokens": 106},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1184,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "speed": "standard",
+        },
+    },
+)
+
+
+CLAUDE_HAIKU_5_5_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
+    CLAUDE_HAIKU_5_5_AGENT_TEST_CASE,
+    scenario="agent_followup",
+    litellm_request=followup_request(
+        CLAUDE_HAIKU_5_5_AGENT_TEST_CASE.litellm_request, CLAUDE_HAIKU_5_5_AGENT_TEST_CASE.expected_litellm_response
+    ),
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default:rawPredict",
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Fix retries_remaining in src/retry.py. It should return the number of retries left and never "
+                            "return a negative number. First read the implementation and its tests."
+                        ),
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I will read the implementation and tests before making changes."},
+                    {
+                        "type": "tool_use",
+                        "id": "call_read_source",
+                        "name": "read_file",
+                        "input": {"path": "src/retry.py"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "call_read_tests",
+                        "name": "read_file",
+                        "input": {"path": "tests/test_retry.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_read_source",
+                        "content": (
+                            '{"path":"src/retry.py","content":"def retries_remaining(limit: int, attempts: int) -> int:\\n    '
+                            'return limit + attempts\\n"}'
+                        ),
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "call_read_tests",
+                        "content": (
+                            '{"path":"tests/test_retry.py","content":"from src.retry import retries_remaining\\n\\ndef '
+                            "test_retries_remaining():\\n    assert retries_remaining(3, 1) == 2\\n    assert "
+                            'retries_remaining(3, 5) == 0\\n"}'
+                        ),
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Before editing, search for other callers of retries_remaining and run tests/test_retry.py to "
+                            "reproduce the failure. These checks are independent, so you may request both together. Wait for "
+                            "the tool results before proposing a patch."
+                        ),
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "thinking",
+                        "thinking": "I'm going to run the search and the tests together in one batch, then wait for both results.\n\n",
+                        "signature": CLAUDE_HAIKU_5_5_AGENT_THINKING_SIGNATURE_0,
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_vrtx_01ALpeozHHPyCfRP9uEngTjK",
+                        "name": "search_code",
+                        "input": {"query": "retries_remaining"},
+                    },
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_vrtx_01EsebyGHZWxE8X5WkdVXTcb",
+                        "name": "run_tests",
+                        "input": {"path": "tests/test_retry.py"},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_vrtx_01ALpeozHHPyCfRP9uEngTjK",
+                        "content": '{"matches": [{"path": "src/worker.py", "line": 12, "text": "remaining = retries_remaining(3, attempts)"}]}',
+                    },
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_vrtx_01EsebyGHZWxE8X5WkdVXTcb",
+                        "content": '{"exit_code": 1, "output": "FAILED tests/test_retry.py::test_retries_remaining - assert 4 == 2"}',
+                    },
+                    {
+                        "type": "text",
+                        "text": (
+                            "Stop after these diagnostics. Do not call more tools or change files. Summarize the bug, the "
+                            "caller found and the failed test in two short sentences."
+                        ),
+                    },
+                ],
+            },
+        ],
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+    },
+    mock_provider_response={
+        **ANTHROPIC_AGENT_RESPONSE,
+        "model": "claude-haiku-5-5",
+        "id": "msg_vrtx_011ChJFB1ucHAT5coaJPt1gY",
+        "content": [
+            {
+                "type": "text",
+                "text": (
+                    "The bug is that `retries_remaining` returns `limit + attempts` instead of subtracting attempts "
+                    "from the limit, and it has no clamp at zero. The only other caller is `src/worker.py:12` "
+                    "(`remaining = retries_remaining(3, attempts)`), and `tests/test_retry.py` fails with `assert 4 "
+                    "== 2`."
+                ),
+            }
+        ],
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 1518,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 114,
+            "output_tokens_details": {"thinking_tokens": 0},
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **CODING_AGENT_RESPONSE,
+        "model": "vertex_ai/claude-haiku-5-5@default",
+        "choices": [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "content": (
+                        "The bug is that `retries_remaining` returns `limit + attempts` instead of subtracting attempts "
+                        "from the limit, and it has no clamp at zero. The only other caller is `src/worker.py:12` "
+                        "(`remaining = retries_remaining(3, attempts)`), and `tests/test_retry.py` fails with `assert 4 "
+                        "== 2`."
+                    ),
+                    "role": "assistant",
+                    "provider_specific_fields": {"citations": None, "thinking_blocks": None},
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 114,
+            "prompt_tokens": 1518,
+            "total_tokens": 1632,
+            "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 114},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 1518,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "speed": "standard",
+        },
+    },
+)
+
+
+CLAUDE_HAIKU_5_5_AGENT_STREAMING_TEST_CASE: Final = StreamingTranslationTestCase(
+    scenario="agent_streaming",
+    litellm_endpoint=CLAUDE_HAIKU_5_5_AGENT_TEST_CASE.litellm_endpoint,
+    litellm_request={
+        **CLAUDE_HAIKU_5_5_AGENT_TEST_CASE.litellm_request,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    },
+    expected_provider_endpoint="/v1/projects/synthetic-vertex-project/locations/global/publishers/anthropic/models/claude-haiku-5-5@default:streamRawPredict?alt=sse",
+    expected_provider_headers=CLAUDE_HAIKU_5_5_AGENT_TEST_CASE.expected_provider_headers,
+    expected_provider_request={
+        **ANTHROPIC_AGENT_REQUEST,
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "low"},
+        "anthropic_version": "vertex-2023-10-16",
+        "stream": True,
+    },
+    mock_provider_frames=(
+        SSEFrame(
+            event="message_start",
+            data={
+                "type": "message_start",
+                "message": {
+                    "model": "claude-haiku-5-5",
+                    "id": "msg_vrtx_011ChJFB7A7jpNwDZBNK854a",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "container": None,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "stop_details": None,
+                    "usage": {
+                        "input_tokens": 1184,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                        "output_tokens": 16,
+                        "speed": "standard",
+                    },
+                },
+            },
+        ),
+        SSEFrame(event="ping", data={"type": "ping"}),
+        SSEFrame(
+            event="content_block_start",
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_vrtx_01RCfSYv6uGaRXJcVQyPGFsY",
+                    "name": "search_code",
+                    "input": {},
+                },
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"query'},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '": "ret'},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "ries_re"},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": "maining"},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '"}'},
+            },
+        ),
+        SSEFrame(event="content_block_stop", data={"type": "content_block_stop", "index": 0}),
+        SSEFrame(
+            event="content_block_start",
+            data={
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_vrtx_01Sb7BdnHsuRrE4Uuaht8w8t",
+                    "name": "run_tests",
+                    "input": {},
+                },
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": ""}},
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": '{"path"'},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": ': "test'},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "s/test_"},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": "retry.p"},
+            },
+        ),
+        SSEFrame(
+            event="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 1,
+                "delta": {"type": "input_json_delta", "partial_json": 'y"}'},
+            },
+        ),
+        SSEFrame(event="content_block_stop", data={"type": "content_block_stop", "index": 1}),
+        SSEFrame(
+            event="message_delta",
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None, "stop_details": None, "container": None},
+                "usage": {
+                    "input_tokens": 1184,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "output_tokens": 105,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                },
+            },
+        ),
+        SSEFrame(event="message_stop", data={"type": "message_stop"}),
+    ),
+    expected_litellm_message={
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "toolu_vrtx_01RCfSYv6uGaRXJcVQyPGFsY",
+                "type": "function",
+                "function": {"name": "search_code", "arguments": '{"query": "retries_remaining"}'},
+            },
+            {
+                "id": "toolu_vrtx_01Sb7BdnHsuRrE4Uuaht8w8t",
+                "type": "function",
+                "function": {"name": "run_tests", "arguments": '{"path": "tests/test_retry.py"}'},
+            },
+        ],
+    },
+    expected_litellm_usage={
+        "prompt_tokens": 1184,
+        "completion_tokens": 105,
+        "total_tokens": 1289,
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+            "text_tokens": 1184,
+            "cache_write_tokens": 0,
+            "cache_creation_tokens": 0,
+            "cache_creation_token_details": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+        },
+        "completion_tokens_details": {"reasoning_tokens": 0, "text_tokens": 105},
     },
 )
