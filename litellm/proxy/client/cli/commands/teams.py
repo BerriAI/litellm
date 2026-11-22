@@ -1,7 +1,7 @@
 """Team management commands for LiteLLM CLI."""
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Final
 
 import click
 import requests
@@ -9,16 +9,11 @@ from rich.console import Console
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_get
 from litellm.proxy.client import Client
 
 from ._cli_context import cli_context_values
-
-
-class _TeamRow(TypedDict):
-    team_alias: ReadOnly[str | None]
-    team_id: ReadOnly[str | None]
-    models: ReadOnly[Sequence[str]]
-    max_budget: ReadOnly[object]
+from .auth import models_summary
 
 
 class _TeamModelsView(TypedDict):
@@ -34,7 +29,7 @@ def teams():
     """Manage teams and team assignments"""
 
 
-def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
+def display_teams_table(teams: object) -> None:
     """Display teams in a formatted table"""
     console: Final = Console()
 
@@ -50,24 +45,14 @@ def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
     table.add_column("Max Budget", style="blue")
     table.add_column("Role", style="red")
 
-    for i, team in enumerate(teams):
-        row: _TeamRow = {
-            "team_alias": team.get("team_alias") or "N/A",
-            "team_id": team.get("team_id", "N/A"),
-            "models": team.get("models", []),
-            "max_budget": team.get("max_budget"),
-        }
-        models = row["models"]
-        max_budget = row["max_budget"]
+    for i, entry in enumerate(iter_items(teams)):
+        team = require_get(entry)
+        team_alias = team.get("team_alias") or "N/A"
+        team_id = team.get("team_id", "N/A")
+        models = team.get("models", [])
+        max_budget = team.get("max_budget")
 
-        # Format models list
-        if models:
-            if len(models) > 3:
-                models_str = ", ".join(models[:3]) + f" (+{len(models) - 3} more)"
-            else:
-                models_str = ", ".join(models)
-        else:
-            models_str = "All models"
+        models_str = models_summary(models)
 
         # Format budget
         budget_str = f"${max_budget}" if max_budget else "Unlimited"
@@ -78,7 +63,7 @@ def display_teams_table(teams: Sequence[dict[str, Any]]) -> None:
             # This would need to be implemented based on actual API response structure
             pass
 
-        table.add_row(str(i + 1), row["team_alias"], row["team_id"], models_str, budget_str, role)
+        table.add_row(str(i + 1), team_alias, team_id, models_str, budget_str, role)
 
     console.print(table)
 

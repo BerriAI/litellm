@@ -12,8 +12,9 @@ import httpx
 from typing_extensions import NotRequired, ReadOnly
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.url_utils import ensure_api_route
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.types.mcp import has_header
 from litellm.types.utils import EmbeddingResponse
 
@@ -22,14 +23,6 @@ class TokenEncoder(Protocol):
     """The tokenizer surface used to estimate prompt tokens."""
 
     def encode(self, text: str, /) -> Sequence[int]: ...
-
-
-class _DebugLogger(Protocol):
-    def debug(self, message: str, /) -> object: ...
-
-
-class _WarningLogger(Protocol):
-    def warning(self, message: str, /) -> object: ...
 
 
 class OllamaEmbeddingResponse(TypedDict):
@@ -45,14 +38,15 @@ def _prepare_ollama_embedding_payload(
     data: Final[dict[str, object]] = {"model": model, "input": prompts}
     special_optional_params: Final = ["truncate", "options", "keep_alive", "dimensions"]
 
-    for k, v in optional_params.items():
+    body_params, extra_body = split_extra_body(optional_params)
+    for k, v in body_params.items():
         if k in special_optional_params:
             data[k] = v
         else:
             data.setdefault("options", {})
             if isinstance(data["options"], dict):
                 data["options"].update({k: v})
-    return data
+    return {**extra_body, **data}
 
 
 def _process_ollama_embedding_response(
@@ -60,7 +54,6 @@ def _process_ollama_embedding_response(
     prompts: list[str],
     model: str,
     model_response: EmbeddingResponse,
-    logging_obj: object,
     encoding: TokenEncoder | None,
 ) -> EmbeddingResponse:
     output_data: Final = []
@@ -74,16 +67,10 @@ def _process_ollama_embedding_response(
     if input_tokens is None:
         if encoding is not None:
             input_tokens = len(encoding.encode("".join(prompts)))
-            if logging_obj:
-                require_attributes(logging_obj, _DebugLogger, "debug").debug(
-                    "Ollama response missing prompt_eval_count; estimated with encoding."
-                )
+            verbose_logger.debug("Ollama response missing prompt_eval_count; estimated with encoding.")
         else:
             input_tokens = 0
-            if logging_obj:
-                require_attributes(logging_obj, _WarningLogger, "warning").warning(
-                    "Missing prompt_eval_count and no encoding provided; defaulted to 0."
-                )
+            verbose_logger.warning("Missing prompt_eval_count and no encoding provided; defaulted to 0.")
 
     model_response.object = "list"
     model_response.data = output_data
@@ -135,7 +122,6 @@ async def ollama_aembeddings(
         prompts=prompts,
         model=model,
         model_response=model_response,
-        logging_obj=logging_obj,
         encoding=encoding,
     )
 
@@ -168,6 +154,5 @@ def ollama_embeddings(
         prompts=prompts,
         model=model,
         model_response=model_response,
-        logging_obj=logging_obj,
         encoding=encoding,
     )

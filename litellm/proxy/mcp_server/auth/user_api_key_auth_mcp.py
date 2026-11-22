@@ -50,7 +50,6 @@ from litellm.proxy.auth.oauth2_check import OAuth2TokenValidationError
 from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
     _get_bearer_token_or_received_api_key,  # pyright: ignore[reportPrivateUsage]  # shared x-litellm-api-key parser lives with user_api_key_auth
     _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
-    oauth2_introspection_applies,
     run_centralized_common_checks,
     user_api_key_auth,
 )
@@ -62,7 +61,6 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     USER_NO_MCP_PERMISSION_SENTINEL,
     get_management_object_ttl,
-    user_object_permission_id_cache_key,
 )
 from litellm.proxy.mcp_server.catalog import global_manager
 from litellm.proxy.mcp_server.oauth_utils import (
@@ -90,10 +88,12 @@ from litellm.proxy.mcp_server.utils import (
     asgi_scope_fields,
     strip_known_server_prefix,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )
+from litellm.rust_bridge._native import RustAuth, RustAuthSettings
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
@@ -287,45 +287,43 @@ async def _bearer_is_litellm_credential(token: str) -> bool:
     return token.startswith(LITELLM_VIRTUAL_KEY_PREFIX) and await virtual_key_may_exist(token)
 
 
-def _identity_check(token: str, route: str, settings: Mapping[str, object]) -> _IdentityCheck | None:
+def _identity_check(
+    token: str, route: str, settings: Mapping[str, object], auth_settings: RustAuthSettings
+) -> _IdentityCheck | None:
     """The identity check LiteLLM's own auth would run on ``token`` for ``route``, in its order: OAuth2
     introspection, then trusted reverse-proxy identity headers, then a JWT whose issuer may be LiteLLM's."""
-    from litellm.proxy.auth.handle_jwt import JWTHandler  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import core as auth_core  # noqa: PLC0415  # proxy import cycle
+    from litellm.proxy.auth import jwt as proxy_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         jwt_issuer_may_be_litellm,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # startup owns the active auth configuration
-        jwt_handler,
         premium_user,
     )
 
     enable_jwt_auth: Final = settings.get("enable_jwt_auth") is True
-    if oauth2_introspection_applies(
-        token,
-        route,
-        enable_oauth2_auth=settings.get("enable_oauth2_auth") is True,
-        enable_jwt_auth=enable_jwt_auth,
-        jwt_handler=jwt_handler,
-    ):
+    if RustAuth.oauth2_introspection_applies(auth_core.request(token, route, None), auth_settings):
         return "oauth2" if premium_user is True else None
     if settings.get("enable_oauth2_proxy_auth") is True:
         return "oauth2_proxy"
-    if enable_jwt_auth and premium_user is True and JWTHandler.is_jwt(token=token) and jwt_issuer_may_be_litellm(token):
+    if enable_jwt_auth and premium_user is True and proxy_jwt.is_jwt(token) and jwt_issuer_may_be_litellm(token):
         return "jwt"
     return None
 
 
-async def _verify_identity(check: Literal["oauth2_proxy", "jwt"], token: str, request: Request) -> None:
+async def _verify_identity(
+    check: Literal["oauth2_proxy", "jwt"], token: str, request: Request, auth_settings: RustAuthSettings
+) -> None:
+    from litellm.proxy.auth import jwt as proxy_jwt  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.oauth2_proxy_hook import (  # noqa: PLC0415  # proxy import cycle
         handle_oauth2_proxy_request,
     )
-    from litellm.proxy.proxy_server import jwt_handler  # noqa: PLC0415  # startup owns the active auth configuration
 
     match check:
         case "oauth2_proxy":
             await handle_oauth2_proxy_request(request=request)
         case "jwt":
-            await jwt_handler.auth_jwt(token=token)  # pyright: ignore[reportUnknownMemberType]  # returns a bare dict; only whether it raises matters
+            _ = await proxy_jwt.verify(auth_settings, token)
         case _:  # pragma: no cover - exhaustiveness guard, unreachable while the Literal holds
             assert_never(check)  # pragma: no cover
 
@@ -338,6 +336,7 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
     runs once inside the full check, where a provider that does not vouch is ``None``. Past that, only a
     user LiteLLM does not know is ``None``; every other refusal (budget, blocked team, disallowed route)
     propagates."""
+    from litellm.proxy.auth import core as auth_core  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415  # proxy import cycle
     from litellm.proxy.mcp_server.bridge_token_flow import (  # noqa: PLC0415  # bridge flow imports this module
         custom_auth_configured,
@@ -351,14 +350,15 @@ async def _upstream_bearer_identity(token: str, litellm_api_key: str, request: R
             return await user_api_key_auth(api_key=litellm_api_key, request=request)
         except (HTTPException, ProxyException):
             return None
+    auth_settings: Final = auth_core.proxy_settings()
     check: Final = _identity_check(
-        token, get_request_route(request), _PROXY_SETTINGS_ADAPTER.validate_python(general_settings)
+        token, get_request_route(request), _PROXY_SETTINGS_ADAPTER.validate_python(general_settings), auth_settings
     )
     if check is None:
         return None
     if check != "oauth2":
         try:
-            await _verify_identity(check, token, request)
+            await _verify_identity(check, token, request, auth_settings)
         except Exception:  # noqa: BLE001  # any verification failure means LiteLLM does not vouch for this bearer
             return None
     try:
@@ -919,7 +919,6 @@ class MCPRequestHandler:
                 mcp_auth_header=mcp_auth_header,
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 admitted_credential=admitted_credential,
-                preserve_jwt_subject=bool(validated_user_api_key_auth.jwt_claims),
             )
 
             return (
@@ -959,49 +958,29 @@ class MCPRequestHandler:
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         *,
         admitted_credential: str | None,
-        preserve_jwt_subject: bool = False,
     ) -> tuple[dict[str, str] | None, dict[str, str], str | None, dict[str, dict[str, str]] | None]:
-        """Remove gateway-shaped credentials and the caller's admitted credential from EVERY egress
-        header context: top-level ``Authorization`` (oauth2 + raw), the deprecated ``x-mcp-auth``, and
-        per-server ``x-mcp-{alias}-authorization``. Preserve the raw ``x-litellm-api-key`` admission
-        header; an admitted subject's top-level Authorization is otherwise dropped unconditionally."""
+        """Remove gateway-shaped credentials from every egress header context, and the caller's admitted
+        credential from the implicitly forwarded top-level ``Authorization``. Raw headers (only forwarded
+        when a server lists them in ``extra_headers``), ``x-mcp-auth`` and ``x-mcp-{alias}-authorization``
+        keep the caller's LiteLLM key, since the admin or caller chose to send it there."""
+        gateway_shaped: Final = MCPRequestHandler._is_gateway_admission_credential
 
-        def cred(value: str | None) -> bool:
-            return MCPRequestHandler._is_gateway_admission_credential(
-                value
-            ) or MCPRequestHandler._is_caller_admission_key(value, admitted_credential)
-
-        # 1. Top-level Authorization → oauth2_headers.
         authz: Final = oauth2_headers.get("Authorization") if oauth2_headers else None
-        preserve_subject: Final = bool(
-            preserve_jwt_subject
-            and not admitted
-            and authz
-            and not _normalize_caller_admission_credential(authz).startswith("sk-")
-            and not MCPRequestHandler._is_gateway_admission_credential(authz)
-            and MCPRequestHandler._is_caller_admission_key(authz, admitted_credential)
-        )
-        if admitted or cred(authz):
+        if admitted or gateway_shaped(authz) or MCPRequestHandler._is_caller_admission_key(authz, admitted_credential):
             oauth2_headers = None
 
-        # 2. raw_headers: drop the admitted subject's Authorization, and ANY header whose value is a
-        #    gateway credential (covers x-mcp-auth and x-mcp-{alias}-authorization in their raw form).
         raw_headers = {
             k: v
             for k, v in raw_headers.items()
-            if k.lower() == "x-litellm-api-key"
-            or (preserve_subject and k.lower() == "authorization")
-            or not ((admitted and k.lower() == "authorization") or cred(v))
+            if not ((admitted and k.lower() == "authorization") or gateway_shaped(v))
         }
 
-        # 3. Deprecated x-mcp-auth value.
-        if cred(mcp_auth_header):
+        if gateway_shaped(mcp_auth_header):
             mcp_auth_header = None
 
-        # 4. Per-server x-mcp-{alias}-authorization values (drop the value, then any now-empty server dict).
         if mcp_server_auth_headers:
             stripped: Final = {
-                alias: {h: val for h, val in hdrs.items() if not cred(val)}
+                alias: {h: val for h, val in hdrs.items() if not gateway_shaped(val)}
                 for alias, hdrs in mcp_server_auth_headers.items()
             }
             mcp_server_auth_headers = {alias: hdrs for alias, hdrs in stripped.items() if hdrs}
@@ -1891,6 +1870,14 @@ class MCPRequestHandler:
         if not auth.jwt_claims and MCPRequestHandler._is_caller_admission_key(value, admitted_credential):
             return None
         return bearer
+
+    @staticmethod
+    def guardrail_bearer_from_raw_headers(
+        raw_headers: Mapping[str, str] | None, auth: UserAPIKeyAuth | None
+    ) -> SecretStr | None:
+        if auth is None:
+            return MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+        return MCPRequestHandler.get_guardrail_bearer_token(Headers(headers=dict(raw_headers or {})), auth)
 
     @staticmethod
     def get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:
@@ -4157,7 +4144,7 @@ class MCPRequestHandler:
         from litellm.proxy.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = user_object_permission_id_cache_key(user_id)
+        cache_key: Final = AuthObject.user_object_permission(user_id)
         try:
             cached: Final[object] = None if check_db_only else await user_api_key_cache.async_get_cache(key=cache_key)
             if cached == USER_NO_MCP_PERMISSION_SENTINEL:
@@ -4469,7 +4456,7 @@ class MCPRequestHandler:
         a link we DID resolve can make the caller deny."""
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        cache_key: Final = f"agent_object_permission_id:{agent_id}"
+        cache_key: Final = AuthObject.agent_object_permission(agent_id)
         try:
             cached: Final = _CACHED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
             if cached == MCPRequestHandler._AGENT_NO_PERMISSION_SENTINEL:
