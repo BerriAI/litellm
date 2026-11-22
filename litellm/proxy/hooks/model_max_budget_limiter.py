@@ -1363,24 +1363,28 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             response_obj,  # pyright: ignore[reportUnknownArgumentType]  # untyped callback response
         )
         charges: Final = (
-            (model, max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
-            *itertools.chain.from_iterable(
-                ((budget_name, cost) for budget_name in _budget_names_of(delegated_model))
-                for delegated_model, cost in delegated_costs
-            ),
+            ((model,), max(response_cost - sum(cost for _, cost in delegated_costs), 0.0)),
+            *((_budget_names_of(delegated_model), cost) for delegated_model, cost in delegated_costs),
         )
-        resolved_charges: Final = tuple(
-            (
+
+        def _counters(budget_names: tuple[str, ...]) -> tuple[tuple[Litellm_EntityType, str, ResolvedModelBudget], ...]:
+            resolved_per_name: Final = itertools.chain.from_iterable(
                 _resolve_entity_model_budgets(
                     model=budget_name,
                     entity_budgets=_entity_budgets(budget_name),
                     model_access_groups=self._model_access_groups,
                     team_id=team_member_team_id,
-                ),
-                cost,
+                )
+                for budget_name in budget_names
             )
-            for budget_name, cost in charges
-        )
+            return tuple(
+                {
+                    (entity_type, entity_id, resolved.budget_model): (entity_type, entity_id, resolved)
+                    for entity_type, entity_id, resolved in resolved_per_name
+                }.values()
+            )
+
+        resolved_charges: Final = tuple((_counters(budget_names), cost) for budget_names, cost in charges)
         budgeted_charges: Final = tuple(charge for charge in resolved_charges if charge[0])
         if not budgeted_charges:
             verbose_proxy_logger.debug(
