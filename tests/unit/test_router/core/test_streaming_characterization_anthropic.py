@@ -319,6 +319,22 @@ async def test_a_raised_error_after_content_is_raised_without_fallback(make_core
     assert host.deployments_called() == ["a"]
 
 
+async def test_a_bridged_cut_past_its_first_chunk_forwards_the_held_frames_and_raises_without_a_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    cut: Final = MidStreamFallbackError(
+        message="cut", model="a", llm_provider="openai", original_exception=server_error("a"), is_pre_first_chunk=False
+    )
+    host.answer("openai/a", anthropic_stream(MESSAGE_START, BLOCK_START, error=cut))
+    host.answer("openai/b", fallback_ok())
+    core = make_core(model_list=GROUPS_AB, fallbacks=[{"a": ["b"]}], num_retries=0)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError):
+        await drain_into(await open_stream(core), seen)
+    assert seen == [MESSAGE_START, BLOCK_START]
+    assert host.deployments_called() == ["a"]
+
+
 async def test_a_raised_server_error_before_content_is_retried_within_the_group(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
@@ -537,6 +553,27 @@ async def test_with_a_fallback_left_lifecycle_frames_are_held_until_content_even
 
 
 @pytest.mark.parametrize(
+    ("router_arguments", "live", "held"),
+    [
+        ({"num_retries": 2}, MESSAGE_START + PING, THINKING_START),
+        ({"fallbacks": [{"a": ["b"]}], "num_retries": 2}, PING, MESSAGE_START + THINKING_START),
+    ],
+    ids=["retry-only", "with-a-fallback"],
+)
+async def test_a_ping_sharing_a_chunk_with_held_frames_reaches_the_client_before_content(
+    make_core: MakeCore, host: ScriptedHost, router_arguments: dict[str, object], live: bytes, held: bytes
+) -> None:
+    received: list[bytes] = []
+    reads: list[tuple[bytes, ...]] = []
+    frames: Final = (MESSAGE_START + THINKING_START + PING, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP)
+    host.answer("openai/a", recording_stream(received, reads, *frames))
+    core = make_core(model_list=GROUPS_AB, **router_arguments)
+    await read_into(await open_stream(core), received)
+    assert b"".join(reads[frames.index(SIGNATURE_DELTA)]) == live
+    assert b"".join(received) == live + held + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
+
+
+@pytest.mark.parametrize(
     ("first_block", "retry_block", "delta"),
     [
         (THINKING_START, THINKING_START, SIGNATURE_DELTA),
@@ -573,6 +610,36 @@ async def test_a_keepalive_sharing_a_chunk_with_the_retrys_message_start_still_r
     core = make_core(model_list=[deployment("a", "a")], num_retries=1)
     frames = await collect_bytes(await open_stream(core))
     assert b"".join(frames) == MESSAGE_START + SSE_COMMENT + text_delta("A") + MESSAGE_STOP
+
+
+async def test_a_second_retry_after_a_live_message_start_reaches_the_client_with_a_single_message_start(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=2)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames == [MESSAGE_START, text_delta("A"), MESSAGE_STOP]
+    assert host.deployments_called() == ["a", "a", "a"]
+
+
+async def test_a_last_retry_cut_inside_its_message_start_sends_no_second_message_start_before_raising(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START[:30], error=server_error()),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
+    seen: list[object] = []
+    with pytest.raises(litellm.InternalServerError):
+        await drain_into(await open_stream(core), seen)
+    assert seen == [MESSAGE_START]
 
 
 async def test_a_context_window_fallback_after_a_live_message_start_drops_the_fallbacks_message_start(
@@ -721,6 +788,37 @@ async def test_a_fallback_that_answers_without_streaming_is_replayed_as_an_sse_l
         b"message_stop",
     ]
     assert b'"B"' in frames[2]
+
+
+async def test_a_retry_that_answers_without_streaming_after_a_live_message_start_is_replayed_without_its_own(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, error_frame()),
+        {
+            "id": "msg_2",
+            "type": "message",
+            "role": "assistant",
+            "model": "a",
+            "content": [{"type": "text", "text": "A"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
+    frames = await collect_bytes(await open_stream(core))
+    assert frames[0] == MESSAGE_START
+    assert event_names(frames) == [
+        b"message_start",
+        b"content_block_start",
+        b"content_block_delta",
+        b"content_block_stop",
+        b"message_delta",
+        b"message_stop",
+    ]
+    assert host.deployments_called() == ["a", "a"]
 
 
 # --- hidden params on the returned stream ------------------------------------------------------
