@@ -780,12 +780,20 @@ def _next_json_level(
     return tuple(chain.from_iterable(map(_children_off_path, level)))
 
 
-def _enum_size(node: JsonValue) -> tuple[bool, int] | None:
+def _enum_bytes(node: JsonValue) -> int:
     match node:
         case {"enum": list() as values}:
-            return (str(node.get("type")).lower() == "integer", sum(len(str(value).encode()) for value in values))
+            return sum(len(str(value).encode()) for value in values)
         case _:
-            return None
+            return 0
+
+
+def _is_integer_enum(node: JsonValue) -> bool:
+    match node:
+        case {"enum": list()}:
+            return str(node.get("type")).lower() == "integer"
+        case _:
+            return False
 
 
 def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
@@ -793,25 +801,16 @@ def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
     return (node for node, _ in chain.from_iterable(levels))
 
 
-def _enum_sizes(schema: JsonValue) -> tuple[tuple[bool, int], ...]:
-    return tuple(size for node in _json_nodes(schema) if (size := _enum_size(node)) is not None)
-
-
 def has_const(schema: JsonValue) -> bool:
     return any(isinstance(node, dict) and "const" in node for node in _json_nodes(schema))
 
 
 def enums_fit(request_parts: JsonValue) -> bool:
-    return _enum_bytes_fit(_enum_sizes(request_parts))
-
-
-def _enum_bytes_fit(enum_sizes: Iterable[tuple[bool, int]]) -> bool:
-    return sum(size for _, size in enum_sizes) <= GEMINI_MAX_ENUM_BYTES
+    return all(total <= GEMINI_MAX_ENUM_BYTES for total in accumulate(map(_enum_bytes, _json_nodes(request_parts))))
 
 
 def _integer_enums_fit(schema: JsonValue) -> bool:
-    enum_sizes: Final = _enum_sizes(schema)
-    return not any(is_integer for is_integer, _ in enum_sizes) or _enum_bytes_fit(enum_sizes)
+    return enums_fit(schema) or not any(map(_is_integer_enum, _json_nodes(schema)))
 
 
 _GeminiRequestPart: Final = TypeVar("_GeminiRequestPart")

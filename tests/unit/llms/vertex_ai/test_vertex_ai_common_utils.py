@@ -1762,23 +1762,26 @@ def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
 _PINNED_CARD: Final = {"type": "string", "enum": ["card"]}
 
 
+_SUBSCHEMA_PLACES: Final[tuple[Callable[[JsonValue], dict[str, JsonValue]], ...]] = (
+    lambda schema: {"type": "object", "properties": {"kind": schema}},
+    lambda schema: {"type": "object", "patternProperties": {"^kind$": schema}},
+    lambda schema: {"type": "object", "additionalProperties": schema},
+    lambda schema: {"$ref": "#/$defs/Kind", "$defs": {"Kind": schema}},
+    lambda schema: {"$ref": "#/definitions/Kind", "definitions": {"Kind": schema}},
+    lambda schema: {"type": "array", "items": schema},
+    lambda schema: {"type": "array", "items": [schema]},
+    lambda schema: {"type": "array", "prefixItems": [schema]},
+    lambda schema: {"type": "array", "contains": schema},
+    lambda schema: {"not": schema},
+    lambda schema: {"anyOf": [schema]},
+    lambda schema: {"oneOf": [schema]},
+    lambda schema: {"allOf": [schema]},
+)
+
+
 @pytest.mark.parametrize(
     "place",
-    [
-        lambda schema: {"type": "object", "properties": {"kind": schema}},
-        lambda schema: {"type": "object", "patternProperties": {"^kind$": schema}},
-        lambda schema: {"type": "object", "additionalProperties": schema},
-        lambda schema: {"$ref": "#/$defs/Kind", "$defs": {"Kind": schema}},
-        lambda schema: {"$ref": "#/definitions/Kind", "definitions": {"Kind": schema}},
-        lambda schema: {"type": "array", "items": schema},
-        lambda schema: {"type": "array", "items": [schema]},
-        lambda schema: {"type": "array", "prefixItems": [schema]},
-        lambda schema: {"type": "array", "contains": schema},
-        lambda schema: {"not": schema},
-        lambda schema: {"anyOf": [schema]},
-        lambda schema: {"oneOf": [schema]},
-        lambda schema: {"allOf": [schema]},
-    ],
+    _SUBSCHEMA_PLACES,
     ids=[
         "properties",
         "pattern-properties",
@@ -3223,3 +3226,10 @@ def test_const_and_enum_walks_end_on_a_schema_that_contains_itself() -> None:
 
     assert has_const(node) is False
     assert enums_fit(node) is False
+
+
+@pytest.mark.timeout(10)
+def test_enum_budget_answers_fast_when_one_huge_enum_value_repeats_across_branches() -> None:
+    huge: Final = "x" * (8 * 1024 * 1024)
+
+    assert enums_fit({"anyOf": [{"type": "string", "enum": [huge]} for _ in range(20_000)]}) is False
