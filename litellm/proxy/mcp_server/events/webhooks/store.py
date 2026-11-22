@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
@@ -53,6 +53,18 @@ class Activation(BaseModel):
     cursor: str | None
 
 
+class SubscriptionQuery(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    principal: str | None = None
+    key_hash: str | None = None
+    server_id: str | None = None
+    status: SubscriptionStatus | None = None
+    live_only: bool = False
+    limit: int = Field(default=100, ge=1, le=1001)
+    offset: int = Field(default=0, ge=0)
+
+
 class EventStore(Protocol):
     async def get(self, subscription_id: str) -> SubscriptionRow | None: ...
 
@@ -70,6 +82,45 @@ class EventStore(Protocol):
     ) -> bool:
         """Mark the row active with fresh secrets and deadlines while its status is still one of ``from_statuses``;
         False when it changed, so a renewal cannot revive a row an unsubscribe is holding."""
+        ...
+
+    async def mark_delivered(self, subscription_id: str, at: datetime) -> None: ...
+
+    async def mark_failed(
+        self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
+    ) -> None: ...
+
+    async def terminate(self, subscription_id: str) -> None: ...
+
+    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
+        ...
+
+    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
+        retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
+        ...
+
+    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
+        ...
+
+    async def delete(self, subscription_id: str) -> None: ...
+
+    async def count_live(self, principal: str) -> int: ...
+
+    async def count_status(self, status: SubscriptionStatus) -> int: ...
+
+    async def verified(self, principal: str, client_url: str) -> bool: ...
+
+    async def find(self, query: SubscriptionQuery) -> tuple[SubscriptionRow, ...]: ...
+
+    async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]: ...
+
+    async def expired(self, now: datetime) -> tuple[SubscriptionRow, ...]: ...
+
+    async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
+        """Terminate the row only while it is still past its deadline, so a renewal that just landed survives."""
         ...
 
 
@@ -117,12 +168,18 @@ def pending_row(row: SubscriptionRow) -> SubscriptionRow:
     return row.model_copy(update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL})
 
 
+class _RawQueries(Protocol):
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
+
+
 class PrismaEventStore:
     def __init__(self, prisma_client: "PrismaClient") -> None:
-        from litellm.repositories.table_repositories import MCPEventSubscriptionRepository
+        from litellm.repositories.table_repositories import MCPEventDeliveryRepository, MCPEventSubscriptionRepository
 
         # Every read follows a write it must see and the raw statements are UPDATEs, so a read replica is never used.
         self._subscriptions: Final = MCPEventSubscriptionRepository(prisma_client, use_writer=True).table
+        self._deliveries: Final = MCPEventDeliveryRepository(prisma_client, use_writer=True).table
+        self._raw: Final[_RawQueries] = prisma_client.writer_db  # pyright: ignore[reportAttributeAccessIssue]  # PrismaWrapper forwards raw queries via __getattr__
 
     async def get(self, subscription_id: str) -> SubscriptionRow | None:
         record: Final = await self._subscriptions.find_unique(where={"id": subscription_id})
@@ -167,8 +224,105 @@ class PrismaEventStore:
         )
         return updated > 0
 
+    async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
+        await self._subscriptions.update_many(
+            where={"id": subscription_id, "status": _NOT_TERMINATED},
+            data={"last_delivery_at": at, "consecutive_failures": 0, "failed_since": None, "last_error": None},
+        )
+
+    async def mark_failed(
+        self, subscription_id: str, failure: CallbackFailure, at: datetime, suspend_after: int
+    ) -> None:
+        await self._raw.query_raw(
+            'UPDATE "LiteLLM_MCPEventSubscription" SET '
+            '"consecutive_failures" = "consecutive_failures" + 1, "last_error" = $2, '
+            '"failed_since" = COALESCE("failed_since", $3::timestamp), "updated_at" = now(), '
+            '"status" = CASE WHEN "status" = \'active\' AND "consecutive_failures" + 1 >= $4 '
+            "THEN 'suspended' ELSE \"status\" END "
+            'WHERE "id" = $1 AND "status" <> \'terminated\' RETURNING "id"',
+            subscription_id,
+            failure,
+            at.isoformat(),
+            suspend_after,
+        )
+
     async def terminate(self, subscription_id: str) -> None:
         await self._subscriptions.update_many(where={"id": subscription_id}, data={"status": "terminated"})
 
+    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        ended: Final = await self._subscriptions.update_many(
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": _NOT_TERMINATED,
+            },
+            data={"status": "terminated"},
+        )
+        return ended > 0
+
+    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+        held: Final = await self._subscriptions.update_many(
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": {"in": ["active", "suspended"]},
+            },
+            data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
+        )
+        return held > 0
+
+    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+        await self._subscriptions.delete_many(
+            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
+        )
+
     async def delete(self, subscription_id: str) -> None:
         await self._subscriptions.delete_many(where={"id": subscription_id})
+
+    async def count_live(self, principal: str) -> int:
+        return await self._subscriptions.count(where={"principal": principal, "status": {"in": list(LIVE_STATUSES)}})
+
+    async def count_status(self, status: SubscriptionStatus) -> int:
+        return await self._subscriptions.count(where={"status": status})
+
+    async def verified(self, principal: str, client_url: str) -> bool:
+        record: Final = await self._subscriptions.find_first(
+            where={"principal": principal, "client_url": client_url, "verified_at": {"not": None}}
+        )
+        return record is not None
+
+    async def find(self, query: SubscriptionQuery) -> tuple[SubscriptionRow, ...]:
+        where: Final = {
+            key: value
+            for key, value in (
+                ("principal", query.principal),
+                ("key_hash", query.key_hash),
+                ("server_id", query.server_id),
+                ("status", query.status),
+            )
+            if value is not None
+        }
+        live: Final = {"status": {"in": list(LIVE_STATUSES)}} if query.live_only and query.status is None else {}
+        records: Final = await self._subscriptions.find_many(
+            where={**where, **live}, take=query.limit, skip=query.offset, order={"created_at": "desc"}
+        )
+        return tuple(_row_from_record(record) for record in records)
+
+    async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]:
+        records: Final = await self._subscriptions.find_many(
+            where={"status": {"in": ["active", "suspended"]}, "upstream_refresh_before": {"lte": before}}, take=100
+        )
+        return tuple(_row_from_record(record) for record in records)
+
+    async def expired(self, now: datetime) -> tuple[SubscriptionRow, ...]:
+        records: Final = await self._subscriptions.find_many(
+            where={"status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}}, take=100
+        )
+        return tuple(_row_from_record(record) for record in records)
+
+    async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
+        ended: Final = await self._subscriptions.update_many(
+            where={"id": subscription_id, "status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}},
+            data={"status": "terminated"},
+        )
+        return ended > 0
