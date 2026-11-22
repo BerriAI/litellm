@@ -1,4 +1,5 @@
 
+import gzip
 import itertools
 import json
 import logging
@@ -815,6 +816,25 @@ def test_an_oversized_linked_video_stops_downloading_at_the_size_limit(role: str
             )
 
     assert 0 < host.sent_bytes <= MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * _MIB + _MIB
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("role", ["user", "tool"])
+def test_a_compressed_linked_video_is_a_bad_request_without_unpacking_it(role: str, custom_llm_provider: str) -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        route: Final = router.get(video_url).respond(
+            200, headers={"content-type": "video/mp4", "content-encoding": "gzip"}, content=gzip.compress(b"\0" * _MIB)
+        )
+        with pytest.raises(litellm.BadRequestError):
+            transformation.gemini_convert_messages_with_history(
+                _turns_with_a_linked_video(role, video_url),
+                model="gemini-3.8-flash",
+                custom_llm_provider=custom_llm_provider,
+            )
+
+    assert route.calls.last.request.headers["accept-encoding"] == "identity"
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
