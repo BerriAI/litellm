@@ -24,6 +24,7 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
+    TELEMETRY_CONTENT_KEYS,
     ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
@@ -434,6 +435,8 @@ class TestMergeClaudeSettings:
             "OTEL_LOG_ASSISTANT_RESPONSES": "1",
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "1",
+            "OTEL_LOG_RAW_API_BODIES": "1",
+            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "1048576",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4000",
             "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token-abc",
         }
@@ -465,13 +468,22 @@ class TestMergeClaudeSettings:
         assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS", "_METRICS_HEADERS"))]
 
     def test_a_content_setting_the_user_turned_off_stays_off(self):
-        settings = {"env": {"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_CONTENT": "0"}}
+        settings = {
+            "env": {
+                "OTEL_LOG_USER_PROMPTS": "0",
+                "OTEL_LOG_TOOL_CONTENT": "0",
+                "OTEL_LOG_RAW_API_BODIES": "0",
+                "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "2048",
+            }
+        }
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", StaticToken("token-abc"))
-        assert {key: value for key, value in merged["env"].items() if key.startswith("OTEL_LOG_")} == {
+        assert {key: merged["env"][key] for key in TELEMETRY_CONTENT_KEYS} == {
             "OTEL_LOG_USER_PROMPTS": "0",
             "OTEL_LOG_ASSISTANT_RESPONSES": "1",
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "0",
+            "OTEL_LOG_RAW_API_BODIES": "0",
+            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "2048",
         }
 
     def test_a_static_token_replaces_an_earlier_logins_headers_helper(self):
@@ -657,6 +669,8 @@ UNDO_SCENARIOS = {
                 "env.OTEL_LOG_ASSISTANT_RESPONSES",
                 "env.OTEL_LOG_TOOL_DETAILS",
                 "env.OTEL_LOG_TOOL_CONTENT",
+                "env.OTEL_LOG_RAW_API_BODIES",
+                "env.CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH",
                 "env.OTEL_EXPORTER_OTLP_ENDPOINT",
                 "env.OTEL_EXPORTER_OTLP_HEADERS",
                 "statusLine",
