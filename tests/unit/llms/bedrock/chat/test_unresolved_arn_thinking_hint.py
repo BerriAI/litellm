@@ -1,10 +1,12 @@
 import asyncio
+import json
 from typing import Final
 
 import httpx
 import pytest
 
 import litellm
+from litellm.llms.bedrock.chat.converse_transformation import UNRESOLVED_ARN_BASE_MODEL_EXAMPLE
 from litellm.llms.bedrock.chat.unresolved_arn_thinking_hint import UNRESOLVED_ARN_THINKING_HINT
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
@@ -21,13 +23,23 @@ _MALFORMED_THINKING: Final = (
 _OTHER_UNSUPPORTED_FIELD: Final = (
     r'{"message":"The model returned the following errors: \"top_k\" is not supported for this model."}'
 )
+_ANSWER: Final = (
+    '{"output":{"message":{"role":"assistant","content":[{"text":"hello"}]}},"stopReason":"end_turn",'
+    '"usage":{"inputTokens":10,"outputTokens":5,"totalTokens":15},"metrics":{"latencyMs":1}}'
+)
 
 
 def _bedrock_answering(body: str) -> httpx.MockTransport:
     return httpx.MockTransport(lambda request: httpx.Response(400, content=body, request=request))
 
 
-def _send(model: str, body: str, *, asynchronous: bool, stream: bool, **deployment: str) -> object:
+def _answer_only_adaptive_thinking(request: httpx.Request) -> httpx.Response:
+    if json.loads(request.content)["additionalModelRequestFields"]["thinking"]["type"] != "adaptive":
+        return httpx.Response(400, content=_ENABLED_THINKING_REJECTION, request=request)
+    return httpx.Response(200, content=_ANSWER, request=request)
+
+
+def _send(model: str, transport: httpx.MockTransport, *, asynchronous: bool, stream: bool, **deployment: str) -> object:
     request: Final = {
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
@@ -40,13 +52,13 @@ def _send(model: str, body: str, *, asynchronous: bool, stream: bool, **deployme
         **deployment,
     }
     if asynchronous:
-        return asyncio.run(litellm.acompletion(**request, client=AsyncHTTPHandler(transport=_bedrock_answering(body))))
-    return litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=_bedrock_answering(body))))
+        return asyncio.run(litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport)))
+    return litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
 
 
 def _raised(model: str, body: str, *, asynchronous: bool, stream: bool, **deployment: str) -> litellm.BadRequestError:
     with pytest.raises(litellm.BadRequestError) as raised:
-        _send(model, body, asynchronous=asynchronous, stream=stream, **deployment)
+        _send(model, _bedrock_answering(body), asynchronous=asynchronous, stream=stream, **deployment)
     return raised.value
 
 
@@ -82,3 +94,19 @@ def test_bedrock_400_keeps_its_message_without_the_hint(model: str, body: str, d
     assert error.status_code == 400
     assert error.message.endswith(body)
     assert UNRESOLVED_ARN_THINKING_HINT not in error.message
+
+
+def test_model_id_the_hint_suggests_is_priced_and_gets_adaptive_thinking_as_base_model() -> None:
+    error: Final = _raised(_PROFILE_ARN, _ENABLED_THINKING_REJECTION, asynchronous=False, stream=False)
+    response: Final = _send(
+        _PROFILE_ARN,
+        httpx.MockTransport(_answer_only_adaptive_thinking),
+        asynchronous=False,
+        stream=False,
+        base_model=UNRESOLVED_ARN_BASE_MODEL_EXAMPLE,
+    )
+
+    assert f"`{UNRESOLVED_ARN_BASE_MODEL_EXAMPLE}`" in error.message
+    assert isinstance(response, litellm.ModelResponse)
+    assert response.choices[0].message.content == "hello"
+    assert (response._hidden_params.get("response_cost") or 0) > 0
