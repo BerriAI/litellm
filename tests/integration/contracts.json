@@ -250,6 +250,30 @@
     "tests/integration/sdk/test_http2_wire.py::test_sync_handler_negotiates_http2_only_when_enabled": [
       "other.sdk_wire.http2.sync_handler_negotiates_h2_only_when_enabled"
     ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_stream_raises_at_the_request_timeout[sync-vertex_ai]": [
+      "other.sdk_wire.vertex_gemini.stalled_stream_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_stream_raises_at_the_request_timeout[sync-gemini]": [
+      "other.sdk_wire.vertex_gemini.stalled_stream_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_stream_raises_at_the_request_timeout[async-vertex_ai]": [
+      "other.sdk_wire.vertex_gemini.stalled_stream_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_stream_raises_at_the_request_timeout[async-gemini]": [
+      "other.sdk_wire.vertex_gemini.stalled_stream_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_body_raises_at_the_request_timeout[sync]": [
+      "other.sdk_wire.vertex_gemini.stalled_body_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stalled_body_raises_at_the_request_timeout[async]": [
+      "other.sdk_wire.vertex_gemini.stalled_body_raises_at_request_timeout"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stream_with_a_request_timeout_still_completes[sync]": [
+      "other.sdk_wire.vertex_gemini.stream_with_request_timeout_completes"
+    ],
+    "tests/integration/sdk/test_vertex_gemini_stream_timeout_wire.py::test_stream_with_a_request_timeout_still_completes[async]": [
+      "other.sdk_wire.vertex_gemini.stream_with_request_timeout_completes"
+    ],
     "tests/integration/cost_calculation/test_cost_tracking.py::test_case_bills_expected_cost[anthropic.claude-sonnet-5-v1:0-input_text]": [
       "quota_management.spend_tracking.cost_matrix.logs_cost"
     ],
