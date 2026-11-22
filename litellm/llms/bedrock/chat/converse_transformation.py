@@ -2421,6 +2421,7 @@ class AmazonConverseConfig(BaseConfig):
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                     sends_guarded_assistant_parts=sends_guarded_text,
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
@@ -2517,6 +2518,7 @@ class AmazonConverseConfig(BaseConfig):
                     user_continue_message=litellm_params.pop("user_continue_message", None),
                     base_model=self._deployment_base_model(_DEPLOYMENT_PARAMS.validate_python(litellm_params)),
                     sends_guarded_assistant_parts=sends_guarded_text,
+                    drop_params=litellm.drop_params is True or litellm_params.get("drop_params") is True,
                 ),
                 capability_model,
             )
