@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import re
+import time
 from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -2588,6 +2589,52 @@ async def test_apply_to_output_streaming_anthropic_sse_masks_past_a_leading_non_
 
     assert b"4111" not in b"".join(collected)
     assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_many_leading_non_object_reads_stay_cheap():
+    guardrail = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<CREDIT_CARD>"},
+    )
+    leading_reads: Final = 7000
+    byte_chunks: Final = (
+        *([b"data: 5\n\n"] * leading_reads),
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    started: Final = time.perf_counter()
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+            response=mock_stream(),
+            request_data={},
+        )
+    ]
+    elapsed: Final = time.perf_counter() - started
+
+    assert b"4111" not in b"".join(collected)
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<CREDIT_CARD>"
+    assert elapsed < 1.0, f"{leading_reads} leading non-object reads took {elapsed:.2f}s"
 
 
 @pytest.mark.asyncio
