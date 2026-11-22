@@ -3407,17 +3407,17 @@ async def add_litellm_data_to_request(
     )
 
     # Normalize non-alias model name to configured router Model Name before alias resolution
-    if litellm.enable_model_prefix_enforcement and llm_router is not None and isinstance((_cur_model := data.get("model")), str):
+    if litellm.enable_model_prefix_enforcement and llm_router is not None and isinstance((_current_model := data.get("model")), str):
         _team_aliases = user_api_key_dict.team_model_aliases
         _key_aliases = user_api_key_dict.aliases
         _is_direct_alias = (
-            (isinstance(_team_aliases, dict) and _cur_model in _team_aliases)
-            or (isinstance(_key_aliases, dict) and _cur_model in _key_aliases)
-            or (_cur_model in litellm.model_alias_map)
-            or (_cur_model in (llm_router.registry().aliases() if hasattr(llm_router, "registry") else (llm_router.model_group_alias or {})))
+            (isinstance(_team_aliases, dict) and _current_model in _team_aliases)
+            or (isinstance(_key_aliases, dict) and _current_model in _key_aliases)
+            or (_current_model in litellm.model_alias_map)
+            or (_current_model in (llm_router.registry().aliases() if hasattr(llm_router, "registry") else (llm_router.model_group_alias or {})))
         )
         if not _is_direct_alias:
-            if (_resolved_model := resolve_wildcard_prefixed_model(_cur_model, llm_router)) is not None and _resolved_model != _cur_model:
+            if (_resolved_model := resolve_wildcard_prefixed_model(_current_model, llm_router)) is not None and _resolved_model != _current_model:
                 data["model"] = _resolved_model
 
     # Save pre-alias model name for credential override lookup
@@ -4086,7 +4086,7 @@ _ROUTER_MODEL_LIST_REF: list | None = None
 _ROUTER_MODEL_LIST_LEN: int = -1
 _ROUTER_EXACT_MODELS: frozenset[str] = frozenset()
 _ROUTER_EXACT_LITELLM_MAP: dict[str, str] = {}
-_ROUTER_PREFIX_TO_PUB: dict[str, str] = {}
+_ROUTER_PREFIX_TO_PUBLIC: dict[str, str] = {}
 _ROUTER_PROVIDER_TO_RULE: dict[str, tuple[str, str, str]] = {}
 _ROUTER_RESOLVED_CACHE: dict[str, str] = {}
 
@@ -4111,25 +4111,25 @@ def _infer_provider_from_model_cost_family(bare_model: str) -> str | None:
 def _rebuild_router_prefix_index(model_list: list) -> None:
     global _ROUTER_MODEL_LIST_REF, _ROUTER_MODEL_LIST_LEN
     global _ROUTER_EXACT_MODELS, _ROUTER_EXACT_LITELLM_MAP
-    global _ROUTER_PREFIX_TO_PUB, _ROUTER_PROVIDER_TO_RULE
+    global _ROUTER_PREFIX_TO_PUBLIC, _ROUTER_PROVIDER_TO_RULE
 
     exact_models: set[str] = set()
     exact_litellm_map: dict[str, str] = {}
-    prefix_to_pub: dict[str, str] = {}
+    prefix_to_public: dict[str, str] = {}
     provider_to_rule: dict[str, tuple[str, str, str]] = {}
     pending_exact: list[tuple[str, str, str]] = []
 
     for dep in model_list:
         if isinstance(dep, dict):
-            pub_name = dep.get("model_name", "")
+            public_name = dep.get("model_name", "")
             litellm_params = dep.get("litellm_params") or {}
             model_info = dep.get("model_info") or {}
         else:
-            pub_name = getattr(dep, "model_name", "")
+            public_name = getattr(dep, "model_name", "")
             litellm_params = getattr(dep, "litellm_params", None) or {}
             model_info = getattr(dep, "model_info", None) or {}
 
-        if not isinstance(pub_name, str) or not pub_name:
+        if not isinstance(public_name, str) or not public_name:
             continue
 
         owner_team_id = (
@@ -4137,7 +4137,7 @@ def _rebuild_router_prefix_index(model_list: list) -> None:
             if isinstance(model_info, dict)
             else getattr(model_info, "team_id", None)
         )
-        if owner_team_id is not None or pub_name.startswith("model_name_"):
+        if owner_team_id is not None or public_name.startswith("model_name_"):
             continue
 
         if isinstance(litellm_params, dict):
@@ -4147,45 +4147,45 @@ def _rebuild_router_prefix_index(model_list: list) -> None:
             litellm_model = getattr(litellm_params, "model", "")
             dep_custom_provider = getattr(litellm_params, "custom_llm_provider", "")
 
-        if pub_name.endswith("/*"):
+        if public_name.endswith("/*"):
             if isinstance(litellm_model, str) and litellm_model.endswith("/*"):
                 llm_wildcard = litellm_model
             elif litellm_model == "*" and isinstance(dep_custom_provider, str) and dep_custom_provider:
                 llm_wildcard = f"{dep_custom_provider}/*"
             else:
                 continue
-            pub_prefix = pub_name.removesuffix("*")
+            public_prefix = public_name.removesuffix("*")
             litellm_prefix = llm_wildcard.removesuffix("*")
             base_llm = litellm_prefix.removesuffix("/")
-            prefix_to_pub[pub_prefix] = pub_prefix
-            prefix_to_pub[litellm_prefix] = pub_prefix
-            provider_to_rule[base_llm] = (pub_prefix, litellm_prefix, base_llm)
+            prefix_to_public[public_prefix] = public_prefix
+            prefix_to_public[litellm_prefix] = public_prefix
+            provider_to_rule[base_llm] = (public_prefix, litellm_prefix, base_llm)
         else:
-            exact_models.add(pub_name)
+            exact_models.add(public_name)
             if isinstance(litellm_model, str) and litellm_model:
                 pending_exact.append(
                     (
-                        pub_name,
+                        public_name,
                         litellm_model,
                         dep_custom_provider if isinstance(dep_custom_provider, str) else "",
                     )
                 )
 
-    for pub_name, litellm_model, dep_prov in pending_exact:
-        llm_prov, llm_sep, llm_bare = litellm_model.partition("/")
+    for public_name, litellm_model, deployment_provider in pending_exact:
+        litellm_provider, llm_sep, llm_bare = litellm_model.partition("/")
         if not llm_sep:
             llm_bare = litellm_model
-            llm_prov = dep_prov
-        if llm_bare == pub_name or (
-            llm_prov and f"{llm_prov}/" not in prefix_to_pub and llm_prov not in provider_to_rule
+            litellm_provider = deployment_provider
+        if llm_bare == public_name or (
+            litellm_provider and f"{litellm_provider}/" not in prefix_to_public and litellm_provider not in provider_to_rule
         ):
-            exact_litellm_map.setdefault(litellm_model, pub_name)
-            if not llm_sep and dep_prov:
-                exact_litellm_map.setdefault(f"{dep_prov}/{litellm_model}", pub_name)
+            exact_litellm_map.setdefault(litellm_model, public_name)
+            if not llm_sep and deployment_provider:
+                exact_litellm_map.setdefault(f"{deployment_provider}/{litellm_model}", public_name)
 
     _ROUTER_EXACT_MODELS = frozenset(exact_models)
     _ROUTER_EXACT_LITELLM_MAP = exact_litellm_map
-    _ROUTER_PREFIX_TO_PUB = prefix_to_pub
+    _ROUTER_PREFIX_TO_PUBLIC = prefix_to_public
     _ROUTER_PROVIDER_TO_RULE = provider_to_rule
     _ROUTER_RESOLVED_CACHE.clear()
     _ROUTER_MODEL_LIST_REF = model_list
@@ -4207,11 +4207,11 @@ def _compute_wildcard_prefixed_model(model: str) -> str | None:
 
     given_prefix = f"{prefix_part}/" if sep else ""
     if sep:
-        if given_prefix not in _ROUTER_PREFIX_TO_PUB:
+        if given_prefix not in _ROUTER_PREFIX_TO_PUBLIC:
             return None
         if "/" in bare_model:
             inner_prefix, inner_sep, _ = bare_model.partition("/")
-            if inner_sep and f"{inner_prefix}/" in _ROUTER_PREFIX_TO_PUB:
+            if inner_sep and f"{inner_prefix}/" in _ROUTER_PREFIX_TO_PUBLIC:
                 return None
 
     stripped_model = bare_model
@@ -4223,8 +4223,8 @@ def _compute_wildcard_prefixed_model(model: str) -> str | None:
 
     if not custom_llm_provider:
         if sep:
-            pub_p = _ROUTER_PREFIX_TO_PUB.get(given_prefix)
-            return f"{pub_p}{bare_model}" if pub_p else None
+            matched_public_prefix = _ROUTER_PREFIX_TO_PUBLIC.get(given_prefix)
+            return f"{matched_public_prefix}{bare_model}" if matched_public_prefix else None
         return model
 
     rule = _ROUTER_PROVIDER_TO_RULE.get(custom_llm_provider)
@@ -4235,9 +4235,9 @@ def _compute_wildcard_prefixed_model(model: str) -> str | None:
         rule = _ROUTER_PROVIDER_TO_RULE.get(base_prov)
 
     if rule is not None:
-        pub_prefix, litellm_prefix, _ = rule
-        if given_prefix in ("", pub_prefix, litellm_prefix):
-            return f"{pub_prefix}{stripped_model}"
+        public_prefix, litellm_prefix, _ = rule
+        if given_prefix in ("", public_prefix, litellm_prefix):
+            return f"{public_prefix}{stripped_model}"
         return None
 
     return model if not sep else None
@@ -4250,8 +4250,8 @@ def resolve_wildcard_prefixed_model(
     if not litellm.enable_model_prefix_enforcement:
         return model
     if llm_router is None:
-        _proxy_srv = sys.modules.get("litellm.proxy.proxy_server")
-        llm_router = getattr(_proxy_srv, "llm_router", None) if _proxy_srv is not None else None
+        _proxy_server = sys.modules.get("litellm.proxy.proxy_server")
+        llm_router = getattr(_proxy_server, "llm_router", None) if _proxy_server is not None else None
         if llm_router is None:
             return model
     model_list = llm_router.model_list
