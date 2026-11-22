@@ -1,4 +1,3 @@
-use litellm_config::RbacRole;
 use serde_json::Value;
 
 use super::{
@@ -70,12 +69,11 @@ pub(crate) async fn claim_identity<H: AuthHost>(
     settings: &JwtSettings,
 ) -> Result<(ClaimIdentity<UserRow<H>>, Option<HostUser<H>>), Error> {
     let info = claims::user_info(claims, settings);
-    let user_id = match claims::rbac_role(claims, settings)? {
-        Some(RbacRole::InternalUser) => claims::object_id(claims, settings)
-            .filter(|text| !text.is_empty())
-            .or(info.user_id),
-        _ => info.user_id,
-    };
+    let user_id = claims::effective_user_id(
+        claims::rbac_role(claims, settings)?,
+        claims::object_id(claims, settings).as_deref(),
+        info.user_id,
+    );
     let agent_id = caller::resolve_agent_id(host, claims, settings).await?;
     let is_admin = claims::is_admin(&claims::scopes(claims)?, settings);
     match resolve_user(
