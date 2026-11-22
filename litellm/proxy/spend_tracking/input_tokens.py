@@ -297,23 +297,26 @@ def count_input_tokens_for_model(request_body: dict, model: str, served_models: 
             )
             return query_tokens + document_tokens
         if "contents" in request_body:
-            gemini_body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
-            if _served_through_completion_adapter(model, served_models):
-                return _count_adapted_gemini_tokens(request_body=gemini_body, model=model)
-            return _count_gemini_tokens(
-                request_body=gemini_body,
-                counter=_GeminiCounter(model=model, audio_models=tuple(served_models) or (model,)),
+            return _count_contents_tokens(
+                request_body=REQUEST_BODY_FIELDS.validate_python(request_body), model=model, served_models=served_models
             )
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
 
 
-def _served_through_completion_adapter(model: str, served_models: Sequence[str]) -> bool:
-    counted: Final = _completion_adapter_serves(model)
-    if counted is not None:
-        return counted
-    return bool(served_models) and all(_completion_adapter_serves(served) is True for served in served_models)
+def _count_contents_tokens(request_body: Mapping[str, object], model: str, served_models: Sequence[str]) -> int | None:
+    adapter_served: Final = frozenset(map(_completion_adapter_serves, served_models or (model,)))
+    if adapter_served == frozenset({True}):
+        return _count_adapted_gemini_tokens(request_body=request_body, model=model)
+    gemini_tokens: Final = _count_gemini_tokens(
+        request_body=request_body,
+        counter=_GeminiCounter(model=model, audio_models=tuple(served_models) or (model,)),
+    )
+    if True not in adapter_served:
+        return gemini_tokens
+    adapted_tokens: Final = _count_adapted_gemini_tokens(request_body=request_body, model=model)
+    return max(gemini_tokens, adapted_tokens) if gemini_tokens is not None and adapted_tokens is not None else None
 
 
 def _completion_adapter_serves(model: str) -> bool | None:
@@ -332,12 +335,23 @@ def _count_adapted_gemini_tokens(request_body: Mapping[str, object], model: str)
     completion: Final = generate_content_body_to_completion(body=request_body, model=model)
     if completion is None:
         return None
+    messages: Final = completion.get("messages")
+    if not all(map(_sized_by_chat_counter, _content_parts(messages))):
+        return None
     return _sum_if_all_sized(
         (
             count_input_tokens_for_model(request_body=dict(completion), model=model),
             _count_text_tokens(model=model, text=completion.get("response_format")),
+            openai_chat_pdf_file_tokens(model, inline_pdf_file_count(messages)),
         )
     )
+
+
+def _sized_by_chat_counter(part: Mapping[str, object]) -> bool:
+    if part.get("type") == "image_url":
+        url: Final = str_keyed(part.get("image_url")).get("url")
+        return isinstance(url, str) and url.startswith("data:image/")
+    return part.get("type") == "text" or _is_inline_pdf_file(part)
 
 
 def _count_text_tokens(model: str, text: object) -> int:

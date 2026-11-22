@@ -733,6 +733,42 @@ async def test_an_openai_chat_request_reserves_what_openai_chat_bills_on_top_of_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("served", ["openai/gpt-5.6-sol", "azure/gpt-5.6-sol"])
+async def test_a_gemini_pdf_body_for_an_openai_deployment_reserves_what_the_chat_request_it_becomes_reserves(
+    served: str,
+) -> None:
+    from tests.unit.proxy.spend_tracking.test_input_tokens import _one_page_pdf_base64
+
+    pdf: Final = _one_page_pdf_base64()
+    question: Final = "Summarize the report."
+    router: Final = _router_with_groups(("pdf-reports", served))
+    chat_file: Final = {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{pdf}"}}
+
+    chat: Final = await count_request_input_tokens(
+        request_body={
+            "model": "pdf-reports",
+            "messages": [{"role": "user", "content": [chat_file, {"type": "text", "text": question}]}],
+        },
+        route="/v1/chat/completions",
+        llm_router=router,
+        team_id=None,
+    )
+    gemini: Final = await count_request_input_tokens(
+        request_body={
+            "contents": [
+                {"role": "user", "parts": [{"inlineData": {"mimeType": "application/pdf", "data": pdf}}, {"text": question}]}
+            ]
+        },
+        route="/v1beta/models/pdf-reports:generateContent",
+        llm_router=router,
+        team_id=None,
+    )
+
+    assert chat == gemini
+    assert "pdf-reports" in gemini
+
+
+@pytest.mark.asyncio
 async def test_alias_group_of_an_openai_model_reserves_on_that_models_token_count():
     router: Final = _router_with_groups(("gpt-6.1-sol", "openai/gpt-6.1-sol"), ("prod-gpt-6", "openai/gpt-6.1-sol"))
 

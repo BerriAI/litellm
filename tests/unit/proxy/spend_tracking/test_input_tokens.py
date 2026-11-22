@@ -37,7 +37,7 @@ async def test_large_input_is_still_counted() -> None:
     assert isinstance(counts, MappingProxyType)
 
 
-def _one_page_pdf_message() -> list[dict[str, object]]:
+def _one_page_pdf_base64() -> str:
     stream: Final = b"BT /F1 12 Tf 72 720 Td (Revenue grew eleven percent while churn fell.) Tj ET"
     bodies: Final = (
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -56,7 +56,11 @@ def _one_page_pdf_message() -> list[dict[str, object]]:
     trailer: Final = (
         f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{offsets[-1] + len(objects[-1])}\n%%EOF\n"
     ).encode()
-    pdf: Final = base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
+    return base64.b64encode(header + b"".join(objects) + xref + trailer).decode()
+
+
+def _one_page_pdf_message() -> list[dict[str, object]]:
+    pdf: Final = _one_page_pdf_base64()
     return [
         {
             "role": "user",
@@ -467,10 +471,9 @@ def test_a_gemini_body_for_an_openai_deployment_counts_the_chat_messages_it_is_s
         (("anthropic/claude-sonnet-5-5",), True),
         (("anthropic/claude-sonnet-5-5", "azure/my-gpt-deployment"), True),
         (("vertex_ai/gemini-3.8-flash",), False),
-        (("anthropic/claude-sonnet-5-5", "gemini/gemini-3.8-flash"), False),
     ],
 )
-def test_a_gemini_body_for_an_alias_counts_as_chat_only_when_no_deployment_serves_it_natively(
+def test_a_gemini_body_for_an_alias_counts_as_chat_only_when_every_deployment_serves_it_through_the_adapter(
     served_models: tuple[str, ...], counted_as_chat: bool
 ) -> None:
     turns: Final = [{"role": role, "parts": [{"text": "ok"}]} for role in ("user", "model") * 100]
@@ -485,6 +488,73 @@ def test_a_gemini_body_for_an_alias_counts_as_chat_only_when_no_deployment_serve
         if counted_as_chat
         else litellm.token_counter(model="team-assistant", text="ok") * len(turns)
     )
+
+
+_LONG_SECOND_SYSTEM_PART: Final = {
+    "contents": [_user({"text": "Can I expense a taxi?"})],
+    "systemInstruction": {"parts": [{"text": "Be brief."}, {"text": "Answer only from the travel policy. " * 200}]},
+}
+_MANY_SHORT_TURNS: Final = {"contents": [{"role": role, "parts": [{"text": "ok"}]} for role in ("user", "model") * 100]}
+
+
+def test_a_gemini_body_counts_as_gemini_when_its_deployments_serve_it_natively_whatever_name_it_is_counted_as() -> None:
+    counted: Final = count_input_tokens_for_model(
+        request_body=_LONG_SECOND_SYSTEM_PART, model="gpt-5.6-sol", served_models=("vertex_ai/gemini-3.8-flash",)
+    )
+
+    assert counted is not None
+    assert counted >= litellm.token_counter(model="gpt-5.6-sol", text="Answer only from the travel policy. " * 200)
+
+
+@pytest.mark.parametrize(
+    "request_body", [_LONG_SECOND_SYSTEM_PART, _MANY_SHORT_TURNS], ids=["native-count-larger", "chat-count-larger"]
+)
+def test_a_gemini_body_for_an_alias_mixing_native_and_adapter_deployments_holds_the_larger_count(
+    request_body: dict[str, object],
+) -> None:
+    native: Final = count_input_tokens_for_model(
+        request_body=request_body, model="team-assistant", served_models=("gemini/gemini-3.8-flash",)
+    )
+    adapted: Final = count_input_tokens_for_model(
+        request_body=request_body, model="team-assistant", served_models=("anthropic/claude-sonnet-5-5",)
+    )
+    mixed: Final = count_input_tokens_for_model(
+        request_body=request_body,
+        model="team-assistant",
+        served_models=("anthropic/claude-sonnet-5-5", "gemini/gemini-3.8-flash"),
+    )
+
+    assert native is not None and adapted is not None
+    assert native != adapted
+    assert mixed == max(native, adapted)
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param({"fileData": {"mimeType": "application/pdf", "fileUri": "https://files.example.invalid/a.pdf"}}, id="remote-pdf"),
+        pytest.param({"fileData": {"mimeType": "image/png", "fileUri": "https://files.example.invalid/cat.png"}}, id="remote-image"),
+        pytest.param({"fileData": {"fileUri": "gs://b/report.pdf"}}, id="remote-file-without-mime"),
+        pytest.param({"inlineData": {"mimeType": "audio/wav", "data": _wav_base64(60)}}, id="inline-audio"),
+        pytest.param({"inlineData": {"mimeType": "video/mp4", "data": "AAAA"}}, id="inline-video"),
+    ],
+)
+def test_a_gemini_body_for_an_openai_deployment_with_media_the_chat_counter_cannot_read_is_unsized(
+    part: dict[str, object],
+) -> None:
+    request_body: Final = {"contents": [_user({"text": "Describe it."}, part)]}
+
+    assert count_input_tokens_for_model(request_body=request_body, model="openai/gpt-5.6-sol") is None
+
+
+def test_a_gemini_body_for_an_openai_deployment_counts_an_inline_image_like_the_chat_request_it_becomes() -> None:
+    contents: Final = [_user({"text": "Describe it."}, {"inlineData": {"mimeType": "image/png", "data": _PNG_PIXEL}})]
+    image: Final = {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_PNG_PIXEL}"}}
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Describe it."}, image]}]
+
+    assert count_input_tokens_for_model(
+        request_body={"contents": contents}, model="openai/gpt-5.6-sol"
+    ) == litellm.token_counter(model="openai/gpt-5.6-sol", messages=messages)
 
 
 def test_a_gemini_body_an_openai_deployment_cannot_be_sent_is_left_unsized() -> None:
