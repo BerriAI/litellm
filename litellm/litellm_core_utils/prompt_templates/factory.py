@@ -1529,16 +1529,16 @@ def _is_downloadable_or_base64_url(url: str) -> bool:
 MAX_VIDEO_DOWNLOAD_BYTES: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
 
 
-def _skip_unfetched_tool_result_video(
-    reason: str, *, drop_params: bool, model: str | None, custom_llm_provider: str
+def skip_unfetched_video(
+    reason: str, *, location: str, drop_params: bool, model: str | None, custom_llm_provider: str
 ) -> None:
     if not drop_params:
         raise BadRequestError(
-            message=f"Could not download the video in a tool result. {reason} Fix the link or set drop_params=True.",
+            message=f"Could not download the video in {location}. {reason} Fix the link or set drop_params=True.",
             model=model or "",
             llm_provider=custom_llm_provider,
         ) from None
-    verbose_logger.warning("Dropped a tool result video that could not be downloaded, since drop_params=True")
+    verbose_logger.warning("Dropped a video from %s that could not be downloaded, since drop_params=True", location)
 
 
 def _gemini_tool_result_video_blob(
@@ -1585,8 +1585,9 @@ def _gemini_tool_result_video_blob(
             llm_provider=custom_llm_provider,
         )
     if not _is_downloadable_or_base64_url(url):
-        return _skip_unfetched_tool_result_video(
+        return skip_unfetched_video(
             "The link must be an http(s) URL or a base64 data URL.",
+            location="a tool result",
             drop_params=drop_params,
             model=model,
             custom_llm_provider=custom_llm_provider,
@@ -1594,8 +1595,9 @@ def _gemini_tool_result_video_blob(
     try:
         video: Final = convert_to_anthropic_image_obj(url, format=None, max_bytes=MAX_VIDEO_DOWNLOAD_BYTES)
     except litellm.ImageFetchError:
-        return _skip_unfetched_tool_result_video(
+        return skip_unfetched_video(
             "The link is unreachable, too large, or not a video.",
+            location="a tool result",
             drop_params=drop_params,
             model=model,
             custom_llm_provider=custom_llm_provider,

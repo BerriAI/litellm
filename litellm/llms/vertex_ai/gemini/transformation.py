@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
     keeps_gemini_video,
     response_schema_prompt,
+    skip_unfetched_video,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -633,16 +634,25 @@ def _process_gemini_video_url(
             model=model or "",
             llm_provider=custom_llm_provider,
         )
-    part: Final = _process_gemini_media(
-        image_url=url,
-        format=_str_field(video_fields, "format", "mime_type", "content_type"),
-        media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
-        model=model,
-        video_metadata=as_str_mapping(video_fields.get("video_metadata")),
-        vertex_project=vertex_project,
-        vertex_credentials=vertex_credentials,
-        max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
-    )
+    try:
+        part: Final = _process_gemini_media(
+            image_url=url,
+            format=_str_field(video_fields, "format", "mime_type", "content_type"),
+            media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
+            model=model,
+            video_metadata=as_str_mapping(video_fields.get("video_metadata")),
+            vertex_project=vertex_project,
+            vertex_credentials=vertex_credentials,
+            max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
+        )
+    except litellm.ImageFetchError:
+        return skip_unfetched_video(
+            "The link is unreachable, too large, or not a video.",
+            location="a message",
+            drop_params=drop_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
     media: Final = part.get("inline_data") or part.get("file_data")
     holds_video: Final = keeps_gemini_video(
         media.get("mime_type") if media is not None else None,
