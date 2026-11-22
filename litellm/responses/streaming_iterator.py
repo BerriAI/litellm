@@ -1621,10 +1621,41 @@ def stream_cost_breakdown(stream: object) -> CostBreakdown | None:
     return None if logging_obj is None else logging_obj.cost_breakdown
 
 
-def _fixed_margin_charged_twice(primary: CostBreakdown | None, fallback: CostBreakdown | None) -> float:
-    if primary is None or fallback is None or primary is fallback:
+@dataclass(frozen=True, slots=True)
+class PricedPartial:
+    event: ResponseIncompleteEvent
+    breakdown: CostBreakdown | None
+
+    @property
+    def priced(self) -> bool:
+        return isinstance(_response_cost(self.event.response), (int, float))
+
+    @property
+    def cost(self) -> float:
+        cost: Final = _response_cost(self.event.response)
+        return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+
+def priced_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    event: Final = partial_responses_incomplete_event_on_disconnect(stream)
+    if event is None:
+        return None
+    priced: Final = isinstance(_response_cost(event.response), (int, float))
+    return PricedPartial(event, stream_cost_breakdown(stream) if priced else None)
+
+
+def held_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    logging_obj: Final = stream_logging(stream)
+    if logging_obj is None:
+        return priced_partial_on_disconnect(stream)
+    with logging_obj.pricing_left_unrecorded():
+        return priced_partial_on_disconnect(stream)
+
+
+def _primary_fixed_margin(primary: PricedPartial, fallback: PricedPartial) -> float:
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
         return 0.0
-    return min(primary.get("margin_fixed_amount", 0.0), fallback.get("margin_fixed_amount", 0.0))
+    return primary.breakdown.get("margin_fixed_amount", 0.0)
 
 
 def _summed_cost_entry(key: str, primary: Mapping[str, object], fallback: Mapping[str, object]) -> object:
@@ -1633,43 +1664,43 @@ def _summed_cost_entry(key: str, primary: Mapping[str, object], fallback: Mappin
     return _summed_count(primary.get(key), fallback.get(key))
 
 
-def cost_breakdown_of_both_deployments(
-    primary: CostBreakdown | None, fallback: CostBreakdown | None
-) -> CostBreakdown | None:
-    if primary is None or fallback is None or primary is fallback:
+def _cost_breakdown_of_both_deployments(primary: PricedPartial, fallback: PricedPartial) -> CostBreakdown | None:
+    if not primary.priced:
+        return fallback.breakdown
+    if not fallback.priced:
+        return primary.breakdown
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
         return None
-    first: Final = _STR_KEYED.validate_python(primary)
-    final: Final = _STR_KEYED.validate_python(fallback)
+    first: Final = _STR_KEYED.validate_python(primary.breakdown)
+    final: Final = _STR_KEYED.validate_python(fallback.breakdown)
     keys: Final = (*first, *(key for key in final if key not in first))
     summed: Final = MappingProxyType({key: _summed_cost_entry(key, first, final) for key in keys})
-    charged_twice: Final = _fixed_margin_charged_twice(primary, fallback)
+    primary_fee: Final = _primary_fixed_margin(primary, fallback)
     charged_once: Final = MappingProxyType(
-        {key: total - charged_twice for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
+        {key: total - primary_fee for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
     )
     return _COST_BREAKDOWN.validate_python({**summed, **charged_once})
 
 
-def partial_billed_for_both_deployments(
-    primary: ResponseIncompleteEvent,
-    primary_breakdown: CostBreakdown | None,
-    fallback: ResponseIncompleteEvent,
-    fallback_breakdown: CostBreakdown | None,
-) -> ResponseIncompleteEvent:
-    primary_cost: Final = _response_cost(primary.response)
-    fallback_cost: Final = _response_cost(fallback.response)
-    total_cost: Final = (
-        primary_cost + fallback_cost - _fixed_margin_charged_twice(primary_breakdown, fallback_breakdown)
-        if isinstance(primary_cost, (int, float)) and isinstance(fallback_cost, (int, float))
-        else None
+def _billed_at(event: ResponseIncompleteEvent, usage: ResponseAPIUsage | None, cost: float) -> ResponseIncompleteEvent:
+    billed: Final = event.response.model_copy(
+        update={"usage": None if usage is None else usage.model_copy(update={"cost": cost})}
     )
-    usage: Final = _usage_of_both_deployments(primary.response.usage, fallback.response.usage)
-    billed: Final = fallback.response.model_copy(
-        update={
-            "usage": usage if usage is None or total_cost is None else usage.model_copy(update={"cost": total_cost})
-        }
+    set_hidden_params(billed, {**(get_hidden_params(event.response) or {}), "response_cost": cost})
+    return event.model_copy(update={"response": billed})
+
+
+def partial_billed_for_both_deployments(primary: PricedPartial, fallback: PricedPartial | None) -> PricedPartial:
+    if fallback is None:
+        return PricedPartial(_billed_at(primary.event, primary.event.response.usage, primary.cost), primary.breakdown)
+    return PricedPartial(
+        _billed_at(
+            fallback.event,
+            _usage_of_both_deployments(primary.event.response.usage, fallback.event.response.usage),
+            primary.cost + fallback.cost - _primary_fixed_margin(primary, fallback),
+        ),
+        _cost_breakdown_of_both_deployments(primary, fallback),
     )
-    set_hidden_params(billed, {**(get_hidden_params(fallback.response) or {}), "response_cost": total_cost})
-    return fallback.model_copy(update={"response": billed})
 
 
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:

@@ -28031,19 +28031,23 @@ _FIXED_MARGIN: Final = 0.001
 
 
 def _priced_cut_responses_stream(
-    response_id: str, response_cost: float, logging_obj: LiteLLMLogging, price_in_usage: bool
+    response_id: str,
+    response_cost: float,
+    logging_obj: LiteLLMLogging,
+    price_in_usage: bool,
+    fixed_margin: float = _FIXED_MARGIN,
 ) -> MagicMock:
     stream: Final = _cut_responses_stream(response_id, _cut_usage(25, 0), response_cost, price_in_usage)
     event: Final = stream.partial_response_on_disconnect.return_value
 
     def priced_partial() -> ResponseIncompleteEvent:
         logging_obj.set_cost_breakdown(
-            input_cost=response_cost - _FIXED_MARGIN,
+            input_cost=response_cost - fixed_margin,
             output_cost=0.0,
             total_cost=response_cost,
             cost_for_built_in_tools_cost_usd_dollar=0.0,
-            margin_fixed_amount=_FIXED_MARGIN,
-            margin_total_amount=_FIXED_MARGIN,
+            margin_fixed_amount=fixed_margin,
+            margin_total_amount=fixed_margin,
         )
         return event
 
@@ -28090,6 +28094,165 @@ async def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(
     assert primary_logging.cost_breakdown is not None
     assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
     assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(_FIXED_MARGIN)
+
+
+@pytest.mark.asyncio
+async def test_a_client_cut_after_a_fallback_with_a_different_fixed_fee_charges_the_fallbacks_fee_once():
+    primary_logging: Final = _cut_stream_logging("primary")
+    billed: Final = await _billed_after_a_fallback(
+        _priced_cut_responses_stream("resp_primary", 0.0035, primary_logging, False, fixed_margin=0.003),
+        _priced_cut_responses_stream("resp_fallback", 0.0014, _cut_stream_logging("fallback"), False, fixed_margin=0.001),
+    )
+
+    billed_cost: Final = (get_hidden_params(billed) or {}).get("response_cost")
+    assert billed_cost == pytest.approx(0.0005 + 0.0004 + 0.001)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
+    assert primary_logging.cost_breakdown.get("margin_fixed_amount") == pytest.approx(0.001)
+    assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(0.001)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unpriced_side", ["primary", "fallback"])
+async def test_a_client_cut_after_a_fallback_bills_an_unpriced_deployment_nothing_and_keeps_the_priced_breakdown(
+    unpriced_side: str,
+):
+    primary_logging: Final = _cut_stream_logging("primary")
+    fallback_logging: Final = _cut_stream_logging("fallback")
+    unpriced_logging: Final = primary_logging if unpriced_side == "primary" else fallback_logging
+    unpriced_logging.set_cost_breakdown(
+        input_cost=0.5, output_cost=0.0, total_cost=0.5, cost_for_built_in_tools_cost_usd_dollar=0.0
+    )
+    unpriced: Final = _cut_responses_stream(f"resp_{unpriced_side}", _cut_usage(25, 0), None)
+    unpriced.logging_obj = unpriced_logging
+    priced_logging: Final = fallback_logging if unpriced_side == "primary" else primary_logging
+    priced: Final = _priced_cut_responses_stream("resp_priced", 0.00105, priced_logging, price_in_usage=False)
+
+    billed: Final = await _billed_after_a_fallback(
+        unpriced if unpriced_side == "primary" else priced, priced if unpriced_side == "primary" else unpriced
+    )
+
+    assert billed.usage is not None
+    assert billed.usage.input_tokens == 50
+    assert (get_hidden_params(billed) or {}).get("response_cost") == pytest.approx(0.00105)
+    assert primary_logging.cost_breakdown is not None
+    assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(0.00105)
+
+
+_PRICE_PER_INPUT_TOKEN: Final = MappingProxyType({"primary-deployment": 1e-5, "fallback-deployment": 3e-6})
+
+
+class _PricedOnTheSharedLogging(BaseResponsesAPIStreamingIterator):
+    def __init__(  # pyright: ignore[reportMissingSuperCall]  # the base needs an httpx response
+        self,
+        deltas: tuple[str, ...],
+        error: BaseException | None,
+        logging_obj: LiteLLMLogging,
+        response_id: str,
+        input_tokens: int | None,
+    ) -> None:
+        self._events: Final = iter(SimpleNamespace(type="response.output_text.delta", delta=delta) for delta in deltas)
+        self._error: Final = error
+        self.logging_obj = logging_obj
+        self._response_id: Final = response_id
+        self._input_tokens: Final = input_tokens
+        self.completed_response = None
+
+    def __aiter__(self) -> "_PricedOnTheSharedLogging":
+        return self
+
+    async def __anext__(self) -> object:
+        event: Final = next(self._events, None)
+        if event is not None:
+            return event
+        if self._error is not None:
+            raise self._error
+        raise StopAsyncIteration
+
+    async def aclose(self) -> None:
+        return None
+
+    def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
+        if self._input_tokens is None:
+            return None
+        cost: Final = self._input_tokens * _PRICE_PER_INPUT_TOKEN[self.logging_obj.model]
+        self.logging_obj.set_cost_breakdown(
+            input_cost=cost, output_cost=0.0, total_cost=cost, cost_for_built_in_tools_cost_usd_dollar=0.0
+        )
+        return _cut_responses_stream(
+            self._response_id, _cut_usage(self._input_tokens, 0), cost, price_in_usage=True
+        ).partial_response_on_disconnect()
+
+
+def _shared_cut_logging() -> LiteLLMLogging:
+    logging_obj: Final = _cut_stream_logging("shared")
+    logging_obj.model = "primary-deployment"
+    return logging_obj
+
+
+async def _streamed_after_a_cut(shared_logging: LiteLLMLogging, fallback: object) -> object:
+    router: Final = Router(
+        model_list=[{"model_name": "primary", "litellm_params": {"model": "anthropic/claude-haiku-5-5", "api_key": "k"}}]
+    )
+
+    async def fallback_attempt(**_kwargs: object) -> object:  # kwargs-ok: the fallback chain's arguments
+        shared_logging.model = "fallback-deployment"
+        if isinstance(fallback, BaseException):
+            raise fallback
+        return fallback
+
+    router.async_function_with_fallbacks_common_utils = fallback_attempt
+    cut: Final = MidStreamFallbackError(
+        message="stream cut",
+        model="claude-haiku-5-5",
+        llm_provider="anthropic",
+        original_exception=litellm.RateLimitError(message="stream cut", llm_provider="anthropic", model="x"),
+        generated_content="hel",
+        is_pre_first_chunk=False,
+    )
+    return await router._aresponses_streaming_iterator(
+        response=_PricedOnTheSharedLogging(("hel",), cut, shared_logging, "resp_primary", 25),
+        initial_kwargs={"model": "primary", "stream": True, "input": "Hi", "original_generic_function": AsyncMock()},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fallback_input_tokens", [30, None])
+async def test_a_client_cut_after_a_fallback_bills_the_first_deployment_at_its_own_price(
+    fallback_input_tokens: int | None,
+):
+    shared_logging: Final = _shared_cut_logging()
+    wrapped: Final = await _streamed_after_a_cut(
+        shared_logging,
+        _PricedOnTheSharedLogging(("lo", " there"), None, shared_logging, "resp_fallback", fallback_input_tokens),
+    )
+    relayed: Final = aiter(wrapped)
+    _ = await anext(relayed)
+    _ = await anext(relayed)
+
+    billed: Final = wrapped.partial_response_on_disconnect()
+
+    expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"] + (
+        0.0 if fallback_input_tokens is None else fallback_input_tokens * _PRICE_PER_INPUT_TOKEN["fallback-deployment"]
+    )
+    assert billed is not None
+    assert (get_hidden_params(billed.response) or {}).get("response_cost") == pytest.approx(expected)
+    assert shared_logging.cost_breakdown is not None
+    assert shared_logging.cost_breakdown.get("total_cost") == pytest.approx(expected)
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_fails_after_a_cut_leaves_no_breakdown_from_the_first_deployments_partial():
+    shared_logging: Final = _shared_cut_logging()
+    wrapped: Final = await _streamed_after_a_cut(
+        shared_logging, litellm.RateLimitError(message="fallback down", llm_provider="openai", model="x")
+    )
+
+    with pytest.raises(litellm.RateLimitError, match="fallback down"):
+        async for _ in wrapped:
+            pass
+
+    assert shared_logging.cost_breakdown is None
 
 
 @pytest.mark.asyncio
