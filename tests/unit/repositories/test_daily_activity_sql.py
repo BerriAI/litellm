@@ -454,7 +454,7 @@ def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> Non
 
 
 _DROPPED_KEYS: Final = (
-    "- 'callback_settings' - 'logging' - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles' "
+    "- 'callback_settings' - 'logging' - 'scim_addresses' - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles' "
     "- 'secret_manager_settings'"
 )
 _REDACTED_KEY_METADATA: Final = (

@@ -6,7 +6,7 @@ This is an enterprise feature and requires a premium license.
 
 import re
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
@@ -259,6 +259,7 @@ class UserProvisionerHelpers:
             data={
                 "user_email": new_user_request.user_email,
                 "user_alias": new_user_request.user_alias,
+                **({"sso_user_id": new_user_request.sso_user_id} if new_user_request.sso_user_id is not None else {}),
                 "metadata": safe_dumps(new_user_request.metadata),
                 **({"user_role": new_user_request.user_role} if admin_group is not None else {}),
             },
@@ -280,6 +281,14 @@ class ScimUserData(TypedDict):
     enterprise: SCIMEnterpriseUser | None
     entitlements: list[SCIMMultiValuedAttribute] | None
     roles: list[SCIMMultiValuedAttribute] | None
+    user_name: ReadOnly[str | None]
+    display_name: ReadOnly[str | None]
+    formatted_name: ReadOnly[str | None]
+    middle_name: ReadOnly[str | None]
+    honorific_prefix: ReadOnly[str | None]
+    honorific_suffix: ReadOnly[str | None]
+    title: ReadOnly[str | None]
+    addresses: ReadOnly[Sequence[SCIMAddress] | None]
 
 
 class GroupMemberExtractionResult(LiteLLMBaseModel):
@@ -345,17 +354,11 @@ def _group_not_found(team_id: str) -> HTTPException:
 
 def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
     """Extract common data from SCIMUser object."""
-    user_email = None
-    if user.emails and len(user.emails) > 0:
-        user_email = user.emails[0].value
-
-    user_alias = None
-    if user.name and user.name.givenName:
-        user_alias = user.name.givenName
-
-    teams = []
-    if user.groups:
-        teams = [group.value for group in user.groups]
+    user_email: Final = user.emails[0].value if user.emails and len(user.emails) > 0 else None
+    user_alias: Final = (
+        user.name.givenName if (not user.displayName and user.name and user.name.givenName) else user.displayName
+    )
+    teams: Final = [group.value for group in user.groups] if user.groups else []
 
     return {
         "user_email": user_email,
@@ -368,36 +371,65 @@ def _extract_scim_user_data(user: SCIMUser) -> ScimUserData:
         "enterprise": user.enterprise_user,
         "entitlements": user.entitlements,
         "roles": user.roles,
+        "user_name": user.userName,
+        "display_name": user.displayName,
+        "formatted_name": user.name.formatted if user.name else None,
+        "middle_name": user.name.middleName if user.name else None,
+        "honorific_prefix": user.name.honorificPrefix if user.name else None,
+        "honorific_suffix": user.name.honorificSuffix if user.name else None,
+        "title": user.title,
+        "addresses": user.addresses,
     }
 
 
 def _build_scim_metadata(
-    given_name: str | None,
-    family_name: str | None,
+    user_data: ScimUserData,
     active: bool | None = None,
-    enterprise: SCIMEnterpriseUser | None = None,
-    entitlements: list[SCIMMultiValuedAttribute] | None = None,
-    roles: list[SCIMMultiValuedAttribute] | None = None,
 ) -> dict[str, object]:
     """Build metadata dictionary with SCIM data."""
+    given_name: Final = user_data["given_name"]
+    family_name: Final = user_data["family_name"]
+    scim_meta_obj: Final = LiteLLM_UserScimMetadata(
+        userName=user_data["user_name"],
+        externalId=user_data["sso_user_id"],
+        displayName=user_data["display_name"],
+        givenName=given_name,
+        familyName=family_name,
+        formatted=user_data["formatted_name"],
+        middleName=user_data["middle_name"],
+        honorificPrefix=user_data["honorific_prefix"],
+        honorificSuffix=user_data["honorific_suffix"],
+        title=user_data["title"],
+    )
+    scim_meta_dict: Final = _JSON_OBJECT_ADAPTER.validate_python(
+        {
+            "givenName": given_name,
+            "familyName": family_name,
+            **scim_meta_obj.model_dump(exclude_none=True),
+        }
+    )
     metadata: Final[dict[str, object]] = {
-        "scim_metadata": LiteLLM_UserScimMetadata(
-            givenName=given_name,
-            familyName=family_name,
-        ).model_dump()
+        "scim_metadata": scim_meta_dict,
     }
 
     if active is not None:
         metadata["scim_active"] = active
 
+    enterprise: Final = user_data["enterprise"]
     if enterprise is not None:
         metadata[SCIM_ENTERPRISE_METADATA_KEY] = enterprise.model_dump(by_alias=True, exclude_none=True)
 
+    entitlements: Final = user_data["entitlements"]
     if entitlements is not None:
         metadata[SCIM_ENTITLEMENTS_METADATA_KEY] = [e.model_dump(exclude_none=True) for e in entitlements]
 
+    roles: Final = user_data["roles"]
     if roles is not None:
         metadata[SCIM_ROLES_METADATA_KEY] = [r.model_dump(exclude_none=True) for r in roles]
+
+    addresses: Final = user_data["addresses"]
+    if addresses is not None:
+        metadata[SCIM_ADDRESSES_METADATA_KEY] = [a.model_dump(exclude_none=True) for a in addresses]
 
     return metadata
 
@@ -1466,6 +1498,32 @@ def _get_schemas() -> Sequence[SCIMSchema]:
                     description="The name of the User, suitable for display.",
                 ),
                 SCIMSchemaAttribute(
+                    name="title",
+                    type="string",
+                    multiValued=False,
+                    description="The user's title, such as Vice President.",
+                ),
+                SCIMSchemaAttribute(
+                    name="addresses",
+                    type="complex",
+                    multiValued=True,
+                    description="Physical mailing addresses for this user.",
+                    subAttributes=[
+                        SCIMSchemaAttribute(name="formatted", type="string", description="Full mailing address."),
+                        SCIMSchemaAttribute(name="streetAddress", type="string", description="Street address."),
+                        SCIMSchemaAttribute(name="locality", type="string", description="City or locality."),
+                        SCIMSchemaAttribute(name="region", type="string", description="State or region."),
+                        SCIMSchemaAttribute(name="postalCode", type="string", description="Zip code or postal code."),
+                        SCIMSchemaAttribute(name="country", type="string", description="Country name or code."),
+                        SCIMSchemaAttribute(
+                            name="type", type="string", description="Address type (work, home, other)."
+                        ),
+                        SCIMSchemaAttribute(
+                            name="primary", type="boolean", description="Whether this is the primary address."
+                        ),
+                    ],
+                ),
+                SCIMSchemaAttribute(
                     name="emails",
                     type="complex",
                     multiValued=True,
@@ -1910,13 +1968,7 @@ async def create_user(
 
         # Create user in database
         user_id: Final = user.userName or str(uuid.uuid4())
-        metadata: Final = _build_scim_metadata(
-            user_data["given_name"],
-            user_data["family_name"],
-            enterprise=user_data["enterprise"],
-            entitlements=user_data["entitlements"],
-            roles=user_data["roles"],
-        )
+        metadata: Final = _build_scim_metadata(user_data)
 
         default_role: Final = _default_scim_user_role()
         admin_group: Final = await _get_scim_admin_group()
@@ -1926,6 +1978,7 @@ async def create_user(
             user_id=user_id,
             user_email=user_data["user_email"],
             user_alias=user_data["user_alias"],
+            sso_user_id=user_data["sso_user_id"],
             teams=user_data["teams"] or None,
             metadata=metadata,
             auto_create_key=False,
@@ -1990,14 +2043,7 @@ async def update_user(
         client_set_active: Final = "active" in user.model_fields_set
         scim_active_for_metadata: Final = user_data["active"] if client_set_active else prev_active
 
-        metadata: Final = _build_scim_metadata(
-            user_data["given_name"],
-            user_data["family_name"],
-            scim_active_for_metadata,
-            enterprise=user_data["enterprise"],
-            entitlements=user_data["entitlements"],
-            roles=user_data["roles"],
-        )
+        metadata: Final = _build_scim_metadata(user_data, active=scim_active_for_metadata)
 
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
@@ -2254,24 +2300,105 @@ def _extract_ids_from_path_filter(path: str | None, attribute: str) -> list[str]
     )
     if not match:
         return []
-    extracted: Final = re.sub(r"\\(.)", r"\1", match.group(2))
+    extracted: Final = _unescape_scim_filter_literal(match.group(2))
     return [extracted] if extracted else []
 
 
-def _handle_displayname_update(op_type: str, value: object, update_data: dict[str, object]) -> None:
+def _unescape_scim_filter_literal(raw: str) -> str:
+    return re.sub(r"\\(.)", r"\1", raw)
+
+
+_NAME_SUBATTR_MAP: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "givenname": "givenName",
+        "familyname": "familyName",
+        "formatted": "formatted",
+        "middlename": "middleName",
+        "honorificprefix": "honorificPrefix",
+        "honorificsuffix": "honorificSuffix",
+    }
+)
+
+_ADDRESSES_FILTER_RE: Final = re.compile(
+    r"""^\s*addresses\s*\[\s*type\s+eq\s+(['"])((?:\\.|[^\\])*?)\1\s*\](?:\.([\w]+))?\s*$""",
+    flags=re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _ScimUserPatchState:
+    update_data: Mapping[str, object]
+    metadata: Mapping[str, object]
+    scim_metadata: Mapping[str, object]
+
+
+def _without_mapping_keys(mapping: Mapping[str, object], *keys: str) -> Mapping[str, object]:
+    excluded: Final = frozenset(keys)
+    return {k: v for k, v in mapping.items() if k not in excluded}
+
+
+def _set_or_pop_scim_metadata_str(
+    scim_metadata: Mapping[str, object],
+    key: str,
+    op_type: str,
+    value: object,
+) -> Mapping[str, object]:
+    if op_type == "remove" or value is None:
+        return _without_mapping_keys(scim_metadata, key)
+    return {**scim_metadata, key: str(value)}
+
+
+def _handle_displayname_update(
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
     """Handle displayname updates."""
-    if op_type == "remove":
-        update_data["user_alias"] = None
-    else:
-        update_data["user_alias"] = str(value)
+    next_alias: Final = None if (op_type == "remove" or value is None) else str(value)
+    return replace(
+        state,
+        update_data={**state.update_data, "user_alias": next_alias},
+        scim_metadata=_set_or_pop_scim_metadata_str(state.scim_metadata, "displayName", op_type, value),
+    )
 
 
-def _handle_externalid_update(op_type: str, value: object, update_data: dict[str, object]) -> None:
+def _handle_externalid_update(
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
     """Handle externalid updates."""
-    if op_type == "remove":
-        update_data["sso_user_id"] = None
-    else:
-        update_data["sso_user_id"] = str(value)
+    next_sso_id: Final = None if (op_type == "remove" or value is None) else str(value)
+    return replace(
+        state,
+        update_data={**state.update_data, "sso_user_id": next_sso_id},
+        scim_metadata=_set_or_pop_scim_metadata_str(state.scim_metadata, "externalId", op_type, value),
+    )
+
+
+def _handle_username_update(
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
+    """Handle userName updates."""
+    return replace(
+        state,
+        scim_metadata=_set_or_pop_scim_metadata_str(state.scim_metadata, "userName", op_type, value),
+    )
+
+
+def _handle_title_update(
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
+    """Handle title updates."""
+    return replace(
+        state,
+        metadata=_without_mapping_keys(state.metadata, "title"),
+        scim_metadata=_set_or_pop_scim_metadata_str(state.scim_metadata, "title", op_type, value),
+    )
 
 
 def _handle_active_update(op_type: str, value: object, metadata: dict[str, object]) -> None:
@@ -2287,18 +2414,210 @@ def _handle_active_update(op_type: str, value: object, metadata: dict[str, objec
         metadata["scim_active"] = bool_val
 
 
-def _handle_name_update(path: str, op_type: str, value: object, scim_metadata: dict[str, object]) -> None:
-    """Handle name field updates (givenName, familyName)."""
-    if path == "name.givenname":
-        if op_type == "remove":
-            scim_metadata.pop("givenName", None)
-        else:
-            scim_metadata["givenName"] = str(value)
-    elif path == "name.familyname":
-        if op_type == "remove":
-            scim_metadata.pop("familyName", None)
-        else:
-            scim_metadata["familyName"] = str(value)
+def _handle_name_update(
+    path: str,
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
+    """Handle name and name.* field updates."""
+    if path == "name":
+        if op_type == "remove" or value is None:
+            return replace(
+                state,
+                metadata=_without_mapping_keys(state.metadata, "name.formatted"),
+                scim_metadata=_without_mapping_keys(state.scim_metadata, *_NAME_SUBATTR_MAP.values()),
+            )
+        if not isinstance(value, dict):
+            raise HTTPException(status_code=400, detail={"error": "The name attribute value must be an object"})
+        name_items: Final = tuple(
+            (sub_attr, name_val)
+            for name_key, name_val in _JSON_OBJECT_ADAPTER.validate_python(value).items()
+            if (sub_attr := _NAME_SUBATTR_MAP.get(name_key.lower())) is not None
+        )
+        next_scim_metadata: Final = reduce(
+            lambda cur, item: _set_or_pop_scim_metadata_str(cur, item[0], op_type, item[1]),
+            name_items,
+            state.scim_metadata,
+        )
+        next_metadata: Final = (
+            _without_mapping_keys(state.metadata, "name.formatted")
+            if any(sub_attr == "formatted" for sub_attr, _ in name_items)
+            else state.metadata
+        )
+        return replace(state, metadata=next_metadata, scim_metadata=next_scim_metadata)
+
+    sub_key: Final = path.split(".", 1)[1] if "." in path else ""
+    canonical_key: Final = _NAME_SUBATTR_MAP.get(sub_key)
+    if canonical_key is None:
+        return state
+    return replace(
+        state,
+        metadata=(
+            _without_mapping_keys(state.metadata, "name.formatted") if canonical_key == "formatted" else state.metadata
+        ),
+        scim_metadata=_set_or_pop_scim_metadata_str(state.scim_metadata, canonical_key, op_type, value),
+    )
+
+
+def _validate_scim_address_dict(entry: Mapping[str, object]) -> Mapping[str, object]:
+    canonical: Final = _canonicalize_scim_model_data(entry, SCIMAddress.model_fields)
+    try:
+        validated: Final = SCIMAddress.model_validate(canonical)
+    except ValidationError:
+        raise HTTPException(status_code=400, detail={"error": "Invalid value for addresses attribute"}) from None
+    return _JSON_OBJECT_ADAPTER.validate_python(validated.model_dump(exclude_none=True))
+
+
+def _load_existing_addresses(metadata: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    raw: Final = metadata.get(SCIM_ADDRESSES_METADATA_KEY)
+    if not isinstance(raw, list):
+        return ()
+    return tuple(_JSON_OBJECT_ADAPTER.validate_python(item) for item in raw if isinstance(item, dict))
+
+
+def _with_addresses_metadata(
+    metadata: Mapping[str, object],
+    entries: Sequence[Mapping[str, object]],
+) -> Mapping[str, object]:
+    if entries:
+        return {**metadata, SCIM_ADDRESSES_METADATA_KEY: [dict(entry) for entry in entries]}
+    return _without_mapping_keys(metadata, SCIM_ADDRESSES_METADATA_KEY)
+
+
+def _address_matches_type(entry: Mapping[str, object], target_type: str) -> bool:
+    entry_type: Final = entry.get("type")
+    return isinstance(entry_type, str) and entry_type.casefold() == target_type.casefold()
+
+
+def _parse_scim_address_item(item: object) -> Mapping[str, object]:
+    if not isinstance(item, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid value for addresses: expected a list of objects"},
+        )
+    return _validate_scim_address_dict(_JSON_OBJECT_ADAPTER.validate_python(item))
+
+
+def _handle_addresses_update(
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
+    """Handle whole-attribute add/replace/remove operations on addresses."""
+    if op_type == "remove":
+        return replace(state, metadata=_without_mapping_keys(state.metadata, SCIM_ADDRESSES_METADATA_KEY))
+    if value is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"The {op_type} operation on addresses requires a 'value' member (RFC 7644 Section 3.5.2)"
+            },
+        )
+    normalized: Final = tuple(value) if isinstance(value, list) else (value,)
+    dumped: Final = tuple(_parse_scim_address_item(item) for item in normalized)
+    if op_type == "add":
+        existing: Final = _load_existing_addresses(state.metadata)
+        return replace(state, metadata=_with_addresses_metadata(state.metadata, (*existing, *dumped)))
+    return replace(state, metadata=_with_addresses_metadata(state.metadata, dumped))
+
+
+def _apply_address_entry_patch(
+    entries: Sequence[Mapping[str, object]],
+    target_type: str,
+    op_type: str,
+    value: object,
+) -> tuple[Mapping[str, object], ...]:
+    if op_type == "remove":
+        return tuple(entry for entry in entries if not _address_matches_type(entry, target_type))
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail={"error": "Filtered addresses value must be an object"})
+    incoming_raw: Final = _JSON_OBJECT_ADAPTER.validate_python(value)
+    incoming_canonical: Final = dict(_canonicalize_scim_model_data(incoming_raw, SCIMAddress.model_fields))
+    incoming_canonical.setdefault("type", target_type)
+    validated_entry: Final = _validate_scim_address_dict(incoming_canonical)
+    matched_exists: Final = any(_address_matches_type(entry, target_type) for entry in entries)
+    updated_entries: Final = tuple(
+        (_validate_scim_address_dict({**entry, **validated_entry}) if op_type == "add" else validated_entry)
+        if _address_matches_type(entry, target_type)
+        else entry
+        for entry in entries
+    )
+    return updated_entries if matched_exists else (*updated_entries, validated_entry)
+
+
+def _patch_one_address_subattr(
+    entry: Mapping[str, object],
+    canonical_subattr: str,
+    clearing: bool,
+    value: object,
+) -> Mapping[str, object] | None:
+    if not clearing:
+        return _validate_scim_address_dict({**entry, canonical_subattr: value})
+    updated: Final = _without_mapping_keys(entry, canonical_subattr)
+    if any(k != "type" and updated.get(k) is not None for k in updated):
+        return _validate_scim_address_dict(updated)
+    return None
+
+
+def _apply_address_subattr_patch(
+    entries: Sequence[Mapping[str, object]],
+    target_type: str,
+    canonical_subattr: str,
+    op_type: str,
+    value: object,
+) -> tuple[Mapping[str, object], ...]:
+    clearing: Final = op_type == "remove" or value is None
+    matched_exists: Final = any(_address_matches_type(entry, target_type) for entry in entries)
+    mapped: Final = tuple(
+        _patch_one_address_subattr(entry, canonical_subattr, clearing, value)
+        if _address_matches_type(entry, target_type)
+        else entry
+        for entry in entries
+    )
+    kept: Final = tuple(entry for entry in mapped if entry is not None)
+    if not matched_exists and not clearing:
+        return (*kept, _validate_scim_address_dict({"type": target_type, canonical_subattr: value}))
+    return kept
+
+
+def _handle_addresses_filtered_update(
+    raw_path: str,
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState:
+    """Handle filtered paths such as addresses[type eq "work"].country."""
+    match: Final = _ADDRESSES_FILTER_RE.match(raw_path)
+    if not match:
+        raise HTTPException(status_code=400, detail={"error": f"Unsupported addresses path: {raw_path}"})
+    target_type: Final = _unescape_scim_filter_literal(match.group(2))
+    raw_subattr: Final = match.group(3)
+    cleaned_metadata: Final = _without_mapping_keys(state.metadata, raw_path.lower())
+    entries: Final = _load_existing_addresses(cleaned_metadata)
+
+    if raw_subattr is None:
+        return replace(
+            state,
+            metadata=_with_addresses_metadata(
+                cleaned_metadata,
+                _apply_address_entry_patch(entries, target_type, op_type, value),
+            ),
+        )
+
+    canonical_subattr: Final = _scim_model_field_names(SCIMAddress.model_fields).get(raw_subattr.casefold())
+    if canonical_subattr is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Unsupported addresses sub-attribute: {raw_subattr}"},
+        )
+    return replace(
+        state,
+        metadata=_with_addresses_metadata(
+            cleaned_metadata,
+            _apply_address_subattr_patch(entries, target_type, canonical_subattr, op_type, value),
+        ),
+    )
 
 
 def _is_group_path(path: str | None) -> bool:
@@ -2593,12 +2912,72 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
         metadata[path] = value
 
 
+def _apply_user_patch_field(
+    raw_path: str,
+    op_type: str,
+    value: object,
+    state: _ScimUserPatchState,
+) -> _ScimUserPatchState | None:
+    """Apply one user attribute PATCH update; returns None for unknown paths."""
+    path: Final = raw_path.lower()
+    if path == "username":
+        return _handle_username_update(op_type, value, state)
+    if path == "displayname":
+        return _handle_displayname_update(op_type, value, state)
+    if path == "externalid":
+        return _handle_externalid_update(op_type, value, state)
+    if path == "title":
+        return _handle_title_update(op_type, value, state)
+    if path == "active":
+        next_metadata: Final = dict(state.metadata)
+        _handle_active_update(op_type, value, next_metadata)
+        return replace(state, metadata=next_metadata)
+    if path == "name" or (path.startswith("name.") and path.split(".", 1)[1] in _NAME_SUBATTR_MAP):
+        return _handle_name_update(path, op_type, value, state)
+    if path == "addresses":
+        return _handle_addresses_update(op_type, value, state)
+    if path.startswith(("addresses[", "addresses.")):
+        return _handle_addresses_filtered_update(raw_path, op_type, value, state)
+    if _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
+        next_metadata_mv: Final = dict(state.metadata)
+        _handle_multi_valued_attribute_update(path, op_type, value, next_metadata_mv)
+        return replace(state, metadata=next_metadata_mv)
+    return None
+
+
+def _apply_patch_op(state: _ScimUserPatchState, op: SCIMPatchOperation) -> _ScimUserPatchState:
+    raw_path: Final = op.path.strip() if isinstance(op.path, str) else ""
+    path: Final = raw_path.lower()
+    value: Final = op.value
+    op_type: Final = op.op
+
+    # Handle SCIM operations without path where value contains the fields
+    if not path and isinstance(value, dict):
+        return reduce(
+            lambda cur, item: (
+                cur
+                if _enterprise_extension_sub_path(item[0]) is not None
+                else (_apply_user_patch_field(item[0], op_type, item[1], cur) or cur)
+            ),
+            _JSON_OBJECT_ADAPTER.validate_python(value).items(),
+            state,
+        )
+
+    next_state: Final = _apply_user_patch_field(raw_path, op_type, value, state)
+    if next_state is not None:
+        return next_state
+    if _is_group_path(path) or _enterprise_extension_sub_path(path) is not None:
+        return state
+    next_metadata: Final = dict(state.metadata)
+    _handle_generic_metadata(path, op_type, value, next_metadata)
+    return replace(state, metadata=next_metadata)
+
+
 def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
 ) -> tuple[dict[str, object], tuple[str, ...]]:
     """Apply patch operations and return update data and the final teams in order."""
-    update_data: Final[dict[str, object]] = {}
     stored_metadata: Final[object] = TypeAdapter(object).validate_python(existing_user.model_dump().get("metadata"))
     metadata: Final = _JSON_OBJECT_ADAPTER.validate_python(stored_metadata) if isinstance(stored_metadata, dict) else {}
     stored_scim_metadata: Final = metadata.get("scim_metadata")
@@ -2617,51 +2996,15 @@ def _apply_patch_ops(
     if isinstance(enterprise, _InvalidEnterpriseValue):
         _raise_invalid_enterprise_value(enterprise)
 
-    for op in patch_ops.Operations:
-        path = op.path.lower() if isinstance(op.path, str) else ""
-        value = op.value
-        op_type = op.op
-
-        # Handle SCIM operations without path where value contains the fields
-        if not path and isinstance(value, dict):
-            for key, val in _JSON_OBJECT_ADAPTER.validate_python(value).items():
-                if _enterprise_extension_sub_path(key) is not None:
-                    continue
-                key_lower = key.lower()
-                if key_lower == "active":
-                    _handle_active_update(op_type, val, metadata)
-                elif key_lower == "displayname":
-                    _handle_displayname_update(op_type, val, update_data)
-                elif key_lower == "externalid":
-                    _handle_externalid_update(op_type, val, update_data)
-                elif key_lower in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
-                    _handle_multi_valued_attribute_update(key_lower, op_type, val, metadata)
-                elif key_lower == "name" and isinstance(val, dict):
-                    for name_key, name_val in _JSON_OBJECT_ADAPTER.validate_python(val).items():
-                        name_key_lower = name_key.lower()
-                        if name_key_lower in ("givenname", "familyname"):
-                            _handle_name_update(
-                                f"name.{name_key_lower}",
-                                op_type,
-                                name_val,
-                                scim_metadata,
-                            )
-            continue
-
-        if path == "displayname":
-            _handle_displayname_update(op_type, value, update_data)
-        elif path == "externalid":
-            _handle_externalid_update(op_type, value, update_data)
-        elif path == "active":
-            _handle_active_update(op_type, value, metadata)
-        elif path in ("name.givenname", "name.familyname"):
-            _handle_name_update(path, op_type, value, scim_metadata)
-        elif _multi_valued_attribute_base(path) in SCIM_MULTI_VALUED_ATTRIBUTE_METADATA_KEYS:
-            _handle_multi_valued_attribute_update(path, op_type, value, metadata)
-        elif _is_group_path(path) or _enterprise_extension_sub_path(path) is not None:
-            continue
-        else:
-            _handle_generic_metadata(path, op_type, value, metadata)
+    final_state: Final = reduce(
+        _apply_patch_op,
+        patch_ops.Operations,
+        _ScimUserPatchState(
+            update_data=MappingProxyType({}),
+            metadata=metadata,
+            scim_metadata=scim_metadata,
+        ),
+    )
 
     record_teams: Final = tuple(existing_user.teams or [])
     group_ops: Final = tuple(op for op in patch_ops.Operations if _is_group_path(op.path))
@@ -2671,15 +3014,18 @@ def _apply_patch_ops(
     )
     final_metadata: Final = (
         {
-            **{key: metadata_value for key, metadata_value in metadata.items() if key != SCIM_ENTERPRISE_METADATA_KEY},
-            "scim_metadata": scim_metadata,
+            **{
+                key: metadata_value
+                for key, metadata_value in final_state.metadata.items()
+                if key != SCIM_ENTERPRISE_METADATA_KEY
+            },
+            "scim_metadata": dict(final_state.scim_metadata),
             **({SCIM_ENTERPRISE_METADATA_KEY: enterprise} if enterprise is not None else {}),
         }
         if enterprise_updates
-        else {**metadata, "scim_metadata": scim_metadata}
+        else {**final_state.metadata, "scim_metadata": dict(final_state.scim_metadata)}
     )
-    update_data["metadata"] = final_metadata
-    return update_data, final_teams
+    return {**final_state.update_data, "metadata": final_metadata}, final_teams
 
 
 def _is_user_not_in_team_error(exc: HTTPException) -> bool:
