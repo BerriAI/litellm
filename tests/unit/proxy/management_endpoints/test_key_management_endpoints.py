@@ -12933,9 +12933,9 @@ class TestLIT1884KeyGenerateValidation:
             assert result is True
 
     @pytest.mark.parametrize("spend", [-9999.0, 5.0])
-    def test_key_generation_check_non_admin_cannot_set_spend(self, spend):
-        data = GenerateKeyRequest(spend=spend)
-        user_api_key_dict = UserAPIKeyAuth(
+    def test_key_generation_check_non_admin_cannot_set_spend(self, spend: float) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(
             user_id="internal-user",
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
@@ -12959,9 +12959,9 @@ class TestLIT1884KeyGenerateValidation:
             (LitellmUserRoles.PROXY_ADMIN, -5.0),
         ],
     )
-    def test_key_generation_check_spend_allowed(self, user_role, spend):
-        data = GenerateKeyRequest(spend=spend)
-        user_api_key_dict = UserAPIKeyAuth(user_id="some-user", user_role=user_role)
+    def test_key_generation_check_spend_allowed(self, user_role: LitellmUserRoles, spend: float | None) -> None:
+        data: Final = GenerateKeyRequest(spend=spend)
+        user_api_key_dict: Final = UserAPIKeyAuth(user_id="some-user", user_role=user_role)
 
         with patch.object(litellm, "key_generation_settings", None):
             assert (
