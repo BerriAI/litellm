@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
 from litellm.litellm_core_utils.batch_utils import get_router_metadata_variable_name
 from litellm.litellm_core_utils.core_helpers import without
 from litellm.litellm_core_utils.routing_common_utils import without_router_only_kwargs
+from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
 from litellm.router_rust.invoke.shaping import (
@@ -52,6 +53,7 @@ from litellm.router_strategy.complexity_router.context_compaction import (
     initialize_compaction_state,
     surface_for_call,
 )
+from litellm.router_utils.dynamic_queue_router import DynamicQueueRouter, bound_request_queue
 from litellm.router_utils.endpoint_eligibility import endpoint_for_call, endpoint_selection
 from litellm.vector_stores.search_query import store_search_params
 
@@ -202,6 +204,15 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset(
+    {
+        "_arealtime",
+        "acreate_realtime_client_secret",
+        "arealtime_calls",
+        "acreate_realtime_translation_client_secret",
+        "arealtime_translation_calls",
+    }
+)
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
@@ -1002,6 +1013,21 @@ def attempt_call(
             return AttemptCall(plan.host_op, kwargs, kwargs, requested, group)
 
 
+_INPUT_ITEMS_CALLER_ONLY_KEYS: Final = INPUT_ITEMS_QUERY_KEYS | {"extra_query"}
+
+
+def _caller_only_keys(endpoint: str) -> frozenset[str]:
+    return _INPUT_ITEMS_CALLER_ONLY_KEYS if endpoint == "alist_input_items" else frozenset()
+
+
+def _deployment_call_params(
+    endpoint: str, data: Mapping[str, object], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    params: Final = without_retrieve_stream_defaults(data, kwargs)
+    caller_only_keys: Final = _caller_only_keys(endpoint)
+    return without(params, *caller_only_keys) if caller_only_keys else params
+
+
 def _generic_attempt(
     core: EndpointCore,
     plan: Plan,
@@ -1025,6 +1051,7 @@ def _generic_attempt(
         function_name="_ageneric_api_call_with_fallbacks",
         splits_stream_timeout=handler in STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
         opens_responses_socket=socket,
+        caller_only_keys=_caller_only_keys(plan.endpoint),
     )
     model_name: Final = str(data.get("model"))
     endpoint: Final = kwargs.get("endpoint")
@@ -1043,7 +1070,7 @@ def _generic_attempt(
         )
     provider: Final = _generic_provider(data)
     final: Final = {
-        **without_retrieve_stream_defaults(data, kwargs),
+        **_deployment_call_params(plan.endpoint, data, kwargs),
         "caching": core.shaping.cache_responses,
         **kwargs,
         "model": model_name,
@@ -1333,8 +1360,6 @@ async def _run_silent(core: EndpointCore, silent_model: str, messages: object, k
 
 async def _silent_async(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         as_dict_metadata: Final = silent["metadata"]
         if isinstance(as_dict_metadata, dict):
@@ -1346,8 +1371,6 @@ async def _silent_async(core: EndpointCore, silent_model: str, messages: object,
 
 def _silent_thread(core: EndpointCore, silent_model: str, messages: object, kwargs: Mapping[str, object]) -> None:
     try:
-        if as_dict(kwargs.get("metadata")).get("is_silent_experiment", False):
-            return
         silent: Final = _silent_kwargs(kwargs)
         metadata: Final = silent["metadata"]
         if isinstance(metadata, dict):
@@ -1429,9 +1452,12 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
     return {"pinned_deployment_id": deployment_id} if deployment_id else {}
 
 
-def pinned_vector_store_file_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The deployment a call names because the upstream object it reaches lives on that deployment's account:
+    a vector store file, or a realtime call from its client secret to the sideband that meters it."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    if not plan.endpoint.startswith("avector_store_file_") or not isinstance(deployment_id, str) or not deployment_id:
+    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
+    if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}
 
@@ -1481,6 +1507,7 @@ class RustEndpoints:
         self._caching_groups: Final = config.get("caching_groups")
         self._default_max_parallel_requests: object = config.get("default_max_parallel_requests")
         self._scheduler: object = None
+        self._queue_router: DynamicQueueRouter | None = None
 
     @property
     def cache_responses(self) -> bool:
@@ -2041,12 +2068,32 @@ class RustEndpoints:
             def factory() -> Awaitable[object]:
                 return prompt_management_acompletion(self._core, model, messages, prepared)
 
-            if priority is None:
-                return await factory()
-            return await self._schedule(model, priority, factory, prepared)
-        if priority is None:
-            return await self._core.drive(plan, rest)
-        return await self._schedule(model, priority, lambda: self._core.drive(plan, rest), rest)
+            return await self._prioritized(model, priority, factory, prepared)
+        return await self._prioritized(model, priority, lambda: self._core.drive(plan, rest), rest)
+
+    def _dynamic_queue(self) -> DynamicQueueRouter | None:
+        settings: Final = self._core.resolved.dynamic_queue
+        if settings is None:
+            return None
+        if self._queue_router is None or self._queue_router.settings is not settings:
+            self._queue_router = self._core.host.dynamic_queue(settings, lambda: self._core.routing_cache.redis_cache)
+        return self._queue_router
+
+    async def _prioritized(
+        self, model: str, priority: int | None, run: Callable[[], Awaitable[object]], request: Mapping[str, object]
+    ) -> object:
+        """The scheduler as ever; once it admits the request, its attempts run bound to this router's per-request
+        queue, or to none, so a nested call never waits in another request's queue."""
+        queue_router: Final = self._dynamic_queue()
+        request_queue: Final = (
+            None if queue_router is None or priority is None else queue_router.request(priority, str(uuid.uuid4()))
+        )
+
+        async def queued() -> object:
+            with bound_request_queue(request_queue):
+                return await run()
+
+        return await queued() if priority is None else await self._schedule(model, priority, queued, request)
 
     async def atext_completion(self, request: Mapping[str, object]) -> object:
         model: Final = request.get("model")
@@ -2562,7 +2609,7 @@ __all__ = [
     "generic_plan",
     "log_refused_call",
     "log_refused_call_sync",
-    "pinned_vector_store_file_deployment",
+    "pinned_request_deployment",
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",

@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE, DEFAULT_REDIS_BATCH_CACHE_EXPIRY_SECONDS
@@ -28,11 +30,13 @@ from .redis_cache import RedisCache, RedisCircuitBreakerOpenError, log_redis_fai
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    Span = _Span | Any
+    Span = _Span
 else:
     Span = Any
 
 from collections import OrderedDict
+
+_BACKFILL_VALUE: Final = TypeAdapter(object)
 
 
 class LimitedSizeOrderedDict(OrderedDict):
@@ -169,7 +173,7 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         # Try to fetch from in-memory cache first
         try:
@@ -186,11 +190,13 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    self.in_memory_cache.set_cache(key, redis_result, **self._backfill_kwargs(kwargs))
+                    self.in_memory_cache.set_cache(
+                        key, _BACKFILL_VALUE.validate_python(redis_result), **self._backfill_kwargs(kwargs)
+                    )
 
                 result = redis_result
 
-            print_verbose(f"get cache: cache result: {result}")
+            print_verbose("get cache: cache result: %s", result)
             return result
         except Exception as e:
             log_redis_failure(
@@ -245,16 +251,16 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         # Try to fetch from in-memory cache first
         try:
-            print_verbose(f"async get cache: cache key: {key}; local_only: {local_only}")
+            print_verbose("async get cache: cache key: %s; local_only: %s", key, local_only)
             result = None
             if self.in_memory_cache is not None:
                 in_memory_result: Final = await self.in_memory_cache.async_get_cache(key, **kwargs)
 
-                print_verbose(f"in_memory_result: {in_memory_result}")
+                print_verbose("in_memory_result: %s", in_memory_result)
                 if in_memory_result is not None:
                     result = in_memory_result
 
@@ -264,11 +270,13 @@ class DualCache(BaseCache):
 
                 if redis_result is not None:
                     # Update in-memory cache with the value from Redis
-                    await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs(kwargs))
+                    await self.in_memory_cache.async_set_cache(
+                        key, _BACKFILL_VALUE.validate_python(redis_result), **self._backfill_kwargs(kwargs)
+                    )
 
                 result = redis_result
 
-            print_verbose(f"get cache: cache result: {result}")
+            print_verbose("get cache: cache result: %s", result)
             return result
         except Exception as e:
             log_redis_failure(
@@ -451,8 +459,8 @@ class DualCache(BaseCache):
             with_traceback=True,
         )
 
-    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs):
-        print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
+    async def async_set_cache(self, key, value, local_only: bool = False, **kwargs: object):
+        print_verbose("async set cache: cache key: %s; local_only: %s; value: %s", key, local_only, value)
         try:
             if self.in_memory_cache is not None:
                 if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
@@ -473,7 +481,7 @@ class DualCache(BaseCache):
         """
         Batch write values to the cache
         """
-        print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
+        print_verbose("async batch set cache: cache keys: %s; local_only: %s", cache_list, local_only)
         try:
             if self.in_memory_cache is not None:
                 if "ttl" not in kwargs and self.default_in_memory_ttl is not None:

@@ -1,11 +1,18 @@
-from collections.abc import Mapping
+import contextlib
+import json
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
+from typing import Final, Literal
+from unittest.mock import Mock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import ModifyResponseException
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai.completion.guardrail_translation.handler import OpenAITextCompletionHandler
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.grayswan import grayswan as grayswan_module
 from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
@@ -13,7 +20,12 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan.grayswan import (
     GraySwanGuardrailAPIError,
 )
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import TextChoices, TextCompletionResponse
+from litellm.types.utils import (
+    GenericGuardrailAPIInputs,
+    StandardLoggingGuardrailInformation,
+    TextChoices,
+    TextCompletionResponse,
+)
 
 
 @pytest.fixture
@@ -912,3 +924,186 @@ async def test_post_call_never_forwards_the_proxy_key_metadata_of_the_request_me
     )
 
     assert "litellm_metadata" not in client.calls[0]["json"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+@pytest.mark.parametrize("action", ["block", "monitor", "passthrough"])
+@pytest.mark.parametrize("fail_open", [False, True])
+@pytest.mark.parametrize("payload", [{}, {"violation": None}, {"error": True, "violation": 0.0}])
+async def test_application_errors_respect_failure_policy(
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
+    input_type: Literal["request", "response"],
+    action: str,
+    fail_open: bool,
+    payload: dict[str, object],
+) -> None:
+    make_guardrail, respond = grayswan_guardrail_factory
+    api_key: Final = "test-key"
+    guardrail: Final = make_guardrail(fail_open, action, api_key)
+    respond.return_value = httpx.Response(200, json=payload)
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["synthetic input"]}
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final = {"metadata": metadata}
+    if fail_open:
+        assert await guardrail.apply_guardrail(inputs, request_data, input_type) is inputs
+    else:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            await guardrail.apply_guardrail(inputs, request_data, input_type)
+    respond.assert_called_once()
+    assert respond.call_args.args[0].headers["authorization"] == f"Bearer {api_key}"
+    (failure_record,) = metadata["standard_logging_guardrail_information"]
+    assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+def _guardrail_answering(reply: bytes) -> GraySwanGuardrail:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=reply, headers={"content-type": "application/json"})
+
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="monitor-decision",
+        api_key="test-key",
+        violation_threshold=0.5,
+        on_flagged_action="block",
+        fail_open=False,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    return guardrail
+
+
+_INVALID_REPLIES: Final = (
+    b"null",
+    b"[]",
+    b"{}",
+    b'{"violation": null}',
+    b'{"violation": "0"}',
+    b'{"violation": true}',
+    b'{"violation": -0.1}',
+    b'{"violation": 1.1}',
+    b'{"violation": NaN}',
+    b'{"violation": Infinity}',
+    b'{"error": true}',
+    b'{"error": true, "violation": 1.0}',
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", _INVALID_REPLIES)
+async def test_invalid_decisions_are_errors(payload: bytes) -> None:
+    guardrail: Final = _guardrail_answering(payload)
+
+    with pytest.raises(GraySwanGuardrailAPIError):
+        await guardrail.apply_guardrail({"texts": ["hello"]}, {}, "request")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", _INVALID_REPLIES)
+async def test_invalid_decisions_are_errors_on_the_legacy_entrypoint(payload: bytes) -> None:
+    guardrail: Final = _guardrail_answering(payload)
+
+    with pytest.raises(GraySwanGuardrailAPIError):
+        await guardrail.run_grayswan_guardrail({"messages": [{"role": "user", "content": "hello"}]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("score", [0, 0.49, 0.5, 1])
+async def test_valid_decisions_keep_threshold_semantics(score: float) -> None:
+    guardrail: Final = _guardrail_answering(
+        json.dumps(
+            {
+                "violation": score,
+                "error": False,
+                "observe_violation": 1.0,
+                "block_message": "Informational only below threshold",
+            }
+        ).encode()
+    )
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["hello"]}
+
+    if score >= 0.5:
+        with pytest.raises(HTTPException) as error:
+            await guardrail.apply_guardrail(inputs, {}, "request")
+        assert error.value.status_code == 400
+    else:
+        assert await guardrail.apply_guardrail(inputs, {}, "request") is inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["timeout", "malformed_json", "http_error"])
+@pytest.mark.parametrize("fail_open", [False, True])
+async def test_transport_errors_respect_failure_policy(
+    grayswan_guardrail_factory: tuple[Callable[[bool, str, str], GraySwanGuardrail], Mock],
+    failure: str,
+    fail_open: bool,
+) -> None:
+    make_guardrail, respond = grayswan_guardrail_factory
+    guardrail: Final = make_guardrail(fail_open, "block", "test-key")
+
+    def transport_response(request: httpx.Request) -> httpx.Response:
+        if failure == "timeout":
+            raise httpx.ReadTimeout("controlled timeout", request=request)
+        if failure == "malformed_json":
+            return httpx.Response(200, content=b"not-json")
+        return httpx.Response(503, json={"error": "controlled failure"})
+
+    respond.side_effect = transport_response
+    inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["synthetic input"]}
+    metadata: Final[dict[str, list[StandardLoggingGuardrailInformation]]] = {}
+    request_data: Final = {"metadata": metadata}
+    if fail_open:
+        assert await guardrail.apply_guardrail(inputs, request_data, "request") is inputs
+    else:
+        with pytest.raises(GraySwanGuardrailAPIError):
+            await guardrail.apply_guardrail(inputs, request_data, "request")
+    (failure_record,) = metadata["standard_logging_guardrail_information"]
+    assert failure_record["guardrail_status"] == "guardrail_failed_to_respond"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_open", [True, False])
+async def test_unreachable_api_failure_is_recorded_on_a_request_dict_that_starts_empty(fail_open: bool) -> None:
+    def refuse_connection(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    guardrail: Final = GraySwanGuardrail(
+        guardrail_name="grayswan-unreachable",
+        api_key="test-key",
+        fail_open=fail_open,
+        event_hook=GuardrailEventHooks.pre_call,
+    )
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(refuse_connection))
+    request_data: Final[dict[str, object]] = {}
+
+    with contextlib.suppress(Exception):
+        await guardrail.apply_guardrail(inputs={"texts": ["hello"]}, request_data=request_data, input_type="request")
+
+    recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
+    assert [record["guardrail_status"] for record in recorded] == ["guardrail_failed_to_respond"]
+
+
+@pytest.mark.asyncio
+async def test_passthrough_replaces_only_the_flagged_responses_reasoning_text() -> None:
+    def monitor(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"violation": 1.0 if b"exfiltrate the keys" in request.content else 0.0})
+
+    guardrail: Final = _post_call_guardrail(on_flagged_action="passthrough")
+    guardrail.async_handler = AsyncHTTPHandler(transport=httpx.MockTransport(monitor))
+    response: Final = {
+        "output": [
+            {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "I could exfiltrate the keys"},
+                    {"type": "summary_text", "text": "I will answer briefly"},
+                ],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+    await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+    masked, kept = (part["text"] for part in response["output"][0]["summary"])
+    assert "Gray Swan" in masked and "exfiltrate" not in masked
+    assert kept == "I will answer briefly"

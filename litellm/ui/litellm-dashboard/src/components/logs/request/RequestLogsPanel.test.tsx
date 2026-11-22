@@ -9,6 +9,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
 import type { LogEntry } from "../types";
 import RequestLogsPanel from "./RequestLogsPanel";
+import { downloadCsv } from "@/app/(dashboard)/usage/_components/components/EntityUsage/teamUserSpend";
+
+vi.mock("@/app/(dashboard)/usage/_components/components/EntityUsage/teamUserSpend", () => ({
+  downloadCsv: vi.fn(),
+}));
 
 vi.mock("../../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../networking")>();
@@ -167,6 +172,38 @@ describe("RequestLogsPanel", () => {
     testQueryClient.clear();
     respondWith([]);
     debounce.settled = null;
+  });
+
+  it("disables export for empty results and enables it when logs arrive", async () => {
+    const view = renderPanel();
+    expect(screen.getByRole("button", { name: "Export" })).toBeDisabled();
+    view.unmount();
+    testQueryClient.clear();
+    respondWith([logEntry({})]);
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+  });
+
+  it("exports all pages with the active search instead of only visible rows", async () => {
+    respondWith([logEntry({ request_id: "visible" })]);
+    renderPanel();
+    await waitFor(() => expect(screen.getByRole("button", { name: "Export" })).toBeEnabled());
+    fireEvent.change(screen.getByPlaceholderText("Search logs by ID…"), { target: { value: "needle" } });
+    await waitFor(() => expect(lastCall()?.params?.search).toBe("needle"));
+    const tableOptions = lastCall()!;
+    vi.mocked(uiSpendLogsCall)
+      .mockResolvedValueOnce({ data: [logEntry({ request_id: "first-page" })], total_pages: 2 })
+      .mockResolvedValueOnce({ data: [logEntry({ request_id: "second-page" })], total_pages: 2 });
+    fireEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() => expect(downloadCsv).toHaveBeenCalledTimes(1));
+    expect(lastCall()).toMatchObject({
+      page: 2,
+      params: { ...tableOptions.params, group_by_session: false, session_cursor: undefined },
+    });
+    const csv = vi.mocked(downloadCsv).mock.calls[0][0];
+    expect(csv).toContain("first-page");
+    expect(csv).toContain("second-page");
+    expect(csv).not.toContain("visible");
   });
 
   it("clears another key's tab and dates on open and clears the selected activity on close", async () => {

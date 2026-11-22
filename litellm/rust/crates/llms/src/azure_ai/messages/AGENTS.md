@@ -8,8 +8,9 @@
 - Caller credentials go out exactly as Python's dict and client send them (owner ruling, 2026-11-13). A caller `api-key` spelled exactly so replaces the deployment key and the Entra ID path. Otherwise the deployment key is added as `api-key`, or the Entra ID token as `Authorization` (replacing only that exact key), beside the caller's headers. `api-key` is renamed to `x-api-key` unless `x-api-key` is spelled exactly so, and names that differ only in case are joined into one header with `, `
 - `anthropic-beta` goes through the `azure_ai` row of `anthropic_beta_headers_config.json` as Python's handler filters it: unknown and unsupported betas are dropped, the caller's and the ones the request needs alike
 - The beta-gated system field strip, system-role normalization and the `cache_control.scope` strip run in `finalize_request`, after the betas are picked from the request as sent, in the order Python's transform runs them
-- This config alone reads messages and system prompts Rust could not type as Python does (`UnparsedMessages::Read`): the sanitizer, advisor and encrypted-reasoning strips rewrite them and their beta triggers count. Every other provider, `anthropic` included by the owner's ruling, keeps main's behaviour: such messages go as sent, and a system prompt that does not parse is main's request error (`messages_body`)
+- Every native Messages provider (anthropic, azure_ai, bedrock invoke) reads messages and system prompts Rust could not type as Python does: the sanitizer, advisor and encrypted-reasoning strips rewrite them, their beta triggers count, and a system prompt that does not parse is kept. There is no per-provider switch for this
 
 # references
 
+- Python counterpart `litellm/llms/azure_ai/anthropic/messages_transformation.py` (`AzureAnthropicMessagesConfig`)
 - https://learn.microsoft.com/en-us/azure/ai-foundry/foundry-models/how-to/use-foundry-models-claude

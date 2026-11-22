@@ -265,6 +265,9 @@ class HiddenlayerGuardrail(CustomGuardrail):
     def supports_structured_messages(self) -> bool:
         return False
 
+    def scans_each_text_separately(self) -> bool:
+        return False
+
     @log_guardrail_information
     async def apply_guardrail(
         self,
@@ -476,6 +479,9 @@ class HiddenlayerGuardrailV2(CustomGuardrail):
         super().__init__(**kwargs)
 
     def supports_structured_messages(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
         return False
 
     @log_guardrail_information

@@ -1,12 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-use crate::base_llm::messages::context::{MessagesModelCapabilities, UnparsedMessages};
+use crate::base_llm::messages::context::MessagesModelCapabilities;
 use fancy_regex::Regex;
 use litellm_auth::CredentialPlacement;
 use litellm_secret_value::SecretValue;
 
-use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
     has_header, header_value, header_values, with_header, without_headers,
 };
@@ -19,8 +18,9 @@ use litellm_llms_types::{
         API_BASE, API_KEY_HEADER, AnthropicBeta, BETA_HEADER, BetaSet,
         DIRECT_BROWSER_ACCESS_HEADER, MESSAGES_PATH,
     },
-    recognized::{Recognized, map_known_runs, python_truthy},
+    recognized::{Recognized, map_known_runs},
 };
+use litellm_python_compat::truthy::json_truthy;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -120,7 +120,7 @@ fn nonempty_secret(value: Option<String>) -> Option<String> {
     value
         .map(|value| {
             value
-                .trim_matches(|c: char| c.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&c))
+                .trim_matches(litellm_python_compat::unicode::isspace)
                 .to_owned()
         })
         .filter(|value| !value.is_empty())
@@ -167,12 +167,16 @@ pub fn resolve_anthropic_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    resolve_non_empty(
-        api_base,
-        env_lookup,
-        &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
-    )
-    .unwrap_or_else(|| API_BASE.to_string())
+    api_base
+        .map(str::trim)
+        .filter(|api_base| !api_base.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            [ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV]
+                .iter()
+                .find_map(|name| env_lookup(name).filter(|value| !value.is_empty()))
+        })
+        .unwrap_or_else(|| API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -322,26 +326,19 @@ pub fn has_advisor_tool(tools: Option<&[Recognized<MessagesTool>]>) -> bool {
 pub fn requires_native_compaction_beta(
     compaction: Option<&Value>,
     messages: &[Recognized<Message>],
-    unparsed: UnparsedMessages,
 ) -> bool {
-    compaction.is_some()
-        || messages
-            .iter()
-            .any(|message| carries_signed_compaction_block(message, unparsed))
+    compaction.is_some() || messages.iter().any(carries_signed_compaction_block)
 }
 
-/// Python's `carries_signed_compaction_block` reads any mapping, so where unparsed messages are
-/// read a message that did not parse is scanned through its raw content too.
-fn carries_signed_compaction_block(
-    message: &Recognized<Message>,
-    unparsed: UnparsedMessages,
-) -> bool {
+/// Python's `carries_signed_compaction_block` reads any mapping, so a message that did not parse
+/// is scanned through its raw content too.
+fn carries_signed_compaction_block(message: &Recognized<Message>) -> bool {
     match message {
         Recognized::Known(message) => message.blocks().iter().any(|block| {
             block.is_type(ContentBlockType::Compaction)
                 && block.signature.as_deref().is_some_and(|s| !s.is_empty())
         }),
-        Recognized::Unrecognized(Value::Object(fields)) if unparsed.read() => matches!(
+        Recognized::Unrecognized(Value::Object(fields)) => matches!(
             fields.get("content"),
             Some(Value::Array(blocks)) if blocks.iter().any(|block| {
                 block.get("type").and_then(Value::as_str) == Some("compaction")
@@ -425,7 +422,7 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_ref() {
+    match block.known_type() {
         Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
             match normalized_if_changed(block.id.as_deref()) {
                 Some(id) => ContentBlock {
@@ -485,7 +482,7 @@ pub fn strip_provider_specific_fields(messages: Vec<Message>) -> Vec<Message> {
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_ref() {
+    let field = match block.known_type() {
         Some(ContentBlockType::Thinking) => block.signature.as_deref(),
         Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
         _ => None,
@@ -496,7 +493,7 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
 const BILLING_HEADER_PREFIX: &str = "x-anthropic-billing-header:";
 
 fn is_billing_header_block(block: &ContentBlock) -> bool {
-    block.block_type == Some(ContentBlockType::Text)
+    block.is_type(ContentBlockType::Text)
         && block
             .text
             .as_deref()
@@ -556,6 +553,17 @@ pub fn strip_billing_metadata_from_system(
 /// goes with them, as main's native route strips them.
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<Message>) -> Vec<Message> {
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
+}
+
+fn is_unsigned_thinking_block(block: &ContentBlock) -> bool {
+    block.is_type(ContentBlockType::Thinking)
+        && block.signature.as_deref().is_none_or(str::is_empty)
+}
+
+/// Python's `strip_unsignable_thinking_blocks_for_claude` once the encrypted strip has run: Claude
+/// answers 400 to a thinking block with no signature, so an open model's reasoning goes.
+pub fn strip_unsigned_thinking_blocks(messages: Vec<Message>) -> Vec<Message> {
+    retain_blocks(messages, |block| !is_unsigned_thinking_block(block))
 }
 
 /// Python's `strip_encrypted_reasoning_blocks_from_anthropic_messages`: the same strip, and a
@@ -881,7 +889,7 @@ fn is_empty_raw_text_block(block: &Value) -> bool {
 fn is_empty_unsigned_raw_thinking_block(block: &Value) -> bool {
     raw_block_type(block) == Some("thinking")
         && is_raw_blank(block.get("thinking"))
-        && !block.get("signature").is_some_and(python_truthy)
+        && !block.get("signature").is_some_and(json_truthy)
 }
 
 /// [`strip_empty_content_blocks`] on a raw message: a text block whose `text` is not a
@@ -1051,7 +1059,7 @@ pub fn strip_raw_advisor_blocks(message: Value) -> Option<Value> {
             .iter()
             .filter(|block| is_raw_advisor_use(block))
             .filter_map(|block| block.get("id"))
-            .filter(|id| python_truthy(id))
+            .filter(|id| json_truthy(id))
             .map(PythonKey::of)
             .collect();
         let answers_advisor =
@@ -1106,6 +1114,25 @@ pub fn strip_raw_encrypted_reasoning_blocks(message: Value) -> Option<Value> {
             .filter(|block| !is_raw_encrypted_reasoning_block(block))
             .cloned()
             .map(with_native_raw_redacted_data)
+            .collect();
+        (kept == blocks || !kept.is_empty()).then_some(kept)
+    })
+}
+
+fn is_raw_unsigned_thinking_block(block: &Value) -> bool {
+    raw_block_type(block) == Some("thinking")
+        && block
+            .get("signature")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+}
+
+pub fn strip_raw_unsigned_thinking_blocks(message: Value) -> Option<Value> {
+    with_raw_blocks(message, |blocks| {
+        let kept: Vec<Value> = blocks
+            .iter()
+            .filter(|block| !is_raw_unsigned_thinking_block(block))
+            .cloned()
             .collect();
         (kept == blocks || !kept.is_empty()).then_some(kept)
     })
@@ -1291,15 +1318,25 @@ mod tests {
         &[(ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
         "https://base-url.example.com"
     )]
-    #[case::blank_api_base_env_falls_back_to_base_url_env(
+    #[case::whitespace_api_base_env_is_kept(
         None,
         &[(ANTHROPIC_API_BASE_ENV, " \t "), (ANTHROPIC_BASE_URL_ENV, "https://base-url.example.com")],
-        "https://base-url.example.com"
+        " \t "
     )]
-    #[case::blank_envs_fall_back_to_public_endpoint(
+    #[case::empty_api_base_env_falls_back_to_base_url_env(
         None,
         &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "  ")],
+        "  "
+    )]
+    #[case::empty_envs_fall_back_to_public_endpoint(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, ""), (ANTHROPIC_BASE_URL_ENV, "")],
         "https://api.anthropic.com"
+    )]
+    #[case::padded_api_base_env_is_kept(
+        None,
+        &[(ANTHROPIC_API_BASE_ENV, " http://h ")],
+        " http://h "
     )]
     fn api_base_resolution(
         #[case] api_base: Option<&str>,
@@ -1731,6 +1768,34 @@ mod tests {
     ) {
         assert_eq!(
             strip_empty_raw_content_blocks(turn(blocks)),
+            expected.map(turn)
+        );
+    }
+
+    #[rstest]
+    #[case::empty_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": ""}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::non_string_signature(
+        json!([{"type": "thinking", "thinking": "plan", "signature": 5}, unparsed_block()]),
+        Some(json!([unparsed_block()]))
+    )]
+    #[case::signed(
+        json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]),
+        Some(json!([{"type": "thinking", "thinking": "plan", "signature": "sig"}, unparsed_block()]))
+    )]
+    #[case::redacted_kept(
+        json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]),
+        Some(json!([{"type": "redacted_thinking", "data": "EmwK"}, unparsed_block()]))
+    )]
+    #[case::only_unsigned(json!([{"type": "thinking", "thinking": "plan"}]), None)]
+    fn strip_raw_unsigned_thinking_blocks_drops_what_claude_rejects(
+        #[case] blocks: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        assert_eq!(
+            strip_raw_unsigned_thinking_blocks(turn(blocks)),
             expected.map(turn)
         );
     }
@@ -2773,33 +2838,19 @@ mod tests {
         #[case] messages: Value,
         #[case] expected: bool,
     ) {
-        for unparsed in [UnparsedMessages::Read, UnparsedMessages::Skipped] {
-            assert_eq!(
-                requires_native_compaction_beta(
-                    compaction.as_ref(),
-                    &history(messages.clone()),
-                    unparsed
-                ),
-                expected
-            );
-        }
+        assert_eq!(
+            requires_native_compaction_beta(compaction.as_ref(), &history(messages)),
+            expected
+        );
     }
 
-    #[rstest]
-    #[case::read(UnparsedMessages::Read, true)]
-    #[case::skipped(UnparsedMessages::Skipped, false)]
-    fn a_signed_compaction_block_in_an_unparsed_message_counts_only_where_unparsed_messages_are_read(
-        #[case] unparsed: UnparsedMessages,
-        #[case] expected: bool,
-    ) {
+    #[test]
+    fn a_signed_compaction_block_in_an_unparsed_message_counts() {
         let messages = history(json!([{"role": "assistant", "content": [
             {"type": "text", "text": 5},
             {"type": "compaction", "content": "c", "signature": "s"}
         ]}]));
-        assert_eq!(
-            requires_native_compaction_beta(None, &messages, unparsed),
-            expected
-        );
+        assert!(requires_native_compaction_beta(None, &messages));
     }
 
     #[rstest]
@@ -2975,6 +3026,7 @@ mod tests {
                 supports_speed: false,
                 supports_mid_conversation_system: false,
                 effort_tiers: tiers(false, false, false, false, false, false),
+                bedrock: Default::default(),
             }
         );
         assert_eq!(

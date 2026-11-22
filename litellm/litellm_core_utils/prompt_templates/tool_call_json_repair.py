@@ -1,5 +1,5 @@
 import json
-from typing import Any, Final  # noqa: TID251  # Existing annotations retained unchanged in this pure move
+from typing import Final
 
 from pydantic import TypeAdapter
 
@@ -82,7 +82,7 @@ def parse_tool_call_arguments(
     arguments: str | None,
     tool_name: str | None = None,
     context: str | None = None,
-) -> Any:
+) -> object:
     """
     Parse tool call arguments from a JSON string.
 

@@ -767,6 +767,44 @@ class TestResponsesAPIHooks:
             assert result is response
 
     @pytest.mark.asyncio
+    async def test_post_call_responses_api_scans_a_compaction_summary(self):
+        """A compaction item's summary is model output too, so it must be DLP-scanned."""
+        from litellm.responses.litellm_completion_transformation.compaction_items import (
+            summary_only_compaction_content,
+        )
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        guardrail = _make_guardrail()
+        response = ResponsesAPIResponse(
+            id="resp-compaction",
+            created_at=0,
+            output=[
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": summary_only_compaction_content(
+                        "The user shared card 4111-1111-1111-1111."
+                    ),
+                }
+            ],
+        )
+
+        async def block_card_numbers(**kwargs: object) -> dict[str, object]:
+            if "4111-1111-1111-1111" in str(kwargs["text"]):
+                raise HTTPException(status_code=400, detail="blocked by Purview")
+            return {"policyActions": []}
+
+        with patch.object(guardrail, "_check_content", side_effect=block_card_numbers):
+            with pytest.raises(HTTPException) as exc_info:
+                await guardrail.async_post_call_success_hook(
+                    data={},
+                    user_api_key_dict=UserAPIKeyAuth(api_key="test", user_id="user-123"),
+                    response=response,
+                )
+
+        assert exc_info.value.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_post_call_responses_api_empty_output_skips(self):
         """Post-call hook must not call _check_content when output has no text."""
         from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2725,6 +2763,62 @@ class TestStreamingIteratorHook:
             assert mock_check.call_args.kwargs["activity"] == "downloadText"
             assert mock_check.call_args.kwargs["text"] == "streamed output"
             assert chunks == [created_event, completed_event]
+
+    @pytest.mark.asyncio
+    async def test_streaming_responses_api_scans_a_compaction_summary(self):
+        """A streamed compaction item's summary must be DLP-scanned before any event is released."""
+        from litellm.responses.litellm_completion_transformation.compaction_items import (
+            summary_only_compaction_content,
+        )
+        from litellm.types.llms.openai import (
+            ResponseCompletedEvent,
+            ResponsesAPIResponse,
+            ResponsesAPIStreamEvents,
+        )
+
+        guardrail = _make_guardrail()
+        completed_event = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp-compaction-stream",
+                created_at=0,
+                output=[
+                    {
+                        "type": "compaction",
+                        "id": "cmp_2",
+                        "encrypted_content": summary_only_compaction_content(
+                            "The user shared card 4111-1111-1111-1111."
+                        ),
+                    }
+                ],
+            ),
+        )
+
+        async def fake_response_stream():
+            yield completed_event
+
+        with patch.object(
+            guardrail, "_check_content", new_callable=AsyncMock
+        ) as mock_check:
+            mock_check.return_value = {"policyActions": []}
+
+            chunks = [
+                chunk
+                async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                    user_api_key_dict=UserAPIKeyAuth(
+                        api_key="test", user_id="user-123"
+                    ),
+                    response=fake_response_stream(),
+                    request_data={},
+                )
+            ]
+
+            mock_check.assert_called_once()
+            assert (
+                mock_check.call_args.kwargs["text"]
+                == "The user shared card 4111-1111-1111-1111."
+            )
+            assert chunks == [completed_event]
 
     @pytest.mark.asyncio
     async def test_streaming_responses_api_violation_blocks_before_yield(self):

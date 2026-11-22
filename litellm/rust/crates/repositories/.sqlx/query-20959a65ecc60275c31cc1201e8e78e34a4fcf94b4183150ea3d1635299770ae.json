@@ -1,0 +1,222 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.project_id,\n       p.project_alias,\n       p.description,\n       p.team_id,\n       p.budget_id,\n       p.metadata AS \"metadata: RawJson\",\n       COALESCE(p.models, '{}') AS \"models!\",\n       p.spend,\n       p.model_spend AS \"model_spend: RawJson\",\n       p.model_rpm_limit AS \"model_rpm_limit: RawJson\",\n       p.model_tpm_limit AS \"model_tpm_limit: RawJson\",\n       p.blocked,\n       p.object_permission_id,\n       p.created_at,\n       p.created_by,\n       p.updated_at,\n       p.updated_by,\n       to_jsonb(b) AS \"litellm_budget_table?: Json<Budget>\"\nFROM \"LiteLLM_ProjectTable\" AS p\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON b.budget_id = p.budget_id\nWHERE p.project_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "project_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "project_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "project_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "team_id"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "metadata: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "model_spend: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "model_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "model_rpm_limit: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "model_rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "model_tpm_limit: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "model_tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "litellm_budget_table?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "20959a65ecc60275c31cc1201e8e78e34a4fcf94b4183150ea3d1635299770ae"
+}
