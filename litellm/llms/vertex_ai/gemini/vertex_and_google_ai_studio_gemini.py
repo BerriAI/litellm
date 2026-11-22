@@ -2017,6 +2017,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
         return rows.get(f"{self._route}/{model.split('/')[-1]}", {}).get("supports_logprobs") is False
 
+    def _is_gemini_image_model(self, model: str) -> bool:
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)
+        bare: Final = model.split("/")[-1]
+        for candidate in (model, f"{self._route}/{bare}", f"gemini/{bare}", bare):
+            entry = rows.get(candidate)
+            if entry is not None:
+                modalities = entry.get("supported_output_modalities")
+                if isinstance(modalities, (list, tuple)) and "image" in modalities:
+                    return True
+        return False
+
     def _without_undeclared_thinking_level(
         self,
         thinking_config: GeminiThinkingConfig,
@@ -2086,6 +2097,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
             elif param == "n":
+                if value is not None and isinstance(value, int) and value > 1 and self._is_gemini_image_model(model):
+                    raise litellm.BadRequestError(
+                        message=f"n={value} is not supported: Vertex Gemini image models return one image per request; send n=1 or separate requests.",
+                        model=model,
+                        llm_provider=self._route,
+                    )
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
                 optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)

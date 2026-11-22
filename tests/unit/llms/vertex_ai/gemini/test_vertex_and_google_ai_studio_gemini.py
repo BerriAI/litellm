@@ -13005,3 +13005,33 @@ async def test_gemini_malformed_finish_with_no_output_bills_the_tokens_on_the_fa
     assert capture.failures[0]["completion_tokens"] == 381
     assert capture.failures[0]["prompt_tokens"] == 9098
     assert cast(float, capture.failures[0]["response_cost"]) > 0
+
+
+def test_vertex_gemini_image_model_rejects_candidate_count_greater_than_one():
+    config = VertexGeminiConfig()
+    # When n=2 on an image model (gemini-3.1-flash-image)
+    with pytest.raises(litellm.BadRequestError, match="Vertex Gemini image models return one image per request"):
+        config.map_openai_params(
+            non_default_params={"n": 2},
+            optional_params={},
+            model="vertex_ai/gemini-3.1-flash-image",
+            drop_params=False,
+        )
+
+    # When n=1 on an image model
+    mapped = config.map_openai_params(
+        non_default_params={"n": 1},
+        optional_params={},
+        model="vertex_ai/gemini-3.1-flash-image",
+        drop_params=False,
+    )
+    assert mapped["candidate_count"] == 1
+
+    # When n=2 on a non-image model (gemini-1.5-pro)
+    mapped_text = config.map_openai_params(
+        non_default_params={"n": 2},
+        optional_params={},
+        model="vertex_ai/gemini-1.5-pro",
+        drop_params=False,
+    )
+    assert mapped_text["candidate_count"] == 2
