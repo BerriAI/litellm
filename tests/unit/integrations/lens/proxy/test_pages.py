@@ -7,9 +7,16 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.integrations.lens.proxy.buffering import BufferBudget
-from litellm.integrations.lens.proxy.pages import dashboard_session, lens_ui_asset, page_auth, same_origin, ui_mount
+from litellm.integrations.lens.proxy.pages import (
+    allow_page,
+    dashboard_session,
+    lens_ui_asset,
+    page_auth,
+    same_origin,
+    ui_mount,
+)
 from litellm.integrations.lens.remote import LensConnection
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
 UNSUPPORTED: Final = "The connected Lens does not serve a UI this gateway can show. Update Lens to use it here"
@@ -274,3 +281,35 @@ async def test_dashboard_session_needs_a_cookie_login_that_resolves_to_its_own_u
         return UserAPIKeyAuth(user_id=resolved)
 
     assert await dashboard_session(_request("GET", {}), cookie=_cookie(user_id, session_key), key=key) is None
+
+
+@pytest.mark.parametrize(
+    ("path", "role"),
+    [
+        ("admin/signals", LitellmUserRoles.INTERNAL_USER),
+        ("admin/signals", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY),
+        ("admin/a-page-a-newer-lens-added", LitellmUserRoles.INTERNAL_USER),
+        ("admin", LitellmUserRoles.INTERNAL_USER),
+        ("admin/signals", None),
+    ],
+)
+def test_lens_admin_pages_stop_at_the_gateway_for_everyone_but_admins(path: str, role: LitellmUserRoles | None) -> None:
+    with pytest.raises(HTTPException) as refused:
+        allow_page(path, UserAPIKeyAuth(user_id="alice", user_role=role))
+
+    assert refused.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("path", "role"),
+    [
+        ("admin/signals", LitellmUserRoles.PROXY_ADMIN),
+        ("admin/traces/signals", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
+        ("v1/traces", LitellmUserRoles.INTERNAL_USER),
+        ("administrators", LitellmUserRoles.INTERNAL_USER),
+        ("evals/admin", LitellmUserRoles.INTERNAL_USER),
+        ("", LitellmUserRoles.INTERNAL_USER),
+    ],
+)
+def test_admins_reach_lens_admin_pages_and_everyone_reaches_the_rest(path: str, role: LitellmUserRoles) -> None:
+    allow_page(path, UserAPIKeyAuth(user_id="alice", user_role=role))

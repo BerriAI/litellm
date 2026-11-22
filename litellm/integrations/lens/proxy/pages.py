@@ -33,7 +33,7 @@ from litellm.integrations.lens.proxy.buffering import (
     request_body,
 )
 from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
-from litellm.proxy._types import SpecialHeaders, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
@@ -52,6 +52,8 @@ _KEY_HEADERS: Final = (
     SpecialHeaders.custom_litellm_api_key.value,
 )
 _READ_METHODS: Final = frozenset({"GET", "HEAD", "OPTIONS"})
+_ADMIN_PREFIX: Final = "admin"
+_ADMIN_ROLES: Final = frozenset({LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY})
 
 
 def ui_mount(root_path: str) -> str:
@@ -250,11 +252,30 @@ async def lens_service(request: Request, log_team_lookup: LogTeamLookupDependenc
     return await service_connection(await delegated_identity(await page_auth(request), log_team_lookup))
 
 
+def admin_page(path: str) -> bool:
+    """Whether a path under `/lens/` is one Lens keeps for admins: everything under its `admin/` prefix.
+
+    Lens decides which of its page APIs go under that prefix, so a Lens release can add or move one with no change here.
+    """
+    return path == _ADMIN_PREFIX or path.startswith(f"{_ADMIN_PREFIX}/")
+
+
+def allow_page(path: str, auth: UserAPIKeyAuth) -> None:
+    """Stop anyone but a LiteLLM admin or admin viewer before the request reaches Lens's admin pages.
+
+    Lens still tells the two apart: several of its admin reads are POSTs, so it refuses a viewer's writes itself.
+    """
+    if admin_page(path) and auth.user_role not in _ADMIN_ROLES:
+        raise HTTPException(403, "Only LiteLLM admins can use this Lens page")
+
+
 @router.api_route("", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 @router.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def lens_request(request: Request, log_team_lookup: LogTeamLookupDependency, path: str = "") -> Response:
     connection: Final = Connection.from_env()
     if connection is None:
         raise HTTPException(503, "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service")
-    identity: Final = await delegated_identity(await page_auth(request), log_team_lookup)
+    auth: Final = await page_auth(request)
+    allow_page(path, auth)
+    identity: Final = await delegated_identity(auth, log_team_lookup)
     return await forward(request, identity, path, connection, connection.remote.control_client(), int(time.time()))
