@@ -3499,6 +3499,9 @@ class Logging(LiteLLMLoggingBaseClass):
         price: Final = self._price_without_recording(response, cache_hit=None, ignore_stamped_cost=False)
         return usage, price.cost or 0.0
 
+    def with_failed_attempts_owed(self, own_cost: float) -> float:
+        return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
+
     def record_served_rounds_for_failure(self, served_rounds: tuple[ServedRound, ...]) -> None:
         if not served_rounds:
             return

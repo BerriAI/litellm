@@ -1,12 +1,14 @@
 import asyncio
 import threading
 from collections.abc import Mapping
+from datetime import datetime
 from io import BytesIO
 from typing import Final
 
 import httpx
 import openai
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -480,3 +482,88 @@ def test_an_unreadable_answer_beside_a_served_image_still_fails_the_request(
 
     with pytest.raises(litellm.APIConnectionError):
         _request_two_images(route, model, httpx.MockTransport(lambda request: next(replies)), spend)
+
+
+class _ServedSpend(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cost: float | None = None
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        response_cost: Final = kwargs.get("response_cost")
+        self.cost = float(response_cost) if isinstance(response_cost, (int, float)) else None
+        self.logged.set()
+
+
+async def _cost_of_image_served_after(
+    monkeypatch: pytest.MonkeyPatch, primary_answer: Mapping[str, object]
+) -> float | None:
+    spend: Final = _ServedSpend()
+    monkeypatch.setattr(litellm, "callbacks", [spend])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.invalid/v1",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, request = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="a single small red dot",
+        litellm_call_id="image-fallback",
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post(url__startswith="https://primary.invalid/").mock(
+            return_value=httpx.Response(200, json=primary_answer)
+        )
+        upstream.post(url__startswith="https://backup.invalid/").mock(return_value=httpx.Response(200, json=_SERVED))
+        await router.aimage_generation(**request, litellm_logging_obj=logging_obj)
+        await asyncio.wait_for(spend.logged.wait(), 10)
+    return spend.cost
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("finish_reason", "content", "error"),
+    (
+        pytest.param("STOP", {"parts": [{"text": "a red dot"}]}, litellm.UnprocessableEntityError, id="text-only"),
+        pytest.param(
+            "IMAGE_PROHIBITED_CONTENT", {"role": "model"}, litellm.ContentPolicyViolationError, id="charged-refusal"
+        ),
+        pytest.param("IMAGE_RECITATION", {"role": "model"}, litellm.ContentPolicyViolationError, id="free-refusal"),
+    ),
+)
+async def test_fallback_that_serves_the_image_also_bills_the_answer_it_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+    finish_reason: str,
+    content: Mapping[str, object],
+    error: type[litellm.ContentPolicyViolationError | litellm.UnprocessableEntityError],
+):
+    answer: Final = {
+        "candidates": [{"finishReason": finish_reason, "finishMessage": _NOT_CHARGED, "content": content}],
+        "usageMetadata": _NINE_IN_SEVEN_OUT,
+    }
+    replaced: Final = _failure_log(monkeypatch, "generation", "gemini/gemini-3.1-flash-image", answer, error).cost
+    served_alone: Final = await _cost_of_image_served_after(monkeypatch, _SERVED)
+    through_fallback: Final = await _cost_of_image_served_after(monkeypatch, answer)
+
+    assert served_alone is not None and served_alone > 0
+    assert replaced is not None
+    assert through_fallback == pytest.approx(served_alone + replaced)

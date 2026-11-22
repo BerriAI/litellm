@@ -430,6 +430,8 @@ class _ImageRouterHandler(litellm.CustomLLM):
     def __init__(self) -> None:
         self.calls: list[str] = []
         self.billed_before_failure: tuple[litellm.Usage, float] | None = None
+        self.owed_after_failure: tuple[litellm.Usage, float] | None = None
+        self.served_cost: float | None = None
 
     async def aimage_generation(
         self,
@@ -449,8 +451,13 @@ class _ImageRouterHandler(litellm.CustomLLM):
         if model.endswith("failing"):
             if self.billed_before_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
                 logging_obj.record_partial_usage_for_failure(*self.billed_before_failure)
+            if self.owed_after_failure is not None and isinstance(logging_obj, LiteLLMLoggingObj):
+                logging_obj.record_served_rounds_for_failure((self.owed_after_failure,))
             raise litellm.RateLimitError(message="primary failed", llm_provider="image-regression", model=model)
-        return ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
+        served: Final = ImageResponse(created=1, data=[ImageObject(url="https://images.example/generated.png")])
+        if self.served_cost is not None:
+            served._hidden_params = {"response_cost": self.served_cost}
+        return served
 
     async def aimage_edit(
         self,
@@ -817,3 +824,27 @@ def test_failed_image_request_bills_what_the_provider_served_in_its_spend_row_an
         2240,
         2256,
     )
+
+
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
+def test_image_cost_header_includes_the_billed_attempt_a_fallback_replaced(
+    monkeypatch: pytest.MonkeyPatch, send: Callable[[TestClient], httpx.Response]
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    client, handler = _image_generation_client(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test", router_settings={"fallbacks": [{"A": ["B"]}]})
+    )
+    handler.owed_after_failure = (litellm.Usage(prompt_tokens=16, completion_tokens=0, total_tokens=16), 0.25)
+    handler.served_cost = 0.5
+    try:
+        with client:
+            response: Final = send(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert handler.calls == ["failing", "working"]
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.75)

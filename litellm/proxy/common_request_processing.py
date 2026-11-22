@@ -2353,6 +2353,16 @@ def _response_cost_header_value(hidden_params: Mapping[str, object]) -> float | 
     return response_cost if isinstance(response_cost, int | float) and finite_cost(response_cost) else ""
 
 
+def response_cost_with_failed_attempts(response_cost: object, logging_obj: object) -> float | str:
+    if isinstance(response_cost, str):
+        return response_cost
+    if not isinstance(response_cost, int | float):
+        return ""
+    if not isinstance(logging_obj, LiteLLMLoggingObj):
+        return response_cost or ""
+    return logging_obj.with_failed_attempts_owed(response_cost) or ""
+
+
 def cost_headers(
     response_cost: float | str | None, litellm_logging_obj: LiteLLMLoggingObj | None
 ) -> Mapping[str, str | None]:

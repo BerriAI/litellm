@@ -13,6 +13,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -23,6 +24,7 @@ from litellm.proxy.common_request_processing import (
     hierarchical_router_settings_updates,
     log_llm_api_exception,
     resolve_litellm_call_id,
+    response_cost_with_failed_attempts,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
@@ -213,7 +215,11 @@ async def image_generation(
         model_id: Final = hidden_params.get("model_id", None) or ""
         cache_key: Final = hidden_params.get("cache_key", None) or ""
         api_base: Final = hidden_params.get("api_base", None) or ""
-        response_cost: Final = hidden_params.get("response_cost", None) or ""
+        request_logging_obj: Final = data.get("litellm_logging_obj")
+        response_cost: Final = response_cost_with_failed_attempts(
+            hidden_params.get("response_cost"),
+            request_logging_obj if isinstance(request_logging_obj, LiteLLMLoggingObj) else None,
+        )
         response_call_id: Final = hidden_params.get("litellm_call_id", None) or ""
 
         fastapi_response.headers.update(

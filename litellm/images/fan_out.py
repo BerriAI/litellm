@@ -8,8 +8,9 @@ from pydantic import TypeAdapter
 
 from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
 from litellm.exceptions import BadRequestError
+from litellm.litellm_core_utils.agentic_followup_failure import ServedRound
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import ImageResponse, ImageUsage, Usage
+from litellm.types.utils import ImageResponse, ImageUsage
 
 _T = TypeVar("_T")
 _REQUEST_COUNT: Final = TypeAdapter(int)
@@ -30,7 +31,7 @@ class _AnswerWithoutAnImage(Protocol):
 class _SpendLog(Protocol):
     def uncached_price(self, result: object) -> _Price: ...
 
-    def record_partial_usage_for_failure(self, usage: Usage, response_cost: float) -> None: ...
+    def record_served_rounds_for_failure(self, served_rounds: tuple[ServedRound, ...]) -> None: ...
 
 
 def image_request_count(requested_images: object, *, model: str, llm_provider: str) -> int:
@@ -160,7 +161,13 @@ def record_partial_image_spend(logging_obj: _SpendLog, responses: Sequence[Image
     if not responses:
         return
     usage: Final = merge_image_responses(responses).usage
-    logging_obj.record_partial_usage_for_failure(
-        ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage.model_dump() if usage else None),
-        _summed_cost(logging_obj, responses) or 0.0,
+    logging_obj.record_served_rounds_for_failure(
+        (
+            (
+                ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+                    usage.model_dump() if usage else None
+                ),
+                _summed_cost(logging_obj, responses) or 0.0,
+            ),
+        )
     )
