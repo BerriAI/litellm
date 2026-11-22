@@ -20,7 +20,7 @@ import litellm.types
 import litellm.types.llms
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB, REDACTED_BY_LITELLM
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -872,7 +872,9 @@ def convert_generic_image_chunk_to_openai_image_obj(
     return "data:{};{},{}".format(media_type, image_chunk["type"], image_chunk["data"])
 
 
-def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) -> GenericImageParsingChunk:
+def convert_to_anthropic_image_obj(
+    openai_image_url: str, format: str | None, *, max_bytes: int | None = None
+) -> GenericImageParsingChunk:
     """
     Input:
     "image_url": "data:image/jpeg;base64,{base64_image}",
@@ -886,7 +888,7 @@ def convert_to_anthropic_image_obj(openai_image_url: str, format: str | None) ->
     """
     try:
         if openai_image_url.startswith("http"):
-            openai_image_url = convert_url_to_base64(url=openai_image_url)
+            openai_image_url = convert_url_to_base64(url=openai_image_url, max_bytes=max_bytes)
         # Extract the media type and base64 data
         media_type, base64_data = openai_image_url.split("data:")[1].split(";base64,")
 
@@ -1524,6 +1526,9 @@ def _is_downloadable_or_base64_url(url: str) -> bool:
     return header.startswith("data:") and bool(separator) and bool(data)
 
 
+MAX_VIDEO_DOWNLOAD_BYTES: Final = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+
+
 def _skip_unfetched_tool_result_video(
     reason: str, *, drop_params: bool, model: str | None, custom_llm_provider: str
 ) -> None:
@@ -1587,7 +1592,7 @@ def _gemini_tool_result_video_blob(
             custom_llm_provider=custom_llm_provider,
         )
     try:
-        video: Final = convert_to_anthropic_image_obj(url, format=None)
+        video: Final = convert_to_anthropic_image_obj(url, format=None, max_bytes=MAX_VIDEO_DOWNLOAD_BYTES)
     except litellm.ImageFetchError:
         return _skip_unfetched_tool_result_video(
             "The link is unreachable, too large, or not a video.",

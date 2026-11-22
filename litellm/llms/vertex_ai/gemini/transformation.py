@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    MAX_VIDEO_DOWNLOAD_BYTES,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -505,6 +506,7 @@ def _process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    max_download_bytes: int | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -598,7 +600,7 @@ def _process_gemini_media(
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            image: Final = convert_to_anthropic_image_obj(image_url, format=format)
+            image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
@@ -639,6 +641,7 @@ def _process_gemini_video_url(
         video_metadata=as_str_mapping(video_fields.get("video_metadata")),
         vertex_project=vertex_project,
         vertex_credentials=vertex_credentials,
+        max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
     )
     media: Final = part.get("inline_data") or part.get("file_data")
     holds_video: Final = keeps_gemini_video(

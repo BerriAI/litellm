@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-from httpx import Response
+from httpx import USE_CLIENT_DEFAULT, Response
 
 import litellm
 from litellm import verbose_logger
@@ -126,7 +126,42 @@ async def async_convert_url_to_base64(url: str, timeout: float | httpx.Timeout |
     raise litellm.ImageFetchError(f"Error: Unable to fetch image from URL after 3 attempts. url={url}")
 
 
-def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None) -> str:
+_DECODED_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageBodyReader:
+    client: httpx.Client
+    max_bytes: int
+
+    def get(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        follow_redirects: bool = False,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> Response:
+        with self.client.stream(
+            "GET",
+            url,
+            headers=headers,
+            follow_redirects=follow_redirects,
+            timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
+        ) as response:
+            return Response(
+                response.status_code,
+                headers=[
+                    (name, value) for name, value in response.headers.multi_items() if name not in _DECODED_BODY_HEADERS
+                ],
+                content=next(response.iter_bytes(self.max_bytes), b""),
+                request=response.request,
+            )
+
+
+def convert_url_to_base64(
+    url: str, timeout: float | httpx.Timeout | None = None, *, max_bytes: int | None = None
+) -> str:
     if url.startswith("data:") and ";base64," in url:
         return url
 
@@ -143,7 +178,11 @@ def convert_url_to_base64(url: str, timeout: float | httpx.Timeout | None = None
     client: Final = litellm.module_level_client
     for attempt_timeout in _attempt_timeouts(timeout):
         try:
-            response = safe_get(client, url, timeout=attempt_timeout)
+            response = safe_get(
+                client if max_bytes is None else _ImageBodyReader(client.client, max_bytes + 1),
+                url,
+                timeout=attempt_timeout,
+            )
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
