@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import io
 import json
@@ -428,6 +429,86 @@ def test_a_gemini_response_schema_under_a_later_config_name_is_counted(first: st
     assert without_schema is not None and schema_under_later is not None
     assert schema_under_later - without_schema == litellm.token_counter(model=GEMINI_MODEL, text=json.dumps(schema))
     assert schema_under_both == schema_under_later
+
+
+@pytest.mark.asyncio
+async def test_a_large_gemini_response_schema_is_counted_without_blocking_the_event_loop() -> None:
+    schema: Final = {
+        "type": "OBJECT",
+        "properties": {
+            f"field_{index}": {"type": "STRING", "description": "A customer note. " * 5}
+            for index in range(TOKENIZE_OFF_EVENT_LOOP_MIN_CHARS // 50)
+        },
+    }
+    request_body: Final = {"contents": [_user({"text": "Fill the form."})], "generationConfig": {"responseSchema": schema}}
+
+    counting: Final = asyncio.create_task(
+        count_input_tokens(request_body=request_body, raw_body=None, models=(GEMINI_MODEL,))
+    )
+    await asyncio.sleep(0)
+
+    assert not counting.done()
+    assert (await counting)[GEMINI_MODEL] == count_input_tokens_for_model(request_body=request_body, model=GEMINI_MODEL)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.6-sol", "azure/gpt-5.6-sol"])
+def test_a_gemini_body_for_an_openai_deployment_counts_the_chat_messages_it_is_sent_as(model: str) -> None:
+    turns: Final = [{"role": role, "parts": [{"text": "ok"}]} for role in ("user", "model") * 100]
+    messages: Final = [{"role": "user" if turn["role"] == "user" else "assistant", "content": "ok"} for turn in turns]
+
+    assert count_input_tokens_for_model(request_body={"contents": turns}, model=model) == litellm.token_counter(
+        model=model, messages=messages
+    )
+
+
+@pytest.mark.parametrize(
+    ("served_models", "counted_as_chat"),
+    [
+        (("anthropic/claude-sonnet-5-5",), True),
+        (("anthropic/claude-sonnet-5-5", "azure/my-gpt-deployment"), True),
+        (("vertex_ai/gemini-3.8-flash",), False),
+        (("anthropic/claude-sonnet-5-5", "gemini/gemini-3.8-flash"), False),
+    ],
+)
+def test_a_gemini_body_for_an_alias_counts_as_chat_only_when_no_deployment_serves_it_natively(
+    served_models: tuple[str, ...], counted_as_chat: bool
+) -> None:
+    turns: Final = [{"role": role, "parts": [{"text": "ok"}]} for role in ("user", "model") * 100]
+    messages: Final = [{"role": "user" if turn["role"] == "user" else "assistant", "content": "ok"} for turn in turns]
+
+    counted: Final = count_input_tokens_for_model(
+        request_body={"contents": turns}, model="team-assistant", served_models=served_models
+    )
+
+    assert counted == (
+        litellm.token_counter(model="team-assistant", messages=messages)
+        if counted_as_chat
+        else litellm.token_counter(model="team-assistant", text="ok") * len(turns)
+    )
+
+
+def test_a_gemini_body_an_openai_deployment_cannot_be_sent_is_left_unsized() -> None:
+    assert count_input_tokens_for_model(request_body={"contents": "Fill the form."}, model="openai/gpt-5.6-sol") is None
+
+
+def test_a_gemini_response_schema_for_an_openai_deployment_is_counted() -> None:
+    schema: Final = {
+        "type": "OBJECT",
+        "properties": {f"field_{index}": {"type": "STRING", "description": "A customer note. " * 5} for index in range(10)},
+    }
+    contents: Final = [_user({"text": "Fill the form."})]
+    capped: Final = {"maxOutputTokens": 64, "responseMimeType": "application/json"}
+
+    with_schema: Final = count_input_tokens_for_model(
+        request_body={"contents": contents, "generationConfig": capped | {"responseSchema": schema}},
+        model="openai/gpt-5.6-sol",
+    )
+    without_schema: Final = count_input_tokens_for_model(
+        request_body={"contents": contents, "generationConfig": capped}, model="openai/gpt-5.6-sol"
+    )
+
+    assert with_schema is not None and without_schema is not None
+    assert with_schema - without_schema >= litellm.token_counter(model="openai/gpt-5.6-sol", text=json.dumps(schema))
 
 
 def test_inline_gemini_audio_counts_by_its_duration() -> None:

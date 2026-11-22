@@ -194,6 +194,23 @@ def google_genai_request_config(data: object) -> object:
     return fields[config_field]
 
 
+def generate_content_body_to_completion(body: Mapping[str, object], model: str) -> _GenAICompletionRequest | None:
+    contents: Final = body.get("contents")
+    if not isinstance(contents, (dict, list)):
+        return None
+    config: Final = google_genai_request_config(body)
+    return GoogleGenAIAdapter().translate_generate_content_to_completion(
+        model=model,
+        contents=contents,
+        config=config if isinstance(config, dict) else None,
+        systemInstruction=body.get("systemInstruction"),
+        system_instruction=body.get("system_instruction"),
+        tools=body.get("tools"),
+        toolConfig=body.get("toolConfig"),
+        tool_config=body.get("tool_config"),
+    )
+
+
 _INTEGER_STRING: Final = re.compile(r"[+-]?\d+")
 _NUMBER_STRING: Final = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 

@@ -45,7 +45,11 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
 from litellm.exceptions import ServiceUnavailableError
-from litellm.google_genai.adapters.transformation import google_genai_config_field, google_genai_request_config
+from litellm.google_genai.adapters.transformation import (
+    generate_content_body_to_completion,
+    google_genai_config_field,
+    google_genai_request_config,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -1082,26 +1086,10 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
-    config: Final = google_genai_request_config(data)
-    contents: Final = data.get("contents") if isinstance(data, dict) else None
-    if (
-        not isinstance(data, dict)
-        or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES
-        or not isinstance(contents, (dict, list))
-    ):
+    if not isinstance(data, dict) or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
         return None
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-
-    return GoogleGenAIAdapter().translate_generate_content_to_completion(
-        model=data.get("model") if isinstance(data.get("model"), str) else "",
-        contents=contents,
-        config=config if isinstance(config, dict) else None,
-        systemInstruction=data.get("systemInstruction"),
-        system_instruction=data.get("system_instruction"),
-        tools=data.get("tools"),
-        toolConfig=data.get("toolConfig"),
-        tool_config=data.get("tool_config"),
-    )
+    model: Final = data.get("model")
+    return generate_content_body_to_completion(body=data, model=model if isinstance(model, str) else "")
 
 
 def _has_explicit_output_cap(data: object, call_type: str | None) -> bool:

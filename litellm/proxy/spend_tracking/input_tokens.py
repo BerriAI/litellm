@@ -24,7 +24,11 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import OPENAI_CHAT_PDF_FILE_TOKENS, PDF_DATA_URL_PREFIX
-from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS, genai_media_part
+from litellm.google_genai.adapters.transformation import (
+    GOOGLE_GENAI_CONFIG_FIELDS,
+    genai_media_part,
+    generate_content_body_to_completion,
+)
 from litellm.litellm_core_utils.audio_utils.utils import audio_duration_tokens
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import (
@@ -52,6 +56,8 @@ from litellm.rust_bridge.token_counter import (
     native_count,
     rust_tokenizer,
 )
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -73,6 +79,9 @@ _INPUT_SIZE_FIELDS: Final = (
     "contents",
     "systemInstruction",
     "system_instruction",
+    "toolConfig",
+    "tool_config",
+    *GOOGLE_GENAI_CONFIG_FIELDS,
 )
 
 
@@ -288,13 +297,47 @@ def count_input_tokens_for_model(request_body: dict, model: str, served_models: 
             )
             return query_tokens + document_tokens
         if "contents" in request_body:
+            gemini_body: Final = REQUEST_BODY_FIELDS.validate_python(request_body)
+            if _served_through_completion_adapter(model, served_models):
+                return _count_adapted_gemini_tokens(request_body=gemini_body, model=model)
             return _count_gemini_tokens(
-                request_body=REQUEST_BODY_FIELDS.validate_python(request_body),
+                request_body=gemini_body,
                 counter=_GeminiCounter(model=model, audio_models=tuple(served_models) or (model,)),
             )
     except Exception:
         verbose_proxy_logger.debug("Unable to count input tokens for budget reservation", exc_info=True)
     return None
+
+
+def _served_through_completion_adapter(model: str, served_models: Sequence[str]) -> bool:
+    counted: Final = _completion_adapter_serves(model)
+    if counted is not None:
+        return counted
+    return bool(served_models) and all(_completion_adapter_serves(served) is True for served in served_models)
+
+
+def _completion_adapter_serves(model: str) -> bool | None:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model)
+        served_provider: Final = LlmProviders(provider)
+    except (litellm.exceptions.BadRequestError, ValueError):
+        return None
+    native_config: Final = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+        model=model, provider=served_provider
+    )
+    return native_config is None
+
+
+def _count_adapted_gemini_tokens(request_body: Mapping[str, object], model: str) -> int | None:
+    completion: Final = generate_content_body_to_completion(body=request_body, model=model)
+    if completion is None:
+        return None
+    return _sum_if_all_sized(
+        (
+            count_input_tokens_for_model(request_body=dict(completion), model=model),
+            _count_text_tokens(model=model, text=completion.get("response_format")),
+        )
+    )
 
 
 def _count_text_tokens(model: str, text: object) -> int:
