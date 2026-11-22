@@ -5,6 +5,8 @@ Dynamic configuration class generator for JSON-based providers.
 from collections.abc import Coroutine
 from typing import TYPE_CHECKING, Final, Literal, overload
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     handle_messages_with_content_list_to_str_conversion,
@@ -18,6 +20,8 @@ from .json_loader import SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+_PARAM_NAMES_ADAPTER: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
 def create_config_class(provider: SimpleProviderConfig):
@@ -107,7 +111,10 @@ def create_config_class(provider: SimpleProviderConfig):
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = super().get_supported_openai_params(model=model)
+            inherited_params: Final = _PARAM_NAMES_ADAPTER.validate_python(
+                super().get_supported_openai_params(model=model)
+            )
+            supported_params: Final = [param for param in inherited_params if param not in provider.unsupported_params]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 

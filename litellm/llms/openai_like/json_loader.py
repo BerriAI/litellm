@@ -6,7 +6,13 @@ import json
 from pathlib import Path
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
+from litellm.types.utils import ProviderSpecificModelInfo
+
+_PROVIDER_INFO_ADAPTER: Final = TypeAdapter(ProviderSpecificModelInfo)
+_STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
 
 
 class SimpleProviderConfig:
@@ -21,7 +27,13 @@ class SimpleProviderConfig:
         self.param_mappings = data.get("param_mappings", {})
         self.constraints = data.get("constraints", {})
         self.special_handling = data.get("special_handling", {})
+        self.unsupported_params: Final[frozenset[str]] = frozenset(
+            _STR_TUPLE_ADAPTER.validate_python(data["unsupported_params"]) if "unsupported_params" in data else ()
+        )
         self.supported_endpoints = data.get("supported_endpoints", [])
+        self.provider_info: ProviderSpecificModelInfo = (
+            _PROVIDER_INFO_ADAPTER.validate_python(data["provider_info"]) if "provider_info" in data else {}
+        )
 
 
 class JSONProviderRegistry:

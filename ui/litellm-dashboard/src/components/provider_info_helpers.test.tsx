@@ -379,6 +379,12 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
     });
 
+    it("should return a perplexity_orchestrator/ placeholder for the Perplexity Orchestrator provider", () => {
+      expect(getPlaceholder(Providers.PERPLEXITY_ORCHESTRATOR)).toBe(
+        "perplexity_orchestrator/anthropic/claude-sonnet-5-5",
+      );
+    });
+
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
       expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
       expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
