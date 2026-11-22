@@ -280,6 +280,24 @@ async def test_a_client_cut_after_a_fallback_bills_the_first_deployment_at_its_o
     await stream.aclose()  # pyright: ignore[reportUnknownMemberType]  # an async stream
 
 
+def test_a_client_cut_while_the_fallback_connects_bills_the_first_deployment_at_its_own_price():
+    shared_logging: Final = _shared_logging()
+    wrapper: Final = FallbackResponsesStreamWrapper(
+        async_generator=Mock(),
+        attempt=Mock(),
+        source_iterator=_PricedOnTheSharedLogging((), None, shared_logging, "resp_primary", 25),
+    )
+    wrapper.hold_primary_partial()
+    shared_logging.model = "fallback-deployment"
+
+    billed: Final = wrapper.partial_response_on_disconnect()
+
+    expected: Final = 25 * _PRICE_PER_INPUT_TOKEN["primary-deployment"]
+    assert _billed_cost(billed) == pytest.approx(expected)
+    assert shared_logging.cost_breakdown is not None
+    assert shared_logging.cost_breakdown.get("total_cost") == pytest.approx(expected)
+
+
 async def test_a_fallback_that_fails_after_a_cut_leaves_no_breakdown_from_the_first_deployments_partial():
     shared_logging: Final = _shared_logging()
     host: Final = ScriptedHost()
