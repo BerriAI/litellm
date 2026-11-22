@@ -394,7 +394,7 @@ def _resolved_agent_param_value(
         if _is_secret_agent_param(key, value, plain_fields):
             return existing.get(key, _MISSING_AGENT_PARAM) if value == REDACTED_BY_LITELM_STRING else value
         return _restore_redacted_nested_value(value, existing.get(key), _depth, _child_plain_fields(key, value))
-    if _is_secret_agent_param(key, existing.get(key), plain_fields):
+    if _is_secret_agent_param(key, existing.get(key), plain_fields) or _is_token_exchange_block(key, existing.get(key)):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
 

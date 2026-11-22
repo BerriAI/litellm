@@ -74,7 +74,7 @@ async def test_the_callers_token_is_exchanged_for_the_agent_bearer_with_env_expa
     monkeypatch.setenv("AGENT_OBO_SECRET", _SECRET)
     idp = _IdP()
 
-    header = await _exchange(idp, {**_BLOCK, "client_secret": "os.environ/AGENT_OBO_SECRET", "header_name": "X-Other"})
+    header = await _exchange(idp, {**_BLOCK, "client_secret": "os.environ/AGENT_OBO_SECRET"})
 
     assert header == {"Authorization": f"Bearer exchanged:{_SUBJECT}:api://agent"}
     assert idp.forms == [
@@ -268,3 +268,34 @@ def _agent() -> AgentResponse:
         agent_card_params={"url": "https://agent.example.com"},
         litellm_params={},
     )
+
+
+@pytest.mark.parametrize("unknown", [{"audiance": "api://typo"}, {"header_name": "X-Other"}])
+async def test_an_unknown_key_in_the_block_is_a_500_naming_it_without_its_value(unknown: Mapping[str, str]) -> None:
+    idp = _IdP()
+
+    with pytest.raises(HTTPException) as refused:
+        await _exchange(idp, {**_BLOCK, **unknown})
+
+    assert refused.value.status_code == 500
+    assert next(iter(unknown)) in str(refused.value.detail)
+    assert next(iter(unknown.values())) not in str(refused.value.detail)
+    assert idp.forms == []
+
+
+@respx.mock
+async def test_an_obo_agent_with_a_custom_llm_provider_is_a_400_before_the_idp() -> None:
+    idp = respx.route(host="idp.example.com")
+
+    with pytest.raises(HTTPException) as refused:
+        await _resolve_backend_auth(
+            {"token_exchange": _BLOCK, "custom_llm_provider": "databricks_agent", "api_key": "static-key"},
+            "databricks_agent",
+            agent=_agent(),
+            request_headers={"authorization": f"Bearer {_SUBJECT}"},
+            user_api_key_auth=_jwt_caller(),
+        )
+
+    assert refused.value.status_code == 400
+    assert "reached by URL" in str(refused.value.detail)
+    assert not idp.called

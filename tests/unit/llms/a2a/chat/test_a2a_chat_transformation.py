@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
 
+import litellm
 from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.llms.a2a.common_utils import A2AError
@@ -129,16 +131,21 @@ def test_resolve_agent_config_from_registry_returns_the_explicit_headers_object_
     assert optional_params == {"stream": True}
 
 
-def test_resolve_agent_config_from_registry_keeps_the_token_exchange_block_out_of_optional_params():
+def _registry_with_agent(litellm_params: dict[str, object]) -> AgentRegistry:
     registry = AgentRegistry()
     registry.register_agent(
         AgentResponse(
             agent_id="obo-agent-id",
             agent_name="obo-agent",
             agent_card_params={"url": "http://agent.example"},
-            litellm_params={"token_exchange": {"client_secret": "obo-secret"}, "timeout": 30},
+            litellm_params=litellm_params,
         )
     )
+    return registry
+
+
+def test_resolve_agent_config_from_registry_keeps_a_disabled_token_exchange_out_of_optional_params():
+    registry = _registry_with_agent({"token_exchange": False, "timeout": 30})
     optional_params: dict[str, object] = {}
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
@@ -147,6 +154,22 @@ def test_resolve_agent_config_from_registry_keeps_the_token_exchange_block_out_o
         )
 
     assert optional_params == {"timeout": 30}
+
+
+@respx.mock
+async def test_an_sdk_call_to_an_obo_agent_is_a_400_that_never_calls_the_agent() -> None:
+    agent = respx.route(host="agent.example").mock(return_value=httpx.Response(200, json={}))
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
+        _registry_with_agent({"token_exchange": {"client_secret": "obo-secret"}, "api_key": "static-key"}),
+    ):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await litellm.acompletion(model="a2a/obo-agent", messages=[{"role": "user", "content": "ping"}])
+
+    assert "/a2a/{agent_id}" in str(refused.value)
+    assert "obo-secret" not in str(refused.value)
+    assert not agent.called
 
 
 def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelResponse:

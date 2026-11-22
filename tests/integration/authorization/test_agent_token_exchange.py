@@ -242,16 +242,24 @@ def test_a_jwt_mapped_to_a_virtual_key_is_exchanged_with_the_entra_obo_grant(rig
 def test_a_virtual_key_or_a_missing_bearer_is_refused_before_the_idp_and_the_agent(rig: _Rig) -> None:
     with peer("obokey", "langgraph") as agent, rig.proxy.scenario() as scenario:
         identity: Final = _agent(rig, scenario, agent, {"token_exchange": _block(rig)})
-        key: Final = scenario.key()
+        key: Final = scenario.key(max_parallel_requests=1)
         rig.exchanges()
-        for headers in ({"Authorization": f"Bearer {key}"}, {"x-litellm-api-key": key}):
+        for headers in ({"Authorization": f"Bearer {key}"}, {"x-litellm-api-key": key}, {"x-litellm-api-key": key}):
             refused = _send(rig, identity, "obo-key", headers)
             _assert_refused(refused, 401, key)
             assert refused.headers["www-authenticate"] == 'Bearer error="invalid_request"', refused.headers
+        subject: Final = "opaque-subject-" + uuid.uuid4().hex
+        _assert_answered(
+            _send(rig, identity, "obo-key-ok", {"x-litellm-api-key": key, "Authorization": f"Bearer {subject}"}),
+            "obo-key-ok",
+        )
         caller: Final = rig.caller()
         _assert_answered(_send(rig, identity, "obo-after", {"Authorization": f"Bearer {caller}"}), "obo-after")
-        assert [form["subject_token"] for form in rig.exchanges()] == [caller]
-        assert _agent_authorizations(agent) == (f"Bearer {_exchanged(caller, '')}",)
+        assert [form["subject_token"] for form in rig.exchanges()] == [subject, caller]
+        assert _agent_authorizations(agent) == (
+            f"Bearer {_exchanged(subject, '')}",
+            f"Bearer {_exchanged(caller, '')}",
+        )
 
 
 def test_an_idp_refusal_becomes_a_json_rpc_error_and_never_reaches_the_agent(rig: _Rig) -> None:
@@ -289,7 +297,7 @@ def test_an_idp_refusal_becomes_a_json_rpc_error_and_never_reaches_the_agent(rig
 def test_the_a2a_model_route_refuses_an_obo_agent_without_calling_it(rig: _Rig) -> None:
     with peer("obomodel", "langgraph") as agent, rig.proxy.scenario() as scenario:
         _agent(rig, scenario, agent, {"token_exchange": _block(rig)})
-        _agent(
+        bridge: Final = _agent(
             rig,
             scenario,
             agent,
@@ -307,6 +315,9 @@ def test_the_a2a_model_route_refuses_an_obo_agent_without_calling_it(rig: _Rig) 
             )
             assert refused.status_code == 400, refused.text
             assert "/a2a/{agent_id}" in refused.text, refused.text
+        bridged: Final = _send(rig, bridge, "obo-bridge", {"Authorization": f"Bearer {caller}"})
+        _assert_refused(bridged, 400, caller)
+        assert "reached by URL" in bridged.text, bridged.text
         _assert_answered(_send(rig, plain, "obo-plain", {"Authorization": f"Bearer {caller}"}), "obo-plain")
         assert rig.exchanges() == ()
         assert _agent_authorizations(agent) == (None,)

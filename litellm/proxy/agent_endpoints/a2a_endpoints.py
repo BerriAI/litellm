@@ -233,6 +233,12 @@ async def _resolve_backend_auth(
     user_api_key_auth: UserAPIKeyAuth,
 ) -> AgentBackendAuth:
     if has_token_exchange(litellm_params):
+        if custom_llm_provider:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Agent '{agent.agent_name}' uses OBO token exchange, which needs an agent reached by URL "
+                "(no custom_llm_provider).",
+            )
         resource: Final = str((agent.agent_card_params or {}).get("url") or agent.agent_id)
         return AgentBackendAuth(
             litellm_params=without_token_exchange(litellm_params),
@@ -950,6 +956,18 @@ async def invoke_agent_a2a(
         if not agent_url and not custom_llm_provider:
             return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
+        exchanged_auth: Final = (
+            await _resolve_backend_auth(
+                litellm_params,
+                custom_llm_provider,
+                agent=agent,
+                request_headers=request.headers,
+                user_api_key_auth=user_api_key_dict,
+            )
+            if has_token_exchange(litellm_params)
+            else None
+        )
+
         verbose_proxy_logger.info(
             "Proxying A2A request to agent '%s' at %s", agent_id, agent_url or "completion-bridge"
         )
@@ -1028,13 +1046,17 @@ async def invoke_agent_a2a(
             dynamic_headers=dynamic_headers or None,
             static_headers=static_headers or None,
         )
-        backend_auth: Final = await _resolve_backend_auth(
-            litellm_params,
-            custom_llm_provider,
-            merged_agent_headers,
-            agent=agent,
-            request_headers=request.headers,
-            user_api_key_auth=user_api_key_dict,
+        backend_auth: Final = (
+            exchanged_auth
+            if exchanged_auth is not None
+            else await _resolve_backend_auth(
+                litellm_params,
+                custom_llm_provider,
+                merged_agent_headers,
+                agent=agent,
+                request_headers=request.headers,
+                user_api_key_auth=user_api_key_dict,
+            )
         )
         agent_extra_headers: Final = _forwarding_headers(
             caller_identity=caller_identity,

@@ -1753,3 +1753,21 @@ def test_restore_redacted_litellm_params_lets_an_edit_drop_a_plain_token_exchang
     restored = _restore_redacted_litellm_params({"token_exchange": edited}, {"token_exchange": _OBO_BLOCK})
 
     assert restored == {"token_exchange": edited}
+
+
+@pytest.mark.parametrize(
+    ("incoming", "expected"),
+    [
+        ({"timeout": 30}, {"timeout": 30, "token_exchange": _OBO_BLOCK}),
+        ({"timeout": 30, "token_exchange": None}, {"timeout": 30, "token_exchange": None}),
+        ({"timeout": 30, "token_exchange": False}, {"timeout": 30, "token_exchange": False}),
+        (
+            {"token_exchange": {**_OBO_BLOCK, "client_secret": REDACTED_BY_LITELM_STRING, "audience": "api://v2"}},
+            {"token_exchange": {**_OBO_BLOCK, "audience": "api://v2"}},
+        ),
+    ],
+)
+def test_restore_redacted_litellm_params_keeps_a_token_exchange_block_the_edit_left_out(
+    incoming: Mapping[str, object], expected: Mapping[str, object]
+):
+    assert _restore_redacted_litellm_params(incoming, {"token_exchange": _OBO_BLOCK}) == expected

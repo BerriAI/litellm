@@ -62,6 +62,9 @@ def _token_exchange_config(litellm_params: Mapping[str, object]) -> TokenExchang
         block: Final = _BLOCK.validate_python(litellm_params.get(TOKEN_EXCHANGE_PARAM))
     except ValidationError:
         return "it must be a mapping"
+    unknown: Final = tuple(sorted(name for name in block if name not in _CONFIG_FIELDS))
+    if unknown:
+        return f"unknown field(s) {', '.join(unknown)}"
     fields: Final = {name: _expand_field(block[name]) for name in _CONFIG_FIELDS if name in block}
     unresolved: Final = tuple(name for name, value in fields.items() if _unresolved(block[name], value))
     if unresolved:
