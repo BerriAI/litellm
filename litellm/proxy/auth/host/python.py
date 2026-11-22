@@ -826,12 +826,13 @@ class PythonAuthHost:
         reading: Final = claims_reading(claims, self.litellm_jwtauth)
         if reading.valid_user_email is False:
             return None
-        if not reading.user_id:
+        user_id: Final = reading.effective_user_id
+        if not user_id:
             return NO_PERSON
         resolved: Final = await self.resolve_user_identity(
-            reading.user_id,
+            user_id,
             reading.user_email,
-            reading.user_id,
+            user_id,
             False,
             None,
             read_email_verified(claims.get("email_verified")),
