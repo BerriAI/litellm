@@ -87,7 +87,7 @@ export function KeyDetailSkeleton({ keyId, backButtonText, onBack, showAutoRoute
               </Button>
             }
           >
-            <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
+            <div className="grid grid-cols-1 items-start gap-6 md:grid-cols-[minmax(180px,240px)_minmax(0,1fr)]">
               <div className="flex flex-col gap-3">
                 <div>
                   <div className="text-xs font-medium text-muted-foreground">
