@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -67,13 +67,16 @@ def _applies_to_call(
     return custom_llm_provider in (provider.strip() for provider in scoped_providers)
 
 
-def _text_values_named(headers: Mapping[str, object], lowered: str) -> tuple[str, ...]:
-    return tuple(value if isinstance(value, str) else "" for name, value in headers.items() if name.lower() == lowered)
+def _header_name(header: tuple[str, str]) -> str:
+    return header[0]
 
 
 def _text_values_by_name(headers: Mapping[str, object]) -> Mapping[str, tuple[str, ...]]:
+    named: Final = sorted(
+        ((name.lower(), value if isinstance(value, str) else "") for name, value in headers.items()), key=_header_name
+    )
     return MappingProxyType(
-        {lowered: _text_values_named(headers, lowered) for lowered in frozenset(name.lower() for name in headers)}
+        {name: tuple(value for _, value in values) for name, values in groupby(named, key=_header_name)}
     )
 
 
