@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.secret_redaction import redact_string
 from .exceptions import UnauthorizedError
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 class KeysManagementClient:
@@ -50,7 +51,7 @@ class KeysManagementClient:
         return_full_object: bool | None = None,
         include_team_keys: bool | None = None,
         return_request: bool = False,
-    ) -> object | requests.Request:
+    ) -> Mapping[str, object] | requests.Request:
         """
         List all API keys with optional filtering and pagination.
 
@@ -107,7 +108,7 @@ class KeysManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return _DECODED_JSON.validate_python(response.json())
+            return _JSON_OBJECT.validate_python(response.json())
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

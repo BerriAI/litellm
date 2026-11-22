@@ -1,4 +1,4 @@
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 
 import requests
@@ -10,6 +10,9 @@ from .exceptions import NotFoundError, UnauthorizedError
 
 _JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
+_USER_LISTING: Final[TypeAdapter[Sequence[Mapping[str, object]] | Mapping[str, object]]] = TypeAdapter(
+    Sequence[Mapping[str, object]] | Mapping[str, object], config=ConfigDict(hide_input_in_errors=True)
+)
 
 
 class UsersManagementClient:
@@ -26,16 +29,15 @@ class UsersManagementClient:
 
     def list_users(
         self, params: Mapping[str, str | bytes | int | float | Iterable[str | bytes | int | float] | None] | None = None
-    ) -> object:
+    ) -> Sequence[Mapping[str, object]] | Mapping[str, object]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        return decoded_json_object(_JSON_VALUE.validate_python(response.json())).get(
-            "users", _JSON_VALUE.validate_python(response.json())
-        )
+        listing: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
+        return _USER_LISTING.validate_python(listing.get("users", listing))
 
     def get_user(self, user_id: str | None = None) -> dict[str, object]:
         """Get user info (GET /user/info)"""
