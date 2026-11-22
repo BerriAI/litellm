@@ -10,6 +10,9 @@ from .exceptions import NotFoundError, UnauthorizedError
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _MODEL_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
+_MODEL_INFO: Final[TypeAdapter[Sequence[Mapping[str, object]] | Mapping[str, object]]] = TypeAdapter(
+    Sequence[Mapping[str, object]] | Mapping[str, object]
+)
 
 
 class ModelsManagementClient:
@@ -193,7 +196,7 @@ class ModelsManagementClient:
 
         # Get all models and filter
         models: Final = self.info()
-        assert not isinstance(models, requests.Request)
+        assert isinstance(models, list)
 
         # Find the matching model
         for model in models:
@@ -216,7 +219,9 @@ class ModelsManagementClient:
             )
         )
 
-    def info(self, return_request: bool = False) -> Sequence[Mapping[str, object]] | requests.Request:
+    def info(
+        self, return_request: bool = False
+    ) -> Sequence[Mapping[str, object]] | Mapping[str, object] | requests.Request:
         """
         Get detailed information about all models from the server.
 
@@ -242,7 +247,7 @@ class ModelsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return _MODEL_ROWS.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
+            return _MODEL_INFO.validate_python(_JSON_OBJECT.validate_python(response.json())["data"])
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)
