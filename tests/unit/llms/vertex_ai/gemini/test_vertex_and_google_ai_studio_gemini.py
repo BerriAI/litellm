@@ -7183,12 +7183,12 @@ def test_gemini_3_adds_the_server_side_flag_next_to_an_auto_tool_choice(route: L
 )
 @pytest.mark.parametrize(
     "tool_choice",
-    ["required", {"type": "function", "function": {"name": "exec_command"}}],
-    ids=["required", "named_function"],
+    ["required", "none", {"type": "function", "function": {"name": "exec_command"}}],
+    ids=["required", "none", "named_function"],
 )
 @pytest.mark.parametrize("build", [_mapped_request_body, _completion_request_body], ids=["mapped", "completion"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
-def test_gemini_3_drops_search_next_to_functions_when_tool_choice_forces_a_function_call(
+def test_gemini_3_drops_search_next_to_functions_when_tool_choice_pins_the_function_mode(
     route: Literal["vertex", "studio"],
     build: Callable[[Literal["vertex", "studio"], str, Mapping[str, object]], RequestBody],
     tool_choice: object,
