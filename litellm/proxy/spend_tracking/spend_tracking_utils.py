@@ -1159,15 +1159,16 @@ def _get_session_id_for_spend_log(
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
-    displaced from the request's session), then trace ids.
+    """Resolve the session id for the spend log row: `omit` honors metadata.session_id, else the conversation id the
+    caller sent (a proxy sub-call carries its parent's this way), never a trace id; batch sessions outrank everything,
+    then the conversation id the caller sent (also one an x-litellm-trace-id header displaced from the request's
+    session), then trace ids.
 
     A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
     it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole."""
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
-        return str(session_id) if session_id else None
+        return str(session_id) if session_id else _caller_session_for_spend_log(kwargs, metadata=None)
 
     from litellm._uuid import uuid
 

@@ -10,7 +10,11 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.constants import (
+    CALLER_SESSION_ID_METADATA_KEY,
+    SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_OMITTED_METADATA_KEY,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.langfuse.langfuse import LangFuseLogger, langfuse_trace_id
 from litellm.litellm_core_utils.litellm_logging import Logging
@@ -571,36 +575,51 @@ async def _send_parent_request(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "request_correlation_in_logs, parent_metadata, parent_ids, parent_session",
+    "request_correlation_in_logs, general_settings, parent_metadata, parent_ids, parent_session",
     [
         (
             False,
             {},
+            {},
             {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
             "claude-code-session",
         ),
-        (False, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
-        (False, {}, {}, "trace-the-parent-minted"),
+        (False, {}, {}, {"litellm_session_id": "conversation-1", "litellm_trace_id": "trace-1"}, "conversation-1"),
+        (False, {}, {}, {}, "trace-the-parent-minted"),
         (
             True,
+            {},
             {"session_id": "client-trace", "trace_id": "client-trace", CALLER_SESSION_ID_METADATA_KEY: "claude-code-session"},
             {"litellm_session_id": "client-trace", "litellm_trace_id": "client-trace"},
             "claude-code-session",
         ),
+        (False, {}, {"session_id": "conversation-in-metadata"}, {}, "conversation-in-metadata"),
+        (
+            False,
+            {"missing_session_id": "omit"},
+            {"session_id": "claude-code-session", "trace_id": "claude-code-session", SESSION_ID_OMITTED_METADATA_KEY: True},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            "claude-code-session",
+        ),
+        (False, {"missing_session_id": "omit"}, {SESSION_ID_OMITTED_METADATA_KEY: True}, {}, None),
     ],
     ids=[
         "claude-code-session-header",
         "session-and-trace-sent-apart",
         "no-session-sent",
         "trace-header-beside-the-claude-code-session-under-request-correlation",
+        "session-sent-only-in-litellm-metadata",
+        "claude-code-session-header-under-omit",
+        "no-session-sent-under-omit",
     ],
 )
 async def test_the_classifier_and_summary_spend_rows_land_in_the_parent_requests_session(
     monkeypatch: pytest.MonkeyPatch,
     request_correlation_in_logs: bool,
+    general_settings: Mapping[str, object],
     parent_metadata: Mapping[str, object],
     parent_ids: Mapping[str, str],
-    parent_session: str,
+    parent_session: str | None,
 ) -> None:
     await _drain_logging_worker()
     monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
@@ -608,7 +627,9 @@ async def test_the_classifier_and_summary_spend_rows_land_in_the_parent_requests
     monkeypatch.setattr(litellm, "callbacks", [spend])
     monkeypatch.setattr(litellm, "_async_success_callback", [spend])
 
-    await _send_parent_request(_classifier_and_summarizer_router(), {}, {**LITELLM_METADATA, **parent_metadata}, parent_ids)
+    await _send_parent_request(
+        _classifier_and_summarizer_router(), general_settings, {**LITELLM_METADATA, **parent_metadata}, parent_ids
+    )
 
     assert {row["model_group"]: row["session_id"] for row in spend.rows} == {
         "classifier": parent_session,

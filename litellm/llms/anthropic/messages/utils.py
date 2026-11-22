@@ -190,7 +190,8 @@ class ProxySubCallLoggingKwargs(StandardCallbackDynamicParams, total=False):
 def proxy_sub_call_logging_kwargs(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
     """The parent request's callback params, proxy-stamped callback vars, and session and trace ids, so a sub-call
     logs in the same session and under the same message-logging and callback-disable settings as the request it
-    serves. The session goes as the top-level ``litellm_session_id`` only, never as metadata ``session_id``, which
+    serves. The session, sent top-level or in ``litellm_metadata``, goes as the top-level ``litellm_session_id``
+    only, never as metadata ``session_id``, which
     deployment affinity and complexity router tier pins read. Of the parent's ``proxy_server_request`` only the
     ``x-litellm-disable-callbacks`` header is carried, since dispatch reads it there: the router reads per-request
     routing inputs from the rest, such as the Claude Code session that would pull a sub-call off its configured model,
@@ -227,12 +228,19 @@ def proxy_sub_call_trace_id(parent_kwargs: Mapping[str, object]) -> str | None:
 
 
 def _parent_session(parent_kwargs: Mapping[str, object]) -> ProxySubCallLoggingKwargs:
-    session_id: Final = parent_kwargs.get("litellm_session_id")
+    session_id: Final = _parent_session_id(parent_kwargs)
     trace_id: Final = proxy_sub_call_trace_id(parent_kwargs)
-    session: Final[ProxySubCallLoggingKwargs] = (
-        {"litellm_session_id": session_id} if isinstance(session_id, str) and session_id else {}
-    )
+    session: Final[ProxySubCallLoggingKwargs] = {"litellm_session_id": session_id} if session_id else {}
     return session if trace_id is None else {**session, "litellm_trace_id": trace_id}
+
+
+def _parent_session_id(parent_kwargs: Mapping[str, object]) -> str | None:
+    top_level: Final = parent_kwargs.get("litellm_session_id")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    litellm_metadata: Final = object_mapping(parent_kwargs.get("litellm_metadata"))
+    in_metadata: Final = litellm_metadata.get("session_id") if litellm_metadata is not None else None
+    return in_metadata if isinstance(in_metadata, str) and in_metadata else None
 
 
 def _parent_langfuse_trace_header(
