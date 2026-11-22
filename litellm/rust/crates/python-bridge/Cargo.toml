@@ -75,6 +75,7 @@ litellm-router-types.workspace = true
 litellm-router-core.workspace = true
 litellm-config.workspace = true
 litellm-gateway-auth-core.workspace = true
+litellm-auth-store.workspace = true
 chrono.workspace = true
 http.workspace = true
 jiff.workspace = true

@@ -104,13 +104,3 @@ pub(crate) fn jwt_is_allowed_domain(
         &settings(litellm_jwtauth)?,
     ))
 }
-
-#[pyfunction]
-#[pyo3(signature = (claim_field, claim_value, issuer=None))]
-pub(crate) fn jwt_key_mapping_cache_key(
-    claim_field: &str,
-    claim_value: &str,
-    issuer: Option<&str>,
-) -> String {
-    authn_jwt::mapping_cache_key(claim_field, claim_value, issuer)
-}

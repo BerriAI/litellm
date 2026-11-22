@@ -400,7 +400,7 @@ def test_deployment_without_a_key_and_no_env_key_fails_before_the_provider(
             lambda candidate: not not_yet_routable(candidate),
             seconds=60,
         )
-        assert response.status_code == 500, response.text
+        assert response.status_code == 401, response.text
         assert "AuthenticationError" in response.text and "CORALBRICKS_API_KEY" in response.text, response.text
         assert_failed(spend_row(response.headers["x-litellm-call-id"]), alias)
         assert wire.drain() == (), "the provider was called without a key"

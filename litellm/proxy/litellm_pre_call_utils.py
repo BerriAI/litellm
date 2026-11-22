@@ -653,6 +653,8 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "client_seen_attempt",
+        "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
         "rate_limit_fallback",
@@ -2315,6 +2317,11 @@ class LiteLLMProxyRequestSetup:
             **(
                 {
                     "user_api_key_app_id": customer.app_id,
+                    **(
+                        {"user_api_key_app_group_id": customer.app_group_id}
+                        if customer.app_group_id is not None
+                        else {}
+                    ),
                     "user_api_key_app_alias": customer.app_alias,
                 }
                 if customer is not None and customer.app_id is not None and customer.app_alias is not None
@@ -2383,12 +2390,15 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+        if any(
+            key in data[_metadata_variable_name]
+            for key in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
+        ):
             incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
             data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
                 key: value
                 for key, value in incoming_metadata.items()
-                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
             }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)

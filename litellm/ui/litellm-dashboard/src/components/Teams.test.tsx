@@ -536,21 +536,20 @@ describe("Teams - team detail deep link (?team=)", () => {
   });
 });
 
-describe("Teams - Create Team CTA is grouped with the tabs on the left", () => {
+describe("Teams - Create Team actions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseOrganizations.mockReturnValue({ data: [] });
   });
 
-  it("should render the Create Team button inside the tab bar, ahead of the tabs", () => {
+  it("should expose Create Team separately from tab navigation", () => {
     renderWithQueryClient(<Teams accessToken="test-token" userID="user-123" userRole="Admin" />);
 
     const tabNav = screen.getByRole("tablist");
-    const createButton = within(tabNav).getByTestId("create-team-button");
-    const firstTab = within(tabNav).getByRole("tab", { name: "Your Teams" });
-
-    expect(within(tabNav).getByRole("separator")).toBeInTheDocument();
-    expect(createButton.compareDocumentPosition(firstTab) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const controls = screen.getByRole("group", { name: "Page controls" });
+    expect(within(controls).getByRole("button", { name: /Create Team/i })).toBeInTheDocument();
+    expect(within(tabNav).queryByRole("button", { name: /Create Team/i })).not.toBeInTheDocument();
+    expect(within(tabNav).getByRole("tab", { name: "Your Teams" })).toBeInTheDocument();
   });
 
   it("should omit the Create Team CTA for a role that cannot manage teams", () => {

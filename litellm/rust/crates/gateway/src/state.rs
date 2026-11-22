@@ -4,10 +4,10 @@ use axum::extract::FromRef;
 use litellm_config::{Config, Environment};
 use litellm_db::Pools;
 use litellm_env::Lookup;
-use litellm_gateway_inference::Gateway;
+use litellm_gateway_auth::{Auth, BearerOrXApiKey};
 use litellm_license::Entitlements;
 
-use crate::{Error, RedisClients, Resources, db, license::build_license};
+use crate::{Error, Gateway, RedisClients, Resources, db, license::build_license};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -21,18 +21,32 @@ pub struct AppState {
 
 impl AppState {
     pub async fn build(config: &Config, environment: &Environment) -> Result<Self, Error> {
-        let resources = Resources::build(config)?;
-        let inference = crate::build_inference(config, &resources)?;
-        let redis = crate::redis::connect(config, &resources).await?;
+        Self::over(config, environment, &Resources::build(config)?).await
+    }
+
+    /// The state `config` describes, built from the `resources` made for it.
+    pub async fn over(
+        config: &Config,
+        environment: &Environment,
+        resources: &Resources,
+    ) -> Result<Self, Error> {
+        let redis = crate::redis::connect(config, resources).await?;
+        let routing = crate::redis::routing(&redis, environment);
+        let inference = crate::build_inference(config, resources, routing).await?;
         let database = db::connect(config, &resources.secrets).await?;
-        let entitlements = Arc::new(build_license(config, environment, &resources).await);
+        let entitlements = Arc::new(build_license(config, environment, resources).await);
         Ok(Self {
             inference,
             redis,
             database,
             entitlements,
-            environment: resources.environment,
+            environment: resources.environment.clone(),
         })
+    }
+
+    /// Who the inference routes and `admit` authenticate: the master key of `config`.
+    pub(crate) fn auth(&self, config: &Config) -> Auth {
+        Auth::from_config(config).with_extractor(Arc::new(BearerOrXApiKey))
     }
 
     pub async fn close(&self) {

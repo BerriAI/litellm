@@ -109,7 +109,7 @@ from litellm.router_rust.invoke.endpoints import (
     is_batch_upload,
     log_refused_call,
     log_refused_call_sync,
-    pinned_vector_store_file_deployment,
+    pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
     reports_own_success,
@@ -2858,7 +2858,7 @@ class RustCore(
         fields: dict[str, object] = {"model": model}  # mutable-ok: built up below, later keys win  # rebind-ok: same
         fields.update(self._routing_fields(prepared, plan.pick_input(prepared)[0]))
         fields.update(pinned_video_deployment(plan, request))
-        fields.update(pinned_vector_store_file_deployment(plan, request))
+        fields.update(pinned_request_deployment(plan, request))
         fields.update(unrouted_fields(plan))
         fields.update(failover_fields(plan))
         fields.update(scoped_fallback_fields(plan, request))
@@ -5018,6 +5018,8 @@ class _Driver:
                     self._level_errors.get(at + 1),
                     self._walk.hop_kwargs(event),
                 )
+                if event.get("succeeded") is not True:
+                    self._walk.log_failed_hop(event, self._level_errors.get(at + 1))
                 if (
                     event.get("succeeded") is not True
                     and id(self._level_errors.get(at + 1)) not in self._recorded_blocked
@@ -5172,13 +5174,11 @@ class _Driver:
             self._attempt_started,
         )
         model_info: Final = as_str_mapping(deployment.get("model_info")) or {}
-        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"))
-        # A call under credentials the request supplied ran as a request-scoped deployment
+        exits: Final = self._core.failure_exits(error, logged, model_info.get("id"), served)  # pyright: ignore[reportUnknownArgumentType]  # see above
+        # A call under an api_key or api_base the request supplied ran as a request-scoped deployment
         # (`_handle_clientside_credential`): its failure is never the shared deployment's.
         ran_as: Final = (as_str_mapping(as_str_mapping(served).get("model_info") if served else None) or {}).get("id")  # pyright: ignore[reportUnknownArgumentType]  # see above
-        request_scoped: Final = self._core.ran_as_request_deployment(
-            ran_as, model_info.get("id")
-        ) or self._caller_entra_failure(error, served, model_info.get("id"))  # pyright: ignore[reportUnknownArgumentType]  # see above
+        request_scoped: Final = self._core.ran_as_request_deployment(ran_as, model_info.get("id"))
         return {
             **attempt_failure(error),
             "detail": detail,
@@ -5211,23 +5211,6 @@ class _Driver:
             return False
         self._recorded_blocked.add(id(error))
         return True
-
-    def _caller_entra_failure(self, error: BaseException, sent: Mapping[str, object], deployment_id: object) -> bool:
-        """``is_caller_entra_credential_failure``: Entra ID rejected a credential the caller sent, not
-        the deployment's own, so the failure is the caller's."""
-        from litellm.router_utils.cooldown_handlers import is_caller_entra_credential_failure
-
-        if not isinstance(deployment_id, str):
-            return False
-        hosted: Final = self._core._hosted  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        defaults: Final = {k: v for k, v in self._core._resolved.default_litellm_params.items() if v is not None}  # pyright: ignore[reportPrivateUsage]  # see above
-        return is_caller_entra_credential_failure(
-            hosted._core_get_deployment(deployment_id),  # pyright: ignore[reportPrivateUsage]  # the host registry's id lookup
-            defaults,
-            {"litellm_params": sent},
-            getattr(error, "status_code", ""),
-            error,
-        )
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
@@ -5791,7 +5774,9 @@ class _Driver:
 
     def failed(self, step: Mapping[str, object]) -> BaseException:
         try:
-            return self._failure(step)
+            failure: Final = self._failure(step)
+            self._walk.log_client_seen(failure)
+            return failure
         finally:
             self.clear_errors()
 
