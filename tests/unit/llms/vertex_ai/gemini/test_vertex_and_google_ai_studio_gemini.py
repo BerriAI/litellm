@@ -6859,6 +6859,23 @@ def _mapped_request_body(
     )
 
 
+def _completion_request_body(route: Literal["vertex", "studio"], model: str, params: Mapping[str, object]) -> RequestBody:
+    from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model=model, custom_llm_provider=_PROVIDER_FOR_ROUTE[route], **deepcopy(dict(params))
+    )
+    return transform_request_body(
+        messages=[{"role": "user", "content": "Find the newest LiteLLM release, then echo it"}],
+        model=model,
+        optional_params=optional_params,
+        custom_llm_provider=_PROVIDER_FOR_ROUTE[route],
+        litellm_params={},
+        cached_content=None,
+    )
+
+
 def _tool_keys(body: RequestBody) -> frozenset[str]:
     return frozenset(key for tool in body.get("tools", []) for key in tool)
 
@@ -7002,7 +7019,7 @@ def search_with_functions_model(monkeypatch: pytest.MonkeyPatch) -> str:
 
 
 @pytest.mark.parametrize("opt_out_key", ["include_server_side_tool_invocations", "includeServerSideToolInvocations"])
-@pytest.mark.parametrize("opt_out_in", ["request", "optional_params"])
+@pytest.mark.parametrize("opt_out_in", ["completion", "optional_params"])
 @pytest.mark.parametrize("route", ["vertex", "studio"])
 def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_side_tools_off(
     route: Literal["vertex", "studio"], opt_out_in: str, opt_out_key: str, search_with_functions_model: str
@@ -7010,8 +7027,8 @@ def test_gemini_3_drops_search_next_to_functions_when_the_caller_turns_server_si
     tools: Final = {"tools": [{"type": "web_search"}, _EXEC_TOOL]}
     opt_out: Final = MappingProxyType({opt_out_key: False})
     body: Final = (
-        _mapped_request_body(route, search_with_functions_model, {**tools, **opt_out})
-        if opt_out_in == "request"
+        _completion_request_body(route, search_with_functions_model, {**tools, **opt_out})
+        if opt_out_in == "completion"
         else _mapped_request_body(route, search_with_functions_model, tools, preset=opt_out)
     )
 

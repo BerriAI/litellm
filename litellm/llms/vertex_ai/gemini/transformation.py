@@ -18,7 +18,12 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, has_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    drops_unsupported_params,
+    has_attributes,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
@@ -1105,6 +1110,13 @@ class _CallerToolConfig(TypedDict, total=False):
 _CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
 
 
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
 def _tools_fit_for_caller_tool_config(tools: Tools, extra_body: object, model: str) -> Tools:
     extra_body_fields: Final = as_str_mapping(extra_body)
     if extra_body_fields is None:
@@ -1229,6 +1241,7 @@ def transform_request_body(
         tools: Final[Tools | None] = optional_params.pop("tools", None)
         tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
         include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
+        turns_server_side_tools_off: Final = optional_params.pop("includeServerSideToolInvocations", None) is False
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1270,12 +1283,16 @@ def transform_request_body(
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
             if tools is not None:
-                built_tools: Final = cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
+                built_tools: Final = (
+                    _without_search_tools_next_to_functions(tools)
+                    if turns_server_side_tools_off
+                    else cast(Tools, tools)  # cast-ok: popped from the untyped optional_params
+                )
                 caller_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
                 data["tools"] = _tools_fit_for_caller_tool_config(built_tools, caller_params.get("extra_body"), model)
             if tool_choice is not None:
                 data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
+            if include_server_side_tool_invocations and not turns_server_side_tools_off:
                 if "toolConfig" not in data:
                     data["toolConfig"] = {}
                 data["toolConfig"]["includeServerSideToolInvocations"] = True
