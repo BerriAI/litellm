@@ -7,8 +7,12 @@ const RELATIVE_STEPS: readonly (readonly [Intl.RelativeTimeFormatUnit, number])[
   ["minute", 60],
 ];
 
-export const formatMoney = (value: number): string =>
-  `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: value > 0 && value < 1 ? 4 : 2 })}`;
+const moneyFormat = (value: number): Intl.NumberFormatOptions => {
+  if (value > 0 && value < 0.01) return { maximumSignificantDigits: 2 };
+  return { minimumFractionDigits: 2, maximumFractionDigits: value > 0 && value < 1 ? 4 : 2 };
+};
+
+export const formatMoney = (value: number): string => `$${value.toLocaleString("en-US", moneyFormat(value))}`;
 
 export const formatCount = (value: number): string => value.toLocaleString("en-US");
 

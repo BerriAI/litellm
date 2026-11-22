@@ -16,6 +16,11 @@ describe("formatMoney", () => {
     expect(formatMoney(0.1)).toBe("$0.10");
     expect(formatMoney(0.12345)).toBe("$0.1235");
   });
+
+  it("keeps a sub-cent budget and its spend apart instead of rounding both to $0.00", () => {
+    expect(formatMoney(0.000001)).toBe("$0.000001");
+    expect(formatMoney(0.0000084)).toBe("$0.0000084");
+  });
 });
 
 describe("formatRelative", () => {
