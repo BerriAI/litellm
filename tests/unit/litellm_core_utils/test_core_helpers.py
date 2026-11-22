@@ -685,7 +685,11 @@ def test_a_planted_litellm_metadata_keeps_the_callers_spend_logs_metadata(
 ) -> None:
     kwargs: Final = {
         "litellm_params": {
-            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "search"},
+            },
             "litellm_metadata": planted,
         }
     }
@@ -697,7 +701,11 @@ def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the
     planted: Final = {"user_api_key_hash": "hash", "applied_guardrails": ["pre"]}
     kwargs: Final = {
         "litellm_params": {
-            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "search"}},
+            "metadata": {
+                "litellm_api_version": "1.0.0",
+                "user_api_key_hash": "hash",
+                "spend_logs_metadata": {"team": "search"},
+            },
             "litellm_metadata": planted,
         }
     }
@@ -709,7 +717,7 @@ def test_carrying_spend_logs_metadata_leaves_the_planted_litellm_metadata_as_the
 def test_a_provider_body_metadata_field_never_reaches_the_spend_row_metadata() -> None:
     kwargs: Final = {
         "litellm_params": {
-            "metadata": {"spend_logs_metadata": {"team": "from-the-body"}},
+            "metadata": {"user_api_key_hash": "hash", "spend_logs_metadata": {"team": "from-the-body"}},
             "litellm_metadata": {"user_api_key_hash": "hash"},
         }
     }
