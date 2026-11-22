@@ -85,8 +85,11 @@ def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_en
     ],
     ids=["other_thinking_400", "other_unsupported_field", "named_model", "profile_arn_with_base_model"],
 )
-def test_bedrock_400_keeps_its_message_without_the_hint(model: str, body: str, deployment: dict[str, str]) -> None:
-    error: Final = _raised(model, body, asynchronous=False, stream=False, **deployment)
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+def test_bedrock_400_keeps_its_message_without_the_hint(
+    model: str, body: str, deployment: dict[str, str], asynchronous: bool
+) -> None:
+    error: Final = _raised(model, body, asynchronous=asynchronous, stream=False, **deployment)
 
     assert error.status_code == 400
     assert error.message.endswith(body)
