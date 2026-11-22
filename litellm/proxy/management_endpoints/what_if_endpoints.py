@@ -1,7 +1,9 @@
 """Prototype endpoints behind the #what-if concepts: control canaries, cache-miss explainer, plan lab."""
 
 import asyncio
+import hashlib
 import json
+import re
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby, pairwise
@@ -527,4 +529,352 @@ async def replay_draft_plan(plan: DraftPlan, user: Annotated[UserAPIKeyAuth, Dep
         customers_losing_money=sum(1 for customer in customers if customer.margin < 0),
         blocked_requests=sum(customer.blocked_requests for customer in customers),
         rerouted_requests=sum(customer.rerouted_requests for customer in customers),
+    )
+
+
+class LimitLayer(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    scope: str
+    name: str
+    kind: Literal["budget", "rpm"]
+    limit: float
+    used: float
+    remaining: float
+    requests_left: int | None
+    resets_at: str | None
+    change_with: str
+
+
+class LimitXray(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    key_alias: str
+    key_aliases: tuple[str, ...]
+    avg_request_usd: float
+    layers: tuple[LimitLayer, ...]
+    unlimited: tuple[str, ...]
+
+
+def _number(value: object) -> float | None:
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _layers(
+    scope: str, name: object, row: Mapping[str, object], used_rpm: float, avg_usd: float, change_with: str
+) -> tuple[LimitLayer, ...]:
+    budget: Final = _number(row.get("max_budget"))
+    rpm: Final = _number(row.get("rpm_limit"))
+    spend: Final = _number(row.get("spend")) or 0.0
+    reset: Final = row.get("budget_reset_at")
+    return (
+        *(
+            (
+                LimitLayer(
+                    scope=scope,
+                    name=str(name or "-"),
+                    kind="budget",
+                    limit=budget,
+                    used=spend,
+                    remaining=max(budget - spend, 0.0),
+                    requests_left=int(max(budget - spend, 0.0) / avg_usd) if avg_usd > 0 else None,
+                    resets_at=str(reset) if reset else None,
+                    change_with=f"{change_with} max_budget",
+                ),
+            )
+            if budget is not None
+            else ()
+        ),
+        *(
+            (
+                LimitLayer(
+                    scope=scope,
+                    name=str(name or "-"),
+                    kind="rpm",
+                    limit=rpm,
+                    used=used_rpm,
+                    remaining=max(rpm - used_rpm, 0.0),
+                    requests_left=int(max(rpm - used_rpm, 0.0)),
+                    resets_at=None,
+                    change_with=f"{change_with} rpm_limit",
+                ),
+            )
+            if rpm is not None
+            else ()
+        ),
+    )
+
+
+@router.get("/limit_xray")
+async def xray_limits(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], key_alias: str = "") -> LimitXray:
+    """Every budget and rate limit that applies to one key, across the key, its team, its team membership,
+    its user and its organization, ordered by which one blocks the next request first."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin(user)
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+
+    async def one(sql: str, *args: object) -> Mapping[str, object]:
+        if any(arg is None for arg in args):
+            return {}
+        found: Final = await query_raw_within_statement_timeout(prisma_client, sql, *args)
+        return found[0] if found else {}
+
+    aliases: Final = tuple(
+        str(row["key_alias"])
+        for row in await query_raw_within_statement_timeout(
+            prisma_client,
+            'SELECT key_alias FROM "LiteLLM_VerificationToken" WHERE key_alias IS NOT NULL ORDER BY created_at DESC '
+            "LIMIT 50",
+        )
+    )
+    alias: Final = key_alias or (aliases[0] if aliases else "")
+    key: Final = await one('SELECT * FROM "LiteLLM_VerificationToken" WHERE key_alias = $1 LIMIT 1', alias)
+    if not key:
+        raise HTTPException(status_code=404, detail=f"No key with alias {alias}")
+    team: Final = await one('SELECT * FROM "LiteLLM_TeamTable" WHERE team_id = $1', key.get("team_id"))
+    member: Final = await one(
+        'SELECT m.spend, b.max_budget, b.rpm_limit, b.budget_reset_at FROM "LiteLLM_TeamMembership" m '
+        'JOIN "LiteLLM_BudgetTable" b ON b.budget_id = m.budget_id WHERE m.team_id = $1 AND m.user_id = $2',
+        key.get("team_id"),
+        key.get("user_id"),
+    )
+    owner: Final = await one('SELECT * FROM "LiteLLM_UserTable" WHERE user_id = $1', key.get("user_id"))
+    org_id: Final = key.get("organization_id") or team.get("organization_id")
+    org: Final = await one(
+        "SELECT o.organization_alias, o.spend, b.max_budget, b.rpm_limit, b.budget_reset_at "
+        'FROM "LiteLLM_OrganizationTable" o JOIN "LiteLLM_BudgetTable" b ON b.budget_id = o.budget_id '
+        "WHERE o.organization_id = $1",
+        org_id,
+    )
+    usage: Final = await one(
+        "SELECT COALESCE(AVG(spend) FILTER (WHERE spend > 0), 0) AS avg_usd, "
+        "COUNT(*) FILTER (WHERE \"startTime\" >= NOW() - INTERVAL '60 seconds') AS key_rpm "
+        'FROM "LiteLLM_SpendLogs" WHERE api_key = $1 AND "startTime" >= NOW() - INTERVAL \'24 hours\'',
+        key.get("token"),
+    )
+    team_usage: Final = await one(
+        'SELECT COUNT(*) AS rpm FROM "LiteLLM_SpendLogs" WHERE team_id = $1 '
+        "AND \"startTime\" >= NOW() - INTERVAL '60 seconds'",
+        key.get("team_id"),
+    )
+    avg_usd: Final = _number(usage.get("avg_usd")) or 0.0
+    key_rpm: Final = _number(usage.get("key_rpm")) or 0.0
+    team_rpm: Final = _number(team_usage.get("rpm")) or 0.0
+    scopes: Final = (
+        ("Key", alias, key, key_rpm, "/key/update"),
+        ("Team member", owner.get("user_email") or key.get("user_id"), member, key_rpm, "/team/member_update"),
+        ("Team", team.get("team_alias"), team, team_rpm, "/team/update"),
+        ("User", owner.get("user_email") or key.get("user_id"), owner, key_rpm, "/user/update"),
+        ("Organization", org.get("organization_alias"), org, team_rpm, "/organization/update"),
+        ("Proxy", "global", {"max_budget": litellm.max_budget or None, "spend": 0.0}, 0.0, "litellm_settings"),
+    )
+    layers: Final = tuple(chain.from_iterable(_layers(*scope) for scope in scopes))
+    limited: Final = frozenset(layer.scope for layer in layers)
+    return LimitXray(
+        key_alias=alias,
+        key_aliases=aliases,
+        avg_request_usd=avg_usd,
+        layers=tuple(
+            sorted(layers, key=lambda layer: layer.requests_left if layer.requests_left is not None else 10**12)
+        ),
+        unlimited=tuple(scope[0] for scope in scopes if scope[0] not in limited),
+    )
+
+
+PR_URL: Final = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
+
+
+class GhostStep(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_id: str
+    start_time: str
+    model: str
+    spend: float
+    role: str
+    summary: str
+
+
+class GhostRun(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    run_id: str
+    key_alias: str
+    task: str
+    models: tuple[str, ...]
+    spend: float
+    total_tokens: int
+    tool_calls: int
+    duration_seconds: float
+    pr_urls: tuple[str, ...]
+    steps: tuple[GhostStep, ...]
+
+
+class GhostTrace(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    loose_requests: int
+    client_session_ids: int
+    runs: tuple[GhostRun, ...]
+
+
+class PrReceipt(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    url: str
+    repo: str
+    number: int
+    spend: float
+    total_tokens: int
+    requests: int
+    tool_calls: int
+    agent_minutes: float
+    key_aliases: tuple[str, ...]
+    models: tuple[str, ...]
+    runs: tuple[str, ...]
+
+
+class PrReceipts(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    receipts: tuple[PrReceipt, ...]
+    spend_with_pr: float
+    spend_without_pr: float
+
+
+def _messages(row: Mapping[str, object]) -> Sequence[object]:
+    return _as_list(_as_dict(row.get("proxy_server_request")).get("messages"))
+
+
+def _digest(key: object, messages: Sequence[object]) -> str:
+    return hashlib.sha256(f"{key}:{json.dumps(messages, sort_keys=True, default=str)}".encode()).hexdigest()
+
+
+def _text(content: object) -> str:
+    return content if isinstance(content, str) else json.dumps(content, default=str)
+
+
+def _step(row: Mapping[str, object]) -> GhostStep:
+    messages: Final = _messages(row)
+    last: Final = _as_dict(messages[-1]) if messages else {}
+    return GhostStep(
+        request_id=str(row.get("request_id")),
+        start_time=str(row.get("startTime")),
+        model=str(row.get("model")),
+        spend=_number(row.get("spend")) or 0.0,
+        role=str(last.get("role", "")),
+        summary=_text(last.get("content"))[:220],
+    )
+
+
+def _run(rows: Sequence[Mapping[str, object]]) -> GhostRun:
+    first: Final = rows[0]
+    final_messages: Final = _messages(rows[-1])
+    users: Final = tuple(_as_dict(m) for m in final_messages if _as_dict(m).get("role") == "user")
+    transcript: Final = json.dumps(final_messages, default=str) + json.dumps(rows[-1].get("response"), default=str)
+    started: Final = datetime.fromisoformat(str(first.get("startTime")).replace("Z", "+00:00"))
+    ended: Final = datetime.fromisoformat(str(rows[-1].get("endTime")).replace("Z", "+00:00"))
+    return GhostRun(
+        run_id=str(first.get("request_id"))[-12:],
+        key_alias=str(_as_dict(first.get("metadata")).get("user_api_key_alias") or "-"),
+        task=_text(users[0].get("content"))[:160] if users else "",
+        models=tuple(sorted({str(row.get("model")) for row in rows})),
+        spend=sum(_number(row.get("spend")) or 0.0 for row in rows),
+        total_tokens=sum(int(_number(row.get("total_tokens")) or 0) for row in rows),
+        tool_calls=sum(1 for m in final_messages if _as_dict(m).get("role") == "tool"),
+        duration_seconds=(ended - started).total_seconds(),
+        pr_urls=tuple(sorted(set(PR_URL.findall(transcript)))),
+        steps=tuple(_step(row) for row in rows),
+    )
+
+
+async def _ghost_trace(hours: int) -> GhostTrace:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    rows: Final = tuple(
+        row
+        for row in await query_raw_within_statement_timeout(
+            prisma_client,
+            'SELECT request_id, "startTime", "endTime", session_id, api_key, model, spend, total_tokens, metadata, '
+            'proxy_server_request, response FROM "LiteLLM_SpendLogs" WHERE "startTime" >= $1::timestamptz '
+            'ORDER BY "startTime" LIMIT 3000',
+            datetime.now(timezone.utc) - timedelta(hours=hours),
+        )
+        if _messages(row)
+    )
+    order: Final = {str(row["request_id"]): index for index, row in enumerate(rows)}
+    by_digest: Final = {_digest(row.get("api_key"), _messages(row)): row for row in reversed(rows)}
+
+    def parent(row: Mapping[str, object]) -> Mapping[str, object] | None:
+        messages: Final = _messages(row)
+        candidates: Final = (
+            by_digest.get(_digest(row.get("api_key"), messages[:size])) for size in range(len(messages) - 1, 0, -1)
+        )
+        return next(
+            (
+                found
+                for found in candidates
+                if found is not None and order[str(found["request_id"])] < order[str(row["request_id"])]
+            ),
+            None,
+        )
+
+    def root(row: Mapping[str, object]) -> str:
+        above: Final = parent(row)
+        return str(row["request_id"]) if above is None else root(above)
+
+    roots: Final = tuple(root(row) for row in rows)
+    runs: Final = tuple(
+        _run(tuple(row for row, owner in zip(rows, roots, strict=True) if owner == run_root))
+        for run_root in dict.fromkeys(roots)
+    )
+    counts: Final = tuple(len(tuple(group)) for _, group in groupby(sorted(str(row.get("session_id")) for row in rows)))
+    return GhostTrace(
+        loose_requests=len(rows),
+        client_session_ids=sum(1 for count in counts if count > 1),
+        runs=tuple(sorted((run for run in runs if len(run.steps) > 1), key=lambda run: -run.spend)),
+    )
+
+
+@router.get("/ghost_trace")
+async def ghost_trace(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], hours: int = 24) -> GhostTrace:
+    """Stitch requests that carry no session id into agent runs: a request continues an earlier one from
+    the same key when its messages start with that request's full message list."""
+    _require_admin(user)
+    return await _ghost_trace(hours)
+
+
+@router.get("/pr_receipts")
+async def pr_receipts(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], hours: int = 24) -> PrReceipts:
+    """Attribute each stitched agent run to the GitHub pull requests its tool calls opened or pushed to,
+    and total the spend per pull request."""
+    _require_admin(user)
+    runs: Final = (await _ghost_trace(hours)).runs
+    shares: Final = sorted(
+        ((url, run, 1 / len(run.pr_urls)) for run in runs for url in run.pr_urls), key=lambda share: share[0]
+    )
+    receipts: Final = tuple(
+        PrReceipt(
+            url=url,
+            repo="/".join(url.split("/")[3:5]),
+            number=int(url.rsplit("/", 1)[1]),
+            spend=sum(run.spend * part for _, run, part in group),
+            total_tokens=int(sum(run.total_tokens * part for _, run, part in group)),
+            requests=sum(len(run.steps) for _, run, _ in group),
+            tool_calls=sum(run.tool_calls for _, run, _ in group),
+            agent_minutes=sum(run.duration_seconds for _, run, _ in group) / 60,
+            key_aliases=tuple(sorted({run.key_alias for _, run, _ in group})),
+            models=tuple(sorted({model for _, run, _ in group for model in run.models})),
+            runs=tuple(run.run_id for _, run, _ in group),
+        )
+        for url, group in ((url, tuple(group)) for url, group in groupby(shares, key=lambda share: share[0]))
+    )
+    return PrReceipts(
+        receipts=tuple(sorted(receipts, key=lambda receipt: -receipt.spend)),
+        spend_with_pr=sum(receipt.spend for receipt in receipts),
+        spend_without_pr=sum(run.spend for run in runs if not run.pr_urls),
     )
