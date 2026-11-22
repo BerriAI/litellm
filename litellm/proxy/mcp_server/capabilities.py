@@ -20,6 +20,7 @@ from litellm.types.mcp import (
     MCPSpecVersion,
     MCPTransport,
 )
+from litellm.types.mcp_server.events import EVENTS_EXTENSION, EVENTS_PROTOCOL_VERSION
 
 GATEWAY_OPERATIONS: Final = frozenset(
     {
@@ -60,7 +61,7 @@ REVISION_SUPPORT: Final[Mapping[str, RevisionSupport]] = MappingProxyType(
             results=frozenset({"complete"})
             if version.value in HANDSHAKE_PROTOCOL_VERSIONS
             else frozenset({"complete", "input_required"}),
-            extensions=frozenset(),
+            extensions=frozenset({EVENTS_EXTENSION}) if version.value == EVENTS_PROTOCOL_VERSION else frozenset(),
             completed=version.value in HANDSHAKE_PROTOCOL_VERSIONS or version.value == "2026-07-28",
         )
         for version in MCPSpecVersion

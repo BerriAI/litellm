@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
-from mcp.types import METHOD_NOT_FOUND
+from mcp.types import METHOD_NOT_FOUND, EmptyResult
 from mcp_types import CLIENT_CAPABILITIES_META_KEY
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
@@ -28,6 +28,9 @@ from litellm.types.mcp_server.events import (
     PollEventsResult,
     StreamEventsParams,
     StreamEventsResult,
+    SubscribeEventsParams,
+    SubscribeEventsResult,
+    UnsubscribeEventsParams,
 )
 
 if TYPE_CHECKING:
@@ -175,6 +178,30 @@ def register_event_handlers(
                 )
         return StreamEventsResult.model_validate({"_meta": {SUBSCRIPTION_ID_META_KEY: subscription_id}})
 
+    async def subscribe_handler(
+        ctx: ServerRequestContext[object, object], params: SubscribeEventsParams
+    ) -> SubscribeEventsResult:
+        from litellm.proxy.mcp_server.events.webhooks.subscribe import subscribe
+
+        async with operation_scope(ctx) as context:
+            result: Final = await subscribe(context, params, request_headers(ctx), served(ctx, context), runtime)
+            if isinstance(result, Error):
+                raise result.error.to_mcp()
+            return result.ok
+
+    async def unsubscribe_handler(
+        ctx: ServerRequestContext[object, object], params: UnsubscribeEventsParams
+    ) -> EmptyResult:
+        from litellm.proxy.mcp_server.events.webhooks.subscribe import unsubscribe
+
+        async with operation_scope(ctx) as context:
+            result: Final = await unsubscribe(context, params, request_headers(ctx), served(ctx, context), runtime)
+            if isinstance(result, Error):
+                raise result.error.to_mcp()
+            return EmptyResult()
+
     server.add_request_handler("events/list", ListEventsParams, list_handler)
     server.add_request_handler("events/poll", PollEventsParams, poll_handler)
     server.add_request_handler("events/stream", StreamEventsParams, stream_handler)
+    server.add_request_handler("events/subscribe", SubscribeEventsParams, subscribe_handler)
+    server.add_request_handler("events/unsubscribe", UnsubscribeEventsParams, unsubscribe_handler)

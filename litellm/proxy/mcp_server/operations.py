@@ -4063,7 +4063,7 @@ class GatewayOperations:
 
     async def _execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
-            case DiscoverRequest():
+            case DiscoverRequest(params=discover_params):
                 deadline: Final = time.monotonic() + MCP_TOOL_LISTING_TIMEOUT
                 disabled: Final = disabled_capabilities()
                 listings: Final = (
@@ -4092,6 +4092,11 @@ class GatewayOperations:
                         return frozenset(MCP_LEGACY_VERSIONS), ServerCapabilities()
 
                     upstream_versions, notifications = await discover_notifications()
+                    from litellm.proxy.mcp_server.events.handlers import advertised_extensions
+
+                    extensions: Final = await advertised_extensions(
+                        context, discover_params.meta if discover_params is not None else None
+                    )
                 finally:
                     try:
                         for task in tasks:
@@ -4105,7 +4110,10 @@ class GatewayOperations:
                     transport=MCPTransport.http,
                     authorized_operations=enabled_gateway_operations(disabled),
                     upstream_versions=upstream_versions,
+                    client_extensions=frozenset(extensions),
+                    upstream_extensions=frozenset(extensions),
                     capabilities=ServerCapabilities(
+                        extensions={key: dict(value) for key, value in extensions.items()} or None,
                         tools=notifications.tools
                         or (
                             ToolsCapability()
