@@ -8482,6 +8482,46 @@ def test_record_exception_on_span_records_the_scrubbed_error_text_with_the_same_
     assert event.attributes["exception.escaped"] == "False"
 
 
+@pytest.mark.parametrize(
+    "callback_flags",
+    [{"message_logging": False}, {"turn_off_message_logging": True}],
+    ids=["opted_out", "turn_off_message_logging"],
+)
+def test_record_exception_on_span_records_the_scrubbed_error_for_a_callback_that_redacts_its_own_messages(
+    monkeypatch: pytest.MonkeyPatch, callback_flags: dict[str, bool]
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    secret: Final = "my ssn is 123-45-6789"
+
+    with provider.get_tracer(__name__).start_as_current_span("failure") as span:
+        OpenTelemetry(**callback_flags)._record_exception_on_span(
+            span=span,
+            kwargs={
+                "exception": ValueError(f"bad input: {secret}"),
+                "standard_logging_object": {
+                    "error_information": {
+                        "error_class": "ValueError",
+                        "error_message": "bad input: redacted-by-litellm",
+                        "traceback": "frames",
+                    },
+                },
+            },
+        )
+
+    (event,) = exporter.get_finished_spans()[0].events
+    assert secret not in str(dict(event.attributes))
+    assert event.attributes["exception.stacktrace"] == "frames"
+
+
 def test_record_exception_on_span_records_the_raised_exception_when_redaction_is_off_and_the_error_holds_the_marker(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

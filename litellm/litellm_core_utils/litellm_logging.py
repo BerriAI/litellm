@@ -186,12 +186,14 @@ from litellm.litellm_core_utils.logging_utils import (
 from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.ptu_pricing import is_spilled_over_ptu_request
 from litellm.litellm_core_utils.redact_messages import (
+    failure_details_for_custom_logger,
     failure_request_texts,
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
     redacted_model_call_details_for_custom_logger,
     redacted_response_obj_for_custom_logger,
     redacted_standard_logging_payload,
+    redacts_failure_events,
     scrub_request_text,
     scrubbed_error_fields,
     scrubbed_exception_text,
@@ -5776,7 +5778,11 @@ class Logging(LiteLLMLoggingBaseClass):
                     start_time=start_time,
                     end_time=end_time,
                     response_obj=result,
-                    kwargs=self.model_call_details,
+                    kwargs=(
+                        failure_details_for_custom_logger(self.model_call_details, callback)
+                        if redacts_failure_events(callback)
+                        else self.model_call_details
+                    ),
                 )
             if callback == "langfuse":
                 global langFuseLogger
@@ -5937,12 +5943,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 return
             if isinstance(callback, CustomLogger):  # custom logger class
                 await callback.async_log_failure_event(
-                    kwargs=redacted_model_call_details_for_custom_logger(
-                        model_call_details=callback.redact_standard_logging_payload_from_model_call_details(
-                            model_call_details=self.model_call_details
-                        ),
-                        custom_logger=callback,
-                    ),
+                    kwargs=failure_details_for_custom_logger(self.model_call_details, callback),
                     response_obj=result,
                     start_time=start_time,
                     end_time=end_time,
