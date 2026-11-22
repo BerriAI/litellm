@@ -878,8 +878,14 @@ impl<H: RouterHost> Call<'_, H> {
             .snapshot
             .registry
             .group(&level.target.group)
-            .filter(|group| group.len() == 1)
-            .and_then(|group| group[0].raw_params.get("num_retries")?.as_u64())
+            .and_then(|group| {
+                let skips_batch_only = skips_batch_only(level.request, &group);
+                let mut usable = group
+                    .into_iter()
+                    .filter(|d| !skips_batch_only || !d.serves_only_batches());
+                usable.next().filter(|_| usable.next().is_none())
+            })
+            .and_then(|deployment| deployment.raw_params.get("num_retries")?.as_u64())
             .and_then(|retries| u32::try_from(retries).ok());
         Err(self.mock_failed(MockFailure::RateLimit, level, lone).into())
     }
@@ -1503,20 +1509,21 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
+        let skips_batch_only = skips_batch_only(request, &candidates.all);
         let shape = GroupShape {
             // The deployment's own group decides, also when the call named the deployment by id.
             single_deployment: snapshot
                 .registry
                 .group(&deployment.model_name)
                 .map_or(candidates.routable(request) == 1, |group| {
-                    deployment.peers_in(&group) == 1
+                    deployment.peers_in(&group, skips_batch_only) == 1
                 })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
                 && !(candidates.kind == ResolveKind::RoutingGroup && candidates.routable(request) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment),
+                && !team_model_has_alternatives(&snapshot.registry, deployment, skips_batch_only),
             has_fallback_group: snapshot
                 .settings
                 .dynamic

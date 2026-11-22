@@ -150,7 +150,11 @@ pub struct GroupShape {
 
 /// `_core_team_model_has_alternatives`: another routable deployment serves the deployment's team
 /// public name.
-pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Deployment) -> bool {
+pub(crate) fn team_model_has_alternatives(
+    registry: &Registry,
+    deployment: &Deployment,
+    skips_batch_only: bool,
+) -> bool {
     let info = &deployment.model_info;
     let (Some(team_id), Some(public_name)) = (&info.team_id, &info.team_public_model_name) else {
         return false;
@@ -161,20 +165,30 @@ pub(crate) fn team_model_has_alternatives(registry: &Registry, deployment: &Depl
             siblings
                 .iter()
                 .filter(|sibling| !sibling.model_info.blocked)
+                .filter(|sibling| deployment.shares_calls_with(sibling, skips_batch_only))
                 .count()
                 > 1
         })
 }
 
 /// `_core_routing_group_has_alternatives`: `model_group` names a callable routing group whose
-/// members span more than one deployment.
-pub(crate) fn routing_group_has_alternatives(registry: &Registry, model_group: &str) -> bool {
+/// members span more than one deployment that could take the call `deployment` failed.
+pub(crate) fn routing_group_has_alternatives(
+    registry: &Registry,
+    model_group: &str,
+    deployment: &Deployment,
+    skips_batch_only: bool,
+) -> bool {
     let resolved = registry.alias_of(model_group).unwrap_or(model_group);
     registry.routing_group_named(resolved).is_some_and(|group| {
         group
             .models
             .iter()
-            .map(|member| registry.named(member).map_or(0, |members| members.len()))
+            .map(|member| {
+                registry
+                    .named(member)
+                    .map_or(0, |members| deployment.peers_in(&members, skips_batch_only))
+            })
             .sum::<usize>()
             > 1
     })
@@ -766,7 +780,10 @@ mod tests {
         )
         .unwrap();
         let first = registry.deployment("a").unwrap();
-        assert_eq!(team_model_has_alternatives(&registry, &first), expected);
+        assert_eq!(
+            team_model_has_alternatives(&registry, &first, true),
+            expected
+        );
     }
 
     #[rstest]
@@ -792,8 +809,9 @@ mod tests {
             vec![group],
         )
         .unwrap();
+        let first = registry.deployment("a").unwrap();
         assert_eq!(
-            routing_group_has_alternatives(&registry, requested),
+            routing_group_has_alternatives(&registry, requested, &first, true),
             expected
         );
     }

@@ -263,7 +263,20 @@ fn without_deployments_that_cannot_batch(
 }
 
 pub(crate) fn skips_batch_only(request: &RouterRequest, pool: &[Arc<Deployment>]) -> bool {
-    !request.batch_create && !request.batch_api && pool.iter().any(|d| !d.serves_only_batches())
+    !request.batch_create
+        && !request.batch_api
+        && !pinned_to_batch_only(request, pool)
+        && pool.iter().any(|d| !d.serves_only_batches())
+}
+
+fn pinned_to_batch_only(request: &RouterRequest, pool: &[Arc<Deployment>]) -> bool {
+    request
+        .pinned_deployment_id
+        .as_deref()
+        .is_some_and(|pinned| {
+            pool.iter()
+                .any(|d| d.id == pinned && d.serves_only_batches())
+        })
 }
 
 fn without_batch_only_deployments(

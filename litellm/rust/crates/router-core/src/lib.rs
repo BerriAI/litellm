@@ -271,6 +271,10 @@ pub struct FailureReport {
     pub count_only: bool,
     /// The model group the request was for, whose fallbacks keep a lone deployment cooling.
     pub requested_group: Option<String>,
+    /// The failed call was a batch, file, fine-tuning, vector store, or container call
+    /// ([`RouterRequest::batch_api`]), which the group's deployments serving only batches could
+    /// also have taken.
+    pub batch_api: bool,
     /// Cool down without counting the failure (`set_cooldown_deployments` alone).
     pub uncounted: bool,
     /// Also count the failed request against the deployment's per-minute requests
@@ -616,16 +620,21 @@ impl Router {
         } else {
             snapshot.settings.cooldown_time
         };
+        let skips_batch_only = !report.batch_api;
         let shape = GroupShape {
             single_deployment: snapshot
                 .registry
                 .group(&deployment.model_name)
-                .is_some_and(|group| deployment.peers_in(&group) == 1)
-                && !report
-                    .requested_group
-                    .as_deref()
-                    .is_some_and(|group| routing_group_has_alternatives(&snapshot.registry, group))
-                && !team_model_has_alternatives(&snapshot.registry, &deployment),
+                .is_some_and(|group| deployment.peers_in(&group, skips_batch_only) == 1)
+                && !report.requested_group.as_deref().is_some_and(|group| {
+                    routing_group_has_alternatives(
+                        &snapshot.registry,
+                        group,
+                        &deployment,
+                        skips_batch_only,
+                    )
+                })
+                && !team_model_has_alternatives(&snapshot.registry, &deployment, skips_batch_only),
             has_fallback_group: snapshot
                 .settings
                 .dynamic

@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.attempt_settlement import (
     released,
     routed_attempt,
 )
-from litellm.litellm_core_utils.batch_utils import is_batch_retrieve_call_type
+from litellm.litellm_core_utils.batch_utils import VECTOR_STORE_AND_CONTAINER_CALLS, is_batch_retrieve_call_type
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     get_parent_otel_span_from_kwargs,
@@ -4470,7 +4470,11 @@ def _routes_as_batch_create(plan: Plan, request: Mapping[str, object]) -> bool:
 
 
 def _is_batch_api_call(plan: Plan) -> bool:
-    return plan.kind in _BATCH_API_KINDS or plan.handler in _BATCH_API_HANDLERS
+    return (
+        plan.kind in _BATCH_API_KINDS
+        or plan.handler in _BATCH_API_HANDLERS
+        or plan.endpoint in VECTOR_STORE_AND_CONTAINER_CALLS
+    )
 
 
 def _request_narrowing(request: Mapping[str, object]) -> Mapping[str, object]:

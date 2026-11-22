@@ -8229,6 +8229,22 @@ _AZURE_FINE_TUNING_JOB: Final = {
     "seed": 0,
     "error": None,
 }
+_AZURE_VECTOR_STORE_SEARCH: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": ["hi"],
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+_AZURE_CONTAINER: Final = {
+    "id": "cntr_1",
+    "object": "container",
+    "created_at": 0,
+    "status": "running",
+    "expires_after": {"anchor": "last_active_at", "minutes": 20},
+    "last_active_at": 0,
+    "name": "sandbox",
+}
 _MIXED_GROUP_BATCH_API_CALLS: Final = {
     "retrieve-batch": (
         lambda router: router.aretrieve_batch(model="gpt-mixed", batch_id="batch_created"),
@@ -8267,6 +8283,14 @@ _MIXED_GROUP_BATCH_API_CALLS: Final = {
         lambda router: router.alist_fine_tuning_jobs(model="gpt-mixed"),
         {"object": "list", "data": [_AZURE_FINE_TUNING_JOB], "has_more": False},
     ),
+    "search-vector-store": (
+        lambda router: router.avector_store_search(model="gpt-mixed", vector_store_id="vs_1", query="hi"),
+        _AZURE_VECTOR_STORE_SEARCH,
+    ),
+    "create-container": (
+        lambda router: router.acreate_container(model="gpt-mixed", name="sandbox"),
+        _AZURE_CONTAINER,
+    ),
 }
 
 
@@ -8274,7 +8298,7 @@ _MIXED_GROUP_BATCH_API_CALLS: Final = {
 @pytest.mark.parametrize(
     ("call", "answer"), _MIXED_GROUP_BATCH_API_CALLS.values(), ids=_MIXED_GROUP_BATCH_API_CALLS.keys()
 )
-async def test_batch_file_and_fine_tuning_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
+async def test_resource_scoped_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
     monkeypatch: pytest.MonkeyPatch,
     call: Callable[[Router], Awaitable[object]],
     answer: Mapping[str, object],
@@ -8297,6 +8321,74 @@ async def test_batch_file_and_fine_tuning_calls_on_a_mixed_azure_group_still_rea
             await call(router)
 
     assert batch_deployment.call_count > 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "answer"),
+    [_MIXED_GROUP_BATCH_API_CALLS["delete-file"], _MIXED_GROUP_BATCH_API_CALLS["retrieve-fine-tuning-job"]],
+    ids=["delete-file", "retrieve-fine-tuning-job"],
+)
+async def test_a_rate_limited_chat_deployment_cools_down_for_batch_api_calls_on_a_mixed_azure_group(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    answer: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chat_deployment: Final = respx_mock.route(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(429, json={"error": {"code": "429", "message": "Rate limit reached"}})
+        )
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(return_value=httpx.Response(200, json=answer))
+
+        async def chat_requests_after_one_call() -> int:
+            with contextlib.suppress(openai.RateLimitError):
+                await call(router)
+            return chat_deployment.call_count
+
+        chat_requests_after_each_call: Final = tuple([await chat_requests_after_one_call() for _ in range(20)])
+
+    assert len({requests for requests in chat_requests_after_each_call if requests}) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "cools_down"),
+    [("afile_delete", True), ("aretrieve_fine_tuning_job", True), ("acompletion", False)],
+)
+async def test_a_logged_rate_limit_cools_a_mixed_azure_chat_deployment_only_for_calls_its_batch_peer_takes(
+    call_type: str, cools_down: bool
+):
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-sku"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-sku"),
+        ],
+    )
+
+    cooled: Final = router.deployment_callback_on_failure(
+        {
+            "call_type": call_type,
+            "exception": litellm.RateLimitError(message="Rate limit reached", llm_provider="azure", model="chat-sku"),
+            "litellm_params": {"model_info": {"id": "chat-sku"}, "metadata": {"model_group": "gpt-mixed"}},
+        },
+        None,
+        0,
+        1,
+    )
+
+    assert cooled is cools_down
+    assert [entry[0] for entry in router.cooldown_cache.get_active_cooldowns(["chat-sku"], None)] == (
+        ["chat-sku"] if cools_down else []
+    )
 
 
 @pytest.mark.asyncio

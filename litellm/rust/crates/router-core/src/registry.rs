@@ -262,12 +262,16 @@ impl Deployment {
         self.is_azure() && self.is_batch_capable()
     }
 
-    /// The members of `group` that can take this deployment's calls: one serving only batches
-    /// takes none of another kind's.
-    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>]) -> usize {
+    /// Whether `peer` could take a call this deployment failed: a call that skips the deployments
+    /// serving only batches never reaches one, unless it reached this one.
+    pub(crate) fn shares_calls_with(&self, peer: &Deployment, skips_batch_only: bool) -> bool {
+        !skips_batch_only || self.serves_only_batches() || !peer.serves_only_batches()
+    }
+
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>], skips_batch_only: bool) -> usize {
         group
             .iter()
-            .filter(|peer| self.serves_only_batches() || !peer.serves_only_batches())
+            .filter(|peer| self.shares_calls_with(peer, skips_batch_only))
             .count()
     }
 

@@ -18,6 +18,7 @@ use litellm_router_core::{
     health::CooldownValue,
     health::current_minute,
     host::UncountedRetries,
+    mock::MockFailure,
     precall::PreCallFacts,
     select,
     select::PassThrough,
@@ -2758,29 +2759,38 @@ async fn a_failed_chat_level_never_falls_back_to_a_batch_only_level() {
 }
 
 fn azure_chat_beside_batch() -> RouterConfig {
+    azure_chat_beside_batch_named("primary")
+}
+
+fn azure_chat_beside_batch_named(model_name: &str) -> RouterConfig {
     serde_json::from_value(json!({
         "model_list": [
-            {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
-            {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+            {"model_name": model_name, "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": model_name, "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
         ]
     }))
     .unwrap()
 }
 
 #[rstest]
-#[case::a_chat_call(false, vec!["c1"])]
-#[case::a_batch_or_file_call(true, vec!["c1", "b2"])]
+#[case::a_chat_call("primary", "primary", false, vec!["c1"])]
+#[case::a_batch_or_file_call("primary", "primary", true, vec!["c1", "b2"])]
+#[case::a_chat_call_through_a_wildcard("azure/*", "azure/gpt-4o", false, vec!["c1"])]
+#[case::a_batch_or_file_call_through_a_wildcard("azure/*", "azure/gpt-4o", true, vec!["c1", "b2"])]
 #[tokio::test]
 async fn only_batch_and_file_calls_pick_among_azure_batch_only_deployments(
+    #[case] model_name: &str,
+    #[case] model: &str,
     #[case] batch_api: bool,
     #[case] expected: Vec<&str>,
 ) {
     let router = router(
-        azure_chat_beside_batch(),
+        azure_chat_beside_batch_named(model_name),
         json!({}),
         Arc::new(ScriptedHost::default()),
     );
     let request = RouterRequest {
+        model: model.to_owned(),
         batch_api,
         ..request()
     };
@@ -2790,6 +2800,65 @@ async fn only_batch_and_file_calls_pick_among_azure_batch_only_deployments(
         .unwrap();
     let healthy: Vec<&str> = candidates.healthy.iter().map(|d| d.id.as_str()).collect();
     assert_eq!(healthy, expected);
+}
+
+#[rstest]
+#[case::to_the_batch_only_deployment("b2")]
+#[case::to_the_chat_deployment("c1")]
+#[tokio::test]
+async fn a_call_pinned_to_a_deployment_of_a_mixed_azure_group_picks_it(#[case] pinned: &str) {
+    let router = router(
+        azure_chat_beside_batch(),
+        json!({}),
+        Arc::new(ScriptedHost::default()),
+    );
+    let request = RouterRequest {
+        pinned_deployment_id: Some(pinned.to_owned()),
+        ..request()
+    };
+    let candidates = router
+        .healthy(&Op::from("avector_store_file_create"), &request)
+        .await
+        .unwrap();
+    let healthy: Vec<&str> = candidates.healthy.iter().map(|d| d.id.as_str()).collect();
+    assert_eq!(healthy, vec![pinned]);
+}
+
+fn azure_chat_with_retries_beside_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat", "num_retries": 3}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+        ]
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_chat_call(false, Some(3))]
+#[case::a_batch_or_file_call(true, None)]
+#[tokio::test]
+async fn a_rate_limit_mock_carries_the_num_retries_of_the_only_deployment_its_call_could_use(
+    #[case] batch_api: bool,
+    #[case] expected: Option<u32>,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(
+        azure_chat_with_retries_beside_batch(),
+        json!({}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        batch_api,
+        mock_failure: Some(MockFailure::RateLimit),
+        ..request()
+    };
+    let _ = router.call(Op::from("acompletion"), request).await;
+    let carried = host.events.lock().iter().find_map(|event| match event {
+        RouterEvent::MockFailed { num_retries, .. } => Some(*num_retries),
+        _ => None,
+    });
+    assert_eq!(carried, Some(expected));
 }
 
 fn azure_chat_alone() -> RouterConfig {
@@ -2841,6 +2910,149 @@ async fn a_reported_rate_limit_leaves_a_chat_deployment_up(#[case] config: Route
         .await
         .unwrap();
     assert_eq!(cooldown, None);
+}
+
+fn azure_team_chat_beside_batch() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "t1a", "litellm_params": {"model": "azure/chat"},
+             "model_info": {"id": "c1", "mode": "chat", "team_id": "T1", "team_public_model_name": "tp"}},
+            {"model_name": "t1b", "litellm_params": {"model": "azure/batch"},
+             "model_info": {"id": "b2", "mode": "batch", "team_id": "T1", "team_public_model_name": "tp"}},
+        ]
+    }))
+    .unwrap()
+}
+
+fn azure_chat_and_batch_groups_in_a_routing_group() -> RouterConfig {
+    serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
+            {"model_name": "batches", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+        ],
+        "routing_groups": [
+            {"group_name": "rg", "models": ["primary", "batches"], "routing_strategy": "simple-shuffle"},
+        ],
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::a_chat_call_in_its_group(azure_chat_beside_batch(), None, false, false)]
+#[case::a_batch_or_file_call_in_its_group(azure_chat_beside_batch(), None, true, true)]
+#[case::a_chat_call_under_a_team_name(azure_team_chat_beside_batch(), None, false, false)]
+#[case::a_batch_or_file_call_under_a_team_name(azure_team_chat_beside_batch(), None, true, true)]
+#[case::a_chat_call_through_a_routing_group(
+    azure_chat_and_batch_groups_in_a_routing_group(),
+    Some("rg"),
+    false,
+    false
+)]
+#[case::a_batch_or_file_call_through_a_routing_group(
+    azure_chat_and_batch_groups_in_a_routing_group(),
+    Some("rg"),
+    true,
+    true
+)]
+#[tokio::test]
+async fn a_reported_rate_limit_cools_a_chat_deployment_only_when_a_batch_only_peer_could_take_the_call(
+    #[case] config: RouterConfig,
+    #[case] requested_group: Option<&str>,
+    #[case] batch_api: bool,
+    #[case] cooled: bool,
+) {
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let cooldown = router
+        .report_failure(
+            "c1",
+            &failure(FailureKind::RateLimit, 429),
+            FailureReport {
+                requested_group: requested_group.map(str::to_owned),
+                batch_api,
+                ..FailureReport::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cooldown.is_some(), cooled);
+}
+
+#[rstest]
+#[case::a_chat_call(false, 0)]
+#[case::a_batch_or_file_call(true, 1)]
+#[tokio::test]
+async fn a_rate_limit_cools_a_chat_deployment_only_for_calls_a_batch_only_peer_could_take(
+    #[case] batch_api: bool,
+    #[case] cooled: usize,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
+    let router = router(
+        azure_chat_then_batch(),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        batch_api,
+        ..request()
+    };
+    let _ = router.call(Op::from("acompletion"), request).await;
+    let cooldowns = router
+        .health()
+        .active_cooldowns(&["c1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected().first().cloned(), cooldowns.len()),
+        (Some("c1".to_owned()), cooled)
+    );
+}
+
+#[tokio::test]
+async fn a_rate_limited_team_chat_deployment_beside_a_batch_only_sibling_stays_up_and_is_retried() {
+    let host = Arc::new(ScriptedHost::default());
+    *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
+    let router = router(
+        azure_team_chat_beside_batch(),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        model: "tp".to_owned(),
+        team_id: Some("T1".to_owned()),
+        listing_team_id: Some("T1".to_owned()),
+        ..RouterRequest::default()
+    };
+    let response = router.call(Op::from("acompletion"), request).await.unwrap();
+    let cooled = router
+        .health()
+        .active_cooldowns(&["c1".to_owned()])
+        .await
+        .unwrap();
+    assert_eq!(
+        (host.selected(), response.deployment_id, cooled.len()),
+        (vec!["c1".to_owned(), "c1".to_owned()], "c1".to_owned(), 0)
+    );
+}
+
+#[rstest]
+#[case::a_chat_call(false, false)]
+#[case::a_batch_or_file_call(true, true)]
+fn a_stream_can_fall_back_only_to_an_order_level_its_call_could_use(
+    #[case] batch_api: bool,
+    #[case] can_fall_back: bool,
+) {
+    let router = router(
+        azure_chat_then_batch(),
+        json!({}),
+        Arc::new(ScriptedHost::default()),
+    );
+    let request = RouterRequest {
+        batch_api,
+        ..request()
+    };
+    let policy = router.stream_policy(&request, &origin(json!({"order": 1})), None);
+    assert_eq!(policy.can_fall_back, can_fall_back);
 }
 
 #[rstest]
