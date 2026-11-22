@@ -144,30 +144,7 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                 />
               )}
             </AgentFormField>
-            <AgentFormField
-              name="execution_mode"
-              label={t("agents.identityFields.executionMode")}
-              defaultValue="autonomous"
-            >
-              {({ value, onChange, id }) => (
-                <Select
-                  items={EXECUTION_MODE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
-                  value={typeof value === "string" ? value : "autonomous"}
-                  onValueChange={onChange}
-                >
-                  <SelectTrigger id={id}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EXECUTION_MODE_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {t(option.labelKey)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </AgentFormField>
+            <ExecutionModeField />
             <AgentFormField
               name="identity_service_principal_id"
               label={t("agents.identityFields.servicePrincipal.label")}
@@ -232,30 +209,63 @@ export const AgentIdentityFields = ({ accessToken }: { accessToken: string | nul
                 <p className="text-sm text-muted-foreground">{t("agents.identityFields.requiredScopes.note")}</p>
               </>
             )}
-            <AgentFormField name="enabled" label={t("agents.identityFields.executionLabel")} defaultValue={true}>
-              {({ value, onChange, id }) => (
-                <Select
-                  items={EXECUTION_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
-                  value={value === false ? "disabled" : "enabled"}
-                  onValueChange={(next) => onChange(next === "enabled")}
-                >
-                  <SelectTrigger id={id}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {EXECUTION_OPTIONS.map((option) => (
-                      <SelectItem key={option.value} value={option.value}>
-                        {t(option.labelKey)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </AgentFormField>
+            <ExecutionField />
             <p className="text-sm text-muted-foreground">{t("agents.identityFields.verificationNote")}</p>
           </>
         )}
       </section>
     </>
+  );
+};
+
+const ExecutionModeField = () => {
+  const { t } = useTranslation();
+  return (
+    <AgentFormField name="execution_mode" label={t("agents.identityFields.executionMode")} defaultValue="autonomous">
+      {({ value, onChange, id }) => (
+        <Select
+          items={EXECUTION_MODE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+          value={typeof value === "string" ? value : "autonomous"}
+          onValueChange={onChange}
+        >
+          <SelectTrigger id={id}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EXECUTION_MODE_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </AgentFormField>
+  );
+};
+
+const ExecutionField = () => {
+  const { t } = useTranslation();
+  return (
+    <AgentFormField name="enabled" label={t("agents.identityFields.executionLabel")} defaultValue={true}>
+      {({ value, onChange, id }) => (
+        <Select
+          items={EXECUTION_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+          value={value === false ? "disabled" : "enabled"}
+          onValueChange={(next) => onChange(next === "enabled")}
+        >
+          <SelectTrigger id={id}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {EXECUTION_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {t(option.labelKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </AgentFormField>
   );
 };
