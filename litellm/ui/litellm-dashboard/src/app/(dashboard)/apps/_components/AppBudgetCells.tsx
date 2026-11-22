@@ -183,10 +183,12 @@ export function AppBudgetTable({
   scope,
   usageLayout = false,
   children,
+  footer,
 }: {
   scope: "organization" | "member";
   usageLayout?: boolean;
   children: ReactNode;
+  footer?: ReactNode;
 }) {
   const { t } = useTranslation();
   const organization = scope === "organization";
@@ -214,6 +216,7 @@ export function AppBudgetTable({
         </TableHeader>
         <TableBody>{children}</TableBody>
       </Table>
+      {footer}
     </div>
   );
 }

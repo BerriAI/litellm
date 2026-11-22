@@ -1,10 +1,10 @@
-import json
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.table_repositories import (
     AgentIdentityRepository,
     AgentsRepository,
@@ -92,7 +92,7 @@ class AgentIdentityStore:
 
     @with_service_target(_AGENT_IDENTITIES_TARGET)
     async def _bound_agent_id(self, tenant_id: str, client_id: str) -> str | AgentIdentityFailure | None:
-        cache_key: Final = f"agent_identity:{json.dumps((tenant_id, client_id))}"
+        cache_key: Final = AuthObject.agent_identity(tenant_id, client_id)
         cached: Final[object] = await self.cache.async_get_cache(key=cache_key) if self.cache is not None else None
         if isinstance(cached, str):
             return cached

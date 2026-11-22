@@ -364,7 +364,6 @@ from litellm.constants import (
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_MODEL_CREATED_AT_TIME,
-    GLOBAL_PROXY_SPEND_CACHE_KEY,
     LITELLM_PROXY_ADMIN_NAME,
     LITELLM_PROXY_BUDGET_NAME,
     MONTHLY_SPEND_REPORT_JOB_ID,
@@ -551,10 +550,7 @@ from litellm.proxy.common_utils.anthropic_error_payload import (
     anthropic_internal_server_error_response,
     uses_anthropic_error_envelope,
 )
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
-    AuthCacheInvalidationSubscriber,
-    publish_auth_cache_invalidation,
-)
+from litellm.proxy.common_utils.cache_invalidation_pubsub import publish_cache_invalidation
 from litellm.proxy.common_utils.callback_lifecycle import (
     CALLBACK_CLOSE_TIMEOUT_SECONDS,
     close_proxy_callbacks,
@@ -662,12 +658,7 @@ from litellm.proxy.common_utils.token_count_log import (
     logged_token_count,
     rejected_token_count,
 )
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    end_user_cache_key,
-    get_management_object_ttl,
-    tag_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import (
     FieldSource,
@@ -942,6 +933,8 @@ from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.cache_invalidation import CacheInvalidation, PythonCaches, connect_invalidation
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
@@ -2201,7 +2194,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
 
             await proxy_config.stop_config_sync_subscriber()
 
-            await proxy_config.stop_auth_cache_invalidation_subscriber()
+            proxy_config.stop_cache_invalidation_subscriber()
 
             await proxy_shutdown_event(worker_heartbeat=worker_heartbeat)
 
@@ -4056,9 +4049,9 @@ async def accounting_window_keys(
     scopes: Final = tuple(
         (entity_type, entity_id, cache_key)
         for entity_type, entity_id, cache_key in (
-            (Litellm_EntityType.KEY, token, token),
-            (Litellm_EntityType.TEAM, team_id, f"team_id:{team_id}"),
-            (Litellm_EntityType.USER, user_id, user_id),
+            (Litellm_EntityType.KEY, token, AuthObject.virtual_key(token) if token is not None else None),
+            (Litellm_EntityType.TEAM, team_id, AuthObject.team(team_id) if team_id is not None else None),
+            (Litellm_EntityType.USER, user_id, AuthObject.user(user_id) if user_id is not None else None),
         )
         if entity_id is not None and cache_key is not None
     )
@@ -4084,7 +4077,7 @@ async def accounting_window_keys(
 
 
 async def _accounting_scope_windows(
-    entity_type: Litellm_EntityType, entity_id: str, cache_key: str
+    entity_type: Litellm_EntityType, entity_id: str, cache_key: AuthObject
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
@@ -4140,7 +4133,7 @@ async def _stored_budget_limits(entity_type: Litellm_EntityType, entity_id: str)
 
 async def ensure_spend_counter_initialized(
     counter_key: str,
-    source_cache_key: str | list[str],
+    source_cache_key: AuthObject | Sequence[AuthObject],
 ) -> None:
     is_warm: Final = await _is_spend_counter_cache_warm(counter_key=counter_key)
     if is_warm is False:
@@ -4162,9 +4155,9 @@ _ensure_spend_counter_initialized: Final = ensure_spend_counter_initialized
 
 
 async def _get_source_cache_base_spend(
-    source_cache_key: str | list[str],
+    source_cache_key: AuthObject | Sequence[AuthObject],
 ) -> float:
-    source_cache_keys: Final = [source_cache_key] if isinstance(source_cache_key, str) else source_cache_key
+    source_cache_keys: Final = (source_cache_key,) if isinstance(source_cache_key, AuthObject) else source_cache_key
     for cache_key in source_cache_keys:
         source: object = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
         if source is None:
@@ -4296,8 +4289,8 @@ async def set_spend_counter_with_floor_and_broadcast(counter_key: str, value: fl
     floor_key: Final = f"spend_db_floor:{counter_key}"
     spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
-    await publish_auth_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
-    await publish_auth_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    await publish_cache_invalidation(cache_key=counter_key, new_value=value, ttl=60)
+    await publish_cache_invalidation(cache_key=floor_key, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
 
 
 async def _apply_spend_counter_increments(  # pyright: ignore[reportUnusedFunction]  # called by legacy_spend_counters
@@ -4367,7 +4360,7 @@ _CachedSpendObjectT = TypeVar(
 
 
 def _add_spend_to_locally_cached_object(
-    cache: UserApiKeyCache, key: str, model_type: type[_CachedSpendObjectT], response_cost: float
+    cache: UserApiKeyCache, key: AuthObject, model_type: type[_CachedSpendObjectT], response_cost: float
 ) -> None:
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
@@ -4383,7 +4376,7 @@ def _add_spend_to_locally_cached_object(
 
 async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> float | None:
     try:
-        return await cache.increment_if_present(GLOBAL_PROXY_SPEND_CACHE_KEY, response_cost)
+        return await cache.increment_if_present(AuthObject.global_proxy_spend(), response_cost)
     except Exception as e:
         verbose_proxy_logger.warning(
             "Spend tracking - failed to add spend to the global proxy spend in Redis. "
@@ -4396,18 +4389,18 @@ async def _add_spend_to_shared_global_proxy_spend(cache: UserApiKeyCache, respon
 
 async def _add_spend_to_global_proxy_spend(cache: UserApiKeyCache, response_cost: float) -> None:
     local_before: Final = _UNTYPED_VALUE.validate_python(
-        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+        cache.get_cache(key=AuthObject.global_proxy_spend(), local_only=True)
     )
     shared_total: Final = await _add_spend_to_shared_global_proxy_spend(cache, response_cost)
     local_total: Final = _UNTYPED_VALUE.validate_python(
-        cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True)
+        cache.get_cache(key=AuthObject.global_proxy_spend(), local_only=True)
     )
     if not isinstance(local_total, (int, float)):
         return
     if shared_total is not None and local_total != local_before and shared_total < local_total:
         return
     cache.set_cache(
-        key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+        key=AuthObject.global_proxy_spend(),
         value=local_total + response_cost if shared_total is None else shared_total,
         local_only=True,
         ttl=get_management_object_ttl(cache),
@@ -4440,7 +4433,9 @@ async def update_cache(
         else:
             hashed_token = token
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await target.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        existing_spend_obj = await target.async_get_cache(
+            key=AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth
+        )
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -4482,7 +4477,7 @@ async def update_cache(
             )
             # set cooldown on alert
 
-    def _add_spend(key: str, model_type: type[_CachedSpendObjectT], cost: float) -> None:
+    def _add_spend(key: AuthObject, model_type: type[_CachedSpendObjectT], cost: float) -> None:
         try:
             _add_spend_to_locally_cached_object(target, key, model_type, cost)
         except Exception as e:
@@ -4491,7 +4486,7 @@ async def update_cache(
                 "Budget enforcement may use stale spend values. "
                 "key=%s, response_cost=%s - %s\n%s",
                 model_type.__name__,
-                key,
+                key.key,
                 cost,
                 str(e),
                 traceback.format_exc(),
@@ -4504,14 +4499,14 @@ async def update_cache(
         return
 
     if user_id is not None:
-        _add_spend(user_id, LiteLLM_UserTable, response_cost)
+        _add_spend(AuthObject.user(user_id), LiteLLM_UserTable, response_cost)
     if end_user_id is not None:
-        _add_spend(end_user_cache_key(end_user_id), LiteLLM_EndUserTable, response_cost)
+        _add_spend(AuthObject.end_user(end_user_id), LiteLLM_EndUserTable, response_cost)
     if team_id is not None:
-        _add_spend(f"team_id:{team_id}", LiteLLM_TeamTableCachedObj, response_cost)
+        _add_spend(AuthObject.team(team_id), LiteLLM_TeamTableCachedObj, response_cost)
     for tag_name in tags or ():
         if tag_name and isinstance(tag_name, str):
-            _add_spend(tag_cache_key(tag_name), LiteLLM_TagTable, response_cost)
+            _add_spend(AuthObject.tag(tag_name), LiteLLM_TagTable, response_cost)
 
     if litellm.max_budget <= 0:
         return
@@ -5275,10 +5270,7 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=SAML_AUTHN_REQUEST_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
-        user_api_key_cache.attach_redis_cache(
-            redis_cache,
-            default_redis_ttl=litellm.default_redis_ttl,
-        )
+        user_api_key_cache.attach_redis_cache(redis_cache)
         for shared_cache in (hook_cache, mcp_state_cache, jwks_cache, ui_settings_cache):
             shared_cache.attach_redis_cache(redis_cache, default_redis_ttl=litellm.default_redis_ttl)
         verbose_proxy_logger.info(
@@ -5672,6 +5664,14 @@ def _db_managed_general_settings_keys() -> frozenset[str]:
     return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
 
 
+def _reject_required_customer_headers_update(fields: Iterable[str]) -> None:
+    if REQUIRED_CUSTOMER_HEADERS_SETTING in fields:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "general_settings.required_customer_headers can only be set in the YAML config file."},
+        )
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5852,7 +5852,7 @@ class ProxyConfig:
         self._cyberark_boot_env: dict[str, str | None] | None = None  # mutable-ok: deployment env snapshot, set once
         self.worker_registry: list[WorkerRegistryEntry] = []
         self.config_sync_subscriber: ConfigSyncSubscriber | None = None
-        self.auth_cache_invalidation_subscriber: AuthCacheInvalidationSubscriber | None = None
+        self.cache_invalidation: CacheInvalidation | None = None
         from litellm.litellm_core_utils.get_model_cost_map import (
             get_model_cost_map_loaded_at,
         )
@@ -5888,6 +5888,9 @@ class ProxyConfig:
         )
 
     def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
+        yaml_settings: Final = as_str_mapping(config.get("general_settings"))
+        if yaml_settings is not None and REQUIRED_CUSTOMER_HEADERS_SETTING in yaml_settings:
+            REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(yaml_settings[REQUIRED_CUSTOMER_HEADERS_SETTING])
         for section, store in self._settings_stores.items():
             _reload_settings_store(section, store, config.get(section))
 
@@ -6098,6 +6101,8 @@ class ProxyConfig:
 
     def reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
         """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
+        if section_name == "general_settings":
+            _reject_required_customer_headers_update(changed_keys)
         store: Final = self._settings_stores.get(cast(Section, section_name))
         if store is None:
             return
@@ -7219,13 +7224,7 @@ class ProxyConfig:
             user_api_key_cache_ttl: Final = general_settings.get("user_api_key_cache_ttl", None)
             if user_api_key_cache_ttl is not None:
                 ttl: Final = float(user_api_key_cache_ttl)
-                # Mirror TTL on Redis as well when ``litellm_settings.enable_redis_auth_cache``
-                # attaches Redis to ``user_api_key_cache``; otherwise DualCache misses in
-                # memory fall back to a key that outlasts ``user_api_key_cache_ttl``.
-                user_api_key_cache.update_cache_ttl(
-                    default_in_memory_ttl=ttl,
-                    default_redis_ttl=ttl,
-                )
+                user_api_key_cache.update_cache_ttl(default_in_memory_ttl=ttl)
                 for split_cache in _caches_split_from_the_auth_cache():
                     split_cache.update_cache_ttl(default_in_memory_ttl=ttl, default_redis_ttl=ttl)
 
@@ -8888,38 +8887,41 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping config sync subscriber: %s", e)
 
-    def start_auth_cache_invalidation_subscriber(
+    def start_cache_invalidation_subscriber(
         self,
         redis_cache: RedisCache | None,
         user_api_key_cache: UserApiKeyCache,
     ) -> None:
-        if redis_cache is None or self.auth_cache_invalidation_subscriber is not None:
+        if redis_cache is None or self.cache_invalidation is not None:
             return
-        subscriber: Final = AuthCacheInvalidationSubscriber(
-            redis_cache=redis_cache,
-            user_api_key_cache=user_api_key_cache,
-            additional_in_memory_caches=(spend_counter_cache.in_memory_cache, byok_credential_cache),
-            evicted_caches=(
-                budget_windows_absent_cache.in_memory_cache,
-                hook_cache.in_memory_cache,
-                mcp_state_cache.in_memory_cache,
-                jwks_cache.in_memory_cache,
-                ui_settings_cache.in_memory_cache,
+        channel: Final = connect_invalidation(
+            connect(redis_cache),
+            redis_cache.namespace,
+            user_api_key_cache.store,
+            spend_counter_store,
+            PythonCaches(
+                copies=(spend_counter_cache.in_memory_cache, byok_credential_cache),
+                evicted=(
+                    budget_windows_absent_cache.in_memory_cache,
+                    hook_cache.in_memory_cache,
+                    mcp_state_cache.in_memory_cache,
+                    jwks_cache.in_memory_cache,
+                    ui_settings_cache.in_memory_cache,
+                ),
+                on_eviction=(user_api_key_cache.void_lease,),
             ),
-            spend_counters=spend_counter_store,
         )
-        self.auth_cache_invalidation_subscriber = subscriber
-        subscriber.start()
-
-    async def stop_auth_cache_invalidation_subscriber(self) -> None:
-        subscriber: Final = self.auth_cache_invalidation_subscriber
-        if subscriber is None:
+        if channel is None:
             return
-        self.auth_cache_invalidation_subscriber = None
-        try:
-            await subscriber.stop()
-        except Exception as e:  # noqa: BLE001  # best-effort: a failing stop must not break proxy shutdown
-            verbose_proxy_logger.error("Error stopping auth cache invalidation subscriber: %s", e)
+        self.cache_invalidation = channel
+        channel.start()
+
+    def stop_cache_invalidation_subscriber(self) -> None:
+        channel: Final = self.cache_invalidation
+        if channel is None:
+            return
+        self.cache_invalidation = None
+        channel.stop()
 
     async def _init_non_llm_objects_in_db(
         self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
@@ -11356,9 +11358,8 @@ class ProxyStartupEvent:
     ) -> None:
         """Warm global spend cache once at startup to reduce impact of first wave of requests."""
         try:
-            cache_key: Final = GLOBAL_PROXY_SPEND_CACHE_KEY
             await fetch_global_spend_with_event_coordination(
-                cache_key=cache_key,
+                cache_key=AuthObject.global_proxy_spend(),
                 user_api_key_cache=user_api_key_cache,
                 prisma_client=prisma_client,
             )
@@ -11676,7 +11677,7 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
         )
 
-        proxy_config.start_auth_cache_invalidation_subscriber(
+        proxy_config.start_cache_invalidation_subscriber(
             redis_cache=redis_usage_cache,
             user_api_key_cache=user_api_key_cache,
         )
@@ -21039,6 +21040,8 @@ async def update_config(
         request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
             await request.json()
         )
+        raw_general_settings: Final = as_str_mapping(request_body.get("general_settings"))
+        _reject_required_customer_headers_update(raw_general_settings or ())
         raw_router_settings: Final = request_body.get("router_settings")
         if isinstance(raw_router_settings, dict):
             supported_router_settings: Final = RUNTIME_UPDATABLE_ROUTER_SETTINGS | (
@@ -21357,6 +21360,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
+    _reject_required_customer_headers_update((data.field_name,))
     requested_value: Final = _requested_field_value(data)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)

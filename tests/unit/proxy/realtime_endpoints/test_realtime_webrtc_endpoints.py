@@ -395,6 +395,26 @@ def test_realtime_calls_requires_auth(proxy_app):
     assert response.status_code == 401
 
 
+@pytest.mark.parametrize("authorization", ["Basic {token}", "bearer{token}", "bearer"])
+def test_realtime_calls_without_a_bearer_credential_returns_401(proxy_app: FastAPI, authorization: str) -> None:
+    token: Final = encrypt_value_helper(
+        _encode_realtime_token_payload(
+            ephemeral_key="fake_upstream_epk",
+            model_id="gpt-4o-realtime-preview",
+            user_id=None,
+            team_id=None,
+            expires_at=None,
+        )
+    )
+    response: Final = TestClient(proxy_app).post(
+        "/v1/realtime/calls",
+        headers={"Authorization": authorization.format(token=token)},
+        content=b"v=0\r\n",
+    )
+    assert response.status_code == 401
+    assert response.json() == {"error": "Missing or invalid Authorization header"}
+
+
 def test_realtime_calls_invalid_token_returns_401(proxy_app):
     """POST /v1/realtime/calls returns 401 with invalid Bearer token."""
     client = TestClient(proxy_app)
@@ -408,11 +428,13 @@ def test_realtime_calls_invalid_token_returns_401(proxy_app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scheme", ["Bearer", "bearer", "BEARER"])
 async def test_realtime_calls_success_with_valid_encrypted_token(
     proxy_app,
     mock_route_request_realtime_calls,
     mock_add_litellm_data,
     mock_pre_call_hook,
+    scheme: str,
 ):
     """POST /v1/realtime/calls returns 201 with valid encrypted token from client_secrets."""
     # Build a valid encrypted token (same format as client_secrets returns)
@@ -443,7 +465,7 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
 
         response = client.post(
             "/v1/realtime/calls",
-            headers={"Authorization": f"Bearer {encrypted_token}"},
+            headers={"Authorization": f"{scheme} {encrypted_token}"},
             content=b"v=0\r\no=- 0 0 IN IP4 0.0.0.0\r\ns=-\r\n",
         )
 

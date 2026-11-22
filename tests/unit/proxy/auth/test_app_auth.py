@@ -7,15 +7,16 @@ from typing import (
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 
 import litellm
-from fastapi import HTTPException
 from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.app_auth import app_scope, resolve_app_hierarchy
 from litellm.proxy.auth.customer_hierarchy_auth import CustomerBudgetExceededError, check_customer_hierarchy_budget
 from litellm.proxy.auth.customer_spend import customer_spend_counter
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.management_helpers.app_groups import AppGroupStore
 from litellm.proxy.management_helpers.apps import AppStore
 from litellm.proxy.spend_tracking.budget_reservation import customer_window_counters
 from litellm.proxy.spend_tracking.customer_cost_margin import key_customer_cost_margin, request_customer_cost_margin
@@ -23,6 +24,7 @@ from litellm.types.proxy.auth.customer_hierarchy import (
     CustomerHierarchyAuth,
     CustomerScopeAuth,
 )
+from litellm.types.proxy.management_endpoints.app_groups import AppGroup, AppGroupBudgetPut, AppGroupCreate
 from litellm.types.proxy.management_endpoints.apps import (
     App,
     AppCreate,
@@ -64,9 +66,7 @@ async def test_cached_app_auth_preserves_identity_and_enforcement_during_databas
     await seed_resources(database)
     await writer.put_definition(AppDefinition(resource_type=resource_type))
     resource: Final = (await writer.resources(0, 10))[0]
-    app: Final = await writer.create(
-        AppCreate(resource_id=resource.resource_id, budget=Budget(max_budget=10)), "admin"
-    )
+    app: Final = await writer.create(AppCreate(resource_id=resource.resource_id, budget=Budget(max_budget=10)), "admin")
     assert isinstance(app, App)
     authenticated: Final = UserAPIKeyAuth(
         team_id="chat",
@@ -86,8 +86,14 @@ async def test_cached_app_auth_preserves_identity_and_enforcement_during_databas
     ) -> CustomerHierarchyAuth | None:
         connection: Final = cast("PrismaClient", SimpleNamespace(db=db))  # cast-ok: external database edge
         return await resolve_app_hierarchy(
-            hierarchy, {"x-litellm-app": assertion}, {}, connection, None, None,
-            "/v1/chat/completions", identity,
+            hierarchy,
+            {"x-litellm-app": assertion},
+            {},
+            connection,
+            None,
+            None,
+            "/v1/chat/completions",
+            identity,
         )
 
     warm: Final = await resolve(database, app.app_id)
@@ -128,7 +134,9 @@ async def test_cached_app_auth_preserves_identity_and_enforcement_during_databas
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("strict", (False, True))
-@pytest.mark.parametrize("scope_key", ("app", "app_customer_org", "app_customer_member"))
+@pytest.mark.parametrize(
+    "scope_key", ("app", "app_customer_org", "app_customer_member", "app_group", "app_group_customer_org")
+)
 async def test_cached_app_spend_rechecks_exhausted_budgets_and_preserves_outage_policy(
     scope_key: str, strict: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -139,11 +147,18 @@ async def test_cached_app_spend_rechecks_exhausted_budgets_and_preserves_outage_
     await seed_resources(database)
     await database.litellm_customerorganizationtable.create({"customer_org_id": "org"})
     await writer.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    groups: Final = AppGroupStore(writer)
+    group: Final = await groups.create(AppGroupCreate(name="Product", budget=Budget(max_budget=10)), "admin")
+    assert isinstance(group, AppGroup)
+    await groups.put_organization(group.app_group_id, "org", AppGroupBudgetPut(budget=Budget(max_budget=10)), "admin")
     app: Final = await writer.create(
         AppCreate(
-            resource_id="chat", budget=Budget(max_budget=10),
+            resource_id="chat",
+            budget=Budget(max_budget=10),
+            app_group_id=group.app_group_id,
             default_customer_member_budget=Budget(max_budget=10),
-        ), "admin",
+        ),
+        "admin",
     )
     assert isinstance(app, App)
     await writer.put_organization(app.app_id, "org", AppOrganizationPut(budget=Budget(max_budget=10)), "admin")
@@ -160,8 +175,13 @@ async def test_cached_app_spend_rechecks_exhausted_budgets_and_preserves_outage_
     async def resolve(db: object = database) -> CustomerHierarchyAuth:
         result: Final = await resolve_app_hierarchy(
             CustomerHierarchyAuth(customer_org_id="org", customer_member_id="member", scopes=()),
-            {}, {}, cast("PrismaClient", SimpleNamespace(db=db)), None, None,
-            "/v1/chat/completions", UserAPIKeyAuth(team_id="chat", team_alias="Chat"),
+            {},
+            {},
+            cast("PrismaClient", SimpleNamespace(db=db)),
+            None,
+            None,
+            "/v1/chat/completions",
+            UserAPIKeyAuth(team_id="chat", team_alias="Chat"),
         )  # cast-ok: external database edge
         assert result is not None
         return result
@@ -170,6 +190,8 @@ async def test_cached_app_spend_rechecks_exhausted_budgets_and_preserves_outage_
     counter: Final = customer_spend_counter(next(scope for scope in warm.scopes if scope.key == scope_key))
     table: Final = {
         "app": database.litellm_apptable,
+        "app_group": database.litellm_appgrouptable,
+        "app_group_customer_org": database.litellm_appgroupcustomerorgtable,
         "app_customer_org": database.litellm_appcustomerorgtable,
         "app_customer_member": database.litellm_appcustomermembertable,
     }[scope_key]
@@ -482,6 +504,7 @@ def test_spoofed_app_metadata_is_removed_when_auth_has_no_app() -> None:
         {
             "metadata": {
                 "user_api_key_app_id": "spoof",
+                "user_api_key_app_group_id": "spoof-group",
                 "user_api_key_app_alias": "spoof",
             }
         },
@@ -489,6 +512,7 @@ def test_spoofed_app_metadata_is_removed_when_auth_has_no_app() -> None:
         "metadata",
     )
     assert "user_api_key_app_id" not in result["metadata"]
+    assert "user_api_key_app_group_id" not in result["metadata"]
     assert "user_api_key_app_alias" not in result["metadata"]
 
 
@@ -619,3 +643,46 @@ async def test_soft_only_app_period_is_accounted_without_enforcing_the_warning(d
     assert tuple((counter.entity_type, counter.entity_id, counter.window_duration) for counter in counters) == (
         ("app", "application", duration),
     )
+
+
+@pytest.mark.asyncio
+async def test_moving_app_changes_new_requests_and_preserves_the_inflight_group_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.types.proxy.auth.customer_hierarchy import customer_hierarchy_ids_from_request
+
+    database: Final = AppDatabase()
+    cache, _ = shared_cache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    store: Final = AppStore(database, NOW, cache=cache, cache_reads=False)
+    groups: Final = AppGroupStore(store)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    first: Final = await groups.create(AppGroupCreate(name="First", budget=Budget(max_budget=100)), "admin")
+    second: Final = await groups.create(AppGroupCreate(name="Second", budget=Budget(max_budget=100)), "admin")
+    assert isinstance(first, AppGroup) and isinstance(second, AppGroup)
+    app: Final = await store.create(AppCreate(resource_id="chat", app_group_id=first.app_group_id), "admin")
+    assert isinstance(app, App)
+    connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
+
+    async def resolve() -> CustomerHierarchyAuth:
+        result: Final = await resolve_app_hierarchy(
+            None, {}, {}, connection, None, None, "/v1/chat/completions", UserAPIKeyAuth(team_id="chat")
+        )
+        assert result is not None
+        return result
+
+    inflight: Final = await resolve()
+    await store.patch(app.app_id, AppPatch(app_group_id=second.app_group_id), "admin")
+    await store.invalidate_cache()
+    later: Final = await resolve()
+    assert inflight.app_group_id == first.app_group_id
+    assert later.app_group_id == second.app_group_id
+    stamped: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        {"metadata": {"user_api_key_app_group_id": "spoof"}},
+        UserAPIKeyAuth(customer_hierarchy=inflight),
+        "metadata",
+    )
+    identity: Final = customer_hierarchy_ids_from_request({"litellm_params": stamped})
+    assert identity is not None and identity.app_group_id == first.app_group_id
