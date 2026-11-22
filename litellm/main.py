@@ -111,6 +111,9 @@ from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
     override_headers,
 )
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model as profile_gate_base_model,
+)
 from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
     create_health_check_response,
@@ -6177,7 +6180,9 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 model=model,
                 configured_headers=headers,
-                base_model=base_model if isinstance(base_model, str) else None,
+                base_model=profile_gate_base_model(
+                    {"base_model": base_model if isinstance(base_model, str) else None}, deployment_model_info
+                ),
             ),
         )
         headers = merged_headers  # rebind-ok: headers is this function's legacy mutable request headers

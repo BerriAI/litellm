@@ -856,11 +856,11 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
-        let deployment_base_model = match non_empty_string(argument("base_model")?) {
+        let deployment_base_model = match non_empty_string(
+            argument("model_info")?.and_then(|info| info.get_item("base_model").ok()),
+        ) {
             Some(base_model) => Some(base_model),
-            None => non_empty_string(
-                argument("model_info")?.and_then(|info| info.get_item("base_model").ok()),
-            ),
+            None => non_empty_string(argument("base_model")?),
         };
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(

@@ -44,7 +44,7 @@ def _gates_on_user_profile_id_support(scoped_header: ProviderSpecificHeader) -> 
 
 
 def deployment_base_model(litellm_params: Mapping[str, object], model_info: object) -> str | None:
-    base_model: Final = litellm_params.get("base_model") or (as_str_mapping(model_info) or {}).get("base_model")
+    base_model: Final = (as_str_mapping(model_info) or {}).get("base_model") or litellm_params.get("base_model")
     return base_model if isinstance(base_model, str) else None
 
 

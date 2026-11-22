@@ -10200,16 +10200,20 @@ async def test_foundry_messages_keeps_the_pin_when_a_configured_api_key_authenti
 
 _UNLISTED_FOUNDRY_CLAUDE: Final = "azure_ai/claude-unlisted-deployment"
 _BASE_MODEL_CASES: Final = pytest.mark.parametrize(
-    "model_info,sent_profile",
-    [({"base_model": "azure_ai/claude-sonnet-5-5"}, ["uprof_key"]), ({}, [])],
-    ids=["base_model_flagged", "no_base_model"],
+    "model_info,caller_base_model,sent_profile",
+    [
+        ({"base_model": "azure_ai/claude-sonnet-5-5"}, None, ["uprof_key"]),
+        ({"base_model": "azure_ai/claude-sonnet-5-5"}, "azure_ai/gpt-4o", ["uprof_key"]),
+        ({}, None, []),
+    ],
+    ids=["base_model_flagged", "caller_base_model_cannot_drop_the_pin", "no_base_model"],
 )
 
 
 @pytest.mark.asyncio
 @_BASE_MODEL_CASES
 async def test_a_routed_completion_pins_an_unlisted_foundry_claude_whose_base_model_the_cost_map_flags(
-    model_info: dict[str, str], sent_profile: list[str]
+    model_info: dict[str, str], caller_base_model: str | None, sent_profile: list[str]
 ) -> None:
     import httpx
 
@@ -10243,6 +10247,7 @@ async def test_a_routed_completion_pins_an_unlisted_foundry_claude_whose_base_mo
             max_tokens=8,
             client=upstream,
             provider_specific_header=updated["provider_specific_header"],
+            base_model=caller_base_model,
         )
     finally:
         await upstream.close()
@@ -10254,7 +10259,7 @@ async def test_a_routed_completion_pins_an_unlisted_foundry_claude_whose_base_mo
 @pytest.mark.asyncio
 @_BASE_MODEL_CASES
 async def test_foundry_messages_pins_an_unlisted_claude_whose_base_model_the_cost_map_flags(
-    model_info: dict[str, str], sent_profile: list[str]
+    model_info: dict[str, str], caller_base_model: str | None, sent_profile: list[str]
 ) -> None:
     import httpx
 
@@ -10278,6 +10283,7 @@ async def test_foundry_messages_pins_an_unlisted_claude_whose_base_model_the_cos
             model_info=model_info,
             client=upstream,
             provider_specific_header=updated["provider_specific_header"],
+            base_model=caller_base_model,
         )
     finally:
         await upstream.close()
