@@ -28,6 +28,7 @@ const log = (id: string): LogEntry => ({
   startTime: "2026-01-01T00:00:00Z",
   endTime: "2026-01-01T00:00:01Z",
   cache_hit: "false",
+  end_user: "=1+\n1",
   messages: [],
   response: {},
 });
@@ -53,6 +54,7 @@ it("exports every page with frozen filters and escapes spreadsheet formulas", as
   const rows = Papa.parse<Record<string, string>>(csv, { header: true }).data;
   expect(rows.map((row) => row["Request ID"])).toEqual(["first", "second"]);
   expect(rows.map((row) => row.Model)).toEqual(["'=FORMULA()", "'=FORMULA()"]);
+  expect(rows.map((row) => row["End User"])).toEqual(["'=1+\n1", "'=1+\n1"]);
 });
 
 it("does not download an empty result", async () => {

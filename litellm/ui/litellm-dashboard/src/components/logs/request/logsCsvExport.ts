@@ -40,7 +40,7 @@ export async function exportLogsCsv(options: Parameters<typeof uiSpendLogsCall>[
       "Duration (ms)": log.request_duration_ms ?? "",
       "Session ID": log.session_id ?? "",
     })),
-    { escapeFormulae: true },
+    { escapeFormulae: /^[=+\-@\t\r]/ },
   );
   if (logs.length > 0) downloadCsv(csv, `litellm-logs-${new Date().toISOString().slice(0, 10)}.csv`);
   return { count: logs.length, capped: logs.length === LOGS_EXPORT_LIMIT };
