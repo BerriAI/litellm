@@ -1921,6 +1921,27 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
     assert dropped == _TOOL_OUTPUT_ONLY
 
 
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_dropped_tool_result_video_keeps_its_signed_link_out_of_the_logs(
+    custom_llm_provider: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": signed_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert dropped == _TOOL_OUTPUT_ONLY
+    assert caplog.records
+    assert signature not in caplog.text
+
+
 _MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
 _HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
 _XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"

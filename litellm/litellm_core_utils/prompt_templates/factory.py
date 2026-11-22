@@ -1533,7 +1533,7 @@ def _skip_unfetched_tool_result_video(
             model=model or "",
             llm_provider=custom_llm_provider,
         ) from exc
-    verbose_logger.warning("Failed to process video in tool response: %s", reason)
+    verbose_logger.warning("Dropped a tool result video that could not be downloaded, since drop_params=True")
 
 
 def _gemini_tool_result_video_blob(
