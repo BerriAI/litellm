@@ -55,6 +55,22 @@ class _Store:
         raise AssertionError("the producer never reads content back")
 
 
+async def _queued_callbacks_ran() -> None:
+    """Returns once every callback already queued on the loop has run, such as an upload start the spool scheduled."""
+    loop: Final = asyncio.get_running_loop()
+    reached: Final = loop.create_future()
+    _ = loop.call_soon(reached.set_result, None)
+    await reached
+
+
+async def _uploads_settled(spool: TraceContentSpool) -> None:
+    """Returns once every upload the spool scheduled has finished and its completion callbacks have released what
+    it held."""
+    await _queued_callbacks_ran()
+    _ = await asyncio.gather(*spool.tasks)
+    await _queued_callbacks_ran()
+
+
 async def _acknowledge(acked: "asyncio.Future[bool]") -> None:
     """Acknowledges an upload and returns once every callback the spool put on it has run."""
     settled: Final = asyncio.Event()
@@ -158,7 +174,7 @@ async def test_a_captured_span_is_exported_only_after_its_upload_is_acknowledged
     assert pipeline.finished() == {}
     assert json.loads(body) == _CONTENT
     acked.set_result(True)
-    await asyncio.gather(*pipeline.spool.tasks)
+    await _uploads_settled(pipeline.spool)
     exported: Final = pipeline.finished()["chat model"]
     reference: Final = StoredReference.model_validate(_reference(exported))
     stored: Final = verified_stored(_KEY, _owner(span), reference)
@@ -186,7 +202,7 @@ async def test_a_failed_upload_exports_the_span_as_unavailable_with_its_metadata
         acked.set_exception(outcome)
     else:
         acked.set_result(outcome)
-    await asyncio.gather(*pipeline.spool.tasks)
+    await _uploads_settled(pipeline.spool)
     exported: Final = pipeline.finished()["chat model"]
     assert _reference(exported) == dict(signed_reference(_KEY, _owner(span), reason))
     assert (exported.attributes or {})["litellm.team.id"] == "team-a"
@@ -200,7 +216,7 @@ async def test_an_upload_past_its_timeout_is_unavailable_and_keeps_its_bytes_unt
     async with _pipeline(store, upload_timeout=0) as pipeline:
         span: Final = _capture(pipeline, content=_MIXED)
         _, body, acked = await asyncio.wait_for(store.uploads.get(), timeout=5)
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         assert _reference(pipeline.finished()["chat model"]) == dict(
             signed_reference(_KEY, _owner(span), Unavailable.UPLOAD_FAILED)
         )
@@ -243,7 +259,7 @@ async def test_captures_past_the_job_limit_are_unavailable_without_growing_the_h
         acks: Final = tuple([await asyncio.wait_for(store.uploads.get(), timeout=5) for _ in range(MAX_CONTENT_JOBS)])
         for _, _, acked in acks:
             acked.set_result(True)
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         assert len(pipeline.finished()) == MAX_CONTENT_JOBS + 1
         assert (pipeline.spool.pending_bytes, pipeline.spool.captures, pipeline.spool.jobs) == (0, {}, 0)
 
@@ -361,7 +377,7 @@ async def test_a_body_past_the_shared_budget_is_unavailable_and_keeps_the_span_m
     content: Final = {"gen_ai.input.messages": "界" * 3000}
     async with _pipeline(store, max_pending_bytes=8000) as pipeline:
         span: Final = _capture(pipeline, content=content)
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         exported: Final = pipeline.finished()["chat model"]
         assert _reference(exported) == dict(signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED))
         assert (exported.attributes or {})["litellm.team.id"] == "team-a"
@@ -380,7 +396,7 @@ async def test_a_span_whose_metadata_would_pass_the_budget_is_exported_at_once_i
         assert _reference(pipeline.finished()["chat model"]) == dict(
             signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED)
         )
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         assert len(pipeline.exported.get_finished_spans()) == 1
         assert (pipeline.spool.captures, pipeline.spool.pending_bytes, pipeline.spool.jobs) == ({}, 0, 0)
 
@@ -397,7 +413,7 @@ async def test_native_uploads_past_their_limit_are_unavailable_while_the_first_s
         )
         assert store.uploads.empty() and "first" not in pipeline.finished()
         await _acknowledge(acked)
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         stored: Final = StoredReference.model_validate(_reference(pipeline.finished()["first"]))
         assert verified_stored(_KEY, _owner(first), stored) is not None
         assert (pipeline.spool.native_uploads, pipeline.spool.pending_bytes) == (0, 0)
@@ -432,7 +448,7 @@ def test_a_provider_built_without_lens_wrappers_exports_spans_exactly_as_before(
 async def test_a_body_stored_four_bytes_a_character_is_charged_as_stored_not_as_its_utf8_size(store: _Store) -> None:
     async with _pipeline(store, max_pending_bytes=20_000) as pipeline:
         span: Final = _capture(pipeline, content=_MIXED)
-        await asyncio.gather(*pipeline.spool.tasks)
+        await _uploads_settled(pipeline.spool)
         assert _reference(pipeline.finished()["chat model"]) == dict(
             signed_reference(_KEY, _owner(span), Unavailable.OVERLOADED)
         )

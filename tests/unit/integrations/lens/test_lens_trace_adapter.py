@@ -483,6 +483,9 @@ async def test_oversized_model_and_tool_content_reach_lens_as_references_stored_
         for _, acked in uploads:
             acked.set_result(True)
         await asyncio.gather(*spool.tasks)
+        released: Final = asyncio.get_running_loop().create_future()
+        _ = asyncio.get_running_loop().call_soon(released.set_result, None)
+        await released
     finally:
         litellm.logging_callback_manager.remove_callback_from_all_lists(trace_logger)
         await spool.aclose()
