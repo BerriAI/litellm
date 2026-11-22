@@ -932,8 +932,9 @@ def _bedrock_pricing_info(
         ModelInfo,
         {
             **without_server_derived_pricing(profile),
-            **served_rates,
-            **pricing_with_overrides(cost_map_key_declared_prices(profile["key"]), overrides),
+            **pricing_with_overrides(
+                pricing_with_overrides(served_rates, cost_map_key_declared_prices(profile["key"])), overrides
+            ),
         },
     )
 
