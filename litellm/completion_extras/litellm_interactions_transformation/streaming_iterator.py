@@ -590,8 +590,12 @@ class InteractionsChatStreamingIterator:
 
     def _end_stream(self) -> None:
         if self._hop_open:
-            self._end_after_failed_hop(ValueError("the continuation stream ended before the interaction completed"))
+            self._fail_stream(ValueError("the continuation stream ended before the interaction completed"))
         self._done = True
+
+    def _deliver(self, chunks: tuple[ModelResponseStream, ...]) -> None:
+        self._hop_delivered = self._hop_delivered or bool(chunks)
+        self._buffer.extend(chunks)
 
     def _fail_stream(self, error: Exception) -> None:
         if not self._hop_open or self._hop_delivered:
@@ -657,11 +661,9 @@ class InteractionsChatStreamingIterator:
             case "interaction.created" | "interaction.start":
                 self._adopt_stream_id(event)
             case "step.start" | "content.start":
-                self._buffer.extend(self._handle_step_start(event))
+                self._deliver(self._handle_step_start(event))
             case "step.delta" | "content.delta":
-                delivered: Final = self._handle_step_delta(event)
-                self._hop_delivered = self._hop_delivered or bool(delivered)
-                self._buffer.extend(delivered)
+                self._deliver(self._handle_step_delta(event))
             case "interaction.completed" | "interaction.complete":
                 self._buffer.extend(self._handle_completed(event))
             case "error" | "interaction.failed" | "interaction.cancelled":

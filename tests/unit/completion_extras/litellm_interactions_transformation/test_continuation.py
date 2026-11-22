@@ -251,13 +251,21 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_stream_repor
     assert tokens == ["tok-1"]
 
 
-def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the_cut_is_not_passed_off_as_a_finish() -> (
-    None
-):
+@pytest.mark.parametrize(
+    ("ending", "raised"),
+    (
+        (({"event_type": "error", "error": {"code": "unavailable", "message": "dropped"}},), "dropped"),
+        ((), "ended before the interaction completed"),
+    ),
+    ids=("error-event", "no-completion"),
+)
+def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the_cut_is_not_passed_off_as_a_finish(
+    ending: tuple[dict[str, object], ...], raised: str
+) -> None:
     events: Final = (
         {"event_type": "step.start", "index": 0, "step": {"type": "model_output"}},
         {"event_type": "step.delta", "index": 0, "delta": {"type": "text", "text": "upon "}},
-        {"event_type": "error", "error": {"code": "unavailable", "message": "dropped"}},
+        *ending,
     )
     _, responder = _scripted(
         (
@@ -280,7 +288,7 @@ def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the
             client=HTTPHandler(client=raw_client),
         )
         seen: Final = [next(stream), next(stream)]
-        with pytest.raises(litellm.exceptions.MidStreamFallbackError, match="dropped"):
+        with pytest.raises(litellm.exceptions.MidStreamFallbackError, match=raised):
             _ = list(stream)
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in seen) == "Once upon "
