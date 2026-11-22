@@ -717,13 +717,25 @@ def _malformed_assistant_history(message: str, target: _TargetModel) -> BadReque
     )
 
 
+def _outputs_images(info: Mapping[str, object]) -> bool:
+    modalities: Final = info.get("supported_output_modalities")
+    return info.get("mode") == "image_generation" or (isinstance(modalities, list) and "image" in modalities)
+
+
+def _bundled_model_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
+    bundled: Final = litellm.utils.get_bundled_model_cost_map()
+    entries: Final = (as_str_mapping(bundled.get(key)) for key in (model, f"{custom_llm_provider}/{model}"))
+    return next((entry for entry in entries if entry is not None), None)
+
+
 def _generates_images(target: _TargetModel) -> bool:
-    if target.model is None:
+    model: Final = target.model
+    if model is None:
         return False
-    info: Final = litellm.utils.lookup_model_info_for_registration(target.model, target.custom_llm_provider)
-    if isinstance(info, litellm.utils.ModelInfoLookupMiss):
-        return False
-    return info.get("mode") == "image_generation" or "image" in (info.get("supported_output_modalities") or ())
+    info: Final = litellm.utils.lookup_model_info_for_registration(model, target.custom_llm_provider)
+    registered: Final[Mapping[str, object]] = {} if isinstance(info, litellm.utils.ModelInfoLookupMiss) else info
+    bundled: Final = _bundled_model_entry(model, target.custom_llm_provider)
+    return _outputs_images(registered) or (bundled is not None and _outputs_images(bundled))
 
 
 def _message_thought_signatures(
