@@ -327,7 +327,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "perplexity_orchestrator"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
