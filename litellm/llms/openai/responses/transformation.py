@@ -664,7 +664,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @lru_cache(maxsize=32)
     def _compile_daybreak_rules(
         include_defaults: bool,
-        cfg_items: tuple[tuple[str, str], ...] | None,
+        config_items: tuple[tuple[str, str], ...] | None,
         safe_json: str | None,
     ) -> tuple[tuple[str, str], ...]:
         merged: dict[str, str] = (
@@ -672,8 +672,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if include_defaults
             else {}
         )
-        if cfg_items is not None:
-            for k, v in cfg_items:
+        if config_items is not None:
+            for k, v in config_items:
                 norm_k = k.strip().lower().removeprefix("openai/")
                 if norm_k:
                     merged[norm_k] = v.strip()
@@ -727,12 +727,12 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if include_defaults and models_raw is None:
             return cls._DEFAULT_DAYBREAK_RULES
 
-        cfg_map: Final = as_str_mapping(models_raw)
-        cfg_items: tuple[tuple[str, str], ...] | None = None
-        if cfg_map is not None:
-            cfg_items = tuple(
+        config_map: Final = as_str_mapping(models_raw)
+        config_items: tuple[tuple[str, str], ...] | None = None
+        if config_map is not None:
+            config_items = tuple(
                 (k, v)
-                for k, v in cfg_map.items()
+                for k, v in config_map.items()
                 if isinstance(v, str) and len(k) <= 256 and len(v) <= 64
             )
         safe_json: Final = (
@@ -740,9 +740,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if (isinstance(models_raw, str) and len(models_raw) <= 16384)
             else None
         )
-        if not include_defaults and cfg_items is None and safe_json is None:
+        if not include_defaults and config_items is None and safe_json is None:
             return ()
-        return cls._compile_daybreak_rules(include_defaults, cfg_items, safe_json)
+        return cls._compile_daybreak_rules(include_defaults, config_items, safe_json)
 
     def _daybreak_access_programs_for_deployment(
         self,
