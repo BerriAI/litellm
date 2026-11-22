@@ -62,6 +62,13 @@ ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE: Final = "1"
 ANTHROPIC_MODEL_KEY: Final = "ANTHROPIC_MODEL"
 OTLP_ENDPOINT_KEY: Final = "OTEL_EXPORTER_OTLP_ENDPOINT"
 OTLP_HEADERS_KEY: Final = "OTEL_EXPORTER_OTLP_HEADERS"
+# Per-signal settings win over the two above, so one left in place would send the gateway key to its collector
+OTLP_SIGNAL_KEYS: Final = (
+    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+)
 TELEMETRY_ENV: Final = MappingProxyType(
     {
         "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
@@ -92,6 +99,7 @@ OWNED_ENV_KEYS: Final = (
     *TELEMETRY_ENV,
     OTLP_ENDPOINT_KEY,
     OTLP_HEADERS_KEY,
+    *OTLP_SIGNAL_KEYS,
 )
 OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
 OWNED_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in OWNED_ENV_KEYS), *OWNED_TOP_LEVEL_KEYS)
@@ -484,12 +492,22 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
     return dict(chain(settings.items(), ((STATUS_LINE_KEY, entry),)))
 
 
+# What a session said and did. Like the two switches above, a value the user already set is kept, so an opt out
+# such as OTEL_LOG_USER_PROMPTS=0 survives configure
+TELEMETRY_CONTENT_KEYS: Final = (
+    "OTEL_LOG_USER_PROMPTS",
+    "OTEL_LOG_ASSISTANT_RESPONSES",
+    "OTEL_LOG_TOOL_DETAILS",
+    "OTEL_LOG_TOOL_CONTENT",
+)
+
+
 def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
     """Claude Code's own traces and logs, sent to the gateway that takes its model calls and under the same
     key: Lens shows a session from these alone. A StaticToken goes in the headers variable. An ApiKeyHelper
     key changes on renewal, so its headers come from `otelHeadersHelper`, which Claude Code reruns."""
     return (
-        *TELEMETRY_ENV.items(),
+        *((key, value) for key, value in TELEMETRY_ENV.items() if key not in TELEMETRY_CONTENT_KEYS),
         (OTLP_ENDPOINT_KEY, base_url.rstrip("/")),
         *(
             ((OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),)
@@ -526,11 +544,12 @@ def merge_claude_settings(
             (
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
+                *((key, TELEMETRY_ENV[key]) for key in TELEMETRY_CONTENT_KEYS),
             ),
             (
                 (key, value)
                 for key, value in current_env.items()
-                if key not in _CREDENTIAL_ENV_KEYS and key != OTLP_HEADERS_KEY
+                if key not in _CREDENTIAL_ENV_KEYS and key not in (OTLP_HEADERS_KEY, *OTLP_SIGNAL_KEYS)
             ),
             ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
             ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),

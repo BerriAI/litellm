@@ -420,9 +420,7 @@ class TestMergeClaudeSettings:
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
     def test_a_static_token_sends_claude_codes_own_traces_and_logs_to_the_proxy_under_that_token(self):
-        merged = merge_claude_settings(
-            {"env": {"OTEL_LOG_USER_PROMPTS": "0"}}, "http://127.0.0.1:4000/", StaticToken("token-abc")
-        )
+        merged = merge_claude_settings({}, "http://127.0.0.1:4000/", StaticToken("token-abc"))
         telemetry = {key: value for key, value in merged["env"].items() if key.startswith(("OTEL_", "CLAUDE_CODE_"))}
         assert telemetry == {
             "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
@@ -447,6 +445,32 @@ class TestMergeClaudeSettings:
         assert merged["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:4000"
         assert merged["env"]["OTEL_LOGS_EXPORTER"] == "otlp"
         assert "OTEL_EXPORTER_OTLP_HEADERS" not in merged["env"]
+
+    @pytest.mark.parametrize("credential", [StaticToken("token-abc"), ApiKeyHelper("/usr/local/bin/lite auth print-token")])
+    def test_a_collector_set_for_one_signal_is_dropped_so_the_gateway_key_only_reaches_the_gateway(self, credential):
+        settings = {
+            "env": {
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://collector.example/v1/logs",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-collector=1",
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "x-collector=1",
+            }
+        }
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", credential)
+        assert [key for key in merged["env"] if key.startswith("OTEL_EXPORTER_OTLP_") and "ENDPOINT" in key] == [
+            "OTEL_EXPORTER_OTLP_ENDPOINT"
+        ]
+        assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS"))]
+
+    def test_a_content_setting_the_user_turned_off_stays_off(self):
+        settings = {"env": {"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_CONTENT": "0"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", StaticToken("token-abc"))
+        assert {key: value for key, value in merged["env"].items() if key.startswith("OTEL_LOG_")} == {
+            "OTEL_LOG_USER_PROMPTS": "0",
+            "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+            "OTEL_LOG_TOOL_DETAILS": "1",
+            "OTEL_LOG_TOOL_CONTENT": "0",
+        }
 
     def test_a_static_token_replaces_an_earlier_logins_headers_helper(self):
         merged = merge_claude_settings(
