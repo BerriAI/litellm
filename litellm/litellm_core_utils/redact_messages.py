@@ -88,17 +88,24 @@ def failure_details_for_custom_logger(
     The kwargs a failure hook of ``custom_logger`` gets: the per-callback redaction its success hooks get, with the
     request's text also scrubbed out of the error when ``redacts_failure_events`` holds for it.
     """
-    details: Final[dict[str, object]] = redacted_model_call_details_for_custom_logger(
-        custom_logger.redact_standard_logging_payload_from_model_call_details(model_call_details=model_call_details),
+    details: Final = (
+        {**model_call_details, **_scrubbed_error_entries(model_call_details)}
+        if redacts_failure_events(custom_logger)
+        else model_call_details
+    )
+    return redacted_model_call_details_for_custom_logger(  # pyright: ignore[reportUnknownVariableType]  # main's redaction helpers return a bare dict
+        custom_logger.redact_standard_logging_payload_from_model_call_details(model_call_details=details),
         custom_logger,
     )
-    if not redacts_failure_events(custom_logger):
-        return details
+
+
+def _scrubbed_error_entries(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+    """The failure's ``standard_logging_object`` and ``traceback_exception`` with the request's text scrubbed out of
+    the error, to merge over ``model_call_details``. Absent entries are left out."""
     texts: Final = failure_request_texts(model_call_details)
-    payload: Final = _as_mapping(details.get("standard_logging_object"))
-    traceback_exception: Final = details.get("traceback_exception")
+    payload: Final = _as_mapping(model_call_details.get("standard_logging_object"))
+    traceback_exception: Final = model_call_details.get("traceback_exception")
     return {
-        **details,
         **(
             {"standard_logging_object": {**payload, **scrubbed_error_fields(payload, texts)}}
             if payload is not None
@@ -1021,7 +1028,9 @@ def _redact_standard_logging_object(
     return standard_logging_object
 
 
-def _payload_copy(payload: Mapping[str, object]) -> dict[str, object]:
+def _payload_copy(
+    payload: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: _redact_standard_logging_object redacts the copy's fields in place
     """
     A deep copy of ``payload``. A field other than ``response``, which redaction rewrites in place, keeps a value
     that cannot be deep-copied, such as a lock in caller metadata, as it is.
