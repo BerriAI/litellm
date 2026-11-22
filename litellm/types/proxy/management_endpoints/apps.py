@@ -47,14 +47,29 @@ class AppResource(BaseModel):
     app_id: str | None = None
 
 
-class AppSettings(BaseModel):
+class AppBudgetSelection(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     budget: Budget | None = None
     budget_id: str | None = Field(
         default=None,
-        description="Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. "
+        min_length=1,
+        description="Linked budget preset. Omit to keep the current assignment, or send null to remove it. "
         "Send budget instead to create a private custom budget, preserving the preset's untouched limits.",
+    )
+
+    @model_validator(mode="after")
+    def exclusive_budget(self) -> "AppBudgetSelection":
+        if self.budget_id is not None and self.budget is not None:
+            raise ValueError("Choose a preset or a custom budget")
+        return self
+
+
+class AppSettings(AppBudgetSelection):
+    app_group_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Parent app group. Omit to preserve membership, or send null to ungroup the app.",
     )
     default_tier_budget_id: str | None = None
     default_customer_member_budget: Budget | None = None
@@ -82,9 +97,7 @@ class AppSettings(BaseModel):
     )
 
     @model_validator(mode="after")
-    def exclusive_budget(self) -> "AppSettings":
-        if self.budget_id is not None and self.budget is not None:
-            raise ValueError("Choose a preset or a custom budget")
+    def exclusive_member_budget(self) -> "AppSettings":
         if self.default_customer_member_budget_id is not None and self.default_customer_member_budget is not None:
             raise ValueError("Choose a member preset or a custom member budget")
         return self
@@ -103,6 +116,7 @@ class App(BaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
 
     app_id: str
+    app_group_id: str | None = None
     resource_type: AppResourceType
     resource_id: str
     alias: str

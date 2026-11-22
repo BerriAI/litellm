@@ -21,9 +21,11 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_VerificationTokenView,
+    UserAPIKeyAuth,
 )
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
     RustAccessGroupRepository,
     RustAgentIdentityRepository,
     RustAuditLogRepository,
@@ -41,6 +43,14 @@ from litellm.rust_bridge._native import (
     RustTeamRepository,
     RustUserRepository,
 )
+
+
+def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -> NativeDatabaseFailure:
+    failure: Final = NativeDatabaseFailure(f"database query failed: {kind}")
+    failure.kind = kind
+    failure.unavailable = kind != "other"
+    failure.requeue_safe = False
+    return failure
 
 
 @dataclass
@@ -629,6 +639,23 @@ class FakeObjectPermissionStore(FakeFindStore):
         return await self._find(object_permission_id, use_writer=use_writer)
 
 
+class FakeKeyReader:
+    """The Rust key repository over the fake key rows: the row shaped into the fields of ``UserAPIKeyAuth`` the way
+    the repository shapes it, with no object permission nested. The repository's own shaping is tested in Rust
+    against Postgres, and pinned to this one in ``tests/unit/redis/stores/test_auth_cache_key.py``."""
+
+    def __init__(self, keys: FakeKeyStore) -> None:
+        self._keys: Final = keys
+
+    async def find(self, token: str, *, use_writer: bool = False) -> object:
+        row: Final = await self._keys.find(token, use_writer=use_writer)
+        if row is None:
+            return None
+        return UserAPIKeyAuth.model_validate(
+            LiteLLM_VerificationTokenView.model_validate_json(row).model_dump(exclude_none=True)
+        ).model_dump(mode="json")
+
+
 class FakeProjectStore:
     def __init__(self, rows: RustStoreRows) -> None:
         self._rows: Final = rows
@@ -699,7 +726,7 @@ class RustAuthStores:
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
-            RustKeyRepository: self.key,
+            RustKeyRepository: FakeKeyReader(self.key),
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
             RustAgentIdentityRepository: self.agent_identity,
             RustAuditLogRepository: self.audit_log,

@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from collections import UserDict
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import reduce
@@ -642,6 +643,50 @@ async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
         metadata="not a mapping",
     )
     assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
+
+
+@pytest.mark.parametrize(
+    ("route", "registered_pass_through_endpoint"),
+    [("/anthropic/v1/messages", False), ("/configured-passthrough/infer", True)],
+    ids=["provider-pass-through", "registered-pass-through"],
+)
+@pytest.mark.parametrize("with_header", [False, True])
+@pytest.mark.asyncio
+async def test_team_required_customer_headers_apply_to_pass_through_routes(
+    route: str, registered_pass_through_endpoint: bool, with_header: bool
+) -> None:
+    run: Final = _run_team_trace_id_check(
+        route=route,
+        request_body={},
+        headers={"X-Tenant-ID": "tenant"} if with_header else {},
+        team_metadata={"required_customer_headers": ["X-Tenant-ID"]},
+        registered_pass_through_endpoint=registered_pass_through_endpoint,
+    )
+    if with_header:
+        assert await run is True
+        return
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await run
+    assert (exc_info.value.code, exc_info.value.param) == (str(status.HTTP_403_FORBIDDEN), "X-Tenant-ID")
+
+
+class _ReadCountingHeaders(UserDict[str, str]):
+    reads = 0
+
+    def __getitem__(self, key: str) -> str:
+        self.reads += 1
+        return super().__getitem__(key)
+
+
+def test_duplicate_required_customer_headers_do_not_multiply_header_reads_or_admit_a_blank_header() -> None:
+    from litellm.proxy.auth.auth_checks import _missing_customer_header
+
+    headers: Final = _ReadCountingHeaders(
+        {**{f"x-extra-{index}": "value" for index in range(100)}, "hOsT": "gateway", "X-Tenant-ID": " \t "}
+    )
+    assert _missing_customer_header(headers, (*("Host" for _ in range(1000)), "X-Tenant-ID")) == "X-Tenant-ID"
+    assert headers.reads <= len(headers)
 
 
 @pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))

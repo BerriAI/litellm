@@ -12,7 +12,6 @@ import { prism } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
-import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
@@ -90,22 +89,19 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
             {t("budgets.panel.title")}
           </PageHeaderTitle>
           <PageHeaderDescription>{t("budgets.panel.description")}</PageHeaderDescription>
-          <PageHeaderControls>
-            <PageTabsList>
-              {canModify && (
-                <>
-                  <Button onClick={() => setIsCreateModelVisible(true)}>
-                    <Plus className="size-4" />
-                    {t("budgets.panel.createButton")}
-                  </Button>
-                  <ToolbarSeparator className="mx-0 h-6" />
-                </>
-              )}
-              <PageTabsTrigger value="budgets">{t("budgets.panel.tabs.budgets")}</PageTabsTrigger>
-              <PageTabsTrigger value="examples">{t("budgets.panel.tabs.examples")}</PageTabsTrigger>
-            </PageTabsList>
-          </PageHeaderControls>
+          {canModify && (
+            <PageHeaderControls>
+              <Button onClick={() => setIsCreateModelVisible(true)}>
+                <Plus className="size-4" />
+                {t("budgets.panel.createButton")}
+              </Button>
+            </PageHeaderControls>
+          )}
         </PageHeader>
+        <PageTabsList>
+          <PageTabsTrigger value="budgets">{t("budgets.panel.tabs.budgets")}</PageTabsTrigger>
+          <PageTabsTrigger value="examples">{t("budgets.panel.tabs.examples")}</PageTabsTrigger>
+        </PageTabsList>
         <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
           <div className="flex min-h-0 flex-1 flex-col">
             <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />

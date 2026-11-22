@@ -367,11 +367,6 @@ MODULE_IMPORT_ALIAS_CASES: Final = (
         "copy_user_api_key_auth_for_cache",
     ),
     (
-        "litellm.proxy.auth.resolvers.store",
-        "_fetch_key_object_from_db_with_reconnect",
-        "fetch_key_object_from_db_with_reconnect",
-    ),
-    (
         "litellm.proxy.auth.route_checks",
         "_user_is_org_admin",
         "user_is_org_admin",
@@ -2662,13 +2657,6 @@ PROXY_ALIAS_CASES: Final = (
         "",
         "_delete_cache_key_object",
         "delete_cache_key_object",
-        False,
-    ),
-    (
-        "litellm.proxy.auth.auth_checks",
-        "",
-        "_fetch_key_object_from_db_with_reconnect",
-        "fetch_key_object_from_db_with_reconnect",
         False,
     ),
     (

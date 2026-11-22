@@ -84,6 +84,11 @@ describe("ModelsAndEndpointsPage", () => {
     };
   });
 
+  it("titles the page with its sidebar label", () => {
+    renderPage();
+    expect(screen.getByRole("heading", { level: 1, name: "Model Management" })).toBeInTheDocument();
+  });
+
   it("renders the admin tab bar and the Deployed Models panel by default", () => {
     renderPage();
     expect(screen.getByRole("tab", { name: "Deployed Models" })).toBeInTheDocument();
