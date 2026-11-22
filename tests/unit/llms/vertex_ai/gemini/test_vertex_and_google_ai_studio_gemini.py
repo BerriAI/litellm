@@ -6899,23 +6899,46 @@ def test_gemini_3_keeps_search_tools_next_to_function_tools(
 
 
 @pytest.mark.parametrize("route", ["vertex", "studio"])
-@pytest.mark.parametrize(
-    "tool_choice", ["auto", "required", {"type": "function", "function": {"name": "exec_command"}}]
-)
-def test_gemini_3_adds_the_server_side_flag_next_to_the_tool_choice_config(
-    route: Literal["vertex", "studio"], tool_choice: object
-) -> None:
+def test_gemini_3_adds_the_server_side_flag_next_to_an_auto_tool_choice(route: Literal["vertex", "studio"]) -> None:
     function_only: Final = _mapped_request_body(
-        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL]} | {"tool_choice": tool_choice}
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": "auto"}
     )
     mixed: Final = _mapped_request_body(
         route,
         "gemini-3-flash-preview",
-        {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": tool_choice},
+        {"tools": [_EXEC_TOOL], "web_search_options": {}, "tool_choice": "auto"},
     )
 
     assert _tool_keys(mixed) == {"function_declarations", "googleSearch"}
     assert mixed.get("toolConfig") == {**function_only.get("toolConfig", {}), "includeServerSideToolInvocations": True}
+
+
+@pytest.mark.parametrize(
+    "params", [params for params, _search_key in _SEARCH_NEXT_TO_FUNCTIONS.values()], ids=_SEARCH_NEXT_TO_FUNCTIONS
+)
+@pytest.mark.parametrize(
+    "tool_choice",
+    ["required", {"type": "function", "function": {"name": "exec_command"}}],
+    ids=["required", "named_function"],
+)
+@pytest.mark.parametrize("build", [_mapped_request_body, _completion_request_body], ids=["mapped", "completion"])
+@pytest.mark.parametrize("route", ["vertex", "studio"])
+def test_gemini_3_drops_search_next_to_functions_when_tool_choice_forces_a_function_call(
+    route: Literal["vertex", "studio"],
+    build: Callable[[Literal["vertex", "studio"], str, Mapping[str, object]], RequestBody],
+    tool_choice: object,
+    params: Mapping[str, object],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    function_only: Final = build(
+        route, "gemini-3-flash-preview", {"tools": [_EXEC_TOOL], "tool_choice": tool_choice}
+    )
+    with caplog.at_level(logging.WARNING):
+        mixed: Final = build(route, "gemini-3-flash-preview", {**params, "tool_choice": tool_choice})
+
+    assert _tool_keys(mixed) == {"function_declarations"}
+    assert mixed.get("toolConfig") == function_only.get("toolConfig")
+    assert "Dropping search tools" in caplog.text
 
 
 @pytest.mark.parametrize("route", ["vertex", "studio"])
