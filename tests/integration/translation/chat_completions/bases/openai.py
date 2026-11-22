@@ -761,6 +761,170 @@ GPT_6_SOL_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+GPT_6_2_SOL_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "openai/gpt-6.2-sol"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
+    expected_provider_request={**OPENAI_RESPONSES_REQUEST_FROM_CHAT_COMPLETIONS, "model": "gpt-6.2-sol"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_RESPONSE,
+        "access_programs": {"cyber": "standard"},
+        "completed_at": 1795362207,
+        "created_at": 1795362206,
+        "id": "resp_06217f3a6b695ba5006b030d9ddc7487d0bce18524338ea45d",
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "instructions": None,
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "content": [
+                    {
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see how it handles zero, negative, and non-integer quant"
+                            "ities before looking at the tests."
+                        ),
+                        "type": "output_text",
+                    }
+                ],
+                "id": "msg_06217f3a6b695ba5006b030d9ebee087d097cb5edd26705304",
+                "phase": "commentary",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                "call_id": "call_f825e563724a4260badb900824255f12",
+                "id": "fc_06217f3a6b695ba5006b030d9f3c9487d0af8c6b118ca718a6",
+                "name": "read_file",
+                "status": "completed",
+                "type": "function_call",
+            },
+        ],
+        "tools": [
+            {
+                "description": "Search source and test files for a literal term.",
+                "name": "search_files",
+                "output_schema": None,
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "paths": {"items": {"type": "string"}, "type": "array"},
+                        "query": {"type": "string"},
+                    },
+                    "required": ["query", "paths"],
+                    "type": "object",
+                },
+                "strict": False,
+                "type": "function",
+            },
+            {
+                "description": "Read a range of lines from a project file.",
+                "name": "read_file",
+                "output_schema": None,
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "end_line": {"minimum": 1, "type": "integer"},
+                        "path": {"type": "string"},
+                        "start_line": {"minimum": 1, "type": "integer"},
+                    },
+                    "required": ["path", "start_line", "end_line"],
+                    "type": "object",
+                },
+                "strict": False,
+                "type": "function",
+            },
+        ],
+        "top_p": 1.0,
+        "usage": {
+            "input_tokens": 312,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": 68,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": 380,
+        },
+    },
+    expected_litellm_response={
+        **CHAT_COMPLETIONS_RESPONSE,
+        "id": "resp_06217f3a6b695ba5006b030d9ddc7487d0bce18524338ea45d",
+        "model": "openai/gpt-6.2-sol",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": (
+                        "I’ll read `shop/validation.py` first to see how it handles zero, negative, and non-integer quant"
+                        "ities before looking at the tests."
+                    ),
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                                "name": "read_file",
+                            },
+                            "id": "call_f825e563724a4260badb900824255f12",
+                            "type": "function",
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "phase": "commentary",
+                        "openai_responses_replay": {
+                            "version": 1,
+                            "items": [
+                                {"type": "message", "parts": [130], "phase": "commentary"},
+                                {"type": "function_call", "index": 0},
+                            ],
+                            "checksum": "4b5e4d9a740be3c14399680f01ef449c04ca9b88870c05557f7b05ff512a2109",
+                        },
+                    },
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 68,
+            "prompt_tokens": 312,
+            "total_tokens": 380,
+            "completion_tokens_details": {"reasoning_tokens": 0},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
+        },
+        "access_programs": {"cyber": "standard"},
+        "billing": {"payer": "developer"},
+        "frequency_penalty": 0.0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+    },
+)
+
 GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",
@@ -903,6 +1067,223 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
         },
         "billing": {"payer": "developer"},
         "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "service_tier": "default",
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "output_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "total_tokens": 0,
+            },
+            "web_search": {"num_requests": 0},
+        },
+    },
+)
+
+GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0: Final = (
+    "gAAAAABrAw3Xw1TqCF6r8tOqqruD9_Uk9zRj0JVSczmDz1bOeaJpZLEpkTPnFwL3bN-vGqAuw0FjSIFBKrvguTP_fgQAOn6G"
+    "THu-Y-kAXU7TNlAI7rMND-OrMBkPzMnFWhQt08LJK6zW0PNSloRTtfGM3zW04CsOPw5zYtLVCwBJx2h43BM2S9RtG7E0iSTi"
+    "W0Sgi18k1C4DoqUpMnHXSNWev9D5c_MuwlYC4jSqzTfmcIdTeje1-HK3RZXEq9zPyD-Jz9dvlv9tkYLilgPWtKUWR6SyqKd1"
+    "ij9ARYyEP5BSDCWpiXbG31I2G4AkqFV9ZYgGwKYIOB-ovdNjZ5aaAdJ9TGRYrEhsmtzOx2QR8f-5XqZnLvrQDkrZgj73edfq"
+    "mRMkpUdvmulgI2oo-3lXY5mrrWDSKAjAiHTbSYkil7f44o2KvaSauf_SpL2C4s3Nq3xo9NKSW9_p3yxzO8IxXmBjbraWI5AQ"
+    "UVxXQJghvydR56SnBb57kDYD39ry_23YN99kbXg5F0oK8HRUbIBn3_rn3El8X1ryO8dbvDHRHl8dQXV2mR5qE_dopJfuPtp8"
+    "hea9Pu17zgeXwvM58yU5Tfu6bFQFDYPS2MHhOH6pnqNGPKpcXc6hnbxEUOjeFaWmmoy0pZq7y0bszkJOxaMCQnZJ1pHElcqw"
+    "8B0w16vOf64ZTEt1Pz98Ka2PeA4GLKEVWU2fz5SzcnrzHkNuVwZouJoC9cjOiAwX9OKkxglnpLuyOe1ElfYiD_Z9c30Txlz7"
+    "R3Rw2dY5XEq0_E56zW5MjgUy-_bFypAa9nY2L8xSG49Hhd1XN98s9jgx8419cCBze88aujFaV5LZ8eKTQ7RtiyL2TOGYxd9i"
+    "-ykJX3991yTNT0R0E6RU4sgOGnoPUswYOPIcjxGmmHN5I5MmZiE8CvUmv3rDyXD2FR2rFQ4eTXswU4tbrSIt3AgTu6N4GAu0"
+    "ZnplAP6vFRK-50MMgaMJwc8OrBCyqDElEGCybPzeWIjjd0t3Mpp1qrSU3m8gLuwO26oM_8vTsVAjWBaVvMHrJO4nlCE9nUpX"
+    "q-gs3A8i2YAVMximcYd1epy3v-2giYKgUaM4R_QOcfaQjQ2EuJ3DV0PqrKYeZAio84PndsLdC-Qs_E95SR5I_I1bx5wXrQ-u"
+    "mNbRfxvW2Q2JKaL61kMliX89E8i6BFYkikOdkTMiuEo_8XMPJPxAep8DWzEfWcMDNSjPkB6s9sO6oaMAmyV9bx1nOrYgWylM"
+    "1oDfPBs-g9ESgPEHbIlTyLhlp1P-H9XcmYAGEbqf5QXMmYJc4y2fJqHRfCnpMvIp6UQ-ZnMJIkhxdiDVokFGwzfUrpV90K2F"
+    "2jbrPQvN_gxHbITzdi9xqXZlxWItnGdrDWKpzBiKXe_vmpfXO3mun2qVMWVQGakcVMZ4fqKX4g2_Jt8EEBJ8i56K8wtSXlhU"
+    "K5aOV2lFcgC2GaWLqm_AzRKB9I_rwLmSSQI0k7W3gqijQNp6QJbAuiGKa6oD57ycriHgpEbLSdCgpP595Z5h_BObxPSrGMSA"
+    "xBpZxJavaNOu8s6SKUqhBqlPMWjjQzNCfYX6bmyIHmLcsWzSUfNSKdJImWuxu6T6jIQ0YYcXeh6HKIaIjHecxzxFJaHMwWOS"
+    "lHYD9EIqKcqNavPPwLkcWbUhfa3HYaBTZ8dcb11TPSY_YaF9EAxaEsM2KHRmarHM08y4NsL71WHbxT500eSCeWFeiysF9b0d"
+    "IvaF0EMx5Iuk8zl5fr5rtTLA2aVt42CZeZi6RIHMTmTXpQTSSjpo_Qrj2s09hWbsHwiuxcmJgIiKG3zwurYy5RVXB2OoDgWF"
+    "ylEtIjRhdF99mOpz_FWW-XjBh6drd7fdts9HWwGkN5hCrUos4omkI5wVb647-9KR1g7abaWbsesmnYBV7J_aEtYf7q9wfSK0"
+    "EzZtTLSeS-1-P3TnHs8n0e2JdUIH0WesFEaPA1_0TygWkA7FKFN-1MXGdewISiMVzZcJXNv_kI2IBLp-09ZikL3oMmsOwS2i"
+    "jPlTA4urpSgp59CbjlQU1tqMFSlpjx4q41j5-h3z_t0YgOJZLjKEJcaXRSi4eSqSbTpBYjvS6GN6RI6bmfbt_dVZqmhmtjhB"
+    "RTW5op7zzA459jCNG_Lm4WN_FHrtT1CnD1dzhj3CM9doRqn2wjWH0KFmhdS-ayHmRSitp2h29LBjWc-XsXJa94jPLbeYkS46"
+    "_t6YEvMbjtNf_PqxIskxk-wv91Q9C2h8RA8iCIh6A7ECYH-cB2NM3CW9qLTz2bEWIBWnLuqudJeJ9DMH0cHOM7V0A_DyZXwz"
+    "6z1IrVqSw6ZZTT2nnBdisCZxlp7mLOs3bnYkXn_B5cNcqQK3zdd2AIyLJNCz-wp1g3ZWlA5HQD4QkISQwQECM-uQOPk_MT4Q"
+    "z2gitA1k-5GLcAnRP9qlY-4t_8qmeUgEBVZaJkeijym5zlRe-k-oeXVVaeBV-X3OqrYWqBTW_AL_WWqTRzxa1rJMPhG-njHE"
+    "pwa6mqLtcwMro9NcbP8uO_QrxhmA5OhDUVRGl1a0jmRV3IUCbSA-5S5WOqLXIm2tNhuhHgX3R0wUccKy_-q6b5_Mpwx_qLpQ"
+    "w97b0OKYxFCVvu0t0roBTuhGVt0xkPrih5H4ZCd9JPp0lnljR84wDVAPQowLM1bNIDLWoLiIkOQ2RxDmIVDTg8-nPq_3QrkO"
+    "MHIem4JbzXutNqc2ZZ7ioBh37YyVJIzg6VOhA1gCMHsr3fazruH9stx_YaSpMi5uoblu25-umHI3cM_q8PvodHZGprkytxJ3"
+    "2l7z4uFBi2laQpuftVLfXdJENRIg1z344TL6-kVYJE_ODcC_AEiq77-g6URQ66em2f5QRpOsCULeXPMFYE0nzMCOhPko0Vub"
+    "an3EVxMP3YXGXPWihI7X2TQUFrYmRAIINKih3VmRS1dxkmwM1MGfBo2SNHFI_7TR1OUAYsNvKFDretUZ8pTp_z_utuzWSjQx"
+    "A6UJ1p6w-5L2XqGxQzdUgJYq-2q30-_W-3L_VuAlkQDPefxGAT8cl74AWlXAwNhm4GkMV-Ec_qLsqn_XXpXEm46etaV5ZKCS"
+    "-EOKNaXIrQlywQX3jHrzhtg-i71XeWyhekUGIr3p9z4-eDly7a8Al9HDRTeaiFFGWFpqr5gCgpDvU9gWGApXNfiUEox_rR03"
+    "HA=="
+)
+
+GPT_6_2_ASTRA_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "openai/gpt-6.2-astra"},
+    expected_provider_endpoint="/responses",
+    expected_provider_headers={"content-type": "application/json", "authorization": "Bearer synthetic-openai-key"},
+    expected_provider_request={**OPENAI_RESPONSES_REQUEST_FROM_CHAT_COMPLETIONS, "model": "gpt-6.2-astra"},
+    mock_provider_response={
+        **OPENAI_RESPONSES_RESPONSE,
+        "access_programs": {"cyber": "standard"},
+        "completed_at": 1795362264,
+        "created_at": 1795362262,
+        "id": "resp_0a8dfcee216af8b7006b030dd5d0fc87d0ad4c7e071fb2f3b5",
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
+        "instructions": None,
+        "model": "gpt-6.2-astra",
+        "output": [
+            {
+                "content": [],
+                "encrypted_content": GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0,
+                "id": "rs_0a8dfcee216af8b7006b030dd7673c87d080828c9780a5e167",
+                "summary": [],
+                "type": "reasoning",
+            },
+            {
+                "content": [
+                    {
+                        "annotations": [],
+                        "logprobs": [],
+                        "text": (
+                            "I’ll read `shop/validation.py` first to see whether `validate_quantity` treats zero differently "
+                            "from negative values and whether it checks for non-integer inputs."
+                        ),
+                        "type": "output_text",
+                    }
+                ],
+                "id": "msg_0a8dfcee216af8b7006b030dd7672c87d08b977373b0f5a906",
+                "phase": "commentary",
+                "role": "assistant",
+                "status": "completed",
+                "type": "message",
+            },
+            {
+                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                "call_id": "call_005cce598cca4e709f883852197f5644",
+                "id": "fc_0a8dfcee216af8b7006b030dd80c2c87d0b9217b28c3d8c527",
+                "name": "read_file",
+                "status": "completed",
+                "type": "function_call",
+            },
+        ],
+        "tools": [
+            {
+                "description": "Search source and test files for a literal term.",
+                "name": "search_files",
+                "output_schema": None,
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "paths": {"items": {"type": "string"}, "type": "array"},
+                        "query": {"type": "string"},
+                    },
+                    "required": ["query", "paths"],
+                    "type": "object",
+                },
+                "strict": False,
+                "type": "function",
+            },
+            {
+                "description": "Read a range of lines from a project file.",
+                "name": "read_file",
+                "output_schema": None,
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "end_line": {"minimum": 1, "type": "integer"},
+                        "path": {"type": "string"},
+                        "start_line": {"minimum": 1, "type": "integer"},
+                    },
+                    "required": ["path", "start_line", "end_line"],
+                    "type": "object",
+                },
+                "strict": False,
+                "type": "function",
+            },
+        ],
+        "top_p": 1.0,
+        "usage": {
+            "input_tokens": 312,
+            "input_tokens_details": {
+                "cache_write_tokens": 0,
+                "cache_write_tokens_details": {"ttl_12h_tokens": 0, "ttl_30m_tokens": 0},
+                "cached_tokens": 0,
+            },
+            "output_tokens": 102,
+            "output_tokens_details": {"reasoning_tokens": 29},
+            "total_tokens": 414,
+        },
+    },
+    expected_litellm_response={
+        **CHAT_COMPLETIONS_RESPONSE,
+        "id": "resp_0a8dfcee216af8b7006b030dd5d0fc87d0ad4c7e071fb2f3b5",
+        "model": "openai/gpt-6.2-astra",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "content": (
+                        "I’ll read `shop/validation.py` first to see whether `validate_quantity` treats zero differently "
+                        "from negative values and whether it checks for non-integer inputs."
+                    ),
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": '{"path":"shop/validation.py","start_line":1,"end_line":100}',
+                                "name": "read_file",
+                            },
+                            "id": "call_005cce598cca4e709f883852197f5644",
+                            "type": "function",
+                        }
+                    ],
+                    "reasoning_items": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs_0a8dfcee216af8b7006b030dd7673c87d080828c9780a5e167",
+                            "encrypted_content": GPT_6_2_ASTRA_ENCRYPTED_CONTENT_0,
+                            "summary": [],
+                        }
+                    ],
+                    "provider_specific_fields": {
+                        "phase": "commentary",
+                        "openai_responses_replay": {
+                            "version": 1,
+                            "items": [
+                                {"type": "reasoning", "index": 0},
+                                {"type": "message", "parts": [162], "phase": "commentary"},
+                                {"type": "function_call", "index": 0},
+                            ],
+                            "checksum": "fe3091400b9ce69460d05d3e87c4fea7b1bac056a8dc0f94419974a99208d8a6",
+                        },
+                    },
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 102,
+            "prompt_tokens": 312,
+            "total_tokens": 414,
+            "completion_tokens_details": {"reasoning_tokens": 29},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+                "cache_creation_tokens": 0,
+                "cache_creation_token_details": {"ephemeral_30m_input_tokens": 0, "ephemeral_12h_input_tokens": 0},
+            },
+        },
+        "access_programs": {"cyber": "standard"},
+        "billing": {"payer": "developer"},
+        "frequency_penalty": 0.0,
+        "image": {"context_compression": "disabled"},
+        "input_transformations": [],
         "presence_penalty": 0.0,
         "service_tier": "default",
         "tool_usage": {

@@ -644,6 +644,212 @@ CLAUDE_FABLE_5_1_RESPONSE_FIELDS: Final[Mapping[str, JsonValue]] = {
     },
 }
 
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0: Final = (
+    "CAQSuwcKEAgUGAI4AUIIdGhpbmtpbmcSDIvQOuQmzYkaRWfkoxoMDjiPJzZrsq8lEVSOIjBQ5gl3/mLTUTgrIVIyEg7UyREh"
+    "ju9AcOh+7lTvy8hZsK8UsM1zS1m9yXHS+tnyBSUq2Absgcf6OtpbvrcIT9QnasOFtdb7F3dgTFwQEJmJEknZWnIRahRGrNsC"
+    "eNpq0nJ44VMVDwneqR6OjBSOPWZ3o0v9pxGj5OOhfU+IbKx2mKk1okeTn6iYCIFpNf7J/rcs11X7Wlu7JEzwU137GXcNITTi"
+    "KPfdKo5Eujoir/9/EgIgEWQzkT/7IHyoM9sbgwWB3KTs4RgHStzz0oRj59Ew4HjprVx8JtpcDs5lkIsUtb9vVkDRqBYzjAR0"
+    "5la2cdPEyRKuT4sPRUbnXZn32ihQg4S/gG9O8aIJuumZ0TDsybZjxzZjZ2AITo0CPqcr/De8T01DQEf3Y81kEu7sh45dfUJJ"
+    "ujwpkXy40W5Xm7jgDeECMUAb7fbzYavygdoiQARCL4ke9dDd/y9uvvWpVlpBo3mmpO8GPtcDOAir/hhfdHs0FWvIeZdw0/lC"
+    "rczuARtPd+jmmGpKGq2jMjXqVnjGmzDaX9iSB5pHt1zNAvCTl0gz/Hsw9Gh9SIfbFQT2E5lRO59ZlPa4e8dS95wQtfj7ky9k"
+    "Hk2fzX2gZp+fz6V5eP6/MHsdeWARnXcqfpa66U1k4ftNUoK+GuaZ2goUDTvKra44/qZt2gjKJkgJR8WohRZxK+VV3I/xIRQl"
+    "ZkaTJx/oaP85JTVjrBAe4RnpXLD6PUFjhwFIayRXTGgpmBPzjZ5w8uCIYI8NyClh9PHzeTqlD0eSef2d4kjjYwv2Uf93uOVj"
+    "ILztWr2rZLDls6qhkCPtu9Bd6+eEtX/VW6RwpiWR0bIxbeM16P180jujJPXx9PtsSTr9NK8SZmOWViG3v/pFsxLByXaAT5Uv"
+    "VKifFv/fX/ukWBd/CZt+nVNUThMlUgq/kpjiNFWJ+zFkEJEYG3WUQGHmC4y3cDwERjIHepZWyADvdMUpvwRETp/vdxOSetQW"
+    "FxJjG1BFqsAzE5hlhkwgROi0qWlpNswAjtxxfIFNj28oAfQ3NFQ8k15kZZtYvwJEHK9sB/axO7d6pE9t3QU9drM2a4u2ZPfZ"
+    "uubFf1n10weFbSrUXhlTUTSAme1QMLzkgA4p7UAIMjTsWIbrKjoH1JCLY6KMNzZUREc2nXgBH6jsO8Z7dcs1YdKR7waisSa6"
+    "SB0/oFoCdGSEGP9IcNB2JqI7IcUv5l6WGAE="
+)
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1: Final = (
+    "CAQSuAcKEQgUGAI4AUIJbmFycmF0aW9uEgwnY9BlyFVK5atZbh4aDCnpnDUJmltBulkCoiIwp1SHFGIytc7HF7bjtlAACINZ"
+    "IwRh3wg3GBx0J9gzYo3udhZ8NW6XW1IcybC8Ro5JKtQGvN2YA3F19/f1CYCFV76tVzbAKD+bssH935eHN0DBS47gyvdxeXB5"
+    "PjS7jqLp2rZ/onCcjPAwxMQTF43YOrgqMLBpkUTk7Qt5mQlosHwyEjtzLnZzGYoqT+JpfsKaVeEFxzfv6n7IFLf3dePqv8zx"
+    "K96QUVyahpIuPpCm/cufm2JaHrkl55OSaktSVoghf/FIm+FtCUVN8mLBZz/KusVnJWbsGhrvci69izOGqhEt+CzXbStw3Je/"
+    "mblb3u/0TkD1doMTqONV1v77iBwdcXzKDfhzBFSRYon7bGr3OknWeFlqAfLZ3GezxrrVz+Tuc/bX48b0l2ten6tf5J4IY8jO"
+    "fAucS0sA3jqi/QQXV8oyx90VNZJ93xW0tqv4HUPdMVBNOs+5bKOtg0PQAJNhjLPjDG8vHPR4MP4NHHwCX/G/+rIBgbhPfQPJ"
+    "220l7pN2dS+oKP47UIpnPzsUvQ1nsOwXMYe3Z7rauhQ5SNdy/nO29EkdPToRMwpvIOdHvBGRUrwKnfGpjX1tzvgdf/K0U05/"
+    "hk/OhB/s4rkDv0uuZRDfsM69rr8K0Z31Gz9w6UO7Ja6XuHvEYSYxJd1GGwAvLZJGh0KegEHeTFUhHiwCFC+3RR19QzNsmf4g"
+    "D75qwcsqxB6dL9J8m+KQ/QtjIq09xNn3S+0n/XRg19DIjlNKxomCUKUCi8xkTVoi6Lk2UEjTE3gNavRGpUodl94wTN/l/acU"
+    "SRePTMwhn6naIcv/drodw//s4qaK+l/P3agMNb9297GBGyrQFc5MYDb0V+McD+kVWFygfHfOTWCEq3XeBYNigp8cltvBdXFD"
+    "A0oTQFkaJhfYNmFTwleUcx4NvkYbffsAkH9FZWJgmL8Ak5gtAlp+J7KkSP3H2T7RJWEPEYxkoW8oYtbTKBoA57Z4yTPWxdpJ"
+    "Uc4bmbCcu5m8DvE5vMnKJEyjE5NgA9/ena9frmR2emobxDtVN1ZQP8eGcXDlIFwwbwK4S/qmmluVCXtPHa8sBueTG5WP2T9b"
+    "gVD6V71/kXKUZX8HwGkEi7NzoXS7DrHLxKRbGLrcdQyoAwR1YELcsiMoeOlwVkSWHj174T2NNodeKvfzp4lXVpNdUgk9Zwjj"
+    "ls5tyBw6PULrokb9OYpaYj+to6jLGAE="
+)
+
+CLAUDE_FABLE_5_2_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/messages",
+    litellm_request={**MESSAGES_REQUEST, "model": "anthropic/claude-fable-5-2"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={
+        **ANTHROPIC_MESSAGES_REQUEST,
+        "model": "claude-fable-5-2",
+        "messages": [
+            {
+                "role": "user",
+                "content": "The checkout rejects quantities of zero. Find the validation code and its tests.",
+            },
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I will locate the quantity validation and its tests."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_synthetic_search_01",
+                        "name": "search_files",
+                        "input": {"query": "quantity", "paths": ["shop/", "tests/"]},
+                    },
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_synthetic_search_01",
+                        "content": (
+                            '{"matches": [{"path": "shop/validation.py", "line": 18, "text": "def validate_quantity(quantity)'
+                            ':"}, {"path": "tests/test_validation.py", "line": 7, "text": "def test_zero_quantity():"}]}'
+                        ),
+                    },
+                    {
+                        "type": "text",
+                        "text": "Read the validation file first so we can understand how zero and negative quantities are handled.",
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                    },
+                ],
+            },
+        ],
+        "system": (
+            "You help maintain a synthetic Python project. Read the relevant files before suggesting a fix. E"
+            "xplain which file you need next, then call a read-only tool. Never change files. Use the message"
+            "s client for this project review. Consider zero, negative and non-integer quantities before choo"
+            "sing the next file to inspect."
+        ),
+        "stream": False,
+        "tools": [
+            {
+                "name": "search_files",
+                "description": "Search source and test files for a literal term.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string"},
+                        "paths": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["query", "paths"],
+                    "additionalProperties": False,
+                },
+            },
+            {
+                "name": "read_file",
+                "description": "Read a range of lines from a project file.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "start_line": {"type": "integer", "minimum": 1},
+                        "end_line": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["path", "start_line", "end_line"],
+                    "additionalProperties": False,
+                },
+            },
+        ],
+    },
+    mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChJDyQ6eRD6kGorRSj3r1",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm going to read the validation file first, starting with shop/validation.py, and I'll look at "
+                    "roughly lines 1 to 60 around the function at line 18. I'm not going to read the test file alongs"
+                    "ide it since the user asked for the validation file first.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm reading shop/validation.py from the top, since validate_quantity at line 18 needs its import"
+                    "s and helpers for zero, negative and non-integer quantities.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01MrdAq4B36YaJdw4sMAiswC",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 273,
+            "output_tokens_details": {"thinking_tokens": 98},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **MESSAGES_RESPONSE,
+        "id": "msg_011ChJDyQ6eRD6kGorRSj3r1",
+        "model": "anthropic/claude-fable-5-2",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm going to read the validation file first, starting with shop/validation.py, and I'll look at "
+                    "roughly lines 1 to 60 around the function at line 18. I'm not going to read the test file alongs"
+                    "ide it since the user asked for the validation file first.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm reading shop/validation.py from the top, since validate_quantity at line 18 needs its import"
+                    "s and helpers for zero, negative and non-integer quantities.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_01MrdAq4B36YaJdw4sMAiswC",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 273,
+            "output_tokens_details": {"thinking_tokens": 98},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+)
+
 CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/messages",

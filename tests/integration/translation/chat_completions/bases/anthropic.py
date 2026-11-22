@@ -855,6 +855,188 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0: Final = (
+    "CAQS9QcKEAgUGAI4AUIIdGhpbmtpbmcSDEBLUFsrnVE/nM+GRRoMUHgJgYS+0MJ8GUEFIjCXhB+SAuqQMfb34FfKrxc7kzJk"
+    "WqouuhXXC0Is/GYFWVWxF5g7biZ+AvAj623y2m8qkgelWRLUenfCxfaZcuQ2W0EFfU17j0/ASxiRyqL2ogcNtOk0UQXTxunw"
+    "P4wCzVYA3zHMREjk3BjEW5ttrPV3sezmTcAEj6eMXp81/C0oyT72ejRNmaD+6xQGvcISNPEfgbXYIR1hcj/XPg0kWxyWTjL3"
+    "mvGiZ4Atc5n+Kg5dPMI18Igu8QF8pcQxzfVSM6etUlGf3jd8LNSIIdgpAaDfeVY/k1LNAY7uTI1ymyYqeZmKJZmU5nvGpGya"
+    "hORh7wRAdP59rxnDTGCYo44WRauqRuZ4J5BHOsE0aEjRcABCl7q0F2NSZbtBx3OIweW8Ln7VhnoZLE6QdUmc1cOOO5HbwXD3"
+    "vPF7HKsduzXM4urv9w70gJ7cUOuNUmXI+UL+4UpUkAWJsDnzAlez70r5Kt1I3kbSVJ+D3R2DxDvAdAaHFK6O7w3+NA2xhMTe"
+    "iHBXeoJ7XCX/FDDiENi5WRudWgztR4KIu8IUAltBKQ66oPGzIhGwjb/u1DYfClWCLBH9Jyf5T7iNNV8foruxfNFTImQYX+hk"
+    "GpgCvPuSEbygp49CIr/7nVK4TUs8fyuzOVOknzlOjwKHcxbDmi/DZHha2sr4cVVDvjAPQQfSDSEo4cS0uvzWm8oZhiRa2lzq"
+    "zFwRnm0qdIm2uXaFjW12I8UJIJHjakU6w6kHQPhJZce978J7drXQl7gztlD4Uqx46p5de+BvfdkwBA6UhHMPRDe3+KVlgPJa"
+    "0tgUKUqrKRt0jM4ADu+cf+tgxm8O6k/NPhi4sL3/aWlgzFf1Z/2vGInWmwhiOxKEKJdYOAcdihKAXKBGrVSDCAMJmxAXPjGH"
+    "sKgDOKZUfUQAz5JTbwT6S9ilLcyDEbDztEAfpFnqIWSp8cSZuMaRwGB83doKwrVK5RuiBIXk5WHkohapSpxFHf9ieiEFST0W"
+    "k6ZRQvilmUtpTi0jyHnm4RqFiZFBBdWX3oSxBpk1sJJMsK+l1SQOSSLG3w3+h8x9GE6m7OGjutBGucZ9kDO4UsQULUr8lVkv"
+    "J1/Nb0mMkyF996buaox3M1Zxs/e1kzsMhzg++Lgr8WZwtQWxo6fyJa1keWr8uFfe8Ij0K+JcmMtT5FLLfCsEJf38eXvZ7z8M"
+    "M+tYJ5CEdqLKrdi5DuY1jw+lOxFyaazXtwbm5smW3PsPyp86LXR/KV1cRs9ujN0j00qZausifNDMu6mnjwQ1+e5C+ZdC2BI/"
+    "sSFuI0ZaB7GS2hgB"
+)
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1: Final = (
+    "CAQSrwcKEQgUGAI4AUIJbmFycmF0aW9uEgynBTptM9eXj08GQlEaDBZh/W2zsYSPnwbPWCIwa8shTIXxn+gYb1VfktEMdFLm"
+    "vm3sRnwkrn6ASfVFMu+YhwxLZpSGilUiiohexxSRKssG599205PmjRY3fozaj1cXwr8K1I9Q8i7pED9qwsFIF7M7Q2aChtD6"
+    "lmHJ0OGxh8ApzGaE39zrFIBCjU839zaPi5rOxK4Cy29d6oJEUiLP1QfhGlPNO/hkeCPs5SCWuGx1nX8hN7YGLoLRM6ojR2dp"
+    "FariFFaDf3npl5etw8uKw6y7zd4yr+kT00koKEBJHFKc56uKCP7E3MECWoIBRPmIuy6AwEkqq/hrbknd1ye5Vey+y5xeCJGx"
+    "mx73RwwSTthPy0ogTeeKlIp6kWUtOHVfN861KnD3ojlJ7+lkGySB7li4f0fy4x8f8NJ4as3pCUvWfBUMBAeNbJUiMd691ja0"
+    "FZcnPKb0VZinv85vR3GVs+cSMCjWH4WyRoIm5QOfXLnbdcptipoX7aThZ8+WQbtXQm+XfcNdshLhVNWFCbMwFac6XMeakQAv"
+    "98aUks6PHDoFC2Niysy1VjvopOwMIm+C8Y3SH4VWaaZx+17wjo9MY1jAlX84CisBKFa67NZEvallmHO0pvCZ12Tx5Xjw3zoR"
+    "B8E8nfRZDGT0i50Z8ZVyDsWJdymR1T3OItKUoM1Uf+HUTZDR5bNpUEhEMvc06tWAaGHaNLXyzk0m4mr2kNBDxG3mYEK0iq7P"
+    "ET7M+81xP6SGdjmbhdS6oTkanA9Y41hOxYnbcBHMWEUl2ypvswth5JYlyOgzIV2qMTpR8NXxtlnpiTtEO9QPbbZZ0FzAaDiZ"
+    "5oiYE2GnBAHJ6b9ZPB3vLK/BjPwZoubMLIZRn/nUi99UymTGRTLpqapDdxEfEboNjVhJW4R+sg1yUybiQ/ysyzV/qyVOjqro"
+    "uVDF7Nd/k1KZBYWR9sVbTN63DpTja+AbGxCNQhY1GJIkYpylBoperEnGXAkZgaydh+fLPsSvLxnjpUuhbTHHUQO+TmPcsSCq"
+    "T7/qF9LKMN6Xd8VYqz43wH5xDrY/7WGfBrYMlT7jZNhxxsBP/GRGAfO09icliEPvI0Z9y/oFc1sTs4gfdM1n1SwaaeBx4TwZ"
+    "JFXqDEi32z37v+utkqtve8y/1tPGZOGfvVm4sxa4YzK1EE71ICilcmQcxRmOjQVpca9I/KXFIdDSbAaPjLBkJSjHoLmBAvmB"
+    "IUAirzYlqCnm1Wb0GAE="
+)
+
+CLAUDE_FABLE_5_2_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/chat/completions",
+    litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "anthropic/claude-fable-5-2"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={**ANTHROPIC_MESSAGES_REQUEST, "model": "claude-fable-5-2"},
+    mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChJDyAhzDMMKX3nqJfQxc",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I need to read the validation file first, so I'll open shop/validation.py around line 18 and loo"
+                    "k at the surrounding lines. The user only asked for that one file, so I'll leave the tests alone"
+                    " for now. I'll explain briefly and then make the read-only call.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm opening shop/validation.py to check how validate_quantity handles zero, negative and non-int"
+                    "eger inputs, starting from the top of the file.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_014kjK8GZzbACLW8tBdRUQFX",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 288,
+            "output_tokens_details": {"thinking_tokens": 113},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **CHAT_COMPLETIONS_RESPONSE,
+        "model": "anthropic/claude-fable-5-2",
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "index": 2,
+                            "caller": {"type": "direct"},
+                            "function": {
+                                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                                "name": "read_file",
+                            },
+                            "id": "toolu_014kjK8GZzbACLW8tBdRUQFX",
+                            "type": "function",
+                        }
+                    ],
+                    "reasoning_content": (
+                        "I need to read the validation file first, so I'll open shop/validation.py around line 18 and loo"
+                        "k at the surrounding lines. The user only asked for that one file, so I'll leave the tests alone"
+                        " for now. I'll explain briefly and then make the read-only call.\n\nI'm opening shop/validation.py"
+                        " to check how validate_quantity handles zero, negative and non-integer inputs, starting from the"
+                        " top of the file.\n\n"
+                    ),
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": (
+                                "I need to read the validation file first, so I'll open shop/validation.py around line 18 and loo"
+                                "k at the surrounding lines. The user only asked for that one file, so I'll leave the tests alone"
+                                " for now. I'll explain briefly and then make the read-only call.\n\n"
+                            ),
+                            "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                        },
+                        {
+                            "type": "thinking",
+                            "thinking": (
+                                "I'm opening shop/validation.py to check how validate_quantity handles zero, negative and non-int"
+                                "eger inputs, starting from the top of the file.\n\n"
+                            ),
+                            "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                        },
+                    ],
+                    "provider_specific_fields": {
+                        "citations": None,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I need to read the validation file first, so I'll open shop/validation.py around line 18 and loo"
+                                    "k at the surrounding lines. The user only asked for that one file, so I'll leave the tests alone"
+                                    " for now. I'll explain briefly and then make the read-only call.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                            },
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'm opening shop/validation.py to check how validate_quantity handles zero, negative and non-int"
+                                    "eger inputs, starting from the top of the file.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                            },
+                        ],
+                    },
+                    "content": None,
+                },
+            }
+        ],
+        "usage": {
+            "completion_tokens": 288,
+            "prompt_tokens": 880,
+            "total_tokens": 1168,
+            "completion_tokens_details": {"reasoning_tokens": 113, "text_tokens": 175},
+            "prompt_tokens_details": {
+                "cached_tokens": 0,
+                "text_tokens": 4,
+                "cache_write_tokens": 876,
+                "cache_creation_tokens": 876,
+                "cache_creation_token_details": {"ephemeral_5m_input_tokens": 876, "ephemeral_1h_input_tokens": 0},
+            },
+            "cache_creation_input_tokens": 876,
+            "cache_read_input_tokens": 0,
+            "inference_geo": "global",
+            "speed": "standard",
+            "service_tier": "standard",
+        },
+    },
+)
+
 CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/chat/completions",

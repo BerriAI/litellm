@@ -797,6 +797,208 @@ CLAUDE_OPUS_5_5_TEST_CASE: Final = TranslationTestCase(
     },
 )
 
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0: Final = (
+    "CAQS0AgKEAgUGAI4AUIIdGhpbmtpbmcSDFkg6hZzQqAftTTgAxoMJh+dOVTOZh6xXUSmIjBmIxLEjNQtpAJjB0fuOEUZqZJB"
+    "X5A2jGeqXvoaDk604EUw/zbukoRvE2j8fd7xM7Mq7Qd96m3zW0n8IMGCiNTo8rgL8HAC4Onvae6fhkP4mTDRCDUqVAXyJnXq"
+    "dMyBa7yYB0Hipaaq8Iy9bEre9SoGbmBBFaKaz7bhQby4JTojb4JgCKKfz4yLPq+8bbVEYue7W7PxLaU5SvaFRHKKpz4/q9+l"
+    "Z90aSCaRJYhvyUwl58Yl34jPgNFTWo2kCuOmRJtdTHBS3pQEEEco3YYSPmyCDq9pxdtXCTWBDjXLTFi0b/Hku4jNUEPtuaeK"
+    "QXSOQfE/POuEXVFjNujxuuLPM8JzQdG3ZWxl/F4hzS4yJmVuiz9bfiGQ2CNja7pg5CRRqM7UKSdDaceDCZ7SDGEIIvNTtn/B"
+    "GWgEaO/m4qedPb4jZ6X8kc54zJ1K+KzWVEuZ3T5tMn9B551gDd/x1S/G3SXnlBJjQJ6gNNkEfxlwq5ui+/wuov3zVCwV7cKO"
+    "2gIe9xOV2g7bQ6Q0OLjjix+zuGXdozdKoySk+lFrDQUr2XaNA9v0/KZIjRccOpBlZm1aJkzt/r9aV2MjAkwLePo3FTn68t9J"
+    "xJA36WChVD3DwAGoadPm0LKVlbd4yGM96vHlyh4T5QdAY+tZ33ThXq7qDTy/XhfhvQ74xc/ptRcJTMWt5u0VAurq3oqZuYMz"
+    "q8rGe9tTMrw9e3fkoNGT/8bIRStwSqYEmlqnFSwCCSssyfAJrrSTyOB+cb0ckYwk7mf0FJ6hzZcJYCS5HWmRhWkfVn2VUfNX"
+    "ry8MDq7XUyw08TEjH+gXh/+vxBCZKggIRsy4pM+8XHN7KBv9CE+oKolqJbahxslt8QBob6cxGm+96jmH1yWeFSGCZICVO61L"
+    "mmBS62g7KavfLBzXl95uOaUTqnIMSkN2M2BVrJZtgWIBM5R7X1PTJ/ElXGUMSxudedcjCQj6O3iFaxShV9QEhAwl9ajw9JYC"
+    "8o5tMo6DqB6BnXp3832zLmwTQ+j93bC4MU3aa0K87pfbu9g+w9bmXt/BG8GEI+UolrjHVW5yauLy5wpOYiKRqh8e7yIFT0g8"
+    "ndIYcK1LgKE+Ya9EIdycwrcu9S1bEgnx/abZJtHKtxYHZeQ7jTwxJEI75EiN1tmTLOdsVtwDELgWzHsovgI/8v9RSagmLj+F"
+    "q1vo4KQhUcQ116SAxto7QZlXwAivz/mREcEgjvvUXvotPFXgAk0g/Tex1kKltuIuIThGeX31vvxCYLiZ3gBB189nTYZH6YZ9"
+    "ZlapG6rrxLZD/lQ+XMt9+YlfUmFURjwLWam80tn5XNkLXG7Rb7zqm2agIN1nbpCrJx+6R5ABLrrYR92NptN7DWDxsSDNvTLe"
+    "iTnifXWPpG4uDT0lvs33JC7UHqAUlthK5V4xla8YAQ=="
+)
+
+CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1: Final = (
+    "CAQStwcKEQgUGAI4AUIJbmFycmF0aW9uEgyc0+WM9+fCUmu0KO4aDEL8AIj7tWaK/qmkwyIwBidUeprU/ZLGF3IjXZzzng65"
+    "DlJk11GVEJxK4XBy8Kd25gbwgvWloAslKm0g6hwlKtMGcastILVodXHH7SG+Mb0e+25LbtSKpRmJ65rWgXtS96MpsykYWFQI"
+    "L/6DWMriMOk50yQTENlh0O+JtDSpYb6F7UKNmO1i7/ke2duLxI/p1ovwMWOMVV0CHNDvINX3YrAHMuMoB0BLdauq1/1mwmpK"
+    "twtDcTfYJ03wYIVtTP8/l1rXI6W6EnY/giC/mkl9w5Z5LxO3r04c/dL/T3gPrBBsXinBRCnclp80MHnWjX6I0CSK4IdxisUW"
+    "ExMNWjMX1eF5s57vfFWI0TNfafGp8tcVw1ttjYDGjb/iAoKOQo75/A4Ub16NllYVM4nQW/azRC0vkG0osAnoob4zq4agSk/h"
+    "qy2KJVkPaCdRauTLKzvZFEi/kkuXOnJ8t1DX0uGRTjkcNIg5yB7NzwQYjUe4gHG7Y/B+25QsRqgIa+CtQOLeyGl53efCIPQK"
+    "2Nl7HTWexsB44rnCD9lLxxKfx/AfHGNomWWQWyPtDoBzDauR7qzinyY+ts3qlHXrq3JAETnmnkV3CB9EcPlxVsDtogBykw0j"
+    "X12oCKwv28pzgvHqOCBzYK0NXbOj1KuznDNDiaT8pi1/1ebfmL5IRqVovAyv5yrdONE884kZPzQkk9Fyjua3LFI41YzDEPdv"
+    "Dx/ww+We2MV8oI1Z56a4oPs8WEPXod8AK35oEXr+CQFLJkruO6NXi5fyk179iDbPbOaGrIztu8i9rQEq0Gsnte1I/jWTGxyb"
+    "sgBreHonT9YuCJgOHHJlFhxwWAmh0ZwXiNTVi3ZGeSlZiL5Vas5qcVeXHEf8iIoyfm5dGHsHfxnY/ty8iYdiXUTdfPNo6/m4"
+    "5BHlS1nGDTNHauwDpQHYy9gAaR+VfnUBlwlb2lxQ3D+GY1ubBuMwTVdqTkltiEYJH7FQa/RL3YgYoX49PzjpQbvl9V89aSv1"
+    "U5Ge2L57vGLGMYJa05hoNsKpcxoPffmIBZwMfbKHFCveIO8UpncNAFAKHb9FlukQ2AjWECafnuCGrNSa/EI1bNpIiOZA8pb1"
+    "O7kHzLjm2jzaTCwQIIeODEnHvizOlppUAQmvPZAb2e+V9aWpHCq2LIjKdkcwaaIXziTuKQJC6dv0BTt+Deb4JxbKvvbD98Ca"
+    "ulnaZ/KSJsFmBoGETJjlG9S/8OsYAQ=="
+)
+
+CLAUDE_FABLE_5_2_TEST_CASE: Final = TranslationTestCase(
+    scenario="basic",
+    litellm_endpoint="/v1/responses",
+    litellm_request={**RESPONSES_REQUEST, "model": "anthropic/claude-fable-5-2"},
+    expected_provider_endpoint="/v1/messages",
+    expected_provider_headers={
+        "x-api-key": "synthetic-anthropic-key",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    },
+    expected_provider_request={
+        **ANTHROPIC_MESSAGES_REQUEST,
+        "model": "claude-fable-5-2",
+        "system": [
+            {
+                "type": "text",
+                "text": (
+                    "You help maintain a synthetic Python project. Read the relevant files before suggesting a fix. E"
+                    "xplain which file you need next, then call a read-only tool. Never change files. Use the respons"
+                    "es client for this project review. Consider zero, negative and non-integer quantities before cho"
+                    "osing the next file to inspect."
+                ),
+            }
+        ],
+    },
+    mock_provider_response={
+        **ANTHROPIC_MESSAGES_RESPONSE,
+        "model": "claude-fable-5-2",
+        "id": "msg_011ChJDycx4pcpVzSdgJQC5g",
+        "content": [
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm going to read the validation file first, shop/validation.py, focusing on the function around"
+                    " line 18 so I can see how quantities are checked. Once that's done, I'll flag which file I need "
+                    "next and consider how zero, negative, and non-integer quantities are handled.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+            },
+            {
+                "type": "thinking",
+                "thinking": (
+                    "I'm reading `shop/validation.py` from the top to see how `validate_quantity` (line 18) handles z"
+                    "ero, negative and non-integer inputs, along with any imports or helpers it depends on.\n\n"
+                ),
+                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+            },
+            {
+                "type": "tool_use",
+                "id": "toolu_015dZutocZxkPUKJrVdCJK1b",
+                "name": "read_file",
+                "input": {"path": "shop/validation.py", "start_line": 1, "end_line": 60},
+                "caller": {"type": "direct"},
+            },
+        ],
+        "usage": {
+            "input_tokens": 4,
+            "cache_creation_input_tokens": 873,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 873, "ephemeral_1h_input_tokens": 0},
+            "output_tokens": 320,
+            "output_tokens_details": {"thinking_tokens": 140},
+            "service_tier": "standard",
+            "inference_geo": "global",
+            "speed": "standard",
+        },
+    },
+    expected_litellm_response={
+        **RESPONSES_RESPONSE,
+        "model": "anthropic/claude-fable-5-2",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": ANY,
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            "I'm going to read the validation file first, shop/validation.py, focusing on the function around"
+                            " line 18 so I can see how quantities are checked. Once that's done, I'll flag which file I need "
+                            "next and consider how zero, negative, and non-integer quantities are handled.\n\nI'm reading `shop"
+                            "/validation.py` from the top to see how `validate_quantity` (line 18) handles zero, negative and"
+                            " non-integer inputs, along with any imports or helpers it depends on.\n\n"
+                        ),
+                        "annotations": [],
+                    }
+                ],
+                "phase": None,
+                "encrypted_content": (
+                    json.dumps(
+                        [
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'm going to read the validation file first, shop/validation.py, focusing on the function around"
+                                    " line 18 so I can see how quantities are checked. Once that's done, I'll flag which file I need "
+                                    "next and consider how zero, negative, and non-integer quantities are handled.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                            },
+                            {
+                                "type": "thinking",
+                                "thinking": (
+                                    "I'm reading `shop/validation.py` from the top to see how `validate_quantity` (line 18) handles z"
+                                    "ero, negative and non-integer inputs, along with any imports or helpers it depends on.\n\n"
+                                ),
+                                "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                            },
+                        ],
+                        separators=(",", ":"),
+                    )
+                ),
+            },
+            {
+                "arguments": '{"path": "shop/validation.py", "start_line": 1, "end_line": 60}',
+                "call_id": "toolu_015dZutocZxkPUKJrVdCJK1b",
+                "name": "read_file",
+                "type": "function_call",
+                "id": "fc_toolu_015dZutocZxkPUKJrVdCJK1b",
+                "namespace": None,
+                "status": "completed",
+            },
+        ],
+        "usage": {
+            "input_tokens": 877,
+            "input_tokens_details": {
+                "audio_tokens": None,
+                "cached_tokens": 0,
+                "cached_tokens_details": None,
+                "cache_write_tokens": 873,
+                "image_tokens": None,
+                "text_tokens": 4,
+                "video_tokens": None,
+            },
+            "output_tokens": 320,
+            "output_tokens_details": {"audio_tokens": None, "reasoning_tokens": 140, "text_tokens": 180},
+            "total_tokens": 1197,
+            "cost": None,
+        },
+        "provider_specific_fields": {
+            "citations": None,
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "thinking": (
+                        "I'm going to read the validation file first, shop/validation.py, focusing on the function around"
+                        " line 18 so I can see how quantities are checked. Once that's done, I'll flag which file I need "
+                        "next and consider how zero, negative, and non-integer quantities are handled.\n\n"
+                    ),
+                    "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_0,
+                },
+                {
+                    "type": "thinking",
+                    "thinking": (
+                        "I'm reading `shop/validation.py` from the top to see how `validate_quantity` (line 18) handles z"
+                        "ero, negative and non-integer inputs, along with any imports or helpers it depends on.\n\n"
+                    ),
+                    "signature": CLAUDE_FABLE_5_2_THINKING_SIGNATURE_1,
+                },
+            ],
+        },
+    },
+)
+
 CLAUDE_FABLE_5_1_TEST_CASE: Final = TranslationTestCase(
     scenario="basic",
     litellm_endpoint="/v1/responses",
