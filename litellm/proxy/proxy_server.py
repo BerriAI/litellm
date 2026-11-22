@@ -1118,7 +1118,11 @@ from litellm.router import (
     LiteLLM_Params,
     ModelGroupInfo,
 )
-from litellm.router_api import ChangeSet, deployment_id, deployment_usable_by_team, router_init_args
+from litellm.router_api import ChangeSet, RoutingContext, deployment_id, deployment_usable_by_team, router_init_args
+from litellm.router_strategy.tag_based_routing import (
+    get_deployments_for_tag,
+    get_tag_metadata_variable_name_from_kwargs,
+)
 from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
@@ -15922,12 +15926,10 @@ class CountRoute:
     routable: tuple[Mapping[str, object], ...]
     deployment: Mapping[str, object] | None
     miss: Exception | None = None
-    team_id: str | None = None
+    fallback: Mapping[str, object] | None = None
 
     def usable_deployment(self) -> Mapping[str, object] | None:
-        if self.deployment is not None:
-            return self.deployment
-        return next((d for d in self.routable if deployment_usable_by_team(d, self.team_id)), None)
+        return self.deployment if self.deployment is not None else self.fallback
 
 
 def _count_context_management(
@@ -16359,6 +16361,29 @@ async def _routed_count_deployment(
     return routed if isinstance(routed, Mapping) else None
 
 
+async def _first_caller_allowed_deployment(
+    served: str,
+    select_request: Mapping[str, object],
+    routable: tuple[Mapping[str, object], ...],
+    team_id: str | None,
+) -> Mapping[str, object] | None:
+    team_usable: Final = tuple(d for d in routable if deployment_usable_by_team(d, team_id))
+    if llm_router is None or not team_usable:
+        return next(iter(team_usable), None)
+    try:
+        tag_allowed: Final = await get_deployments_for_tag(
+            ctx=RoutingContext(llm_router),
+            model=served,
+            healthy_deployments=team_usable,  # pyright: ignore[reportArgumentType]  # deployment dicts
+            request_kwargs=dict(select_request),  # pyright: ignore[reportArgumentType]  # the request kwargs
+            metadata_variable_name=get_tag_metadata_variable_name_from_kwargs(select_request),
+            request_deployments=routable,  # pyright: ignore[reportArgumentType]  # deployment dicts
+        )
+    except ValueError:
+        return None
+    return next((d for d in team_usable if d in tag_allowed), None)
+
+
 async def _caller_served_count_model(model: str, caller: UserAPIKeyAuth | None, settings: Mapping[str, object]) -> str:
     if caller is None:
         return model
@@ -16384,13 +16409,20 @@ async def route_count(
     }
     routable: Final = _routable_count_deployments(served, select_request)
     routed: Final = await _routed_count_deployment(served, select_request, routable)
+    deployment: Final = routed if isinstance(routed, Mapping) else None
     return CountRoute(
         served=served,
         select_request=select_request,
         routable=routable,
-        deployment=routed if isinstance(routed, Mapping) else None,
+        deployment=deployment,
         miss=routed if isinstance(routed, Exception) else None,
-        team_id=None if caller is None else caller.team_id,
+        fallback=(
+            None
+            if deployment is not None
+            else await _first_caller_allowed_deployment(
+                served, select_request, routable, None if caller is None else caller.team_id
+            )
+        ),
     )
 
 

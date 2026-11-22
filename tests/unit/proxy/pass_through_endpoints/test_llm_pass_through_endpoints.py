@@ -8702,6 +8702,74 @@ async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tag", "expected_path"),
+    (
+        ("account-a", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+        ("account-b", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_a_deployment_the_callers_tags_allow_when_every_one_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    tag: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        request_body={**_BEDROCK_COUNT_BODY, "tags": [tag]},
+        model_list=(
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+            ),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS,
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "account-b-deployment"},
+                tags=("account-b",),
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+        cooled_down_ids=("account-a-deployment", "account-b-deployment"),
+        enable_tag_filtering=True,
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_cooled_down_count_when_no_deployment_allows_the_callers_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["account-c"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            cooled_down_ids=("account-a-deployment",),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 429
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
 async def test_bedrock_native_count_tokens_refuses_a_caller_whose_tags_no_deployment_allows(
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
