@@ -314,25 +314,25 @@ def test_single_leading_underscore_is_not_exempt(tmp_path):
         "typing_extensions.ParamSpec('_T')",
     ),
 )
-def test_a_type_variable_stays_bare_and_a_final_one_trips(tmp_path, declaration):
+def test_a_type_variable_stays_bare_and_a_final_one_trips(tmp_path: Path, declaration: str) -> None:
     assert "LIT010" not in _codes(tmp_path, f"_T = {declaration}\n")
     assert "LIT010" in _codes(tmp_path, f"_T: Final = {declaration}\n")
     assert "LIT010" in _codes(tmp_path, f"_T: Final[object] = {declaration}\n")
 
 
-def test_a_final_type_variable_trips_in_a_class_body(tmp_path):
+def test_a_final_type_variable_trips_in_a_class_body(tmp_path: Path) -> None:
     assert "LIT010" in _codes(tmp_path, "class Box:\n    _T: Final = TypeVar('_T')\n")
 
 
-def test_a_final_type_variable_trips_on_the_config_surface(tmp_path):
+def test_a_final_type_variable_trips_on_the_config_surface(tmp_path: Path) -> None:
     assert "LIT010" in _codes_at(tmp_path, ("litellm", "__init__.py"), "_T: Final = TypeVar('_T')\n")
 
 
-def test_rebinding_a_bare_type_variable_still_trips(tmp_path):
+def test_rebinding_a_bare_type_variable_still_trips(tmp_path: Path) -> None:
     assert "LIT010" in _codes(tmp_path, "_T = TypeVar('_T')\n_T = 1\n")
 
 
-def test_a_final_call_to_any_other_factory_stays_clean(tmp_path):
+def test_a_final_call_to_any_other_factory_stays_clean(tmp_path: Path) -> None:
     assert "LIT010" not in _codes(tmp_path, "limit: Final = int('1')\n")
 
 
