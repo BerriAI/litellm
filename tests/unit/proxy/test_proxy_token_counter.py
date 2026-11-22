@@ -5963,7 +5963,49 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
-_MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+@pytest.mark.asyncio
+async def test_responses_count_on_claude_refuses_to_count_turns_stored_redacted_naming_previous_response_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redacted_turn: Final = {
+        "request_id": "chatcmpl-stored",
+        "call_type": "aresponses",
+        "session_id": "session-1",
+        "proxy_server_request": {
+            "messages": [{"role": "user", "content": "redacted-by-litellm"}],
+            "prompt": "",
+            "input": "",
+        },
+        "response": {
+            "id": "chatcmpl-stored",
+            "object": "chat.completion",
+            "choices": [
+                {"index": 0, "message": {"role": "assistant", "content": "redacted-by-litellm"}, "finish_reason": "stop"}
+            ],
+        },
+        "status": "success",
+    }
+
+    with (
+        patch.object(
+            ResponsesSessionHandler,
+            "get_all_spend_logs_for_previous_response_id",
+            new_callable=AsyncMock,
+            return_value=[redacted_turn],
+        ),
+        pytest.raises(ProxyException) as refused,
+    ):
+        await _claude_count(monkeypatch, {}, {"input": "And in 1999?", "previous_response_id": "chatcmpl-stored"})
+
+    assert (refused.value.code, refused.value.type, refused.value.param) == (
+        "400",
+        "invalid_request_error",
+        "previous_response_id",
+    )
+    assert "cannot be replayed" in refused.value.message
+
+
+_MULTILINGUAL_TEXT: Final ="日本語のテキストとहिन्दी पाठ और русский текст. " * 20
 
 
 @pytest.mark.asyncio
