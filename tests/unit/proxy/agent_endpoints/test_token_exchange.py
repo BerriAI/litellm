@@ -191,3 +191,34 @@ async def test_backend_auth_sends_the_exchanged_bearer_and_strips_the_block_from
     assert auth.header == {"Authorization": "Bearer agent-bound"}
     assert auth.litellm_params == {"api_key": "static-key"}
     assert parse_qs(idp.calls.last.request.content.decode())["subject_token"] == [subject]
+
+
+async def test_an_unset_env_reference_is_a_500_naming_the_field_and_never_reaches_the_idp() -> None:
+    idp = _IdP()
+
+    with pytest.raises(HTTPException) as refused:
+        await _exchange(idp, {**_BLOCK, "audience": "os.environ/A2A_OBO_AUDIENCE_NOT_SET"})
+
+    assert refused.value.status_code == 500
+    assert "audience" in str(refused.value.detail) and _SECRET not in str(refused.value.detail)
+    assert idp.forms == []
+
+
+@pytest.mark.parametrize("disabled", [{}, False, None])
+async def test_a_falsy_token_exchange_block_keeps_the_agents_static_auth(disabled: object) -> None:
+    agent = AgentResponse(
+        agent_id="agent-plain",
+        agent_name="plain-agent",
+        agent_card_params={"url": "https://agent.example.com"},
+        litellm_params={"token_exchange": disabled, "api_key": "static-key"},
+    )
+
+    auth = await _resolve_backend_auth(
+        {"token_exchange": disabled, "api_key": "static-key"},
+        None,
+        agent=agent,
+        request_headers={},
+        user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key"),
+    )
+
+    assert auth.header == {"Authorization": "Bearer static-key"}

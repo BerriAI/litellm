@@ -43,6 +43,7 @@ _AGENT_ONLY_PARAMS: Final = frozenset(
         AGENT_CARD_PATH_PARAM,
         A2A_PROTOCOL_VERSION_PARAM,
         A2A_USER_API_KEY_HASH_PARAM,
+        "token_exchange",
     }
 )
 

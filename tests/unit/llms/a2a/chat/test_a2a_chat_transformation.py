@@ -1,7 +1,7 @@
 """Tests for litellm/llms/a2a/chat/transformation.py response transform."""
 
 import uuid
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -10,6 +10,8 @@ from pydantic import ValidationError
 from litellm.llms.a2a.chat.streaming_iterator import A2AModelResponseIterator
 from litellm.llms.a2a.chat.transformation import A2AConfig
 from litellm.llms.a2a.common_utils import A2AError
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+from litellm.types.agents import AgentResponse
 from litellm.types.utils import ModelResponse
 
 
@@ -125,6 +127,26 @@ def test_resolve_agent_config_from_registry_returns_the_explicit_headers_object_
     assert resolved[2] is headers
     assert resolved[:2] == ("http://explicit.example", "explicit-key")
     assert optional_params == {"stream": True}
+
+
+def test_resolve_agent_config_from_registry_keeps_the_token_exchange_block_out_of_optional_params():
+    registry = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="obo-agent-id",
+            agent_name="obo-agent",
+            agent_card_params={"url": "http://agent.example"},
+            litellm_params={"token_exchange": {"client_secret": "obo-secret"}, "timeout": 30},
+        )
+    )
+    optional_params: dict[str, object] = {}
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        A2AConfig.resolve_agent_config_from_registry(
+            agent_name="obo-agent", api_base=None, api_key=None, headers=None, optional_params=optional_params
+        )
+
+    assert optional_params == {"timeout": 30}
 
 
 def _transform(payload: object, headers: dict[str, str] | None = None) -> ModelResponse:

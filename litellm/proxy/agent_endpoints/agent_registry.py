@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy.agent_endpoints.kill_switch import restore_kill_switch
 from litellm.proxy.agent_endpoints.managed_identity import managed_write_fields, raise_identity_failure
+from litellm.proxy.agent_endpoints.token_exchange import TOKEN_EXCHANGE_PLAIN_KEYS
 from litellm.proxy.management_helpers.object_permission_utils import (
     prepare_object_permission_upsert,
 )
@@ -208,6 +209,10 @@ _AGENT_PARAMS_SEQUENCE_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAda
 _EMPTY_LITELLM_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def _is_secret_agent_param(key: str) -> bool:
+    return key not in TOKEN_EXCHANGE_PLAIN_KEYS and _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+
+
 def redact_sensitive_agent_litellm_params(litellm_params: object, _depth: int = 0) -> object:
     """
     Replace credential-bearing values in an agent's litellm_params with
@@ -251,7 +256,7 @@ def _redact_agent_params_tree(value: object, _depth: int) -> object:
     return {
         key: (
             REDACTED_BY_LITELM_STRING
-            if _AGENT_PARAMS_MASKER.is_sensitive_key(key)
+            if _is_secret_agent_param(key)
             else _redact_agent_params_tree(nested_value, _depth + 1)
         )
         for key, nested_value in typed_params.items()
@@ -370,10 +375,10 @@ def _resolved_agent_param_value(
     ``_MISSING_AGENT_PARAM`` when it should be dropped entirely."""
     if key in incoming:
         value: Final = incoming[key]
-        if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
+        if _is_secret_agent_param(key):
             return existing.get(key, _MISSING_AGENT_PARAM) if value == REDACTED_BY_LITELM_STRING else value
         return _restore_redacted_nested_value(value, existing.get(key), _depth)
-    if _AGENT_PARAMS_MASKER.is_sensitive_key(key):
+    if _is_secret_agent_param(key):
         return existing.get(key, _MISSING_AGENT_PARAM)
     return _MISSING_AGENT_PARAM
 

@@ -13,6 +13,9 @@ from litellm.proxy.mcp_server.outbound_credentials.types import CredError, Serve
 from litellm.secret_managers.main import get_secret_str
 
 TOKEN_EXCHANGE_PARAM: Final = "token_exchange"
+TOKEN_EXCHANGE_PLAIN_KEYS: Final = frozenset(
+    {TOKEN_EXCHANGE_PARAM, "token_exchange_endpoint", "subject_token_type", "token_endpoint_auth_method"}
+)
 _CONFIG_FIELDS: Final = (
     "profile",
     "token_exchange_endpoint",
@@ -28,7 +31,7 @@ _EXCHANGER: Final = build_token_exchanger()
 
 
 def has_token_exchange(litellm_params: Mapping[str, object]) -> bool:
-    return litellm_params.get(TOKEN_EXCHANGE_PARAM) is not None
+    return bool(litellm_params.get(TOKEN_EXCHANGE_PARAM))
 
 
 def without_token_exchange(
@@ -41,14 +44,19 @@ def _expand(value: object) -> object:
     return get_secret_str(value) if isinstance(value, str) and value.startswith("os.environ/") else value
 
 
-def _token_exchange_config(litellm_params: Mapping[str, object]) -> TokenExchangeConfig | None:
+def _token_exchange_config(litellm_params: Mapping[str, object]) -> TokenExchangeConfig | str:
     try:
         block: Final = _BLOCK.validate_python(litellm_params.get(TOKEN_EXCHANGE_PARAM))
-        return TokenExchangeConfig.model_validate(
-            {name: _expand(block[name]) for name in _CONFIG_FIELDS if name in block}
-        )
     except ValidationError:
-        return None
+        return "it must be a mapping"
+    fields: Final = {name: _expand(block[name]) for name in _CONFIG_FIELDS if name in block}
+    unresolved: Final = tuple(name for name, value in fields.items() if value is None and block[name] is not None)
+    if unresolved:
+        return f"unresolved os.environ/ reference in {', '.join(unresolved)}"
+    try:
+        return TokenExchangeConfig.model_validate(fields)
+    except ValidationError:
+        return "a field has an unsupported value"
 
 
 def _raise_challenge(error: CredError) -> NoReturn:
@@ -74,8 +82,10 @@ async def exchange_agent_token(
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     config: Final = _token_exchange_config(litellm_params)
-    if config is None:
-        raise_public(CredError.of_misconfigured(f"agent '{agent_id}' has an invalid {TOKEN_EXCHANGE_PARAM} block"))
+    if isinstance(config, str):
+        raise_public(
+            CredError.of_misconfigured(f"agent '{agent_id}' has an invalid {TOKEN_EXCHANGE_PARAM} block: {config}")
+        )
     subject_token: Final = MCPServerManager.extract_subject_token(None, request_headers, user_api_key_auth)
     if subject_token is None:
         raise_public(

@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
-    frozenset({"api_key", "api_base", "headers", "model"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
+    frozenset({"api_key", "api_base", "headers", "model", "token_exchange"}) | AZURE_ENTRA_LITELLM_PARAM_KEYS
 )
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 

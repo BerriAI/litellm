@@ -1236,7 +1236,8 @@ def _stored_agent_row(values: Mapping[str, object] | SimpleNamespace) -> LiteLLM
             "execution_mode": "autonomous",
             **{
                 key: json.dumps(value)
-                if key in ("litellm_params", "agent_card_params", "kill_switch", "static_headers") and not isinstance(value, str)
+                if key in ("litellm_params", "agent_card_params", "kill_switch", "static_headers")
+                and not isinstance(value, str)
                 else value
                 for key, value in fields.items()
             },
@@ -1631,3 +1632,77 @@ async def test_application_registration_preserves_its_existing_owner(operation: 
                 "issuer": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
             }
         }
+
+
+_OBO_SECRET: Final = "obo-stored-client-secret"
+_OBO_BLOCK: Final = {
+    "token_exchange_endpoint": "https://idp.example.com/token",
+    "client_id": "agent-client",
+    "client_secret": _OBO_SECRET,
+    "audience": "api://agent",
+    "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+    "token_endpoint_auth_method": "client_secret_post",
+}
+
+
+def test_redact_sensitive_agent_litellm_params_masks_only_the_token_exchange_client_secret():
+    redacted = redact_sensitive_agent_litellm_params({"token_exchange": _OBO_BLOCK})
+
+    assert redacted == {"token_exchange": {**_OBO_BLOCK, "client_secret": REDACTED_BY_LITELM_STRING}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["put", "patch"])
+@pytest.mark.parametrize(
+    ("sent_secret", "stored_secret"),
+    [
+        ({}, _OBO_SECRET),
+        ({"client_secret": REDACTED_BY_LITELM_STRING}, _OBO_SECRET),
+        ({"client_secret": "rotated-client-secret"}, "rotated-client-secret"),
+    ],
+)
+async def test_editing_a_token_exchange_block_keeps_the_stored_secret_unless_a_new_one_is_sent(
+    operation: str, sent_secret: Mapping[str, str], stored_secret: str
+) -> None:
+    registry: Final = AgentRegistry()
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+        return_value=_stored_agent_row({"litellm_params": {"token_exchange": _OBO_BLOCK}, "object_permission_id": None})
+    )
+    saved = MagicMock()
+    saved.model_dump.return_value = {
+        "agent_id": "agent-123",
+        "agent_name": "Test Agent",
+        "agent_card_params": _sample_agent_card_params(),
+        "litellm_params": {},
+        "object_permission": None,
+    }
+    saved.object_permission = None
+    mock_update: Final = AsyncMock(return_value=saved)
+    mock_prisma.db.litellm_agentstable.update = mock_update
+    edited: Final = {
+        key: value for key, value in {**_OBO_BLOCK, "audience": "api://agent-v2"}.items() if key != "client_secret"
+    }
+    litellm_params: Final = {"token_exchange": {**edited, **sent_secret}}
+
+    if operation == "put":
+        await registry.update_agent_in_db(
+            agent_id="agent-123",
+            agent={
+                "agent_name": "Test Agent",
+                "agent_card_params": _sample_agent_card_params(),
+                "litellm_params": litellm_params,
+            },
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+    else:
+        await registry.patch_agent_in_db(
+            agent_id="agent-123",
+            agent={"litellm_params": litellm_params},
+            prisma_client=mock_prisma,
+            updated_by="test-user",
+        )
+
+    stored_params: Final = json.loads(mock_update.call_args.kwargs["data"]["litellm_params"])
+    assert stored_params["token_exchange"] == {**edited, "client_secret": stored_secret}
