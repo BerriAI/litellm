@@ -163,7 +163,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     OpenAIGPT5Config,
 )
 from litellm.llms.openai.common_utils import get_openai_credentials
-from litellm.llms.openai_like.acedatacloud import acedatacloud_uses_messages
+from litellm.llms.openai_like.acedatacloud import acedatacloud_api_key, acedatacloud_uses_messages
 from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
@@ -6693,9 +6693,18 @@ def completion(
         elif custom_llm_provider == "azure_ai":
             response = _complete_azure_ai(_dispatch_ctx)
         elif custom_llm_provider == "acedatacloud" and acedatacloud_uses_messages(model):
+            ace_key: Final = acedatacloud_api_key(
+                _dispatch_ctx.api_key,
+                _FORWARDED_HEADERS_ADAPTER.validate_python(_dispatch_ctx.headers or litellm.headers),
+            )
+            if not ace_key:
+                raise AuthenticationError(
+                    message="Set ACEDATACLOUD_API_KEY or pass api_key", llm_provider="acedatacloud", model=model
+                )
             response = _complete_anthropic(  # rebind-ok: common dispatcher finalizes the selected provider result
                 replace(
                     _dispatch_ctx,
+                    api_key=ace_key,
                     api_base=(_dispatch_ctx.api_base or "https://api.acedata.cloud").rstrip("/").removesuffix("/v1"),
                     litellm_params={**_dispatch_ctx.litellm_params, "use_bearer_for_custom_base": True},
                 )

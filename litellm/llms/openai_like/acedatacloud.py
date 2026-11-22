@@ -32,10 +32,25 @@ def acedatacloud_uses_messages(model: str) -> bool:
     )
 
 
+def acedatacloud_api_key(api_key: str | None, headers: Mapping[str, object] | None = None) -> str | None:
+    explicit: Final = api_key or get_secret_str("ACEDATACLOUD_API_KEY") or litellm.api_key
+    if explicit:
+        return explicit
+    authorization: Final = next(
+        (
+            value
+            for name, value in (headers or {}).items()
+            if name.lower() == "authorization" and isinstance(value, str)
+        ),
+        "",
+    )
+    return authorization[7:].strip() if authorization.lower().startswith("bearer ") else None
+
+
 class AceDataCloudModelInfo(OpenAIGPTConfig):
     @staticmethod
     def get_api_key(api_key: str | None = None) -> str | None:
-        return api_key or get_secret_str("ACEDATACLOUD_API_KEY")
+        return acedatacloud_api_key(api_key)
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str:

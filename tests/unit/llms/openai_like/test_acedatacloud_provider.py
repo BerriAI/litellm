@@ -296,6 +296,21 @@ def test_messages_authentication_error_does_not_fall_back_to_chat() -> None:
     assert route.call_count == 1
 
 
+def test_messages_does_not_send_another_providers_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ACEDATACLOUD_API_KEY", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-anthropic-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-openai-key")
+    with respx.mock() as upstream:
+        with pytest.raises(litellm.AuthenticationError, match="ACEDATACLOUD_API_KEY"):
+            completion(
+                model="acedatacloud/claude-sonnet-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=16,
+                num_retries=0,
+            )
+        assert not upstream.calls
+
+
 def test_request_priced_models_do_not_turn_the_fee_into_token_pricing() -> None:
     for model, entry in model_cost.items():
         if model.startswith("acedatacloud/") and "input_cost_per_request" in entry:
