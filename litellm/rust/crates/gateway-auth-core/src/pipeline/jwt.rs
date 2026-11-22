@@ -113,11 +113,10 @@ fn claimed_ids<R: Rows>(
     settings: &JwtSettings,
 ) -> (Option<String>, Option<String>) {
     let object_id = claims::object_id(claims, settings).filter(|text| !text.is_empty());
-    match (caller.rbac_role, object_id) {
-        (Some(RbacRole::Team), Some(object_id)) => (Some(object_id), info.user_id.clone()),
-        (Some(RbacRole::InternalUser), Some(object_id)) => (None, Some(object_id)),
-        _ => (None, info.user_id.clone()),
-    }
+    let user_id =
+        claims::effective_user_id(caller.rbac_role, object_id.as_deref(), info.user_id.clone());
+    let team_id = object_id.filter(|_| caller.rbac_role == Some(RbacRole::Team));
+    (team_id, user_id)
 }
 
 /// `JWTAuthManager.authorize_jwt` after `authenticate_jwt`: the caller and what it may call, then

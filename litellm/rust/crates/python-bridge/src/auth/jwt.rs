@@ -18,6 +18,8 @@ use super::settings::jwt_auth;
 pub(crate) struct MappedClaimsView {
     /// `get_user_id`, falling back to the email.
     user_id: Option<String>,
+    /// Local user selected by the same RBAC mapping as ordinary JWT authentication.
+    effective_user_id: Option<String>,
     /// `get_user_id` with no fallback.
     claim_user_id: Option<String>,
     user_email: Option<String>,
@@ -73,6 +75,15 @@ pub(crate) fn jwt_claims(
     let settings = settings(litellm_jwtauth)?;
     let mapped = jwt::claims::claims(&claims, &settings);
     Ok(MappedClaimsView {
+        effective_user_id: jwt::claims::rbac_role(&claims, &settings)
+            .ok()
+            .and_then(|role| {
+                jwt::claims::effective_user_id(
+                    role,
+                    mapped.object_id.as_deref(),
+                    mapped.user.user_id.clone(),
+                )
+            }),
         user_id: mapped.user.user_id,
         claim_user_id: jwt::user_id(&claims, &settings, None),
         user_email: mapped.user.user_email,

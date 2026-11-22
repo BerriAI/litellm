@@ -357,6 +357,18 @@ pub fn user_info(claims: &Claims, settings: &JwtSettings) -> UserInfo {
     }
 }
 
+/// The local user id for a verified token, including the internal-user object id mapping.
+pub fn effective_user_id(
+    role: Option<RbacRole>,
+    object_id: Option<&str>,
+    user_id: Option<String>,
+) -> Option<String> {
+    match (role, object_id.filter(|id| !id.is_empty())) {
+        (Some(RbacRole::InternalUser), Some(id)) => Some(id.to_owned()),
+        _ => user_id,
+    }
+}
+
 /// The readers that cannot fail, for callers that want them together.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MappedClaims {
