@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache, partial
-from itertools import chain
+from itertools import chain, product
 from types import MappingProxyType
 from typing import Final, Literal, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, cast
 
@@ -1755,18 +1755,23 @@ def _cache_read_rate(model_info: Mapping[str, object]) -> float | None:
 def _prompt_size_rate(
     model_info: Mapping[str, object], prompt_tokens: int | None, rate: float | None, cost_keys: Sequence[str]
 ) -> float | None:
-    """`rate`, raised to the highest of `cost_keys`' `_above_<n>_tokens` prices a prompt of `prompt_tokens` bills at."""
+    """`rate`, raised to the highest of `cost_keys`' `_above_<n>_tokens` prices a prompt of `prompt_tokens` bills at,
+    read from each deployment too, since a router model group's own prices leave them out."""
     if rate is None or prompt_tokens is None:
         return rate
-    above_keys: Final = (
-        get_modality_token_cost_key(model_info, key, prompt_tokens, threshold_is_inclusive=True) for key in cost_keys
-    )
+    deployments: Final = _DEPLOYMENT_PRICES.validate_python(model_info.get("deployment_pricing") or ())
+    price_tables: Final = (model_info, *(pricing.costs for pricing in deployments))
     above_rates: Final = tuple(
         above_rate
-        for key in above_keys
-        if key not in cost_keys and (above_rate := _to_float(model_info.get(key))) is not None
+        for prices, cost_key in product(price_tables, cost_keys)
+        if (above_rate := _above_threshold_rate(prices, cost_key, prompt_tokens)) is not None
     )
     return max((rate, *above_rates))
+
+
+def _above_threshold_rate(prices: Mapping[str, object], cost_key: str, prompt_tokens: int) -> float | None:
+    above_key: Final = get_modality_token_cost_key(prices, cost_key, prompt_tokens, threshold_is_inclusive=True)
+    return None if above_key == cost_key else _to_float(prices.get(above_key))
 
 
 def _tier_input_rate(tier: Mapping[str, object], *, holds_audio: bool) -> float:

@@ -1125,6 +1125,29 @@ def test_the_input_floor_prices_a_gemini_prompt_at_the_rates_its_size_bills_at(
     assert floor == pytest.approx(expected)
 
 
+def test_a_routed_gemini_deployment_prices_its_cached_window_at_its_above_threshold_rates() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": GEMINI_MODEL,
+                "litellm_params": {"model": "gemini/threshold-priced-gemini", "api_key": "k"},
+                "model_info": {"id": "threshold-priced-gemini", **_THRESHOLD_PRICED, "max_input_tokens": 300_000},
+            }
+        ]
+    )
+    counts: Final = {GEMINI_MODEL: 200}
+
+    reserved: Final = estimate_request_max_cost(
+        request_body=_CACHED_BODY, route=GEMINI_ROUTES[2], llm_router=router, input_token_counts=counts
+    )
+    floor: Final = estimate_request_input_cost(
+        request_body=_CACHED_BODY, route=GEMINI_ROUTES[2], llm_router=router, input_token_counts=counts
+    )
+
+    assert floor == pytest.approx(200 * 2e-06 + 299_800 * 2e-07)
+    assert reserved == pytest.approx(200 * 2e-06 + 299_800 * 2e-07 + 100 * 6e-06)
+
+
 def test_cached_content_without_an_input_or_cache_read_price_cannot_be_reserved() -> None:
     reserved: Final = _max_cost_for_cost_info(
         request_body=_CACHED_BODY,
