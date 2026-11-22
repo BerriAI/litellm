@@ -39,6 +39,7 @@ async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_
                 "x-content-type-options": "nosniff",
                 "set-cookie": "lens_session=leaked",
                 "x-internal": "private",
+                "content-security-policy": "script-src 'self'; frame-ancestors 'none'; connect-src 'self'",
                 "x-lens-ui-mount": "/team-a/lens/ui",
             },
         )
@@ -52,7 +53,7 @@ async def test_ui_files_come_from_the_connected_lens_and_only_the_dashboard_may_
         "cache-control": "no-cache",
         "x-content-type-options": "nosniff",
         "x-frame-options": "SAMEORIGIN",
-        "content-security-policy": "frame-ancestors 'self'",
+        "content-security-policy": "script-src 'self'; connect-src 'self'; frame-ancestors 'self'",
     }
 
 

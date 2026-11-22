@@ -45,9 +45,19 @@ _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "re
 _PRIVATE: Final = MappingProxyType({"cache-control": "private, no-store"})
 _UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
 _UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
-_UI_SAME_ORIGIN_FRAME: Final = MappingProxyType(
-    {"x-frame-options": "SAMEORIGIN", "content-security-policy": "frame-ancestors 'self'"}
-)
+_UI_FRAME: Final = "frame-ancestors 'self'"
+
+
+def _framed_policy(upstream: str | None) -> str:
+    """Lens's own content policy with its framing rule replaced by one that lets only the dashboard frame it."""
+    kept: Final = tuple(
+        directive.strip()
+        for directive in (upstream or "").split(";")
+        if directive.strip() and not directive.strip().lower().startswith("frame-ancestors")
+    )
+    return "; ".join((*kept, _UI_FRAME))
+
+
 _UI_UNAVAILABLE: Final = "The connected Lens does not serve a UI this gateway can show. Update Lens to use it here"
 _KEY_HEADERS: Final = (
     SpecialHeaders.openai_authorization.value,
@@ -97,7 +107,8 @@ async def lens_ui_asset(
                 status_code=200,
                 headers={
                     **{name: value for name, value in response.headers.items() if name in _UI_RESPONSE_HEADERS},
-                    **_UI_SAME_ORIGIN_FRAME,
+                    "x-frame-options": "SAMEORIGIN",
+                    "content-security-policy": _framed_policy(response.headers.get("content-security-policy")),
                 },
                 reservation=reservation,
             )
