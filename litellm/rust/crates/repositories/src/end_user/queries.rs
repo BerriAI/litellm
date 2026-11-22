@@ -18,6 +18,7 @@ pub(super) struct ObjectPermission {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_access_groups: Option<Vec<String>>,
     pub mcp_tool_permissions: Option<RawJson>,
+    pub mcp_event_permissions: Option<RawJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vector_stores: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -131,8 +132,8 @@ mod tests {
         let _ = sqlx::query(
             r#"
             WITH permission AS (
-                INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id, models, mcp_tool_permissions)
-                VALUES ('end-user-record-permission', ARRAY['gpt-4o'], '{"server": ["tool"]}')
+                INSERT INTO "LiteLLM_ObjectPermissionTable" (object_permission_id, models, mcp_tool_permissions, mcp_event_permissions)
+                VALUES ('end-user-record-permission', ARRAY['gpt-4o'], '{"server": ["tool"]}', '{"server": ["build.*"]}')
             )
             INSERT INTO "LiteLLM_EndUserTable"
                 (user_id, alias, spend, allowed_model_region, models, budget_id, object_permission_id, blocked)
@@ -163,6 +164,7 @@ mod tests {
                 "mcp_servers": [],
                 "mcp_access_groups": [],
                 "mcp_tool_permissions": {"server": ["tool"]},
+                "mcp_event_permissions": {"server": ["build.*"]},
                 "vector_stores": [],
                 "agents": [],
                 "agent_access_groups": [],

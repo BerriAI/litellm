@@ -367,6 +367,7 @@ record! {
         mcp_servers: Option<Vec<String>> = Some(Vec::new()),
         mcp_access_groups: Option<Vec<String>> = Some(Vec::new()),
         mcp_tool_permissions: Option<Lists>,
+        mcp_event_permissions: Option<Lists>,
         vector_stores: Option<Vec<String>> = Some(Vec::new()),
         agents: Option<Vec<String>> = Some(Vec::new()),
         agent_access_groups: Option<Vec<String>> = Some(Vec::new()),

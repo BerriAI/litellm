@@ -14,6 +14,7 @@ pub struct ObjectPermission {
     pub mcp_servers: Vec<String>,
     pub mcp_access_groups: Vec<String>,
     pub mcp_tool_permissions: Option<RawJson>,
+    pub mcp_event_permissions: Option<RawJson>,
     pub vector_stores: Vec<String>,
     pub agents: Vec<String>,
     pub agent_access_groups: Vec<String>,
@@ -63,11 +64,11 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO "LiteLLM_ObjectPermissionTable"
-                (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, vector_stores,
-                 agents, agent_access_groups, models, blocked_tools, mcp_toolsets, search_tools,
-                 mcp_tool_search_enabled, skills)
-            VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{v1}', '{a1}', '{ag1}', '{m1}', '{bt}',
-                    '{ts}', '{st}', true, '{sk}')
+                (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions,
+                 mcp_event_permissions, vector_stores, agents, agent_access_groups, models, blocked_tools,
+                 mcp_toolsets, search_tools, mcp_tool_search_enabled, skills)
+            VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{"s1": ["build.*"]}', '{v1}', '{a1}',
+                    '{ag1}', '{m1}', '{bt}', '{ts}', '{st}', true, '{sk}')
             "#,
         )
         .execute(&mut *tx)
@@ -84,6 +85,7 @@ mod tests {
                 "mcp_servers": ["s1", "s2"],
                 "mcp_access_groups": ["g1"],
                 "mcp_tool_permissions": {"s1": ["t1"]},
+                "mcp_event_permissions": {"s1": ["build.*"]},
                 "vector_stores": ["v1"],
                 "agents": ["a1"],
                 "agent_access_groups": ["ag1"],
