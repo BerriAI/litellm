@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_toke
 from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS, VertexAIError
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
@@ -10482,7 +10482,7 @@ def test_vertex_response_json_schema_pins_a_const_inside_the_defs_it_keeps() -> 
     }
 
 
-_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_CHARACTERS // 10
+_TEN_CHARACTER_CONSTS_IN_BUDGET: Final = GEMINI_MAX_ENUM_BYTES // 10
 
 
 def _ten_character_const_properties(numbers: range) -> dict[str, object]:
@@ -10591,3 +10591,17 @@ def test_gemini_sends_consts_unpinned_once_tools_and_response_format_pass_the_en
         else response_properties
     )
 
+
+@pytest.mark.parametrize(
+    ("const", "pinned"),
+    [("a" * GEMINI_MAX_ENUM_BYTES, True), ("账" * (GEMINI_MAX_ENUM_BYTES // 3 + 1), False)],
+    ids=["ascii-at-budget", "multibyte-over-budget"],
+)
+def test_gemini_tools_measure_the_enum_budget_in_utf8_bytes(const: str, pinned: bool) -> None:
+    declarations: Final = _tools_through_chat([_tool("record", {"source": {"type": "string", "const": const}})])[0][
+        "function_declarations"
+    ]
+
+    assert declarations[0]["parameters"]["properties"]["source"] == (
+        {"type": "string", "enum": [const]} if pinned else {"type": "string"}
+    )

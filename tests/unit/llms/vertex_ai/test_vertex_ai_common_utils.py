@@ -22,7 +22,9 @@ from litellm.llms.vertex_ai.common_utils import (
     convert_vertex_datetime_to_openai_datetime,
     get_vertex_location_from_url,
     get_vertex_project_id_from_url,
+    enums_fit,
     get_vertex_url,
+    has_const,
     pop_vertex_request_labels,
     set_schema_property_ordering,
     supports_response_json_schema,
@@ -2360,6 +2362,17 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
             },
             {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
         ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"const": "card"}, {"const": "bank"}], "const": "bank"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["bank"]}]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
     ],
     ids=[
         "items",
@@ -2370,6 +2383,8 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
         "empty-string",
         "const-beside-any-of",
         "const-beside-mixed-type-any-of",
+        "const-beside-branches-with-other-consts",
+        "typeless-empty-string",
     ],
 )
 def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
@@ -2515,3 +2530,24 @@ def test_build_json_schema_pins_consts_down_to_the_recursion_cap_and_sends_deepe
     sent: Final = _kind_beside_a_leaf_at_depth({"const": "card"}, depth, {"const": "card"})
 
     assert build_json_schema(sent) == _kind_beside_a_leaf_at_depth(_PINNED_CARD, depth, expected_leaf)
+
+
+
+@pytest.mark.timeout(10)
+def test_const_and_enum_walks_end_on_a_schema_that_contains_itself() -> None:
+    node: Final[dict[str, JsonValue]] = {"type": "object"}
+    node["properties"] = {  # rebind-ok: a schema that contains itself needs a store after it exists
+        "left": node,
+        "right": node,
+        "kind": {"type": "string", "enum": ["x" * 2001]},
+    }
+
+    assert has_const(node) is False
+    assert enums_fit(node) is False
+
+
+@pytest.mark.timeout(10)
+def test_enum_budget_answers_fast_when_one_huge_enum_value_repeats_across_branches() -> None:
+    huge: Final = "x" * (8 * 1024 * 1024)
+
+    assert enums_fit({"anyOf": [{"type": "string", "enum": [huge]} for _ in range(20_000)]}) is False

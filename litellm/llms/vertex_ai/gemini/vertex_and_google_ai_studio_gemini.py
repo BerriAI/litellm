@@ -771,7 +771,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
+        tools_json: Final = cast(JsonValue, value)  # cast-ok: tools are JSON request data
+        schema_value: Final[JsonValue] = deepcopy(tools_json) if pin_consts else tools_json
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)

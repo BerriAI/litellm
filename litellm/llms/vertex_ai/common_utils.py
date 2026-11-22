@@ -744,7 +744,7 @@ _SINGLE_SCHEMA_KEYWORDS: Final = frozenset({"items", "additionalProperties", "no
 _LIST_SCHEMA_KEYWORDS: Final = frozenset({"items", "anyOf", "oneOf", "allOf", "prefixItems"})
 
 
-GEMINI_MAX_ENUM_CHARACTERS: Final = 2000
+GEMINI_MAX_ENUM_BYTES: Final = 2000
 _GEMINI_EXACT_INT_MAX: Final = 2**53 - 1
 
 
@@ -758,24 +758,35 @@ def _json_children(node: JsonValue) -> Iterable[JsonValue]:
             return ()
 
 
-def _next_json_level(level: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
-    return tuple(chain.from_iterable(_json_children(node) for node in level))
+def _children_off_path(entry: tuple[JsonValue, frozenset[int]]) -> Iterable[tuple[JsonValue, frozenset[int]]]:
+    node, ancestors = entry
+    path: Final = ancestors | {id(node)}
+    return (
+        (child, path) for child in _json_children(node) if isinstance(child, (dict, list)) and id(child) not in path
+    )
 
 
-def _enum_characters(node: JsonValue) -> int:
+def _next_json_level(
+    level: tuple[tuple[JsonValue, frozenset[int]], ...], _: None
+) -> tuple[tuple[JsonValue, frozenset[int]], ...]:
+    return tuple(chain.from_iterable(map(_children_off_path, level)))
+
+
+def _enum_bytes(node: JsonValue) -> int:
     match node:
         case {"enum": list() as values}:
-            return sum(len(str(value)) for value in values)
+            return sum(len(str(value).encode()) for value in values)
         case _:
             return 0
 
 
 def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
-    return chain.from_iterable(takewhile(bool, accumulate(repeat(None), _next_json_level, initial=(schema,))))
+    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=((schema, frozenset[int]()),)))
+    return (node for node, _ in chain.from_iterable(levels))
 
 
 def enums_fit(request_parts: JsonValue) -> bool:
-    return sum(map(_enum_characters, _json_nodes(request_parts))) <= GEMINI_MAX_ENUM_CHARACTERS
+    return all(total <= GEMINI_MAX_ENUM_BYTES for total in accumulate(map(_enum_bytes, _json_nodes(request_parts))))
 
 
 def has_const(schema: JsonValue) -> bool:
@@ -792,7 +803,7 @@ def with_pins_that_fit(build: Callable[[bool], _GeminiRequestPart], pin_consts: 
     if enums_fit(cast(JsonValue, pinned)):  # cast-ok: built tools and schemas are JSON request data
         return pinned
     verbose_logger.debug(
-        "Gemini consts sent unpinned: the request's enum values exceed %s characters", GEMINI_MAX_ENUM_CHARACTERS
+        "Gemini consts sent unpinned: the request's enum values exceed %s bytes", GEMINI_MAX_ENUM_BYTES
     )
     return build(False)
 
@@ -858,6 +869,8 @@ def _const_as_declared(value: JsonValue, declared_type: JsonValue) -> JsonValue:
 def _branch_holds(branch: JsonValue, const: JsonValue) -> bool:
     if not isinstance(branch, dict):
         return True
+    if "$ref" in branch or ("const" in branch and branch["const"] != const):
+        return False
     declared_type: Final = branch.get("type")
     json_type: Final = _pinnable_type_of(_const_as_declared(const, declared_type))
     return json_type is not None and _declared_type_holds(declared_type, json_type)
@@ -884,7 +897,7 @@ def _push_const_into_branches(schema: JsonValue) -> None:
         return
     del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
     schema[keyword] = [  # rebind-ok: the schema builders edit their own copy in place
-        {"const": const, **branch} if isinstance(branch, dict) else branch for branch in holding
+        {**branch, "const": const} if isinstance(branch, dict) else branch for branch in holding
     ]
 
 
@@ -894,12 +907,15 @@ def _pin_scalar_consts(schema: JsonValue, *, pins_empty_string: bool, depth: int
     _push_const_into_branches(schema)
     declared_type: Final = schema.get("type")
     const: Final = _const_as_declared(schema.get("const"), declared_type)
-    skipped: Final = _is_union(schema) or (const == "" and not pins_empty_string)
-    json_type: Final = None if skipped else _pinnable_type_of(const)
+    unresolved: Final = _is_union(schema) or "$ref" in schema
+    unpinned_empty_string: Final = const == "" and not pins_empty_string
+    json_type: Final = None if unresolved or unpinned_empty_string else _pinnable_type_of(const)
     if json_type is not None and _declared_type_holds(declared_type, json_type):
         del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
         schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
         schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
+    if unpinned_empty_string and declared_type is None and not unresolved:
+        schema["type"] = "string"  # rebind-ok: the schema builders edit their own copy in place
     for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
         _pin_scalar_consts(subschema, pins_empty_string=pins_empty_string, depth=depth + 1)
 
