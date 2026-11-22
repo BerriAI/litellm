@@ -3,6 +3,7 @@ from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field, field_validator, model_validator
 
+from litellm.models.budget import BudgetRolloverCap
 from litellm.models.user import LiteLLM_UserTable
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
@@ -29,6 +30,7 @@ class NewUserRequest(GenerateRequestBase):
     tpm_limit: int | None = Field(default=None, ge=0)
     rpm_limit: int | None = Field(default=None, ge=0)
     max_budget: float | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
     user_email: str | None = None
     user_alias: str | None = None
     user_role: (
@@ -76,6 +78,7 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
         | None
     ) = None
     max_budget: float | None = None
+    rollover_max_budget: BudgetRolloverCap | None = None
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):

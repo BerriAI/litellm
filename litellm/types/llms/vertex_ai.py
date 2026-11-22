@@ -62,15 +62,17 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
-class FunctionResponsePartType(TypedDict, total=False):
-    inline_data: BlobType
-    file_data: FileDataType
-
-
 class VideoMetadataType(TypedDict, total=False):
     fps: ReadOnly[float]
     startOffset: ReadOnly[str]
     endOffset: ReadOnly[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+    media_resolution: ReadOnly[Literal["low", "medium", "high"]]
+    video_metadata: ReadOnly[VideoMetadataType]
 
 
 class PartType(TypedDict, total=False):

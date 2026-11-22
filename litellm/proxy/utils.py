@@ -395,7 +395,7 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 class _RelTuplesRow(TypedDict):

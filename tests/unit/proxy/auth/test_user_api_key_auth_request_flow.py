@@ -1755,27 +1755,26 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
 
 
 @pytest.mark.asyncio
-async def test_return_user_api_key_auth_obj_user_spend_and_budget():
-    """
-    Test that return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
-    from user_obj attributes.
-    """
+@pytest.mark.parametrize(("cap", "credit", "expected_budget"), [(None, None, 1000.0), (1300.0, 200.0, 1200.0)])
+async def test_return_user_api_key_auth_obj_user_spend_and_budget(
+    cap: float | None, credit: float | None, expected_budget: float
+) -> None:
     from datetime import datetime
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
-    user_obj = type(
-        "LiteLLM_UserTable",
-        (),
-        {
-            "tpm_limit": 1000,
-            "rpm_limit": 100,
-            "user_email": "test@example.com",
-            "spend": 250.0,
-            "max_budget": 1000.0,
-            "user_role": "internal_user",
-        },
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        tpm_limit=1000,
+        rpm_limit=100,
+        user_email="test@example.com",
+        spend=250.0,
+        max_budget=1000.0,
+        budget_duration="monthly",
+        rollover_max_budget=cap,
+        rollover_credit=credit,
+        user_role="internal_user",
     )
 
     api_key = "sk-test-key"
@@ -1805,7 +1804,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
 
     assert isinstance(result, UserAPIKeyAuth)
     assert result.user_spend == 250.0
-    assert result.user_max_budget == 1000.0
+    assert result.user_max_budget == expected_budget
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"
@@ -3523,6 +3522,61 @@ async def test_deferred_body_check_uses_only_the_authenticated_teams_deployments
         await user_api_key_auth(request=request, api_key="Bearer external-token")
     assert int(rejection.value.code) == 401
     assert "vertex_location" in str(rejection.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,dispatched_to_pass_through,is_allowed",
+    [("/MS_Office/upstream/authorize", True, True), ("/v1/chat/completions", False, False)],
+)
+async def test_deferred_body_check_admits_query_credentials_only_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch, path: str, dispatched_to_pass_through: bool, is_allowed: bool
+) -> None:
+    from litellm.proxy.utils import ProxyLogging
+
+    async def authenticate(request: Request, api_key: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(api_key=api_key, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-chat",
+                "model_info": {"team_id": "pinned-team", "team_public_model_name": "chat"},
+                "litellm_params": {"model": "vertex_ai/test-model"},
+            },
+        ]
+    )
+    key_cache: Final = UserApiKeyCache()
+    attributes: Final = {
+        **_proxy_attrs_for_centralized_checks(user_custom_auth=authenticate),
+        "general_settings": {"allow_client_side_credentials": False},
+        "llm_router": router,
+        "llm_model_list": None,
+        "user_api_key_cache": key_cache,
+        "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
+    }
+    for name, value in attributes.items():
+        monkeypatch.setattr(litellm.proxy.proxy_server, name, value)
+    scope: Final = {
+        "type": "http",
+        "method": "GET",
+        "path": path,
+        "headers": [],
+        "query_string": b"response_type=code&client_id=test-client",
+        "route": SimpleNamespace(path=path),
+    }
+    request: Final = Request(
+        {**scope, "endpoint": _user_defined_pass_through_endpoint()} if dispatched_to_pass_through else scope,
+        receive=AsyncMock(return_value={"type": "http.request", "more_body": False, "body": b""}),
+    )
+    if is_allowed:
+        identity: Final = await user_api_key_auth(request=request, api_key="Bearer external-token")
+        assert identity.user_role == LitellmUserRoles.INTERNAL_USER
+        return
+    with pytest.raises(ProxyException) as rejection:
+        await user_api_key_auth(request=request, api_key="Bearer external-token")
+    assert int(rejection.value.code) == 401
+    assert "client_id is not allowed" in str(rejection.value)
 
 
 @pytest.mark.asyncio

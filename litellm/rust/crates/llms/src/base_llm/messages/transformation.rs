@@ -158,6 +158,7 @@ pub trait MessagesDialect {
         &self,
         request: MessagesRequest,
         _headers: &Headers,
+        _url: &str,
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)
