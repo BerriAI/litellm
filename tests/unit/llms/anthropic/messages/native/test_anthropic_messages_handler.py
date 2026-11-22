@@ -30,6 +30,7 @@ from litellm.types.utils import (
     ModelResponse,
     StandardLoggingPayloadErrorInformation,
 )
+from tests.test_litellm_rust.support.recording_server import ResponseSpec, recording_service
 
 
 @pytest.mark.asyncio
@@ -80,6 +81,85 @@ async def test_openai_messages_forwards_stop_sequences_to_chat_completions(
         body: Final = json.loads(chat.calls.last.request.content)
         assert body["stop"] == ["STOPPROBE", "ENDPROBE"]
         assert "stop_sequences" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("base_from_env", [False, True], ids=["deployment_api_base", "anthropic_api_base_env"])
+async def test_anthropic_version_2026_10_21_sends_sampling_params_to_a_third_party_anthropic_api(
+    monkeypatch: pytest.MonkeyPatch, base_from_env: bool, drop_params: bool
+) -> None:
+    with recording_service() as upstream:
+        upstream.expected_requests = 1
+        if base_from_env:
+            monkeypatch.setenv("ANTHROPIC_API_BASE", upstream.base_url)
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "deepseek",
+                    "litellm_params": {
+                        "model": "anthropic/deepseek-v4-flash",
+                        "api_key": "test-api-key",
+                        "drop_params": drop_params,
+                        **({} if base_from_env else {"api_base": upstream.base_url}),
+                    },
+                }
+            ]
+        )
+        upstream.enqueue(
+            ResponseSpec(
+                body={
+                    "id": "msg_sampling",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "deepseek-v4-flash",
+                    "content": [{"type": "text", "text": "hi"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        await router.aanthropic_messages(
+            model="deepseek",
+            max_tokens=16,
+            temperature=0.2,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
+
+    sent: Final = upstream.requests[-1]
+    assert sent.headers["anthropic-version"] == "2026-10-21"
+    assert isinstance(sent.body, dict)
+    assert sent.body["temperature"] == 0.2
+
+
+@pytest.mark.asyncio
+async def test_anthropic_version_2026_10_21_refuses_deployment_sampling_params_before_calling_anthropic() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-4-6",
+                    "api_key": "test-api-key",
+                    "api_base": "https://api.anthropic.com",
+                    "temperature": 1,
+                },
+            }
+        ]
+    )
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match=r"does not support temperature=1\. anthropic-version 2026-10-21 removed temperature, top_p and top_k",
+    ):
+        await router.aanthropic_messages(
+            model="claude",
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            extra_headers={"anthropic-version": "2026-10-21"},
+        )
 
 
 @pytest.mark.parametrize("stop_sequences", [None, []], ids=["no-stops", "empty-stops"])

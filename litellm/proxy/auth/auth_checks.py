@@ -58,6 +58,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -74,7 +76,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
-    LiteLLM_VerificationTokenView,
     LiteLLMRoutes,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -339,6 +340,7 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -362,6 +364,71 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
     return (
         team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
         is True
+    )
+
+
+def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
+    if not _metadata_is_mapping(scope):
+        return ()
+    return REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(
+        _TRACE_ID_METADATA_ADAPTER.validate_python(scope).get(REQUIRED_CUSTOMER_HEADERS_SETTING) or ()
+    )
+
+
+def _metadata_is_mapping(metadata: object) -> bool:
+    return isinstance(metadata, Mapping)
+
+
+def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
+
+
+def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ...]) -> str | None:
+    present: Final = frozenset(name.lower() for name, value in headers.items() if value.strip())
+    return next((header for header in required if header.lower() not in present), None)
+
+
+def _is_pass_through_route(route: str, request: Request | None) -> bool:
+    return RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+
+
+def _route_requires_customer_headers(route: str, request: Request | None) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route) or _is_pass_through_route(route, request)
+    ) and not RouteChecks.is_info_route(route)
+
+
+async def missing_required_customer_header(
+    request: Request | None,
+    route: str,
+    authenticated: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> str | None:
+    """The first header this route's required-customer-header policy needs that the request lacks, or None."""
+    from litellm.proxy import proxy_server
+
+    if not _route_requires_customer_headers(route, request):
+        return None
+    team: Final = (
+        await get_team_object(
+            team_id=authenticated.team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+        if authenticated.team_id is not None and authenticated.team_id != UI_TEAM_ID
+        else None
+    )
+    return _missing_customer_header(
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+        _required_customer_headers(
+            (
+                getattr(proxy_server, "general_settings", None),
+                getattr(team, "metadata", None),
+                getattr(authenticated, "metadata", None),
+            )
+        ),
     )
 
 
@@ -1446,10 +1513,7 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    pass_through_route: Final = RouteChecks.check_route_access(
-        route=route,
-        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
-    ) or request_dispatched_to_pass_through_endpoint(request)
+    pass_through_route: Final = _is_pass_through_route(route, request)
     headers_only: Final = (
         RouteChecks.check_route_access(
             route=route,
@@ -1497,6 +1561,33 @@ async def common_checks(
             type=ProxyErrorTypes.bad_request_error,
             param="trace_id",
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    required_customer_headers: Final = (
+        _required_customer_headers(
+            (
+                general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
+                getattr(team_object, "metadata", None),
+                getattr(valid_token, "metadata", None),
+            )
+        )
+        if _route_requires_customer_headers(route, request)
+        else ()
+    )
+    missing_customer_header: Final = (
+        _missing_customer_header(
+            _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+            required_customer_headers,
+        )
+        if required_customer_headers
+        else None
+    )
+    if missing_customer_header is not None:
+        raise ProxyException(
+            message=f"Missing required customer header {missing_customer_header}",
+            type=ProxyErrorTypes.auth_error,
+            param=missing_customer_header,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     await can_agent_call_model(
@@ -3618,11 +3709,24 @@ class AccessGroupNotFoundError(HTTPException):
         )
 
 
+async def _find_team_retrying_a_lost_connection(
+    team_id: str, prisma_client: PrismaClient, *, use_writer: bool
+) -> LiteLLM_TeamTableCachedObj | None:
+    teams: Final = TeamRepository(prisma_client)
+    try:
+        return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+    except NativeDatabaseFailure as error:
+        if error.kind != "unreachable":
+            raise
+        verbose_proxy_logger.warning("Team read lost its database connection, retrying once: %s", error)
+    return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+
+
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> LiteLLM_TeamTableCachedObj | None:
     response: LiteLLM_TeamTableCachedObj | None = await bounded_db_lookup(
-        TeamRepository(prisma_client).find_with_model_aliases(team_id, use_writer=use_writer), name="team"
+        _find_team_retrying_a_lost_connection(team_id, prisma_client, use_writer=use_writer), name="team"
     )
 
     if response is None and team_id_upsert:
@@ -4253,33 +4357,76 @@ class ExperimentalUIJWTToken:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
 
-async def fetch_key_object_from_db_with_reconnect(
+async def load_key_object(
     hashed_token: str,
     prisma_client: PrismaClient,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
     deadline_seconds: float | None = None,
     *,
+    user_api_key_cache: UserApiKeyCache,
     check_db_only: bool = False,
-) -> LiteLLM_VerificationTokenView | None:
+) -> UserAPIKeyAuth | None:
     """
-    The key's ``combined_view`` row from the Rust key store, which also resolves a hash rotated away from a key
-    within its grace period. The gate wait and the read share one deadline, so a stalled database fails the
-    request with ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer.
+    The key from the Rust key repository, which also resolves a hash rotated away from a key within its grace
+    period, with the object permission it points at nested, cached as ``cache_key_object`` caches it.
+
+    The gate wait and the read share one deadline, so a stalled database fails the request with
+    ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer and leaves the cache
+    as it is.
     """
-    return await bounded_db_lookup(
-        _fetch_key_view(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
+    found: Final = await bounded_db_lookup(
+        _fetch_key(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
         name="key",
         deadline_seconds=deadline_seconds,
     )
+    if found is None:
+        return None
+    key: Final = UserAPIKeyAuth.model_validate(
+        dict(
+            await _with_object_permission(
+                found, prisma_client, proxy_logging_obj, user_api_key_cache, check_db_only=check_db_only
+            )
+        )
+    )
+    if not check_db_only:
+        await cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_obj=key,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    return key
 
 
-_fetch_key_object_from_db_with_reconnect: Final = fetch_key_object_from_db_with_reconnect
+async def _with_object_permission(
+    key: Mapping[str, object],
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging | None,
+    user_api_key_cache: UserApiKeyCache,
+    *,
+    check_db_only: bool,
+) -> Mapping[str, object]:
+    """``key`` with the object permission it points at nested. The permission is read under its own deadline, after
+    the key's. ``get_object_permission`` answers None for a permission table that stalls or a row its model refuses,
+    which leaves a key the database answered for without it. A writer read must see the permission, so there it
+    raises instead and fails the read."""
+    object_permission_id: Final = key.get("object_permission_id")
+    if not isinstance(object_permission_id, str) or not object_permission_id:
+        return key
+    permission: Final = await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    return key if permission is None else {**key, "object_permission": permission.model_dump(mode="json")}
 
 
-async def _fetch_key_view(
+async def _fetch_key(
     hashed_token: str, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging | None, *, use_writer: bool
-) -> LiteLLM_VerificationTokenView | None:
+) -> Mapping[str, object] | None:
     async with db_lookup_gate.current():
         try:
             return await VerificationTokenRepository(prisma_client).find_for_auth(hashed_token, use_writer=use_writer)
@@ -4370,55 +4517,23 @@ async def get_key_object(
     if check_cache_only:
         raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}.")
 
-    # else, check db
-    _valid_token: Final[BaseModel | None] = await fetch_key_object_from_db_with_reconnect(
+    # else, read the database, which caches the key it finds
+    _response: Final = await load_key_object(
         hashed_token=hashed_token,
         prisma_client=prisma_client,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
         check_db_only=check_db_only,
     )
 
-    if _valid_token is None:
+    if _response is None:
         raise ProxyException(
             message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,
         )
-
-    _response: Final = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
-
-    # Load object_permission if object_permission_id exists but object_permission is not loaded
-    if _response.object_permission_id and (check_db_only or not _response.object_permission):
-        try:
-            _response.object_permission = await get_object_permission(
-                object_permission_id=_response.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=check_db_only,
-            )
-        except Exception as e:
-            if check_db_only:
-                raise
-            verbose_proxy_logger.debug(
-                "Failed to load object_permission for key with object_permission_id=%s: %s",
-                _response.object_permission_id,
-                e,
-            )
-
-    if check_db_only:
-        return _response
-
-    # save the key object to cache
-    await cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=_response,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
 
     return _response
 

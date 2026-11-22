@@ -411,3 +411,59 @@ async def test_an_assertion_for_another_audience_is_rejected_not_raised(jwt_sett
     assert isinstance(rejected, proxy_jwt.AssertionRejection)
     assert not isinstance(accepted, proxy_jwt.AssertionRejection)
     assert accepted["sub"] == "user-1"
+
+
+_ENV_JWKS_URL: Final = "https://env.example/jwks"
+_ENV_SIGNING_KEY: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_ENVIRONMENT_JWT_SETTINGS: Final = {"JWT_PUBLIC_KEY_URL": _ENV_JWKS_URL, "JWT_AUDIENCE": "env-app"}
+
+
+class _JwksByUrl:
+    async def get(self, url: str, params: object = None, headers: object = None) -> httpx.Response:
+        signer: Final = {_JWKS_URL: _SIGNING_KEY, _ENV_JWKS_URL: _ENV_SIGNING_KEY}[url]
+        key: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signer.public_key(), as_dict=True)
+        return httpx.Response(200, json={"keys": [{**key, "kid": "k1"}]}, request=httpx.Request("GET", url))
+
+
+@pytest.fixture(params=[{}, _ENVIRONMENT_JWT_SETTINGS], ids=["without_environment", "with_environment"])
+def config_jwt_settings(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> RustAuthSettings:
+    import litellm.proxy.proxy_server as proxy_server
+
+    for name in ("JWT_PUBLIC_KEY_URL", "JWT_AUDIENCE", "JWT_ISSUER"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in request.param.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(proxy_server, "jwt_http_handler", _JwksByUrl())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
+    return RustAuthSettings(
+        {"enable_jwt_auth": True},
+        LiteLLM_JWTAuth(public_key_url=_JWKS_URL, audience="litellm-app"),
+        core.HostFacts(master_key=None, premium=True, has_db=False),
+    )
+
+
+@pytest.mark.asyncio
+async def test_litellm_jwtauth_public_key_url_and_audience_verify_a_matching_token(
+    config_jwt_settings: RustAuthSettings,
+) -> None:
+    verified: Final = await proxy_jwt.verify(config_jwt_settings, _signed({"sub": "user-1", "aud": "litellm-app"}))
+
+    assert verified["sub"] == "user-1"
+
+
+@pytest.mark.parametrize(
+    ("audience", "signing_key"),
+    [
+        pytest.param("other-app", _SIGNING_KEY, id="another_audience"),
+        pytest.param("env-app", _SIGNING_KEY, id="environment_audience"),
+        pytest.param("litellm-app", _ENV_SIGNING_KEY, id="environment_key"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_litellm_jwtauth_public_key_url_and_audience_refuse_any_other_token(
+    config_jwt_settings: RustAuthSettings, audience: str, signing_key: rsa.RSAPrivateKey
+) -> None:
+    token: Final = _signed({"sub": "user-1", "aud": audience}, signing_key)
+
+    with pytest.raises(Exception, match="Validation fails"):
+        _ = await proxy_jwt.verify(config_jwt_settings, token)
