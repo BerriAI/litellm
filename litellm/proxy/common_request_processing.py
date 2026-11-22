@@ -466,7 +466,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     logging object) would never reach spend tracking. Assemble the partial
     response from the wrapper's collected chunks and dispatch success logging
     for it; dispatch_success_handlers dedups against a natural end-of-stream
-    dispatch via has_dispatched_final_stream_success.
+    dispatch via has_dispatched_final_stream_success. A Responses API partial
+    already carries the usage of every deployment the stream went through, so
+    it replaces the partial usage a failed earlier attempt left on the logging
+    object instead of being overridden by it.
 
     Awaited directly by the shielded cleanup rather than scheduled with
     create_task: the client is already gone so the extra latency is harmless,
@@ -494,6 +497,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
             sanitize_for_log(logging_obj.litellm_call_id),
         )
+        logging_obj.model_call_details.pop("combined_usage_object", None)
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
     if not isinstance(chunks, list) or not chunks:

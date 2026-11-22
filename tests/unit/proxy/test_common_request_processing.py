@@ -9607,6 +9607,45 @@ class TestStreamingClientDisconnectBilling:
         assert stream.built_while_loop_served is True
         assert billed is False
 
+    @pytest.mark.asyncio
+    async def test_a_cut_after_a_fallback_bills_the_partials_tokens_over_the_failed_attempts_stash(self, monkeypatch):
+        from litellm.types.llms.openai import ResponseIncompleteEvent, ResponsesAPIResponse, ResponsesAPIStreamEvents
+
+        partial: Final = ResponsesAPIResponse.model_validate(
+            MappingProxyType(
+                {
+                    "id": "resp_fallback",
+                    "object": "response",
+                    "created_at": 1,
+                    "status": "incomplete",
+                    "model": "gpt-4o-mini",
+                    "output": (),
+                    "usage": MappingProxyType({"input_tokens": 50, "output_tokens": 0, "total_tokens": 50}),
+                }
+            )
+        )
+
+        class _FallbackCutStream:
+            def partial_response_on_disconnect(self) -> ResponseIncompleteEvent:
+                return ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=partial)
+
+        recorder: Final = _RecordingSuccessLogger()
+        monkeypatch.setattr(litellm, "callbacks", [recorder])
+        logging_obj: Final = (await self._start_partial_stream()).logging_obj
+        logging_obj.model_call_details["combined_usage_object"] = litellm.Usage(
+            prompt_tokens=25, completion_tokens=0, total_tokens=25
+        )
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+            {"litellm_logging_obj": logging_obj}, _FallbackCutStream()
+        )
+        for _ in range(50):
+            if recorder.success_events:
+                break
+            await asyncio.sleep(0.1)
+
+        assert billed is True
+        assert recorder.success_events[0]["kwargs"]["standard_logging_object"]["prompt_tokens"] == 50
+
 
 def _apply_stream_usage_tracking(
     data: dict,
