@@ -267,7 +267,6 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
             model="gemini/gemini-3-flash-preview",
             messages=[{"role": "user", "content": "continue"}],
             use_interactions=True,
-            previous_interaction_id="v1_prev_99",
             environment="browser",
             audio={"voice": "alloy", "format": "pcm16"},
             response_json_schema=schema,
@@ -293,7 +292,7 @@ def test_top_level_interactions_kwargs_pass_preprocessing_with_drop_params_false
     assert json.loads(captured[0].content) == {
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "continue"}]}],
-        "previous_interaction_id": "v1_prev_99",
+        "store": False,
         "environment": "browser",
         "response_format": {"type": "text", "mime_type": "application/json", "schema": schema},
         "generation_config": {"speech_config": [{"voice": "Kore"}]},
@@ -362,6 +361,7 @@ def test_interactions_native_tool_choice_and_wav_audio_bypass_legacy_gemini_vali
     assert json.loads(captured[0].content) == {
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "test"}]}],
+        "store": False,
         **expected_fields,
     }
 
@@ -550,6 +550,14 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"safetySettings": []}}}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"generationConfig": {}}}}, False),
         ("gemini-4-neon", "gemini", {"candidate_count": 2}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"cached_content": "cachedContents/abc"}}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"previous_interaction_id": "v1_other_keys_turn"}}, False),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {"optional_params": {"extra_body": {"cachedContent": "cachedContents/abc"}}},
+            False,
+        ),
     ),
 )
 def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do_not(
@@ -569,3 +577,80 @@ def test_globally_configured_safety_settings_keep_gemini_4_on_generate_content(m
     monkeypatch.setattr(litellm, "vertex_ai_safety_settings", {"HARM_CATEGORY_HARASSMENT": "BLOCK_NONE"})
 
     assert should_route_to_interactions_api(model="gemini-4-neon", custom_llm_provider="vertex_ai") is False
+
+
+@pytest.mark.parametrize(
+    ("provider", "request_params", "expected"),
+    (
+        ("vertex_ai", {}, False),
+        ("vertex_ai_beta", {}, False),
+        ("vertex_ai", {"litellm_params": {"vertex_location": "us-central1"}}, True),
+        ("vertex_ai", {"optional_params": {"vertex_ai_location": "us-central1"}}, True),
+        ("gemini", {}, True),
+    ),
+)
+@pytest.mark.parametrize("ambient", ("module", "VERTEXAI_LOCATION", "VERTEX_LOCATION"))
+def test_vertex_gemini_4_relying_on_an_ambient_location_stays_on_generate_content(
+    monkeypatch: pytest.MonkeyPatch,
+    ambient: str,
+    provider: str,
+    request_params: Mapping[str, object],
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    monkeypatch.setattr(litellm, "vertex_location", "europe-west4" if ambient == "module" else None)
+    for name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION"):
+        monkeypatch.delenv(name, raising=False)
+    if ambient != "module":
+        monkeypatch.setenv(ambient, "europe-west4")
+
+    assert (
+        should_route_to_interactions_api(model="gemini-4-neon", custom_llm_provider=provider, **request_params)
+        is expected
+    )
+
+
+def test_vertex_gemini_4_with_no_configured_location_routes_to_interactions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    monkeypatch.setattr(litellm, "vertex_location", None)
+    for name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert should_route_to_interactions_api(model="gemini-4-neon", custom_llm_provider="vertex_ai") is True
+
+
+@pytest.mark.parametrize(
+    "token_kwargs",
+    ({"continuation_token": "tok_resume"}, {"extra_body": {"continuation_token": "tok_resume"}}),
+)
+def test_callers_continuation_token_reaches_interactions_from_the_top_level_or_extra_body(
+    monkeypatch: pytest.MonkeyPatch, token_kwargs: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    def responder(req: httpx.Request) -> httpx.Response:
+        captured.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_resumed",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "the rest"}]}],
+                "usage": {"total_input_tokens": 5, "total_output_tokens": 3, "total_tokens": 8},
+            },
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        resumed: Final = litellm.completion(
+            model="gemini/gemini-4-neon",
+            messages=[{"role": "user", "content": "write a long story"}],
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            **token_kwargs,
+        )
+
+    assert isinstance(resumed, ModelResponse)
+    assert [req.url.path for req in captured] == ["/v1beta/interactions"]
+    assert json.loads(captured[0].content)["continuation_token"] == "tok_resume"

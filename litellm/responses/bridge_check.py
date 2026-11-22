@@ -381,8 +381,26 @@ def _is_interactions_eligible_target(
 
 _ONE_CANDIDATE: Final = (None, 1)
 _GENERATE_CONTENT_ONLY_KEYS: Final = frozenset(
-    {"generationConfig", "generation_config", "safety_settings", "safetySettings"}
+    {
+        "generationConfig",
+        "generation_config",
+        "safety_settings",
+        "safetySettings",
+        "cached_content",
+        "cachedContent",
+        "previous_interaction_id",
+    }
 )
+_VERTEX_LOCATION_KEYS: Final = ("vertex_location", "vertex_ai_location")
+_VERTEX_LOCATION_ENV_VARS: Final = ("VERTEXAI_LOCATION", "VERTEX_LOCATION")
+
+
+def _relies_on_ambient_vertex_location(custom_llm_provider: str, *param_sources: Mapping[str, object] | None) -> bool:
+    if custom_llm_provider not in ("vertex_ai", "vertex_ai_beta"):
+        return False
+    if any(any((source or {}).get(key) for key in _VERTEX_LOCATION_KEYS) for source in param_sources):
+        return False
+    return bool(litellm.vertex_location) or any(get_secret_str(name) for name in _VERTEX_LOCATION_ENV_VARS)
 
 
 def _needs_generate_content(*param_sources: Mapping[str, object] | None) -> bool:
@@ -458,6 +476,7 @@ def should_route_to_interactions_api(
         and litellm.vertex_ai_safety_settings is None
         and candidate_count in _ONE_CANDIDATE
         and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)
+        and not _relies_on_ambient_vertex_location(custom_llm_provider, str_keyed_mapping(optional_params), llm_map)
     )
 
 
@@ -571,7 +590,10 @@ def dispatch_interactions_bridge(
     )
     if stream_options is not None and "stream_options" not in cleaned_opt:
         cleaned_opt["stream_options"] = stream_options
-    continuation_token: Final = (str_keyed_mapping(raw_kwargs) or {}).get("continuation_token")
+    raw_kwargs_map: Final = str_keyed_mapping(raw_kwargs) or {}
+    continuation_token: Final = raw_kwargs_map.get("continuation_token") or (
+        str_keyed_mapping(raw_kwargs_map.get("extra_body")) or {}
+    ).get("continuation_token")
     if continuation_token:
         cleaned_opt["continuation_token"] = continuation_token
     llm_map: Final = _merge_vertex_bridge_params(str_keyed_mapping(litellm_params), str_keyed_mapping(raw_kwargs))

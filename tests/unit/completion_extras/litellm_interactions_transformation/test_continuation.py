@@ -223,6 +223,33 @@ def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_fails() -> N
     assert tokens == ["tok-1"]
 
 
+def test_streaming_bridge_ends_with_length_and_the_token_when_a_hop_stream_reports_a_provider_error() -> None:
+    quota_event: Final = {"event_type": "error", "error": {"code": "resource_exhausted", "message": "quota"}}
+    _, responder = _scripted(
+        (
+            _sse(_interaction("Once ", "requires_continuation", "tok-1")),
+            httpx.Response(
+                200, text=f"data: {json.dumps(quota_event)}\n\n", headers={"content-type": "text/event-stream"}
+            ),
+        )
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        stream: Final = litellm.completion(
+            model=MODEL,
+            max_tokens=1000,
+            messages=list(MESSAGES),
+            stream=True,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        text, finish_reasons, tokens, _ = _drain(stream)
+
+    assert text == "Once "
+    assert finish_reasons == ["length"]
+    assert tokens == ["tok-1"]
+
+
 def test_vertex_resume_of_a_stored_turn_sends_no_input_because_the_previous_interaction_holds_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

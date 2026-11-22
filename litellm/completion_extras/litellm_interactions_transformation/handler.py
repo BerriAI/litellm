@@ -10,10 +10,11 @@ from types import MappingProxyType
 from typing import Final, NoReturn, Protocol, TypeAlias, runtime_checkable
 
 import httpx
+from openai import OpenAIError
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import request_timeout
-from litellm.exceptions import APIConnectionError, PermissionDeniedError, Timeout
+from litellm.exceptions import APIConnectionError, PermissionDeniedError
 from litellm.interactions.utils import get_provider_interactions_api_config
 from litellm.litellm_core_utils.core_helpers import (
     process_response_headers,  # pyright: ignore[reportUnknownVariableType]  # upstream helper uses bare dict
@@ -453,7 +454,7 @@ async def _send_async_request(
     return pooled_resp
 
 
-_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, Timeout)
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, OpenAIError)
 
 
 def _mark_initial_prompt_tokens(result: ModelResponse, hops: Sequence[JsonMapping]) -> None:

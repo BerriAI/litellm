@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Final, NoReturn, TypeAlias, TypedDict
 
 import httpx
+from openai import OpenAIError
 from pydantic import JsonValue, TypeAdapter
 from typing_extensions import ReadOnly
 
@@ -19,7 +20,6 @@ from litellm.exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
-    Timeout,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -60,7 +60,7 @@ LineStreamAsync: TypeAlias = AsyncIterator[str | bytes]
 HopBody: TypeAlias = dict[str, object]
 SyncHopOpener: TypeAlias = Callable[[HopBody], httpx.Response]
 AsyncHopOpener: TypeAlias = Callable[[HopBody], Awaitable[httpx.Response]]
-_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, Timeout)
+_HOP_FAILURES: Final = (BaseLLMException, httpx.HTTPError, ValueError, OpenAIError)
 
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _EMPTY_JSON_MAP: Final[JsonMapping] = MappingProxyType({})
