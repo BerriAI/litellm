@@ -1,8 +1,10 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { Copy, Inbox, Info } from "lucide-react";
+import { Copy, Inbox, Info, LayoutGrid } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
@@ -104,7 +106,9 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const isChat = variant === "chat";
   const portalClassName = isChat ? "chat-theme" : undefined;
   const dashboardRootClassName = isEmbedded ? "w-full" : "min-h-screen bg-card";
-  const dashboardContentClassName = isEmbedded ? "w-full p-6" : "w-full px-8 py-12";
+  const dashboardContentClassName = isEmbedded ? undefined : "w-full px-8 py-12";
+  const HubPage = isEmbedded && !isChat ? Page : "div";
+  const HubContent = isEmbedded && !isChat ? PageContent : React.Fragment;
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
   const [agentHubData, setAgentHubData] = useState<AgentCard[] | null>(null);
@@ -349,467 +353,482 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           {/* Navigation - only show when not embedded */}
           {!isChat && !isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-          <div className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
-            {/* Embedded Explainer - only shown when embedded in dashboard */}
-            {!isChat && isEmbedded && (
-              <div className="mb-6 p-4 bg-info/10 border border-info/20 rounded-lg">
-                <p className="text-sm text-foreground">{t("aiHub.publicModelHub.embeddedExplainer")}</p>
-              </div>
-            )}
+          <HubPage className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
+            <HubContent>
+              {/* Embedded Explainer - only shown when embedded in dashboard */}
+              {!isChat && isEmbedded && (
+                <>
+                  <PageHeader>
+                    <PageHeaderTitle>
+                      <LayoutGrid />
+                      {t("aiHub.modelHubTable.title")}
+                    </PageHeaderTitle>
+                    <PageHeaderDescription>{t("aiHub.modelHubTable.userDescription")}</PageHeaderDescription>
+                  </PageHeader>
+                  <div className="p-4 bg-info/10 border border-info/20 rounded-lg">
+                    <p className="text-sm text-foreground">{t("aiHub.publicModelHub.embeddedExplainer")}</p>
+                  </div>
+                </>
+              )}
 
-            {/* About Section - only shown when not embedded */}
-            {!isChat && !isEmbedded && (
-              <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">{t("aiHub.publicModelHub.about.title")}</h2>
-                <p className="text-foreground mb-6 text-base leading-relaxed">
-                  {customDocsDescription ? customDocsDescription : t("aiHub.publicModelHub.about.defaultDescription")}
-                </p>
-                <div className="flex items-center space-x-3 text-sm text-muted-foreground">
-                  <span className="flex items-center">
-                    <span className="w-4 h-4 mr-2">🔧</span>
-                    {t("aiHub.publicModelHub.about.builtWith", { version: litellmVersion })}
-                  </span>
-                </div>
-              </Card>
-            )}
-
-            {/* Useful Links - only shown when not embedded */}
-            {showUsefulLinks && (
-              <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">
-                  {t("aiHub.publicModelHub.usefulLinks.title")}
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                  {Object.entries(usefulLinks || {})
-                    .map(([title, value]) => {
-                      // Handle both old format (string) and new format ({url, index})
-                      const url = typeof value === "string" ? value : value.url;
-                      const index = typeof value === "string" ? 0 : value.index ?? 0;
-                      return { title, url, index };
-                    })
-                    .sort((a, b) => a.index - b.index)
-                    .map(({ title, url }) => (
-                      <button
-                        key={title}
-                        onClick={() => window.open(url, "_blank")}
-                        className="flex min-w-0 items-center space-x-3 text-info transition-colors p-3 rounded-lg hover:bg-info/10 border border-border"
-                      >
-                        <ExternalLinkIcon className="w-4 h-4 shrink-0" />
-                        <p className="text-sm font-medium break-words">{title}</p>
-                      </button>
-                    ))}
-                </div>
-              </Card>
-            )}
-
-            {/* Health and Endpoint Status - only shown when not embedded */}
-            {!isChat && !isEmbedded && (
-              <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
-                <h2 className="text-2xl font-semibold mb-6 text-foreground">
-                  {t("aiHub.publicModelHub.health.title")}
-                </h2>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <p className="text-success font-medium text-sm">
-                    {t("aiHub.publicModelHub.health.serviceStatus", { status: serviceStatus })}
+              {/* About Section - only shown when not embedded */}
+              {!isChat && !isEmbedded && (
+                <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
+                  <h2 className="text-2xl font-semibold mb-6 text-foreground">
+                    {t("aiHub.publicModelHub.about.title")}
+                  </h2>
+                  <p className="text-foreground mb-6 text-base leading-relaxed">
+                    {customDocsDescription ? customDocsDescription : t("aiHub.publicModelHub.about.defaultDescription")}
                   </p>
-                </div>
-              </Card>
-            )}
+                  <div className="flex items-center space-x-3 text-sm text-muted-foreground">
+                    <span className="flex items-center">
+                      <span className="w-4 h-4 mr-2">🔧</span>
+                      {t("aiHub.publicModelHub.about.builtWith", { version: litellmVersion })}
+                    </span>
+                  </div>
+                </Card>
+              )}
 
-            {/* Tabs for Models and Agents */}
-            <Card
-              className={
-                isChat
-                  ? "chat-model-hub-card border-0 bg-transparent p-0 shadow-none"
-                  : "p-8 bg-card border border-border rounded-lg shadow-xs"
-              }
-            >
-              <Tabs value={isChat ? "models" : activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
-                {!isChat && (
-                  <TabsList>
-                    <TabsTrigger value="models">{t("aiHub.publicModelHub.tabs.models")}</TabsTrigger>
-                    {hasAgents && <TabsTrigger value="agents">{t("aiHub.publicModelHub.tabs.agents")}</TabsTrigger>}
-                    {hasMcpServers && <TabsTrigger value="mcp">{t("aiHub.publicModelHub.tabs.mcp")}</TabsTrigger>}
-                    <TabsTrigger value="skills">{t("aiHub.publicModelHub.tabs.skills")}</TabsTrigger>
-                  </TabsList>
-                )}
-
-                {/* Models Tab */}
-                <TabsContent value="models" className="model-hub-models">
-                  {!isChat && (
-                    <div className="model-hub-heading flex justify-between items-center mb-8">
-                      <h2 className="text-2xl font-semibold text-foreground">
-                        {t("aiHub.publicModelHub.models.title")}
-                      </h2>
-                    </div>
-                  )}
-
-                  {isChat && (
-                    <div className="chat-model-section-heading">
-                      <h2>{t("aiHub.publicModelHub.models.chatTitle")}</h2>
-                      <span
-                        className="chat-model-section-count"
-                        aria-label={t("aiHub.publicModelHub.models.chatCount", { rowCount: models.rowCount })}
-                      >
-                        {models.rowCount.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Filters */}
-                  <div
-                    className={
-                      isChat
-                        ? "chat-model-hub-filters chat-model-filter-bar"
-                        : "chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border"
-                    }
-                  >
-                    <div className={isChat ? "chat-model-filter-search" : undefined}>
-                      {!isChat && (
-                        <div className="flex items-center space-x-2 mb-3">
-                          <p className="text-sm font-medium text-foreground">
-                            {t("aiHub.publicModelHub.models.searchLabel")}
-                          </p>
-                          <Tooltip>
-                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top" className={portalClassName}>
-                              {t("aiHub.publicModelHub.models.searchTooltip")}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                      )}
-                      <div className="relative">
-                        <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
-                        {isChat ? (
-                          <Input
-                            type="text"
-                            placeholder={t("aiHub.publicModelHub.models.chatSearchPlaceholder")}
-                            aria-label={t("aiHub.publicModelHub.models.chatSearchAriaLabel")}
-                            value={models.searchValue}
-                            onChange={(e) => models.onSearchChange(e.target.value)}
-                            className="pl-9"
-                          />
-                        ) : (
-                          <input
-                            type="text"
-                            placeholder={t("aiHub.publicModelHub.models.searchPlaceholder")}
-                            aria-label={t("aiHub.publicModelHub.models.searchAriaLabel")}
-                            value={models.searchValue}
-                            onChange={(e) => models.onSearchChange(e.target.value)}
-                            className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
-                          />
-                        )}
-                      </div>
-                    </div>
-                    {isChat && (
-                      <ModelHubProviders
-                        providers={modelFacets.providers}
-                        selectedProviders={models.providerValues}
-                        onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
-                        loading={models.isLoading && modelFacets.providers.length === 0}
-                      />
-                    )}
-                    {!isChat && (
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium mb-3 text-foreground">
-                          {t("aiHub.publicModelHub.models.providerLabel")}
-                        </p>
-                        <Combobox
-                          multiple
-                          items={modelFacets.providers}
-                          value={models.providerValues}
-                          onValueChange={models.onProvidersChange}
+              {/* Useful Links - only shown when not embedded */}
+              {showUsefulLinks && (
+                <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
+                  <h2 className="text-2xl font-semibold mb-6 text-foreground">
+                    {t("aiHub.publicModelHub.usefulLinks.title")}
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {Object.entries(usefulLinks || {})
+                      .map(([title, value]) => {
+                        // Handle both old format (string) and new format ({url, index})
+                        const url = typeof value === "string" ? value : value.url;
+                        const index = typeof value === "string" ? 0 : value.index ?? 0;
+                        return { title, url, index };
+                      })
+                      .sort((a, b) => a.index - b.index)
+                      .map(({ title, url }) => (
+                        <button
+                          key={title}
+                          onClick={() => window.open(url, "_blank")}
+                          className="flex min-w-0 items-center space-x-3 text-info transition-colors p-3 rounded-lg hover:bg-info/10 border border-border"
                         >
-                          <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
-                            <ComboboxValue>
-                              {(values: string[]) =>
-                                values.map((provider) => (
-                                  <ComboboxChip key={provider} aria-label={provider}>
-                                    {provider}
-                                  </ComboboxChip>
-                                ))
-                              }
-                            </ComboboxValue>
-                            <ComboboxChipsInput
-                              placeholder={t("aiHub.publicModelHub.models.providersPlaceholder")}
-                              aria-label={t("aiHub.publicModelHub.models.providersAriaLabel")}
-                              className="min-w-24"
-                            />
-                          </ComboboxChips>
-                          <ComboboxContent anchor={anchor} className={portalClassName}>
-                            <ComboboxEmpty>{t("aiHub.publicModelHub.models.noProvidersFound")}</ComboboxEmpty>
-                            <ComboboxList>
-                              {(provider: string) => {
-                                const { logo } = getProviderLogoAndName(provider);
-                                return (
-                                  <ComboboxItem key={provider} value={provider}>
-                                    <span className="flex min-w-0 items-center space-x-2">
-                                      {logo && (
-                                        <img
-                                          src={logo}
-                                          alt={provider}
-                                          className="w-5 h-5 shrink-0 object-contain"
-                                          onError={(e) => {
-                                            (e.target as HTMLImageElement).style.display = "none";
-                                          }}
-                                        />
-                                      )}
-                                      <span className="capitalize break-words">{provider}</span>
-                                    </span>
-                                  </ComboboxItem>
-                                );
-                              }}
-                            </ComboboxList>
-                          </ComboboxContent>
-                        </Combobox>
+                          <ExternalLinkIcon className="w-4 h-4 shrink-0" />
+                          <p className="text-sm font-medium break-words">{title}</p>
+                        </button>
+                      ))}
+                  </div>
+                </Card>
+              )}
+
+              {/* Health and Endpoint Status - only shown when not embedded */}
+              {!isChat && !isEmbedded && (
+                <Card className="mb-10 p-8 bg-card border border-border rounded-lg shadow-xs">
+                  <h2 className="text-2xl font-semibold mb-6 text-foreground">
+                    {t("aiHub.publicModelHub.health.title")}
+                  </h2>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <p className="text-success font-medium text-sm">
+                      {t("aiHub.publicModelHub.health.serviceStatus", { status: serviceStatus })}
+                    </p>
+                  </div>
+                </Card>
+              )}
+
+              {/* Tabs for Models and Agents */}
+              <Card
+                className={
+                  isChat
+                    ? "chat-model-hub-card border-0 bg-transparent p-0 shadow-none"
+                    : "p-8 bg-card border border-border rounded-lg shadow-xs"
+                }
+              >
+                <Tabs value={isChat ? "models" : activeTab} onValueChange={setActiveTab} className="public-hub-tabs">
+                  {!isChat && (
+                    <TabsList>
+                      <TabsTrigger value="models">{t("aiHub.publicModelHub.tabs.models")}</TabsTrigger>
+                      {hasAgents && <TabsTrigger value="agents">{t("aiHub.publicModelHub.tabs.agents")}</TabsTrigger>}
+                      {hasMcpServers && <TabsTrigger value="mcp">{t("aiHub.publicModelHub.tabs.mcp")}</TabsTrigger>}
+                      <TabsTrigger value="skills">{t("aiHub.publicModelHub.tabs.skills")}</TabsTrigger>
+                    </TabsList>
+                  )}
+
+                  {/* Models Tab */}
+                  <TabsContent value="models" className="model-hub-models">
+                    {!isChat && (
+                      <div className="model-hub-heading flex justify-between items-center mb-8">
+                        <h2 className="text-2xl font-semibold text-foreground">
+                          {t("aiHub.publicModelHub.models.title")}
+                        </h2>
                       </div>
                     )}
-                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
-                      {!isChat && (
-                        <p className="text-sm font-medium mb-3 text-foreground">
-                          {t("aiHub.publicModelHub.models.modeLabel")}
-                        </p>
-                      )}
-                      <MultiSelect
-                        options={modeOptions}
-                        contentClassName={portalClassName}
-                        value={models.modeValues}
-                        onValueChange={models.onModesChange}
-                        placeholder={
-                          isChat
-                            ? t("aiHub.publicModelHub.models.chatModePlaceholder")
-                            : t("aiHub.publicModelHub.models.modePlaceholder")
-                        }
-                        className="w-full"
-                      />
-                    </div>
-                    <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
-                      {!isChat && (
-                        <p className="text-sm font-medium mb-3 text-foreground">
-                          {t("aiHub.publicModelHub.models.featuresLabel")}
-                        </p>
-                      )}
-                      <MultiSelect
-                        options={featureOptions}
-                        contentClassName={portalClassName}
-                        value={models.featureValues}
-                        onValueChange={models.onFeaturesChange}
-                        placeholder={
-                          isChat
-                            ? t("aiHub.publicModelHub.models.chatFeaturesPlaceholder")
-                            : t("aiHub.publicModelHub.models.featuresPlaceholder")
-                        }
-                        className="w-full"
-                      />
-                    </div>
-                  </div>
 
-                  <div className="model-hub-table">
-                    <DataTable
-                      data={models.rows}
-                      columns={modelColumns}
-                      getRowId={(model, index) =>
-                        model.pass_through_path
-                          ? `passthrough:${model.pass_through_path}:${index}`
-                          : model.model_group || String(index)
-                      }
-                      sortingMode="server"
-                      sorting={models.sorting}
-                      onSortingChange={models.onSortingChange}
-                      paginationMode="server"
-                      pagination={models.pagination}
-                      onPaginationChange={models.onPaginationChange}
-                      rowCount={models.rowCount}
-                      isLoading={models.isLoading}
-                      loadingMessage={t("aiHub.publicModelHub.models.loading")}
-                      noDataMessage={
-                        <PublicHubEmptyState
-                          title={
-                            models.hasActiveQuery
-                              ? t("aiHub.publicModelHub.models.noMatchTitle")
-                              : t("aiHub.publicModelHub.models.emptyTitle")
-                          }
-                          body={
-                            models.hasActiveQuery
-                              ? t("aiHub.publicModelHub.models.noMatchBody")
-                              : t("aiHub.publicModelHub.models.emptyBody")
-                          }
-                        />
-                      }
-                      size="compact"
-                    />
-                  </div>
-                </TabsContent>
-
-                {/* Agents Tab */}
-                {!isChat && hasAgents && (
-                  <TabsContent value="agents">
-                    <div className="flex justify-between items-center mb-8">
-                      <h2 className="text-2xl font-semibold text-foreground">
-                        {t("aiHub.publicModelHub.agents.title")}
-                      </h2>
-                    </div>
+                    {isChat && (
+                      <div className="chat-model-section-heading">
+                        <h2>{t("aiHub.publicModelHub.models.chatTitle")}</h2>
+                        <span
+                          className="chat-model-section-count"
+                          aria-label={t("aiHub.publicModelHub.models.chatCount", { rowCount: models.rowCount })}
+                        >
+                          {models.rowCount.toLocaleString()}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Filters */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
-                      <div>
-                        <div className="flex items-center space-x-2 mb-3">
-                          <p className="text-sm font-medium text-foreground">
-                            {t("aiHub.publicModelHub.agents.searchLabel")}
-                          </p>
-                          <Tooltip>
-                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top" className={portalClassName}>
-                              {t("aiHub.publicModelHub.agents.searchTooltip")}
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
+                    <div
+                      className={
+                        isChat
+                          ? "chat-model-hub-filters chat-model-filter-bar"
+                          : "chat-model-hub-filters grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border"
+                      }
+                    >
+                      <div className={isChat ? "chat-model-filter-search" : undefined}>
+                        {!isChat && (
+                          <div className="flex items-center space-x-2 mb-3">
+                            <p className="text-sm font-medium text-foreground">
+                              {t("aiHub.publicModelHub.models.searchLabel")}
+                            </p>
+                            <Tooltip>
+                              <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
+                              <TooltipContent side="top" className={portalClassName}>
+                                {t("aiHub.publicModelHub.models.searchTooltip")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                        )}
                         <div className="relative">
                           <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
-                          <input
-                            type="text"
-                            placeholder={t("aiHub.publicModelHub.agents.searchPlaceholder")}
-                            value={agentSearchTerm}
-                            onChange={(e) => setAgentSearchTerm(e.target.value)}
-                            className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
-                          />
+                          {isChat ? (
+                            <Input
+                              type="text"
+                              placeholder={t("aiHub.publicModelHub.models.chatSearchPlaceholder")}
+                              aria-label={t("aiHub.publicModelHub.models.chatSearchAriaLabel")}
+                              value={models.searchValue}
+                              onChange={(e) => models.onSearchChange(e.target.value)}
+                              className="pl-9"
+                            />
+                          ) : (
+                            <input
+                              type="text"
+                              placeholder={t("aiHub.publicModelHub.models.searchPlaceholder")}
+                              aria-label={t("aiHub.publicModelHub.models.searchAriaLabel")}
+                              value={models.searchValue}
+                              onChange={(e) => models.onSearchChange(e.target.value)}
+                              className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                            />
+                          )}
                         </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium mb-3 text-foreground">
-                          {t("aiHub.publicModelHub.agents.skillsLabel")}
-                        </p>
+                      {isChat && (
+                        <ModelHubProviders
+                          providers={modelFacets.providers}
+                          selectedProviders={models.providerValues}
+                          onSelect={(provider) => models.onProvidersChange(provider ? [provider] : [])}
+                          loading={models.isLoading && modelFacets.providers.length === 0}
+                        />
+                      )}
+                      {!isChat && (
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium mb-3 text-foreground">
+                            {t("aiHub.publicModelHub.models.providerLabel")}
+                          </p>
+                          <Combobox
+                            multiple
+                            items={modelFacets.providers}
+                            value={models.providerValues}
+                            onValueChange={models.onProvidersChange}
+                          >
+                            <ComboboxChips render={<div ref={anchor} />} className="min-h-8 w-full py-1 text-sm">
+                              <ComboboxValue>
+                                {(values: string[]) =>
+                                  values.map((provider) => (
+                                    <ComboboxChip key={provider} aria-label={provider}>
+                                      {provider}
+                                    </ComboboxChip>
+                                  ))
+                                }
+                              </ComboboxValue>
+                              <ComboboxChipsInput
+                                placeholder={t("aiHub.publicModelHub.models.providersPlaceholder")}
+                                aria-label={t("aiHub.publicModelHub.models.providersAriaLabel")}
+                                className="min-w-24"
+                              />
+                            </ComboboxChips>
+                            <ComboboxContent anchor={anchor} className={portalClassName}>
+                              <ComboboxEmpty>{t("aiHub.publicModelHub.models.noProvidersFound")}</ComboboxEmpty>
+                              <ComboboxList>
+                                {(provider: string) => {
+                                  const { logo } = getProviderLogoAndName(provider);
+                                  return (
+                                    <ComboboxItem key={provider} value={provider}>
+                                      <span className="flex min-w-0 items-center space-x-2">
+                                        {logo && (
+                                          <img
+                                            src={logo}
+                                            alt={provider}
+                                            className="w-5 h-5 shrink-0 object-contain"
+                                            onError={(e) => {
+                                              (e.target as HTMLImageElement).style.display = "none";
+                                            }}
+                                          />
+                                        )}
+                                        <span className="capitalize break-words">{provider}</span>
+                                      </span>
+                                    </ComboboxItem>
+                                  );
+                                }}
+                              </ComboboxList>
+                            </ComboboxContent>
+                          </Combobox>
+                        </div>
+                      )}
+                      <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                        {!isChat && (
+                          <p className="text-sm font-medium mb-3 text-foreground">
+                            {t("aiHub.publicModelHub.models.modeLabel")}
+                          </p>
+                        )}
                         <MultiSelect
-                          options={agentSkillOptions}
-                          value={selectedAgentSkills}
-                          onValueChange={setSelectedAgentSkills}
-                          placeholder={t("aiHub.publicModelHub.agents.skillsPlaceholder")}
+                          options={modeOptions}
+                          contentClassName={portalClassName}
+                          value={models.modeValues}
+                          onValueChange={models.onModesChange}
+                          placeholder={
+                            isChat
+                              ? t("aiHub.publicModelHub.models.chatModePlaceholder")
+                              : t("aiHub.publicModelHub.models.modePlaceholder")
+                          }
+                          className="w-full"
+                        />
+                      </div>
+                      <div className={isChat ? "chat-model-filter-select min-w-0" : "min-w-0"}>
+                        {!isChat && (
+                          <p className="text-sm font-medium mb-3 text-foreground">
+                            {t("aiHub.publicModelHub.models.featuresLabel")}
+                          </p>
+                        )}
+                        <MultiSelect
+                          options={featureOptions}
+                          contentClassName={portalClassName}
+                          value={models.featureValues}
+                          onValueChange={models.onFeaturesChange}
+                          placeholder={
+                            isChat
+                              ? t("aiHub.publicModelHub.models.chatFeaturesPlaceholder")
+                              : t("aiHub.publicModelHub.models.featuresPlaceholder")
+                          }
                           className="w-full"
                         />
                       </div>
                     </div>
 
-                    <DataTable
-                      data={filteredAgentData}
-                      paginationMode="client"
-                      columns={agentColumns}
-                      getRowId={(agent, index) => agent.name || String(index)}
-                      sortingMode="client"
-                      sorting={agentSorting}
-                      onSortingChange={setAgentSorting}
-                      isLoading={agentLoading}
-                      loadingMessage={t("aiHub.publicModelHub.agents.loading")}
-                      noDataMessage={
-                        <PublicHubEmptyState
-                          title={t("aiHub.publicModelHub.agents.noMatchTitle")}
-                          body={t("aiHub.publicModelHub.agents.noMatchBody")}
-                        />
-                      }
-                      size="compact"
-                    />
-
-                    <div className="mt-8 text-center">
-                      <p className="text-sm text-muted-foreground">
-                        {t("aiHub.publicModelHub.agents.showing", {
-                          shown: filteredAgentData.length,
-                          total: agentHubData?.length || 0,
-                        })}
-                      </p>
+                    <div className="model-hub-table">
+                      <DataTable
+                        data={models.rows}
+                        columns={modelColumns}
+                        getRowId={(model, index) =>
+                          model.pass_through_path
+                            ? `passthrough:${model.pass_through_path}:${index}`
+                            : model.model_group || String(index)
+                        }
+                        sortingMode="server"
+                        sorting={models.sorting}
+                        onSortingChange={models.onSortingChange}
+                        paginationMode="server"
+                        pagination={models.pagination}
+                        onPaginationChange={models.onPaginationChange}
+                        rowCount={models.rowCount}
+                        isLoading={models.isLoading}
+                        loadingMessage={t("aiHub.publicModelHub.models.loading")}
+                        noDataMessage={
+                          <PublicHubEmptyState
+                            title={
+                              models.hasActiveQuery
+                                ? t("aiHub.publicModelHub.models.noMatchTitle")
+                                : t("aiHub.publicModelHub.models.emptyTitle")
+                            }
+                            body={
+                              models.hasActiveQuery
+                                ? t("aiHub.publicModelHub.models.noMatchBody")
+                                : t("aiHub.publicModelHub.models.emptyBody")
+                            }
+                          />
+                        }
+                        size="compact"
+                      />
                     </div>
                   </TabsContent>
-                )}
 
-                {/* MCP Servers Tab */}
-                {!isChat && hasMcpServers && (
-                  <TabsContent value="mcp">
-                    <div className="flex justify-between items-center mb-8">
-                      <h2 className="text-2xl font-semibold text-foreground">{t("aiHub.publicModelHub.mcp.title")}</h2>
-                    </div>
+                  {/* Agents Tab */}
+                  {!isChat && hasAgents && (
+                    <TabsContent value="agents">
+                      <div className="flex justify-between items-center mb-8">
+                        <h2 className="text-2xl font-semibold text-foreground">
+                          {t("aiHub.publicModelHub.agents.title")}
+                        </h2>
+                      </div>
 
-                    {/* Filters */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
-                      <div>
-                        <div className="flex items-center space-x-2 mb-3">
-                          <p className="text-sm font-medium text-foreground">
-                            {t("aiHub.publicModelHub.mcp.searchLabel")}
-                          </p>
-                          <Tooltip>
-                            <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
-                            <TooltipContent side="top" className={portalClassName}>
-                              {t("aiHub.publicModelHub.mcp.searchTooltip")}
-                            </TooltipContent>
-                          </Tooltip>
+                      {/* Filters */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
+                        <div>
+                          <div className="flex items-center space-x-2 mb-3">
+                            <p className="text-sm font-medium text-foreground">
+                              {t("aiHub.publicModelHub.agents.searchLabel")}
+                            </p>
+                            <Tooltip>
+                              <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
+                              <TooltipContent side="top" className={portalClassName}>
+                                {t("aiHub.publicModelHub.agents.searchTooltip")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <div className="relative">
+                            <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
+                            <input
+                              type="text"
+                              placeholder={t("aiHub.publicModelHub.agents.searchPlaceholder")}
+                              value={agentSearchTerm}
+                              onChange={(e) => setAgentSearchTerm(e.target.value)}
+                              className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                            />
+                          </div>
                         </div>
-                        <div className="relative">
-                          <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
-                          <input
-                            type="text"
-                            placeholder={t("aiHub.publicModelHub.mcp.searchPlaceholder")}
-                            value={mcpSearchTerm}
-                            onChange={(e) => setMcpSearchTerm(e.target.value)}
-                            className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium mb-3 text-foreground">
+                            {t("aiHub.publicModelHub.agents.skillsLabel")}
+                          </p>
+                          <MultiSelect
+                            options={agentSkillOptions}
+                            value={selectedAgentSkills}
+                            onValueChange={setSelectedAgentSkills}
+                            placeholder={t("aiHub.publicModelHub.agents.skillsPlaceholder")}
+                            className="w-full"
                           />
                         </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium mb-3 text-foreground">
-                          {t("aiHub.publicModelHub.mcp.transportLabel")}
+
+                      <DataTable
+                        data={filteredAgentData}
+                        paginationMode="client"
+                        columns={agentColumns}
+                        getRowId={(agent, index) => agent.name || String(index)}
+                        sortingMode="client"
+                        sorting={agentSorting}
+                        onSortingChange={setAgentSorting}
+                        isLoading={agentLoading}
+                        loadingMessage={t("aiHub.publicModelHub.agents.loading")}
+                        noDataMessage={
+                          <PublicHubEmptyState
+                            title={t("aiHub.publicModelHub.agents.noMatchTitle")}
+                            body={t("aiHub.publicModelHub.agents.noMatchBody")}
+                          />
+                        }
+                        size="compact"
+                      />
+
+                      <div className="mt-8 text-center">
+                        <p className="text-sm text-muted-foreground">
+                          {t("aiHub.publicModelHub.agents.showing", {
+                            shown: filteredAgentData.length,
+                            total: agentHubData?.length || 0,
+                          })}
                         </p>
-                        <MultiSelect
-                          options={mcpTransportOptions}
-                          value={selectedMcpTransports}
-                          onValueChange={setSelectedMcpTransports}
-                          placeholder={t("aiHub.publicModelHub.mcp.transportPlaceholder")}
-                          className="w-full"
-                        />
                       </div>
-                    </div>
+                    </TabsContent>
+                  )}
 
-                    <DataTable
-                      data={filteredMcpData}
-                      paginationMode="client"
-                      columns={mcpColumns}
-                      getRowId={(server, index) => server.server_id || String(index)}
-                      sortingMode="client"
-                      sorting={mcpSorting}
-                      onSortingChange={setMcpSorting}
-                      isLoading={mcpLoading}
-                      loadingMessage={t("aiHub.publicModelHub.mcp.loading")}
-                      noDataMessage={
-                        <PublicHubEmptyState
-                          title={t("aiHub.publicModelHub.mcp.noMatchTitle")}
-                          body={t("aiHub.publicModelHub.mcp.noMatchBody")}
-                        />
-                      }
-                      size="compact"
-                    />
+                  {/* MCP Servers Tab */}
+                  {!isChat && hasMcpServers && (
+                    <TabsContent value="mcp">
+                      <div className="flex justify-between items-center mb-8">
+                        <h2 className="text-2xl font-semibold text-foreground">
+                          {t("aiHub.publicModelHub.mcp.title")}
+                        </h2>
+                      </div>
 
-                    <div className="mt-8 text-center">
-                      <p className="text-sm text-muted-foreground">
-                        {t("aiHub.publicModelHub.mcp.showing", {
-                          shown: filteredMcpData.length,
-                          total: mcpHubData?.length || 0,
-                        })}
-                      </p>
-                    </div>
-                  </TabsContent>
-                )}
+                      {/* Filters */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8 p-6 bg-muted rounded-lg border border-border">
+                        <div>
+                          <div className="flex items-center space-x-2 mb-3">
+                            <p className="text-sm font-medium text-foreground">
+                              {t("aiHub.publicModelHub.mcp.searchLabel")}
+                            </p>
+                            <Tooltip>
+                              <TooltipTrigger render={<Info className="w-4 h-4 text-muted-foreground cursor-help" />} />
+                              <TooltipContent side="top" className={portalClassName}>
+                                {t("aiHub.publicModelHub.mcp.searchTooltip")}
+                              </TooltipContent>
+                            </Tooltip>
+                          </div>
+                          <div className="relative">
+                            <SearchIcon className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 transform -translate-y-1/2" />
+                            <input
+                              type="text"
+                              placeholder={t("aiHub.publicModelHub.mcp.searchPlaceholder")}
+                              value={mcpSearchTerm}
+                              onChange={(e) => setMcpSearchTerm(e.target.value)}
+                              className="border border-border rounded-lg pl-10 pr-4 py-2 w-full text-sm focus:outline-hidden focus:ring-2 focus:ring-ring focus:border-transparent bg-card"
+                            />
+                          </div>
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium mb-3 text-foreground">
+                            {t("aiHub.publicModelHub.mcp.transportLabel")}
+                          </p>
+                          <MultiSelect
+                            options={mcpTransportOptions}
+                            value={selectedMcpTransports}
+                            onValueChange={setSelectedMcpTransports}
+                            placeholder={t("aiHub.publicModelHub.mcp.transportPlaceholder")}
+                            className="w-full"
+                          />
+                        </div>
+                      </div>
 
-                {/* Skill Hub Tab */}
-                {!isChat && (
-                  <TabsContent value="skills">
-                    <SkillHubDashboard
-                      key={skillsToken}
-                      skills={skillHubData}
-                      isLoading={skillsQuery.isLoading}
-                      accessToken={skillsToken}
-                      publicPage={!skillsToken}
-                    />
-                  </TabsContent>
-                )}
-              </Tabs>
-            </Card>
-          </div>
+                      <DataTable
+                        data={filteredMcpData}
+                        paginationMode="client"
+                        columns={mcpColumns}
+                        getRowId={(server, index) => server.server_id || String(index)}
+                        sortingMode="client"
+                        sorting={mcpSorting}
+                        onSortingChange={setMcpSorting}
+                        isLoading={mcpLoading}
+                        loadingMessage={t("aiHub.publicModelHub.mcp.loading")}
+                        noDataMessage={
+                          <PublicHubEmptyState
+                            title={t("aiHub.publicModelHub.mcp.noMatchTitle")}
+                            body={t("aiHub.publicModelHub.mcp.noMatchBody")}
+                          />
+                        }
+                        size="compact"
+                      />
+
+                      <div className="mt-8 text-center">
+                        <p className="text-sm text-muted-foreground">
+                          {t("aiHub.publicModelHub.mcp.showing", {
+                            shown: filteredMcpData.length,
+                            total: mcpHubData?.length || 0,
+                          })}
+                        </p>
+                      </div>
+                    </TabsContent>
+                  )}
+
+                  {/* Skill Hub Tab */}
+                  {!isChat && (
+                    <TabsContent value="skills">
+                      <SkillHubDashboard
+                        key={skillsToken}
+                        skills={skillHubData}
+                        isLoading={skillsQuery.isLoading}
+                        accessToken={skillsToken}
+                        publicPage={!skillsToken}
+                      />
+                    </TabsContent>
+                  )}
+                </Tabs>
+              </Card>
+            </HubContent>
+          </HubPage>
 
           {/* Model Details Modal */}
           <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>

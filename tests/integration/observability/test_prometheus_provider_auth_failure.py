@@ -624,6 +624,7 @@ def test_a_provider_401_on_a_stored_credential_the_caller_names_leaves_a_healthy
     rig.upstream.drain()
     assert send(rig.gateway, cell).status_code == 200
     assert_reached_with_the_deployment_credential(rig, cell)
+    until(rig.gateway, TOTALS, model_id=identity(cell))
     response: Final = rig.gateway.request(
         "POST",
         "/v1/chat/completions",

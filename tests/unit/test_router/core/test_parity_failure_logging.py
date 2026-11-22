@@ -33,7 +33,7 @@ from tests.unit.test_router.core.fallbacks_helpers import (
     headers,
     show_router_debug,
 )
-from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error
+from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment, rate_limit, server_error, timeout
 
 GROUP_OF_TWO: Final = [deployment("a", "a1"), deployment("a", "a2")]
 UTC_2030: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
@@ -408,6 +408,113 @@ async def test_a_fallback_hop_works_on_its_own_copy_of_the_metadata(make_core: M
     assert hop["attempted_fallbacks"] == 1
     assert hop["original_model_group"] == "a"
     assert hop["model_group"] == "b"
+
+
+def _attempt(record: object) -> tuple[object, ...] | None:
+    """``(group, deployment, error class, retry count)`` of a breadcrumb the router left."""
+    if not isinstance(record, Mapping):
+        return None
+    return (record["model_group"], record["deployment_id"], record["exception_type"], record["attempted_retries"])
+
+
+def _logging_obj_whose_metadata_each_call_replaces(
+    host: ScriptedHost, failures: Mapping[str, BaseException]
+) -> Logging:
+    """A logging object the way the SDK leaves it: every provider call swaps in that call's own
+    metadata before it fails with ``failures``' error for its deployment, else a timeout."""
+    logging_obj: Final = _RecordingLogging("acompletion")
+    logging_obj.litellm_params["metadata"] = {}
+
+    def fail(**request: object) -> object:  # kwargs-ok: the host passes the request kwargs
+        sent: Final = request.get("metadata")
+        logging_obj.litellm_params["metadata"] = dict(sent) if isinstance(sent, Mapping) else {}
+        model_info: Final = request.get("model_info")
+        return failures.get(str(model_info["id"]) if isinstance(model_info, Mapping) else "", timeout())
+
+    host.answer("*", fail)
+    return logging_obj
+
+
+@pytest.mark.parametrize(
+    ("model_list", "fallbacks", "failures", "error", "client_saw", "failed_hops"),
+    [
+        pytest.param(
+            [deployment("a", "a1"), deployment("b", "b1")],
+            [{"a": ["b"]}],
+            {},
+            litellm.Timeout,
+            ("a", "a1", "Timeout", 1),
+            [("b", "b1", "Timeout", 1)],
+            id="one_fallback_fails_and_the_client_gets_the_requested_groups_error",
+        ),
+        pytest.param(
+            [deployment("a", "a1"), deployment("b", "b1"), deployment("c", "c1")],
+            [{"a": ["b", "c"]}],
+            {"c1": server_error()},
+            litellm.Timeout,
+            ("a", "a1", "Timeout", 1),
+            [("c", "c1", "InternalServerError", 1), ("b", "b1", "Timeout", 1)],
+            id="a_second_fallback_keeps_the_first_ones_last_attempt",
+        ),
+        pytest.param(
+            [deployment("a", "a1", order=1), deployment("a", "a2", order=2), deployment("b", "b1")],
+            [{"a": ["b"]}],
+            {"a1": server_error(), "a2": server_error()},
+            litellm.Timeout,
+            ("b", "b1", "Timeout", 1),
+            [("b", "b1", "Timeout", 1)],
+            id="ordered_deployments_hand_the_client_the_fallbacks_error",
+        ),
+        pytest.param(
+            [deployment("a", "a1")],
+            [],
+            {},
+            litellm.Timeout,
+            ("a", "a1", "Timeout", 1),
+            [],
+            id="no_fallback",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_failed_request_names_the_attempt_the_client_saw_and_each_failed_fallbacks_last_attempt(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    model_list: list[dict[str, object]],  # mutable-ok: a model_list
+    fallbacks: list[dict[str, list[str]]],  # mutable-ok: a fallbacks setting
+    failures: Mapping[str, BaseException],
+    error: type[Exception],
+    client_saw: tuple[object, ...],
+    failed_hops: list[tuple[object, ...]],  # mutable-ok: compared with a list
+) -> None:
+    logging_obj: Final = _logging_obj_whose_metadata_each_call_replaces(host, failures)
+    core: Final = make_core(model_list=model_list, num_retries=1, fallbacks=fallbacks)
+
+    _ = await _failed(core, "a", expected_error=error, litellm_logging_obj=logging_obj, metadata={})
+
+    logged: Final = logging_obj.litellm_params["metadata"]
+    assert _attempt(logged["client_seen_attempt"]) == client_saw
+    assert [_attempt(record) for record in logged["failed_fallback_attempts"]] == failed_hops
+
+
+@pytest.mark.asyncio
+async def test_a_request_cancelled_inside_a_fallback_call_names_no_attempt_the_client_saw(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    """A total_timeout or a client disconnect cancels the call that is running: the client gets no
+    attempt's error, so the fallback call that was running stays the one the failure row describes."""
+    logging_obj: Final = _logging_obj_whose_metadata_each_call_replaces(host, {"b1": asyncio.CancelledError()})
+    core: Final = make_core(
+        model_list=[deployment("a", "a1"), deployment("b", "b1")], num_retries=1, fallbacks=[{"a": ["b"]}]
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        _ = await complete(core, "a", litellm_logging_obj=logging_obj, metadata={})
+
+    logged: Final = logging_obj.litellm_params["metadata"]
+    assert logged["model_group"] == "b"
+    assert "client_seen_attempt" not in logged
+    assert "failed_fallback_attempts" not in logged
 
 
 @pytest.mark.asyncio

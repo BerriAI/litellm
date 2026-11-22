@@ -5,10 +5,14 @@ use axum::{
 };
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
+use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
 use serde_json::{Map, Value, json};
 
-use crate::headers::Routing;
+use crate::{
+    headers::Routing,
+    hooks::{HookError, Refusal},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +32,10 @@ pub enum Error {
     NoDeployments(#[from] NoDeployments),
     #[error(transparent)]
     Routing(litellm_router_core::Error),
+    #[error("{}", .0.message)]
+    Refused(Refusal),
+    #[error(transparent)]
+    Callback(litellm_error::Source),
     #[error("request body exceeds the size limit")]
     BodyTooLarge,
     #[error("unexpected HTTP host operation")]
@@ -100,19 +108,19 @@ impl IntoResponse for Error {
     }
 }
 
-/// The error a request ended on, with the deployment the router says raised it, which the proxy
-/// names in `x-litellm-model-id`.
+/// The error a request ended on, with what the router did for the call it ended: the deployment
+/// the router says raised it, or everything it did for a stream the provider failed before any
+/// content and no other attempt answered for.
 #[derive(Debug)]
 pub struct Ended {
     pub error: Box<Error>,
-    pub deployment_id: Option<String>,
+    pub routing: Option<Routing>,
 }
 
 impl Ended {
-    /// What the router did for the call, which the routing headers layer reads off the response.
+    /// What the routing headers layer reads off the response.
     pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        let deployment_id = self.deployment_id.as_deref()?;
-        Some(Extension(Routing::failed_on(deployment_id)))
+        self.routing.clone().map(Extension)
     }
 }
 
@@ -120,14 +128,38 @@ impl<E: Into<Error>> From<E> for Ended {
     fn from(error: E) -> Self {
         Self {
             error: Box::new(error.into()),
-            deployment_id: None,
+            routing: None,
         }
     }
 }
 
-impl IntoResponse for Ended {
-    fn into_response(self) -> Response {
-        (self.routing(), *self.error).into_response()
+/// The envelope a route answers an error in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ErrorFormat {
+    Anthropic,
+    OpenAi,
+}
+
+impl Ended {
+    pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
+        match format {
+            ErrorFormat::OpenAi => (self.routing(), *self.error).into_response(),
+            ErrorFormat::Anthropic => (
+                self.error.status(),
+                self.routing(),
+                Json(self.error.body(request_id)),
+            )
+                .into_response(),
+        }
+    }
+}
+
+impl From<HookError> for Error {
+    fn from(ended: HookError) -> Self {
+        match ended {
+            HookError::Refused(refusal) => Self::Refused(refusal),
+            HookError::Failed(failure) => Self::Callback(failure),
+        }
     }
 }
 
@@ -147,10 +179,11 @@ impl Error {
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
-            Self::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Internal | Self::Callback(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::Ocr(error) => ocr_status(error),
             Self::Route(error) => route_status(error),
             Self::Routing(error) => routing_status(error),
+            Self::Refused(refusal) => refusal.status,
         }
     }
 
@@ -162,7 +195,7 @@ impl Error {
         let status = self.status();
         json!({"error": {
             "message": self.message(),
-            "type": error_type(status),
+            "type": MessagesErrorType::for_status(status.as_u16()),
             "param": null,
             "code": status.as_u16(),
         }})
@@ -196,12 +229,14 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Auth(error) => error.to_string(),
+            Self::Refused(refusal) => refusal.message.clone(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
             | Self::Ocr(_)
             | Self::NoDeployments(_)
             | Self::Routing(_)
+            | Self::Callback(_)
             | Self::BodyTooLarge
             | Self::Internal => litellm_error::Report::new(self).to_string(),
         }
@@ -248,25 +283,12 @@ fn ocr_status(error: &OcrError) -> StatusCode {
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
 }
 
-fn error_type(status: StatusCode) -> &'static str {
-    match status.as_u16() {
-        400 => "invalid_request_error",
-        401 => "authentication_error",
-        403 => "permission_error",
-        404 => "not_found_error",
-        413 => "request_too_large",
-        429 => "rate_limit_error",
-        529 => "overloaded_error",
-        _ => "api_error",
-    }
-}
-
 fn envelope(status: StatusCode, message: &str) -> Map<String, Value> {
     Map::from_iter([
         ("type".to_owned(), Value::from("error")),
         (
             "error".to_owned(),
-            json!({"type": error_type(status), "message": message}),
+            json!({"type": MessagesErrorType::for_status(status.as_u16()), "message": message}),
         ),
     ])
 }

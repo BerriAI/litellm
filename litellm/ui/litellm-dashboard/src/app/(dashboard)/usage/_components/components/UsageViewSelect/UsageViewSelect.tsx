@@ -24,7 +24,7 @@ export interface UsageViewSelectProps {
   userRole: string | null;
   canViewTagUsage?: boolean;
   isOrgAdmin?: boolean;
-  title?: string;
+  title?: string | null;
   description?: string;
   "data-id"?: string;
 }
@@ -165,10 +165,12 @@ export const UsageViewSelect: React.FC<UsageViewSelectProps> = ({
   const selectedOption = filteredOptions.find((option) => option.value === value);
   return (
     <div className="flex items-center gap-3" data-id={dataId}>
-      <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-        <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
-        {title}
-      </h1>
+      {title && (
+        <h1 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+          <BarChart3 aria-hidden="true" className="size-4" strokeWidth={2} />
+          {title}
+        </h1>
+      )}
       <Select
         value={value}
         onValueChange={(next: UsageOption | null) => {

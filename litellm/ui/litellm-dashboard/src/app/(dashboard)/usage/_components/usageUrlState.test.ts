@@ -376,11 +376,20 @@ describe("client team scope", () => {
 describe("configured Usage default", () => {
   afterEach(() => vi.useRealTimers());
 
-  it.each([undefined, null, "unknown", "last_7_days"])("preserves the rolling seven-day fallback for %s", (setting) => {
+  it.each([undefined, null, "unknown"])("defaults to the current month through today for %s", (setting) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 9, 24, 12, 34, 56, 789));
+    expect(defaultUsageDateRange(setting)).toEqual({
+      value: { from: new Date(2026, 9, 1), to: new Date(2026, 9, 24, 23, 59, 59, 999) },
+      preset: "MTD",
+    });
+  });
+
+  it("preserves the rolling seven-day range when explicitly configured", () => {
     vi.useFakeTimers();
     const now = new Date(2026, 9, 24, 12, 34, 56, 789);
     vi.setSystemTime(now);
-    expect(defaultUsageDateRange(setting)).toEqual({
+    expect(defaultUsageDateRange("last_7_days")).toEqual({
       value: { from: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000), to: now },
       preset: null,
     });

@@ -24,6 +24,7 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLMKeyType,
@@ -110,6 +111,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "phoenix_project_name",
         "opik",
         "model_limit_max_borrow_multiple",
+        REQUIRED_CUSTOMER_HEADERS_SETTING,
     )
 )
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})

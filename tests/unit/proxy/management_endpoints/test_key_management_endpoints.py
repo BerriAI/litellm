@@ -4437,6 +4437,39 @@ def test_check_team_key_model_specific_limits_no_limits():
     )
 
 
+@pytest.mark.parametrize(
+    ("limit_field", "limit_name"), [("model_rpm_limit", "RPM"), ("model_tpm_limit", "TPM")], ids=["rpm", "tpm"]
+)
+def test_check_org_key_model_specific_limits_reads_limits_already_moved_into_metadata(
+    limit_field: str, limit_name: str
+) -> None:
+    """Key generation moves the per-model limits into metadata and deletes the request
+    attributes before the organization check runs, so the check must still see them."""
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token-1", organization_id="test-org", metadata={limit_field: {"gpt-4": 80}}
+    )
+    org_table = LiteLLM_OrganizationTable(
+        organization_id="test-org",
+        budget_id="test-budget",
+        models=[],
+        created_by="test",
+        updated_by="test",
+        metadata={limit_field: {"gpt-4": 100}},
+    )
+    data = GenerateKeyRequest(metadata={limit_field: {"gpt-4": 30}})
+    delattr(data, "model_rpm_limit")
+    delattr(data, "model_tpm_limit")
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_org_key_model_specific_limits(keys=[existing_key], org_table=org_table, data=data)
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == (
+        f"Allocated {limit_name} limit=80 + Key {limit_name} limit=30 is greater than "
+        f"organization {limit_name} limit=100"
+    )
+
+
 def test_check_team_key_model_specific_limits_rpm_overallocation():
     """
     Test check_team_key_model_specific_limits when model-specific RPM would cause overallocation.
@@ -12521,20 +12554,12 @@ async def test_update_key_team_member_with_permission_can_update_non_budget(
     team_id = "team-with-update-grant"
     member_user_id = "team-member-user"
 
-    mock_existing_key = MagicMock()
-    mock_existing_key.token = test_hashed_token
-    mock_existing_key.user_id = None  # team-scoped key (no owning user)
-    mock_existing_key.team_id = team_id
-    mock_existing_key.project_id = None
-    mock_existing_key.max_budget = 10.0
-    mock_existing_key.key_alias = "original"
-    mock_existing_key.models = []
-    mock_existing_key.model_dump.return_value = {
-        "token": test_hashed_token,
-        "user_id": None,
-        "team_id": team_id,
-        "max_budget": 10.0,
-    }
+    mock_existing_key: Final = LiteLLM_VerificationToken(
+        token=test_hashed_token,
+        team_id=team_id,
+        max_budget=10.0,
+        key_alias="original",
+    )
 
     team_table = LiteLLM_TeamTableCachedObj(
         team_id=team_id,
@@ -20002,16 +20027,30 @@ async def test_generate_key_batch_enqueued_token_limit_rejected_for_non_admin():
     assert "Only proxy admins can set" in str(exc.value.detail)
 
 
+@pytest.fixture(params=[
+    (_BATCH_LIMIT, 100000, {_BATCH_LIMIT: 10**12}),
+    *[("required_customer_headers", ["X-Tenant-ID"], value) for value in (
+        None, {}, {"note": "updated"}, {"required_customer_headers": []},
+        {"required_customer_headers": None}, {"required_customer_headers": ["X-User-ID"]},
+    )],
+])
+def protected_metadata_change(request: pytest.FixtureRequest) -> tuple[str, object, dict[str, object] | None]:
+    return request.param
+
+
 @pytest.mark.asyncio
-async def test_update_key_batch_enqueued_token_limit_raised_rejected_for_non_admin(monkeypatch):
+async def test_update_key_protected_metadata_changes_rejected_for_non_admin(
+    monkeypatch: pytest.MonkeyPatch, protected_metadata_change: tuple[str, object, dict[str, object] | None]
+):
     """/key/update is reachable by the key's own holder, so the gate has to
     fire inside the update path itself rather than only at generation."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )
 
+    field, stored, metadata = protected_metadata_change
     token = "d1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
-    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {field: stored}))
 
     mock_request = MagicMock()
     mock_request.query_params = {}
@@ -20019,7 +20058,7 @@ async def test_update_key_batch_enqueued_token_limit_raised_rejected_for_non_adm
     with pytest.raises(ProxyException) as exc:
         await update_key_fn(
             request=mock_request,
-            data=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            data=UpdateKeyRequest(key=token, metadata=metadata),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-internal",
@@ -20032,8 +20071,12 @@ async def test_update_key_batch_enqueued_token_limit_raised_rejected_for_non_adm
     assert "Only proxy admins can set" in str(exc.value.message)
 
 
+@pytest.mark.parametrize("field,stored", [(_BATCH_LIMIT, 100000), ("required_customer_headers", ["X-Tenant-ID"])])
+@pytest.mark.parametrize("resend", [False, True])
 @pytest.mark.asyncio
-async def test_update_key_batch_enqueued_token_limit_unchanged_allows_non_admin_edit(monkeypatch):
+async def test_update_key_unchanged_protected_metadata_allows_non_admin_edit(
+    monkeypatch: pytest.MonkeyPatch, field: str, stored: object, resend: bool
+):
     """The edit form resends every field it renders, so gating on presence
     would 403 a key owner renaming a key that carries an admin-set limit."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -20041,14 +20084,14 @@ async def test_update_key_batch_enqueued_token_limit_unchanged_allows_non_admin_
     )
 
     token = "e1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
-    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {_BATCH_LIMIT: 100000}))
+    _wire_update_key_fn(monkeypatch, _estimate_key_row(token, {field: stored}))
 
     mock_request = MagicMock()
     mock_request.query_params = {}
 
     result = await update_key_fn(
         request=mock_request,
-        data=UpdateKeyRequest(key=token, key_alias="my-alias", metadata={_BATCH_LIMIT: 100000}),
+        data=UpdateKeyRequest(key=token, key_alias="my-alias", **({"metadata": {field: stored}} if resend else {})),
         user_api_key_dict=UserAPIKeyAuth(
             user_role=LitellmUserRoles.INTERNAL_USER,
             api_key="sk-internal",
@@ -20061,7 +20104,9 @@ async def test_update_key_batch_enqueued_token_limit_unchanged_allows_non_admin_
 
 
 @pytest.mark.asyncio
-async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin():
+async def test_regenerate_key_protected_metadata_changes_rejected_for_non_admin(
+    protected_metadata_change: tuple[str, object, dict[str, object] | None]
+):
     """/key/regenerate runs the request body through prepare_key_update_data
     exactly as an update does, so it is a third write path into the field."""
     from litellm.proxy._types import RegenerateKeyRequest
@@ -20069,11 +20114,12 @@ async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin(
         _execute_virtual_key_regeneration,
     )
 
+    field, stored, metadata = protected_metadata_change
     token = "f1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
     key_in_db = LiteLLM_VerificationToken(
         token=token,
         user_id="internal_user",
-        metadata={_BATCH_LIMIT: 100000},
+        metadata={field: stored},
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -20082,7 +20128,7 @@ async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin(
             key_in_db=key_in_db,
             hashed_api_key=token,
             key="sk-original",
-            data=RegenerateKeyRequest(key="sk-original", metadata={_BATCH_LIMIT: 10**12}),
+            data=RegenerateKeyRequest(key="sk-original", metadata=metadata),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-internal",
@@ -20098,19 +20144,22 @@ async def test_regenerate_key_batch_enqueued_token_limit_rejected_for_non_admin(
 
 
 @pytest.mark.asyncio
-async def test_bulk_key_update_batch_enqueued_token_limit_rejected_for_non_admin():
+async def test_bulk_key_update_protected_metadata_changes_rejected_for_non_admin(
+    protected_metadata_change: tuple[str, object, dict[str, object] | None]
+):
     """Bulk team-key updates run through _process_single_key_update, not
     /key/update's validator, so the gate must also live on that path."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _process_single_key_update,
     )
 
+    field, stored, metadata = protected_metadata_change
     token = "a2b2c3d4e5f6789012345678901234567890123456789012345678901234abcd"
-    existing = _estimate_key_row(token, {_BATCH_LIMIT: 100000})
+    existing = _estimate_key_row(token, {field: stored})
 
     with pytest.raises(HTTPException) as exc:
         await _process_single_key_update(
-            update_key_request=UpdateKeyRequest(key=token, metadata={_BATCH_LIMIT: 10**12}),
+            update_key_request=UpdateKeyRequest(key=token, metadata=metadata),
             user_api_key_dict=UserAPIKeyAuth(
                 user_role=LitellmUserRoles.INTERNAL_USER,
                 api_key="sk-internal",
@@ -25032,24 +25081,34 @@ def test_key_expiry_metadata_rejects_invalid_thresholds(value: object) -> None:
     assert "key_expiry_alert_days" in str(exc.value.detail)
 
 
-def test_key_generate_accepts_expiry_alert_opt_in(spend_permission_client: TestClient) -> None:
-    response: Final = spend_permission_client.post("/key/generate", json={"metadata": {"key_expiry_alert_days": 7}})
+@pytest.mark.parametrize("field,value", [
+    ("key_expiry_alert_days", 7),
+    *[("required_customer_headers", value) for value in ([], ["X-Tenant-ID"], ["X-Tenant-ID", "X-User-ID"])],
+])
+def test_key_generate_persists_valid_metadata(spend_permission_client: TestClient, field: str, value: object) -> None:
+    response: Final = spend_permission_client.post("/key/generate", json={"metadata": {field: value}})
     assert response.status_code == 200, response.text
-    assert response.json()["metadata"]["key_expiry_alert_days"] == 7
+    assert response.json()["metadata"][field] == value
 
 
+@pytest.mark.parametrize("field,value", [
+    ("key_expiry_alert_days", [7, 1]),
+    *[("required_customer_headers", value) for value in ("X-Tenant-ID", ["Bad Header"], [123])],
+])
 @pytest.mark.parametrize("route", ["/key/generate", "/key/update"])
-def test_key_writes_reject_invalid_expiry_alert_days(spend_permission_client: TestClient, route: str) -> None:
+def test_key_writes_reject_invalid_metadata(
+    spend_permission_client: TestClient, route: str, field: str, value: object
+) -> None:
     from litellm.proxy import proxy_server
 
     proxy_server.prisma_client.db.litellm_verificationtoken.find_unique.return_value = LiteLLM_VerificationToken(
         token=hash_token("sk-test"), metadata={}
     )
     response: Final = spend_permission_client.post(
-        route, json={"key": "sk-test", "metadata": {"key_expiry_alert_days": [7, 1]}}
+        route, json={"key": "sk-test", "metadata": {field: value}}
     )
     assert response.status_code == 400, response.text
-    assert "key_expiry_alert_days" in response.text
+    assert field in response.text
 
 
 @pytest.mark.asyncio
@@ -25233,3 +25292,41 @@ async def test_key_duration_edits_use_the_writers_current_schedule(
     assert persisted["budget_duration"] == "45m"
     assert persisted["budget_reset_at"] == datetime.fromisoformat(expected)
     assert persisted["max_budget"] == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_type", (UpdateKeyRequest, RegenerateKeyRequest))
+@pytest.mark.parametrize("new_team", (None, "internal-team"))
+@pytest.mark.parametrize(
+    "role,required,refused",
+    (
+        (LitellmUserRoles.INTERNAL_USER, ["X-Tenant-ID"], True),
+        (LitellmUserRoles.TEAM, ["X-Tenant-ID"], True),
+        (LitellmUserRoles.PROXY_ADMIN, ["X-Tenant-ID"], False),
+        (LitellmUserRoles.INTERNAL_USER, [], False),
+    ),
+)
+async def test_key_team_changes_cannot_remove_inherited_header_policy(
+    monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores,
+    request_type: type[UpdateKeyRequest] | type[RegenerateKeyRequest],
+    new_team: str | None, role: LitellmUserRoles, required: list[str], refused: bool,
+) -> None:
+    rust_auth_stores.team.rows["external-team"] = {
+        "team_id": "external-team", "metadata": {"required_customer_headers": required},
+    }
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    request: Final = request_type(key="hashed-key", team_id=new_team)
+    call: Final = prepare_key_update_data(
+        data=request,
+        existing_key_row=LiteLLM_VerificationToken(token="hashed-key", team_id="external-team"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=role),
+        prisma_client=MagicMock(),
+    )
+    if refused:
+        with pytest.raises(HTTPException) as rejected:
+            await call
+        assert rejected.value.status_code == 403
+        assert "required_customer_headers" in str(rejected.value.detail)
+        return
+    result: Final = await call
+    assert result["team_id"] == new_team

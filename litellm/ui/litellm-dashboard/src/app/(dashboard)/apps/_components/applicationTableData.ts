@@ -1,3 +1,8 @@
+import { createSerializer } from "nuqs";
+import { uiHref } from "@/utils/uiHref";
+import { customerAppParsers } from "../../customers/_components/CustomerHierarchyNavigation";
+import type { App, AppResource } from "./appForms";
+import type { AppGroup } from "./appGroupApi";
 import type { SortingState } from "@tanstack/react-table";
 import {
   customerBudgetLimit,
@@ -35,11 +40,16 @@ const STATUS_ORDER = {
   "customerPortal.analytics.budgetUsageUnavailable": null,
 } as const;
 
+export type ApplicationSpendPeriod = "monthly" | "selected";
+
 function applicationSortValues(
   entity: CustomerUsageEntity,
   total: CustomerUsageTotal | null | undefined,
-  overallSpend: number | null,
-  customLabel: string | null,
+  {
+    overallSpend,
+    customLabel,
+    spendPeriod,
+  }: { overallSpend: number | null; customLabel: string | null; spendPeriod: ApplicationSpendPeriod },
 ) {
   const budgets = customerBudgetUsage(entity);
   const monthly = budgets.find((budget) => customerBudgetPeriod(budget.budget_duration) === "monthly");
@@ -48,7 +58,7 @@ function applicationSortValues(
   return {
     application: entity.label,
     group: customLabel === null ? null : entity.budgetGroup ?? custom,
-    spend: monthly ? monthly.spend : total?.spend ?? null,
+    spend: spendPeriod === "monthly" && monthly ? monthly.spend : total?.spend ?? null,
     budget: customerBudgetLimit(entity),
     share: total && overallSpend !== null ? share : null,
     tokens: total?.tokens ?? null,
@@ -56,35 +66,78 @@ function applicationSortValues(
   };
 }
 
+const usageHref = createSerializer(customerAppParsers);
+
+function budgetUsageRow(
+  source: {
+    id: string;
+    label: string;
+    record: Pick<App, "spend" | "budget" | "budget_id" | "budget_usage"> | null;
+    usageId: string | null;
+  },
+  groups: BudgetGroups["default_budgets"] | undefined,
+  usage: ReadonlyMap<string | null, CustomerUsageTotal> | undefined,
+  { customLabel, spendPeriod = "monthly" }: { customLabel: string; spendPeriod?: ApplicationSpendPeriod },
+) {
+  const { id, label, record, usageId } = source;
+  const entity = {
+    ...appUsageEntity(id, label, {
+      spend: record?.spend ?? 0,
+      effective_budget: record?.budget,
+      budget_usage: record?.budget_usage,
+    }),
+    budgetGroup: groups ? groups.find((group) => group.budget_id === record?.budget_id)?.name : "—",
+  };
+  const total = usageId ? usage?.get(usageId) : null;
+  return {
+    entity,
+    total,
+    values: applicationSortValues(entity, total, {
+      overallSpend: usage?.get(null)?.spend ?? null,
+      customLabel: groups ? customLabel : null,
+      spendPeriod,
+    }),
+  };
+}
+
+export interface ApplicationUsageTableRow extends ReturnType<typeof budgetUsageRow> {
+  href?: string;
+  description?: string | null;
+  resourceType?: AppResource["resource_type"];
+}
+
 export function applicationTableRows(
   rows: readonly ApplicationRow[],
   groups: BudgetGroups["default_budgets"] | undefined,
   usage: ReadonlyMap<string | null, CustomerUsageTotal> | undefined,
-  customLabel: string,
+  options: { customLabel: string; spendPeriod?: ApplicationSpendPeriod },
 ) {
-  const names = new Map(groups?.map((group) => [group.budget_id, group.name]));
-  const overallSpend = usage?.get(null)?.spend ?? null;
   return rows.map(({ resource, app }) => {
-    const entity = {
-      ...appUsageEntity(resource.resource_id, resource.alias, {
-        spend: app?.spend ?? 0,
-        effective_budget: app?.budget,
-        budget_usage: app?.budget_usage,
-      }),
-      budgetGroup: groups ? names.get(app?.budget_id ?? "") : "—",
-    };
-    const total = app ? usage?.get(app.app_id) : null;
+    const source = { id: resource.resource_id, label: resource.alias, record: app, usageId: app?.app_id ?? null };
     return {
       resource,
       app,
-      entity,
-      total,
-      values: applicationSortValues(entity, total, overallSpend, groups ? customLabel : null),
+      ...budgetUsageRow(source, groups, usage, options),
+      resourceType: resource.resource_type,
+      href: app ? usageHref(uiHref("apps/usage"), { app_id: app.app_id }) : undefined,
     };
   });
 }
 
-type ApplicationTableRow = ReturnType<typeof applicationTableRows>[number];
+export function appGroupTableRows(
+  rows: readonly AppGroup[],
+  groups: BudgetGroups["default_budgets"] | undefined,
+  usage: ReadonlyMap<string | null, CustomerUsageTotal> | undefined,
+  customLabel: string,
+): ApplicationUsageTableRow[] {
+  return rows.map((group) => {
+    const source = { id: group.app_group_id, label: group.name, record: group, usageId: group.app_group_id };
+    return {
+      ...budgetUsageRow(source, groups, usage, { customLabel }),
+      description: group.description,
+    };
+  });
+}
 
 const compareValues = (left: string | number | null, right: string | number | null, descending: boolean) => {
   if (left === null && right === null) return 0;
@@ -95,18 +148,22 @@ const compareValues = (left: string | number | null, right: string | number | nu
   return comparison * (descending ? -1 : 1);
 };
 
-export function sortApplications(rows: readonly ApplicationTableRow[], search: string, sorting: SortingState) {
+export function sortApplications<T extends ApplicationUsageTableRow>(
+  rows: readonly T[],
+  search: string,
+  sorting: SortingState,
+) {
   const query = search.trim().toLocaleLowerCase();
   const active = sorting[0] ?? APPLICATION_TABLE.defaultSort;
   const column = APPLICATION_COLUMNS.find(({ id }) => id === active.id) ?? APPLICATION_COLUMNS[0];
   return rows
-    .filter(({ resource }) =>
-      [resource.alias, resource.resource_id].some((value) => value.toLocaleLowerCase().includes(query)),
+    .filter(({ entity, description }) =>
+      [entity.label, entity.id, description ?? ""].some((value) => value.toLocaleLowerCase().includes(query)),
     )
     .sort(
       (left, right) =>
         compareValues(left.values[column.id], right.values[column.id], active.desc) ||
-        left.resource.alias.localeCompare(right.resource.alias) ||
-        left.resource.resource_id.localeCompare(right.resource.resource_id),
+        left.entity.label.localeCompare(right.entity.label) ||
+        left.entity.id.localeCompare(right.entity.id),
     );
 }

@@ -6,6 +6,8 @@ Tests the GET and PATCH endpoints for managing cost discount configuration.
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +19,7 @@ import litellm
 from litellm._internal_context import pinned_billing_time
 from litellm.proxy._types import CostEstimateRequest
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
+    get_cost_margin_config,
     router,
     update_cost_discount_config,
     update_cost_margin_config,
@@ -24,6 +27,32 @@ from litellm.proxy.management_endpoints.cost_tracking_settings import (
 from litellm.proxy.proxy_server import app
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config_owned", (True, False))
+async def test_get_margin_reports_effective_config_ownership(config_owned: bool, tmp_path: Path) -> None:
+    from litellm.proxy import proxy_server
+
+    config: Final = proxy_server.ProxyConfig()
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(
+        "litellm_settings:\n  cost_margin_config: {openai: 0.1}\n" if config_owned else "litellm_settings: {}\n"
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_config", config),
+        patch("litellm.proxy.proxy_server.store_model_in_db", False),
+        patch("litellm.proxy.proxy_server.user_config_file_path", str(config_file)),
+    ):
+        response: Final = await get_cost_margin_config()
+
+    assert response == {
+        "values": {"openai": 0.1} if config_owned else {},
+        "source": "config" if config_owned else "unset",
+        "editable": not config_owned,
+    }
 
 
 class TestCostTrackingSettings:

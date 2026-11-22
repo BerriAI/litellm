@@ -1555,6 +1555,23 @@ describe("CreateKey", () => {
   });
 
   describe("writers outside the submit path", () => {
+    it("shows an SSO owner's alias without changing the submitted user ID", async () => {
+      const userId = "abc301ea-49c0-47c9-aee2-53b86a550582";
+      vi.mocked(userFilterUICall).mockResolvedValue([
+        { user_id: userId, user_email: null, user_alias: "Acme Developer" },
+      ]);
+
+      await openModal();
+      await userEvent.click(screen.getByRole("radio", { name: "Another User" }));
+      await nameTheKey();
+
+      await userEvent.type(await userSearchInput(), userId.slice(0, 8));
+      await userEvent.click(await screen.findByRole("option", { name: `Acme Developer (${userId})` }));
+      await submit();
+
+      expect((await createdPayload()).user_id).toBe(userId);
+    });
+
     it("lets the selected user win over the search text typed into the same field", async () => {
       vi.mocked(userFilterUICall).mockResolvedValue([
         { user_id: "u-77", user_email: "alice@example.com" },
