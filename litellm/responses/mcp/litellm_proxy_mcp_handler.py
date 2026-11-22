@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
+from litellm.proxy.mcp_server.result_conversion import url_elicitation_as_error_result
 from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
@@ -991,6 +992,13 @@ class LiteLLM_Proxy_MCP_Handler:
                     if user_identifier:
                         logging_request_data["user"] = user_identifier
 
+                logging_metadata["guardrails"] = TypeAdapter(list[object]).validate_python(
+                    TypeAdapter(Mapping[str, object])
+                    .validate_python((guardrail_context or {}).get("metadata") or {})
+                    .get("guardrails")
+                    or ()
+                )
+
                 litellm_logging_obj: LiteLLMLoggingObj | None = None
                 try:
                     litellm_logging_obj, _ = function_setup(
@@ -1041,33 +1049,38 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
-                result = await global_mcp_server_manager.call_tool(
-                    server_name=server_name,
-                    name=sanitized_tool_name,
-                    arguments=parsed_arguments,
-                    user_api_key_auth=typed_user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    litellm_logging_obj=litellm_logging_obj,
-                    guardrail_context=guardrail_context,
-                    listed_tool=(
-                        next((tool for tool in served_tools if tool.name == tool_name), None)
-                        if served_tools is not None
-                        else ...
-                    ),
+                result = await url_elicitation_as_error_result(
+                    global_mcp_server_manager.call_tool(
+                        server_name=server_name,
+                        name=sanitized_tool_name,
+                        arguments=parsed_arguments,
+                        user_api_key_auth=typed_user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        litellm_logging_obj=litellm_logging_obj,
+                        guardrail_context=guardrail_context,
+                        listed_tool=(
+                            next((tool for tool in served_tools if tool.name == tool_name), None)
+                            if served_tools is not None
+                            else ...
+                        ),
+                    )
                 )
 
                 if proxy_logging_obj:
                     result = await proxy_logging_obj.post_mcp_call_hook(
                         response=result,
-                        request_data=(
-                            litellm_logging_obj.model_call_details
-                            if litellm_logging_obj
-                            else {"mcp_tool_name": tool_name}
-                        ),
+                        request_data={
+                            **(
+                                litellm_logging_obj.model_call_details
+                                if litellm_logging_obj
+                                else {"mcp_tool_name": tool_name}
+                            ),
+                            "metadata": logging_metadata,
+                        },
                         user_api_key_dict=typed_user_api_key_auth,
                     )
 

@@ -12,10 +12,10 @@ import jwt
 import pytest
 import respx
 from cryptography.hazmat.primitives.asymmetric import rsa
-from starlette.types import Message
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
+from starlette.types import Message
 
 import litellm
 from litellm.caching.dual_cache import DualCache
@@ -29,8 +29,8 @@ from litellm.proxy._types import (
     LiteLLM_JWTAuth,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
-    LiteLLM_TeamTableCachedObj,
     LiteLLM_TeamMembership,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     RoleBasedPermissions,
@@ -39,18 +39,16 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    project_cache_key,
-    tag_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.pass_through_endpoints.cursor_cli_passthrough_endpoints import cursor_cli_passthrough
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.utils import hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _RUN: Final = "agent.v1.AgentService/RunSSE"
 _APPEND: Final = "aiserver.v1.BidiService/BidiAppend"
@@ -157,9 +155,9 @@ def test_normalized_gateway_bearers_never_reach_cursor(
     credential: str,
     template: str,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+        key=AuthObject.virtual_key(hash_token(credential)), value=UserAPIKeyAuth(token=hash_token(credential))
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
@@ -175,9 +173,9 @@ def test_normalized_gateway_bearers_never_reach_cursor(
 def test_normalized_copied_gateway_secret_is_removed_without_changing_cursor_credentials(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, credential: str
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(credential), value=UserAPIKeyAuth(token=hash_token(credential))
+        key=AuthObject.virtual_key(hash_token(credential)), value=UserAPIKeyAuth(token=hash_token(credential))
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     bearer: Final = f"bEaReR  {_TOKEN}  "
@@ -200,26 +198,26 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
     source: str,
     tpm_limit: int | None,
 ) -> None:
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     key: Final = MASTER_KEY if source == "master-header" else "sk-cursor-tagged-key"
     tag: Final = "cursor-budget-tag"
     proxy_server.user_api_key_cache.set_cache(
-        key=tag_cache_key(tag),
+        key=AuthObject.tag(tag),
         value=LiteLLM_TagTable(
             tag_name=tag,
             litellm_budget_table=LiteLLM_BudgetTable(budget_id="tag-budget", tpm_limit=tpm_limit, rpm_limit=100),
         ),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_id:tag-team",
+        key=AuthObject.team("tag-team"),
         value=LiteLLM_TeamTableCachedObj(team_id="tag-team", metadata={"tags": [tag]}),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key=project_cache_key("tag-project"),
+        key=AuthObject.project("tag-project"),
         value=LiteLLM_ProjectTableCachedObj(project_id="tag-project", metadata={"tags": [tag]}),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth(
             token=hash_token(key),
             metadata={"tags": [tag]} if source == "key" else {},
@@ -243,13 +241,15 @@ def test_effective_tag_token_caps_cannot_be_bypassed_by_opaque_requests(
 
 @pytest.mark.parametrize("lookup", ["absent", "error", "no-database"])
 def test_opaque_tag_lookup_distinguishes_absent_tags_from_unverifiable_limits(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, lookup: str
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    rust_auth_stores: RustAuthStores,
+    lookup: str,
 ) -> None:
-    database: Final = MagicMock()
-    database.db.litellm_tagtable.find_many = AsyncMock(
-        return_value=[], side_effect=ConnectionError("tag database unavailable") if lookup == "error" else None
-    )
-    monkeypatch.setattr(proxy_server, "prisma_client", None if lookup == "no-database" else database)
+    if lookup == "error":
+        rust_auth_stores.tag.seed("unregistered-tag", ConnectionError("tag database unavailable"))
+    monkeypatch.setattr(proxy_server, "prisma_client", None if lookup == "no-database" else prisma_with_empty_config())
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
         f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-tags": "unregistered-tag"}, content=b"\xff"
@@ -286,7 +286,7 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
     monkeypatch.delenv("JWT_ISSUER", raising=False)
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.setattr(proxy_server, "premium_user", True)
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(
         proxy_server,
         "general_settings",
@@ -300,7 +300,7 @@ def test_signed_jwt_with_model_permissions_cannot_enter_an_opaque_relay(
         else {"enable_jwt_auth": True},
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_id:cursor-jwt-team", value=LiteLLM_TeamTableCachedObj(team_id="cursor-jwt-team", models=[])
+        key=AuthObject.team("cursor-jwt-team"), value=LiteLLM_TeamTableCachedObj(team_id="cursor-jwt-team", models=[])
     )
     token: Final = jwt.encode(
         {
@@ -350,9 +350,10 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, controls: dict[str, object]
 ) -> None:
     key: Final = "sk-cursor-restricted-test"
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), **controls})
+        key=AuthObject.virtual_key(hash_token(key)),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), **controls}),
     )
     response: Final = client.post(
         f"/cursor-cli/{_APPEND}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
@@ -362,7 +363,8 @@ def test_unenforceable_or_disallowed_key_policies_fail_closed(
 
 
 @pytest.mark.parametrize(
-    "budget_field", ["max_budget", "team_max_budget", "user_max_budget", "organization_max_budget", "end_user_max_budget"]
+    "budget_field",
+    ["max_budget", "team_max_budget", "user_max_budget", "organization_max_budget", "end_user_max_budget"],
 )
 @pytest.mark.parametrize("limit,spend", [(0, 0), (10, 0), (10, 11)])
 def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
@@ -374,9 +376,9 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
     spend: int,
 ) -> None:
     key: Final = "sk-cursor-spend-capped"
-    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), budget_field: limit, "spend": spend}),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
@@ -388,29 +390,30 @@ def test_spend_capped_keys_cannot_use_an_unmetered_cursor_relay(
 
 
 @pytest.fixture
-def member_gateway(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> tuple[str, MagicMock]:
-    database: Final = MagicMock()
-    database.db.litellm_budgettable.find_unique = AsyncMock(return_value=None)
+def member_gateway(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
+) -> tuple[str, MagicMock]:
+    database: Final = prisma_with_empty_config()
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     cache: Final = UserApiKeyCache()
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     key: Final = "sk-cursor-default-member"
     cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth(token=hash_token(key), user_id="default-member", team_id="default-team"),
     )
     cache.set_cache(
-        key="default-member",
+        key=AuthObject.user("default-member"),
         value=LiteLLM_UserTable(user_id="default-member", user_role=LitellmUserRoles.INTERNAL_USER),
     )
     cache.set_cache(
-        key="team_id:default-team",
+        key=AuthObject.team("default-team"),
         value=LiteLLM_TeamTableCachedObj(
             team_id="default-team", metadata={"team_member_budget_id": "default-member-budget"}
         ),
     )
     cache.set_cache(
-        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        key=AuthObject.team_membership_reservation(user_id="default-member", team_id="default-team"),
         value=LiteLLM_TeamMembership(user_id="default-member", team_id="default-team"),
     )
     return key, database
@@ -429,7 +432,7 @@ def test_effective_default_member_limits_control_opaque_admission(
 ) -> None:
     key, _ = member_gateway
     proxy_server.user_api_key_cache.set_cache(
-        key=team_membership_reservation_cache_key(user_id="default-member", team_id="default-team"),
+        key=AuthObject.team_membership_reservation(user_id="default-member", team_id="default-team"),
         value=LiteLLM_TeamMembership(
             user_id="default-member",
             team_id="default-team",
@@ -438,7 +441,7 @@ def test_effective_default_member_limits_control_opaque_admission(
         ),
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_member_default_budget:default-member-budget",
+        key=AuthObject.team_member_default_budget("default-member-budget"),
         value=LiteLLM_BudgetTable(
             budget_id="default-member-budget",
             max_budget=default_limit,
@@ -456,12 +459,15 @@ def test_effective_default_member_limits_control_opaque_admission(
 
 @pytest.mark.parametrize("lookup", ["missing", "error"])
 def test_unverifiable_default_member_budgets_block_opaque_admission(
-    client: TestClient, member_gateway: tuple[str, MagicMock], respx_mock: respx.MockRouter, lookup: str
+    client: TestClient,
+    member_gateway: tuple[str, MagicMock],
+    rust_auth_stores: RustAuthStores,
+    respx_mock: respx.MockRouter,
+    lookup: str,
 ) -> None:
-    key, database = member_gateway
-    database.db.litellm_budgettable.find_unique = AsyncMock(
-        return_value=None, side_effect=ConnectionError("budget lookup unavailable") if lookup == "error" else None
-    )
+    key, _ = member_gateway
+    if lookup == "error":
+        rust_auth_stores.budget.rows["default-member-budget"] = ConnectionError("budget lookup unavailable")
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
     response: Final = client.post(
         f"/cursor-cli/{_RUN}", headers={**_HEADERS, "x-litellm-api-key": key}, content=b"\xff"
@@ -476,10 +482,10 @@ def test_default_member_limits_do_not_apply_without_a_member_identity(
 ) -> None:
     key, _ = member_gateway
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), team_id="default-team")
+        key=AuthObject.virtual_key(hash_token(key)), value=UserAPIKeyAuth(token=hash_token(key), team_id="default-team")
     )
     proxy_server.user_api_key_cache.set_cache(
-        key="team_member_default_budget:default-member-budget",
+        key=AuthObject.team_member_default_budget("default-member-budget"),
         value=LiteLLM_BudgetTable(budget_id="default-member-budget", max_budget=10),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_RUN}").respond(content=b"\x08\x01")
@@ -508,11 +514,12 @@ def test_agent_bound_keys_cannot_bypass_opaque_model_scopes(
     registry: Final = agent_registry.AgentRegistry()
     registry.register_agent(agent)
     monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
-    database: Final = MagicMock()
+    database: Final = prisma_with_empty_config()
     database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key), value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "agent_id": agent_id})
+        key=AuthObject.virtual_key(hash_token(key)),
+        value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "agent_id": agent_id}),
     )
     upstream: Final = respx_mock.post(f"{_BASE}/{_APPEND}").respond(content=b"\x08\x01")
     response: Final = client.post(
@@ -697,9 +704,9 @@ async def test_parallel_request_limit_counts_overlapping_agent_rpcs(
     monkeypatch.setattr(litellm, "callbacks", [limiter])
     monkeypatch.setattr(litellm, "_async_success_callback", [limiter])
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter])
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": limit}),
     )
     stream: Final = StagedStream()
@@ -840,9 +847,9 @@ async def test_cancelled_session_releases_parallel_request_slot(
     monkeypatch.setattr(litellm, "callbacks", [limiter, recorder])
     monkeypatch.setattr(litellm, "_async_success_callback", [limiter, recorder])
     monkeypatch.setattr(litellm, "_async_failure_callback", [limiter, recorder])
-    monkeypatch.setattr(proxy_server, "prisma_client", "test-database")
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     proxy_server.user_api_key_cache.set_cache(
-        key=hash_token(key),
+        key=AuthObject.virtual_key(hash_token(key)),
         value=UserAPIKeyAuth.model_validate({"token": hash_token(key), "max_parallel_requests": 1}),
     )
     stream: Final = StagedStream()

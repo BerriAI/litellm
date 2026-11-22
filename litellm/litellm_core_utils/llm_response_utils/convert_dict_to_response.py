@@ -798,6 +798,8 @@ def convert_to_model_response_object(
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
+    *,
+    preserve_stored_finish_reason: bool = False,
 ):
     additional_headers = get_response_headers(_response_headers)
 
@@ -939,7 +941,9 @@ def convert_to_model_response_object(
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
-                if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
+                    if finish_reason == "stop" and message.tool_calls:
+                        finish_reason = "tool_calls"
+                elif not preserve_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##

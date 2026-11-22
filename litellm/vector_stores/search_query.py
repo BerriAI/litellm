@@ -13,7 +13,7 @@ from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mappi
 from litellm.types.vector_stores import RETRIEVAL_QUERY_PARAMS, VectorStoreSearchQueryImage
 
 _QUERY_IMAGE: Final = TypeAdapter(VectorStoreSearchQueryImage)
-_Query: Final = TypeVar("_Query", bound=str | Sequence[str])
+_Query = TypeVar("_Query", bound=str | Sequence[str])
 _CALLER_QUERY_PARAMS: Final = ("query_image", *RETRIEVAL_QUERY_PARAMS)
 _BASE64_LINE_BREAKS: Final = str.maketrans("", "", "\r\n")
 
@@ -103,7 +103,11 @@ def sent_query_image(query_image: object, extra_body: object) -> object:
 
 
 def _without_retrieval_query(params: Mapping[str, object]) -> Mapping[str, object]:
-    return {key: value for key, value in params.items() if key not in RETRIEVAL_QUERY_PARAMS}
+    return {
+        key: value
+        for key, value in params.items()
+        if key not in (*RETRIEVAL_QUERY_PARAMS, "fallbacks", "_vector_store_fallback_plan")
+    }
 
 
 def store_search_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:

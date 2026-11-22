@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE \"LiteLLM_AgentIdentity\" AS i\nSET last_authenticated_at = NOW() AT TIME ZONE 'UTC'\nFROM \"LiteLLM_AgentsTable\" AS a\nWHERE i.agent_id = $1\n  AND i.revision = $2\n  AND i.active\n  AND a.agent_id = i.agent_id\n  AND a.enabled\n  AND a.identity_managed\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6bc4571e99762be6beea9ba00c07dba4a61d81625569ff40c026d0e38dc097e3"
+}

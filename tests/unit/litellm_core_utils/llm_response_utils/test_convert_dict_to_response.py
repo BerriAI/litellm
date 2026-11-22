@@ -16,6 +16,32 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 FIXED_TIME: Final[datetime] = datetime(2025, 1, 1, 12, 0, 0)
 
 
+@pytest.mark.parametrize("cached_fields", [{}, {"cached_tokens": None}, {"cached_tokens": 0}, {"cached_tokens": 6}])
+@pytest.mark.parametrize("convert", [False, True])
+def test_image_response_null_cached_tokens_match_absent(cached_fields: dict[str, int | None], convert: bool) -> None:
+    payload: Final = {
+        "created": 1700000000,
+        "data": [{"b64_json": "AA=="}],
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 4, "image_tokens": 6, **cached_fields},
+        },
+    }
+    response: Final = (
+        LiteLLMResponseObjectHandler.convert_to_image_response(payload) if convert else ImageResponse(**payload)
+    )
+    assert response.usage is not None
+    assert response.usage.input_tokens_details.model_dump() == {
+        "text_tokens": 4,
+        "image_tokens": 6,
+        "cached_tokens": cached_fields.get("cached_tokens") or 0,
+        "cached_tokens_details": None,
+    }
+    assert response.data[0].b64_json == "AA=="
+
+
 def test_reused_ollama_ids_have_distinct_response_and_spend_ids() -> None:
     from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 
@@ -320,6 +346,83 @@ _SCALAR_DEFAULTS = {
     "api_key": getattr(litellm, "api_key", None),
     "cohere_key": getattr(litellm, "cohere_key", None),
 }
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("reuse_response", [False, True])
+def test_convert_to_image_response_preserves_typed_svg_usage(reuse_response: bool) -> None:
+    svg_usage: Final = {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 5, "total_tokens": 30,
+    }
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+        model_response_object=ImageResponse() if reuse_response else None,
+    )
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == svg_usage
+    assert result.model_dump()["svg_usage"] == svg_usage
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("svg_usage", [
+    {"input_tokens": 10, "output_tokens": 20},
+    {"model": "gpt-6.2-sol", "input_tokens": "invalid", "output_tokens": 20},
+])
+def test_malformed_svg_usage_keeps_image_response_intact(svg_usage: dict[str, object]) -> None:
+    result: Final = convert_to_model_response_object(
+        response_object={"created": 1234567890, "data": [{"b64_json": "image"}], "svg_usage": svg_usage},
+        response_type="image_generation",
+    )
+    assert result.created == 1234567890
+    assert result.data[0].b64_json == "image"
+    assert result.svg_usage is None
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+@pytest.mark.parametrize("token_field", ["input_tokens", "output_tokens", "reasoning_tokens", "total_tokens"])
+def test_negative_svg_tokens_keep_image_response_and_rendering_cost(
+    token_field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("DEBUG", logger="LiteLLM"):
+        result: Final = convert_to_model_response_object(
+            response_object={
+                "created": 1234567890,
+                "data": [{"b64_json": "image"}],
+                "usage": {
+                    "input_tokens": 10, "output_tokens": 20, "total_tokens": 30,
+                    "input_tokens_details": {"text_tokens": 10, "image_tokens": 0},
+                },
+                "svg_usage": {
+                    "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+                    "reasoning_tokens": 5, "total_tokens": 30, token_field: -1,
+                },
+            },
+            response_type="image_generation",
+        )
+    image_only: Final = result.model_copy(update={"svg_usage": None})
+    rendering_cost: Final = litellm.completion_cost(
+        model="gpt-image-2.6-flare", completion_response=image_only, call_type="image_generation"
+    )
+    assert result.created == 1234567890
+    assert result.data[0].b64_json == "image"
+    assert result.svg_usage is None
+    assert "Ignoring invalid SVG authoring usage in image response" in caplog.text
+    assert rendering_cost > 0
+    assert litellm.completion_cost(
+        model="gpt-image-2.6-flare", completion_response=result, call_type="image_generation"
+    ) == pytest.approx(rendering_cost)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+def test_svg_usage_defaults_optional_token_counts() -> None:
+    result: Final = ImageResponse(svg_usage={"model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20})
+    assert result.svg_usage is not None
+    assert result.svg_usage.model_dump() == {
+        "model": "gpt-6.2-sol", "input_tokens": 10, "output_tokens": 20,
+        "reasoning_tokens": 0, "total_tokens": 0,
+    }
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 def test_convert_to_image_response_basic():

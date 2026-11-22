@@ -22,6 +22,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.proxy_server import app
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -873,14 +874,14 @@ def test_delete_access_group_patches_cached_team_and_key(
     # inconsistently across Python/unittest versions; sync returns are awaited as immediate results.
     def user_cache_get_side_effect(*args, **kwargs):
         cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        if cache_key == "team_id:team-1":
+        if cache_key == AuthObject.team("team-1"):
             if team_cache_group_ids is None:
                 return None
             return LiteLLM_TeamTableCachedObj(
                 team_id="team-1",
                 access_group_ids=list(team_cache_group_ids),
             )
-        if cache_key == "hashed-key-1":
+        if cache_key == AuthObject.virtual_key("hashed-key-1"):
             if key_cache_group_ids is None:
                 return None
             return UserAPIKeyAuth(
@@ -904,7 +905,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key") == AuthObject.team("team-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.team("team-1"))
         ]
         assert len(team_set_calls) >= 1, "Expected team cache to be patched"
         # The cached team object should have the updated access_group_ids
@@ -916,7 +918,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key") == AuthObject.team("team-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.team("team-1"))
         ]
         assert len(team_set_calls) == 0, "Should not patch team cache when not cached"
 
@@ -924,7 +927,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-1"))
         ]
         assert len(key_set_calls) >= 1, "Expected key cache to be patched"
         written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]
@@ -934,7 +938,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-1"))
         ]
         assert len(key_set_calls) == 0, "Should not patch key cache when not cached"
 
@@ -967,9 +972,9 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
 
     def user_cache_get_dict_when_key_matches(*args, **kwargs):
         cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        if cache_key == "team_id:team-1":
+        if cache_key == AuthObject.team("team-1"):
             return None
-        if cache_key == "hashed-key-dict":
+        if cache_key == AuthObject.virtual_key("hashed-key-dict"):
             return UserAPIKeyAuth.model_validate(cached_key_payload)
         return None
 
@@ -982,7 +987,8 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     key_set_calls = [
         c
         for c in mock_cache.async_set_cache.call_args_list
-        if c.kwargs.get("key", "") == "hashed-key-dict" or (len(c.args) >= 1 and c.args[0] == "hashed-key-dict")
+        if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-dict")
+        or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-dict"))
     ]
     assert len(key_set_calls) >= 1, "Expected key cache to be patched"
     written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]

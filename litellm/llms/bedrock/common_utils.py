@@ -36,7 +36,13 @@ from pydantic import ConfigDict, TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, lax_bool, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    int_of,
+    lax_bool,
+    require_attributes,
+    require_get,
+)
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
     schema_property_count,
@@ -73,6 +79,12 @@ _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
+BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES: Final = (
+    "/openai/v1/chat/completions",
+    "/v1/chat/completions",
+    "/chat/completions",
+)
+BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES: Final = ("/openai/v1/responses", "/v1/responses", "/responses")
 BedrockRoute = Literal[
     "converse",
     "invoke",
@@ -85,6 +97,11 @@ BedrockRoute = Literal[
     "mantle",
     "chat_completions",
 ]
+
+
+def strip_bedrock_runtime_route_suffix(url: str, suffixes: Sequence[str]) -> str:
+    trimmed: Final = url.rstrip("/")
+    return next((trimmed[: -len(suffix)] for suffix in suffixes if trimmed.endswith(suffix)), trimmed)
 
 
 def served_service_tier(response_headers: Mapping[str, str] | None) -> str | None:
@@ -1884,13 +1901,18 @@ def _bedrock_model_id_without_region(model: str) -> str:
     return regional_id if separator and region in get_all_bedrock_regions() else routed_id
 
 
-def bedrock_model_is_unknown(model: str) -> bool:
+def bedrock_model_is_in_catalog(model: str) -> bool:
     model_id: Final = _bedrock_model_id_without_region(model)
-    if "/" in model_id:
-        return False
     base: Final = get_bedrock_base_model(model_id)
     regional_ids: Final = (f"{region}.{base}" for region in get_bedrock_cross_region_inference_regions())
-    if any(_cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)):
+    return any(
+        _cost_map_row_names_a_provider(key) for key in (*_bedrock_model_info_candidates(model_id), *regional_ids)
+    )
+
+
+def bedrock_model_is_unknown(model: str) -> bool:
+    model_id: Final = _bedrock_model_id_without_region(model)
+    if "/" in model_id or bedrock_model_is_in_catalog(model_id):
         return False
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 
@@ -2433,14 +2455,10 @@ def get_bedrock_response_stream_shape():
 _BEDROCK_STREAM_OUTPUT_SHAPES: Final = ("ConverseStreamOutput", "ResponseStream")
 
 
-class _ModeledErrorMetadata(TypedDict, total=False):
-    httpStatusCode: ReadOnly[int]
-
-
 def _modeled_error_status(member: Shape) -> int | None:
-    error: Final[_ModeledErrorMetadata] = (member.metadata or {}).get("error", {})
+    error: Final = require_get(_JSON_VALUE.validate_python((member.metadata or {}).get("error", {})))
     status: Final = error.get("httpStatusCode")
-    return None if status is None else int(status)
+    return None if status is None else int_of(status)
 
 
 def _structure_members(shape: Shape | None) -> Mapping[str, Shape]:
@@ -2780,7 +2798,9 @@ class CommonBatchFilesUtils:
 
         aws_region_name: Final = self._base_aws.get_aws_region_name(optional_params=optional_params, model="")
         credentials: Final = self._base_aws.resolve_credentials(
-            AwsAuthParams.model_validate(optional_params), aws_region_name
+            AwsAuthParams.model_validate(optional_params),
+            aws_region_name,
+            _JSON_OBJECT.validate_python(optional_params),
         )
 
         # Prepare the request data

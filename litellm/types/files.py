@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -309,7 +309,7 @@ class TwoStepFileUploadRequest(TypedDict):
     method: Required[str]
     url: Required[str]
     headers: Required[dict[str, str]]
-    data: Required[str | bytes | dict[str, Any]]
+    data: Required[str | bytes | dict[str, object]]
 
 
 class TwoStepFileUploadConfig(TypedDict, total=False):
@@ -338,9 +338,9 @@ class StreamingMediaUploadConfig(TypedDict, total=False):
     round-trips, so a multi-GB upload finishes in one continuous transfer instead
     of hundreds of sequential PUTs that overrun client/LB timeouts.
 
-    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``Any`` here to
+    ``body_stream`` is a ``BaseFileUploadStream``; it is typed ``object`` here to
     avoid importing the llms layer into types.
     """
 
-    body_stream: Required[Any]
+    body_stream: Required[object]
     content_type: str

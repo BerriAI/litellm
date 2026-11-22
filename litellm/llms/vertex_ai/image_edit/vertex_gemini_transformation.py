@@ -1,7 +1,7 @@
 import base64
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
@@ -175,7 +175,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
@@ -259,8 +259,8 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             else {},
         )
 
-    def _prepare_inline_image_parts(self, image: FileTypes | list[FileTypes]) -> list[HttpxPartType]:
-        images: Final[list[FileTypes]] = image if isinstance(image, list) else [image]
+    def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[HttpxPartType]:
+        images: Final[Sequence[object]] = image if isinstance(image, list) else [image]
         return [
             {
                 "inlineData": {
@@ -272,7 +272,7 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
             if img is not None
         ]
 
-    def _read_all_bytes(self, image: FileTypes) -> bytes:
+    def _read_all_bytes(self, image: object) -> bytes:
         if isinstance(image, bytes):
             return image
         if isinstance(image, BytesIO):

@@ -8,9 +8,14 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    is_undecodable_json_object,
+    loads_json_object,
+    map_finish_reason,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.anthropic.chat.handler import (
     ModelResponseIterator as AnthropicModelResponseIterator,
 )
@@ -170,9 +175,8 @@ def collapse_pure_text_chunks(
         json_str = ev[idx + len("data:") :].strip()
         if not json_str.startswith("{"):
             continue
-        try:
-            data = decoded_json_object(_DECODED_JSON.validate_python(json.loads(json_str)))
-        except (json.JSONDecodeError, ValueError):
+        data = loads_json_object(json_str)
+        if data is None:
             return None
 
         etype = data.get("type")
@@ -221,11 +225,6 @@ def collapse_pure_text_chunks(
     return out
 
 
-def _has_non_object_data(event_str: str) -> bool:
-    data_start: Final = event_str.find("data:")
-    return data_start != -1 and not event_str[data_start + len("data:") :].lstrip().startswith("{")
-
-
 def build_complete_streaming_response_legacy(
     all_chunks: Sequence[str | bytes],
     litellm_logging_obj: LiteLLMLoggingObj,
@@ -263,8 +262,6 @@ def build_complete_streaming_response_legacy(
                 # text payload happens to contain "[DONE]" is not dropped.
                 if any(line.strip() == "data: [DONE]" for line in event_str.split("\n")):
                     continue
-                if _has_non_object_data(event_str):
-                    continue
                 transformed_openai_chunk = anthropic_model_response_iterator.convert_str_chunk_to_generic_chunk(
                     chunk=event_str
                 )
@@ -301,13 +298,8 @@ def _sse_data_payload(event_str: str) -> str | None:
 def extract_sse_data(event_str: str) -> dict | None:
     """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
     payload: Final = _sse_data_payload(event_str)
-    if payload is None or not payload.startswith("{"):
-        return None
-    try:
-        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
-    except (ValueError, TypeError):
-        return None
-    return decoded if is_str_keyed_dict(decoded) else None
+    decoded: Final = None if payload is None else loads_json_object(payload)
+    return decoded if isinstance(decoded, dict) else None
 
 
 def build_usage_only_response_from_chunks(
@@ -504,14 +496,6 @@ def _carries_no_data(fields: Sequence[tuple[str, str]]) -> bool:
             return False
 
 
-def _json_mapping(payload: str) -> Mapping[str, object] | None:
-    try:
-        value: Final = _DECODED_JSON.validate_python(json.loads(payload))
-    except ValueError:
-        return None
-    return as_str_mapping(value)
-
-
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
@@ -570,8 +554,10 @@ def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
 def _is_json_no_reader_can_take(payload: str) -> bool:
     try:
         value: Final = _DECODED_JSON.validate_python(json.loads(payload))
-    except ValueError:
+    except json.JSONDecodeError:
         return False
+    except (ValueError, RecursionError):
+        return True
     if value is None:
         return False
     event: Final = as_str_mapping(value)
@@ -584,6 +570,10 @@ def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
         _joined_sse_bytes(all_chunks), final=False
     )
     return any(_is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in _sse_frames(sse_stream))
+
+
+def _has_undecodable_object_event(sse_stream: str) -> bool:
+    return any(is_undecodable_json_object(_sse_data_payload(frame) or "") for frame in _sse_frames(sse_stream))
 
 
 def anthropic_sse_event_type(event: str) -> object:
@@ -616,7 +606,9 @@ def _error_events(sse_stream: str) -> tuple[str, ...]:
 
 def _plain_error_event(event: str) -> str:
     payload: Final = _sse_data_payload(event) or ""
-    one_line: Final = payload.translate(_JSON_ESCAPED_LINE_BREAKS) if _json_mapping(payload) is not None else payload
+    one_line: Final = (
+        payload.translate(_JSON_ESCAPED_LINE_BREAKS) if loads_json_object(payload) is not None else payload
+    )
     return "\n".join(("event: error", *(f"data: {line}" for line in one_line.splitlines()[:1])))
 
 
@@ -723,7 +715,7 @@ def assemble_anthropic_sse_stream(
     passes the upstream error on; a caller recording what was served keeps None.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
+    if sse_stream is None or _has_undecodable_object_event(sse_stream):
         return None
     message_start: Final = _anthropic_message_start(sse_stream)
     if message_start is None:
@@ -753,7 +745,7 @@ def assemble_anthropic_sse_stream(
 
 
 def _is_error_payload(payload: str) -> bool:
-    event: Final = _json_mapping(payload)
+    event: Final = loads_json_object(payload)
     if event is None or not _ERROR_PAYLOAD_KEYS.issuperset(event):
         return False
     return event.get("type") == "error" or ("type" not in event and isinstance(event.get("error"), Mapping))

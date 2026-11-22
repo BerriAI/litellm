@@ -8,6 +8,16 @@ pub enum CustomerScope {
     Team,
     #[strum(serialize = "customer_member")]
     Member,
+    #[strum(serialize = "app")]
+    App,
+    #[strum(serialize = "app_customer_org")]
+    AppOrganization,
+    #[strum(serialize = "app_customer_member")]
+    AppMember,
+    #[strum(serialize = "app_group")]
+    AppGroup,
+    #[strum(serialize = "app_group_customer_org")]
+    AppGroupOrganization,
 }
 
 /// One budget's spend counter. `parse` and `key` round-trip `main`'s `spend:*` keys exactly.
@@ -47,6 +57,11 @@ pub enum SpendCounter {
     CustomerOrg(String),
     CustomerTeam(String),
     CustomerMember(String),
+    App(String),
+    AppCustomerOrg(String),
+    AppCustomerMember(String),
+    AppGroup(String),
+    AppGroupCustomerOrg(String),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,21 +101,36 @@ impl SpendCounter {
             Self::CustomerOrg(id) => format!("spend:customer_org:{id}"),
             Self::CustomerTeam(id) => format!("spend:customer_team:{id}"),
             Self::CustomerMember(id) => format!("spend:customer_member:{id}"),
+            Self::App(id) => format!("spend:app:{id}"),
+            Self::AppCustomerOrg(id) => format!("spend:app_customer_org:{id}"),
+            Self::AppCustomerMember(id) => format!("spend:app_customer_member:{id}"),
+            Self::AppGroup(id) => format!("spend:app_group:{id}"),
+            Self::AppGroupCustomerOrg(id) => format!("spend:app_group_customer_org:{id}"),
         }
+    }
+
+    /// The charges-only twin of a key, team, user, org or end user lifetime counter; `None` for any
+    /// other counter, which has no twin.
+    pub fn committed(self) -> Option<Self> {
+        matches!(
+            self,
+            Self::Key { window: None, .. }
+                | Self::Team { window: None, .. }
+                | Self::User(_)
+                | Self::Org(_)
+                | Self::EndUser(_)
+        )
+        .then(|| Self::Committed(Box::new(self)))
     }
 
     pub fn parse(key: &str) -> Result<Self, NotASpendCounter> {
         let invalid = || NotASpendCounter(key.to_owned());
         let rest = key.strip_prefix("spend:").ok_or_else(invalid)?;
         if let Some(twin) = rest.strip_prefix("committed:") {
-            return match Self::parse(&format!("spend:{twin}")).map_err(|_| invalid())? {
-                counter @ (Self::Key { window: None, .. }
-                | Self::Team { window: None, .. }
-                | Self::User(_)
-                | Self::Org(_)
-                | Self::EndUser(_)) => Ok(Self::Committed(Box::new(counter))),
-                _ => Err(invalid()),
-            };
+            return Self::parse(&format!("spend:{twin}"))
+                .ok()
+                .and_then(Self::committed)
+                .ok_or_else(invalid);
         }
         let (scope, id) = rest.split_once(':').ok_or_else(invalid)?;
         if let Ok(scope) = scope.parse::<CustomerScope>() {
@@ -117,6 +147,11 @@ impl SpendCounter {
                     CustomerScope::Organization => Self::CustomerOrg(id.to_owned()),
                     CustomerScope::Team => Self::CustomerTeam(id.to_owned()),
                     CustomerScope::Member => Self::CustomerMember(id.to_owned()),
+                    CustomerScope::App => Self::App(id.to_owned()),
+                    CustomerScope::AppOrganization => Self::AppCustomerOrg(id.to_owned()),
+                    CustomerScope::AppMember => Self::AppCustomerMember(id.to_owned()),
+                    CustomerScope::AppGroup => Self::AppGroup(id.to_owned()),
+                    CustomerScope::AppGroupOrganization => Self::AppGroupCustomerOrg(id.to_owned()),
                 }),
             };
         }
@@ -172,11 +207,48 @@ mod tests {
     #[case::lifetime_organization("spend:customer_org:tenant:lifetime")]
     #[case::period_team("spend:customer_team:tenant:team:2026-01-01T00:00:00+00:00")]
     #[case::lifetime_member("spend:customer_member:user@example.com:lifetime")]
+    #[case::app("spend:app:application:lifetime")]
+    #[case::app_organization("spend:app_customer_org:application:org:lifetime")]
+    #[case::app_member("spend:app_customer_member:application:member:lifetime")]
+    #[case::app_window("spend:app:application:window:1mo@2026-11-01T00:00:00+00:00")]
+    #[case::app_org_window(
+        "spend:app_customer_org:application%3Aorg:window:1mo@2026-11-01T00:00:00+00:00"
+    )]
+    #[case::app_member_window(
+        "spend:app_customer_member:application%3Amember:window:12mo@2026-01-01T00:00:00+00:00"
+    )]
+    #[case::app_group("spend:app_group:group:lifetime")]
+    #[case::app_group_org("spend:app_group_customer_org:group:org:lifetime")]
+    #[case::app_group_window("spend:app_group:group:window:1mo@2026-11-01T00:00:00+00:00")]
+    #[case::app_group_org_window(
+        "spend:app_group_customer_org:group%3Aorg:window:1mo@2026-11-01T00:00:00+00:00"
+    )]
     fn customer_counter_keys_round_trip(#[case] key: &str) {
         assert_eq!(
             SpendCounter::parse(key).expect("customer counter").key(),
             key
         );
+    }
+
+    #[rstest]
+    #[case::key("spend:key:k", Some("spend:committed:key:k"))]
+    #[case::team("spend:team:t", Some("spend:committed:team:t"))]
+    #[case::user("spend:user:u", Some("spend:committed:user:u"))]
+    #[case::org("spend:org:o", Some("spend:committed:org:o"))]
+    #[case::end_user("spend:end_user:e", Some("spend:committed:end_user:e"))]
+    #[case::key_window("spend:key:k:window:1d", None)]
+    #[case::user_window("spend:user_window:u:1d", None)]
+    #[case::tag("spend:tag:t", None)]
+    #[case::team_member("spend:team_member:u:t", None)]
+    fn committed_twins_exist_only_for_lifetime_entity_counters(
+        #[case] key: &str,
+        #[case] twin: Option<&str>,
+    ) {
+        let committed = SpendCounter::parse(key).unwrap().committed();
+        assert_eq!(committed.as_ref().map(SpendCounter::key).as_deref(), twin);
+        if let Some(twin) = twin {
+            assert_eq!(SpendCounter::parse(twin).ok(), committed);
+        }
     }
 
     #[rstest]

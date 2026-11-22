@@ -353,6 +353,8 @@ Set `LITELLM_PROXY_API_BASE` and `LITELLM_PROXY_API_KEY` and every model call th
 
 [**Docs: Agent Harnesses**](https://docs.litellm.ai/docs/harness)
 
+Use `litellm.agent_eval(tasks, targets, trials=3)` to compare harness and model targets with typed tasks and success checks. If your runner already schedules cases, use `await litellm.aagent_eval_attempt(task, target, trial=trial, suite_id=run_id)` for each attempt. It returns the same `EvalRun` used by the suite, including the agent result, check, usage and costs. Both paths prepare a fresh workspace, run setup, execute the agent, grade its output and clean up. Your runner owns concurrency, progress, checkpoint storage and resuming unfinished attempts.
+
 </details>
 
 ### Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))

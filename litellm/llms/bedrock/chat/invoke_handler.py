@@ -220,7 +220,7 @@ def _stream_decoder(
     return AWSEventStreamDecoder(model=model, json_mode=json_mode)
 
 
-_StreamChunk: Final = TypeVar("_StreamChunk")
+_StreamChunk = TypeVar("_StreamChunk")
 
 
 def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _StreamChunk:
@@ -788,7 +788,11 @@ class AWSEventStreamDecoder:
                 provider_specific_fields=model_response_provider_specific_fields,
             )
 
-            return response
+            match chunk_data:
+                case {"serviceTier": {"type": str(tier)}} if tier:
+                    return _with_served_service_tier(response, tier)
+                case dict():
+                    return response
         except Exception as e:
             raise Exception(f"Received streaming error - {e}")
 
