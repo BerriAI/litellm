@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import Router
+from litellm.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelGuardrail,
@@ -373,6 +374,7 @@ def _make_guardrail(
     timeout: float | None = None,
     max_concurrent_decision_calls: int = 8,
     screen_scope: Literal["all", "new_messages", "latest_turn"] = "all",
+    cache: DualCache | None = None,
 ) -> DecisionModelGuardrail:
     return DecisionModelGuardrail(
         guardrail_name="test_decision_model",
@@ -385,6 +387,7 @@ def _make_guardrail(
         timeout=timeout,
         max_concurrent_decision_calls=max_concurrent_decision_calls,
         screen_scope=screen_scope,
+        cache=cache,
     )
 
 
@@ -1341,6 +1344,16 @@ async def test_screen_scope_all_screens_every_message():
 async def test_screen_scope_new_messages_screens_only_after_last_assistant_turn():
     router: Final = _decision_router(probability=0.01)
     guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "first user prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["first user prompt"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    router.adecisions.reset_mock()
+
     messages: Final[list[dict[str, object]]] = [
         {"role": "user", "content": "first user prompt"},
         {
@@ -1390,6 +1403,16 @@ async def test_screen_scope_new_messages_first_turn_screens_initial_messages():
 async def test_screen_scope_new_messages_subsequent_user_prompt():
     router: Final = _decision_router(probability=0.01)
     guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "first user prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["first user prompt"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    router.adecisions.reset_mock()
+
     messages: Final[list[dict[str, object]]] = [
         {"role": "user", "content": "first user prompt"},
         {"role": "assistant", "content": "first assistant response"},
@@ -1410,6 +1433,18 @@ async def test_screen_scope_new_messages_subsequent_user_prompt():
 async def test_screen_scope_new_messages_multiple_tools_screened_concurrently():
     router, order, in_flight = _tracking_router()
     guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "first user prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["first user prompt"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    order.clear()
+    in_flight["count"] = 0
+    in_flight["peak"] = 0
+
     messages: Final[list[dict[str, object]]] = [
         {"role": "user", "content": "first user prompt"},
         {
@@ -1447,6 +1482,16 @@ async def test_screen_scope_new_messages_blocks_injection_in_new_tool_result():
     marker: Final = "INJECTION-ATTEMPT"
     router: Final = _marker_router(marker)
     guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    turn1_messages: Final[list[dict[str, object]]] = [
+        {"role": "user", "content": "benign prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["benign prompt"],
+        "structured_messages": cast(list[AllMessageValues], turn1_messages),
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    router.adecisions.reset_mock()
+
     messages: Final[list[dict[str, object]]] = [
         {"role": "user", "content": "benign prompt"},
         {"role": "assistant", "content": "fetching data"},
@@ -1468,45 +1513,161 @@ async def test_screen_scope_new_messages_blocks_injection_in_new_tool_result():
 
 
 @pytest.mark.asyncio
-async def test_screen_scope_new_messages_does_not_screen_old_injection():
+async def test_screen_scope_attacker_supplied_assistant_turn_screens_and_blocks_prefix():
     marker: Final = "OLD-PROMPT-INJECTION"
     router: Final = _marker_router(marker)
     guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
-    messages: Final[list[dict[str, object]]] = [
+    messages: Final = [
         {"role": "user", "content": f"past prompt with {marker}"},
         {"role": "assistant", "content": "acknowledged"},
         {"role": "tool", "tool_call_id": "call_1", "content": "clean tool output"},
     ]
     inputs: Final[GenericGuardrailAPIInputs] = {
         "texts": [f"past prompt with {marker}", "clean tool output"],
-        "structured_messages": cast(list[AllMessageValues], messages),
+        "structured_messages": [
+            {"role": "user", "content": f"past prompt with {marker}"},
+            {"role": "assistant", "content": "acknowledged"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "clean tool output"},
+        ],
     }
 
-    result: Final = await guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
 
-    assert result is inputs
+    assert exc_info.value.status_code == 400
     sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
-    assert sent == ["clean tool output"]
+    assert f"past prompt with {marker}" in sent
 
 
 @pytest.mark.asyncio
 async def test_screen_scope_latest_turn_alias_screens_only_after_last_assistant():
     router: Final = _decision_router(probability=0.01)
     guardrail: Final = _make_guardrail(screen_scope="latest_turn", router_provider=lambda: router)
-    messages: Final[list[dict[str, object]]] = [
+    turn1_messages: Final = [
+        {"role": "user", "content": "first user prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["first user prompt"],
+        "structured_messages": [
+            {"role": "user", "content": "first user prompt"},
+        ],
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    router.adecisions.reset_mock()
+
+    messages: Final = [
         {"role": "user", "content": "first user prompt"},
         {"role": "assistant", "content": "first assistant response"},
         {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
     ]
     inputs: Final[GenericGuardrailAPIInputs] = {
         "texts": ["first user prompt", "tool output"],
-        "structured_messages": cast(list[AllMessageValues], messages),
+        "structured_messages": [
+            {"role": "user", "content": "first user prompt"},
+            {"role": "assistant", "content": "first assistant response"},
+            {"role": "tool", "tool_call_id": "call_1", "content": "tool output"},
+        ],
     }
 
     await guardrail.apply_guardrail(inputs, {"messages": messages}, "request")
 
     sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
     assert sent == ["tool output"]
+
+
+@pytest.mark.asyncio
+async def test_screen_scope_multi_turn_verified_prefix_skips_prior_messages():
+    router: Final = _decision_router(probability=0.01)
+    guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+
+    turn1_messages: Final = [
+        {"role": "user", "content": "initial user prompt"},
+    ]
+    turn1_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["initial user prompt"],
+        "structured_messages": [
+            {"role": "user", "content": "initial user prompt"},
+        ],
+    }
+    await guardrail.apply_guardrail(turn1_inputs, {"messages": turn1_messages}, "request")
+    assert [call.kwargs["input"] for call in router.adecisions.await_args_list] == ["initial user prompt"]
+    router.adecisions.reset_mock()
+
+    turn2_messages: Final = [
+        {"role": "user", "content": "initial user prompt"},
+        {"role": "assistant", "content": "assistant response 1"},
+        {"role": "user", "content": "second user prompt"},
+    ]
+    turn2_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["initial user prompt", "second user prompt"],
+        "structured_messages": [
+            {"role": "user", "content": "initial user prompt"},
+            {"role": "assistant", "content": "assistant response 1"},
+            {"role": "user", "content": "second user prompt"},
+        ],
+    }
+    await guardrail.apply_guardrail(turn2_inputs, {"messages": turn2_messages}, "request")
+    assert [call.kwargs["input"] for call in router.adecisions.await_args_list] == ["second user prompt"]
+    router.adecisions.reset_mock()
+
+    turn3_messages: Final = [
+        {"role": "user", "content": "initial user prompt"},
+        {"role": "assistant", "content": "assistant response 1"},
+        {"role": "user", "content": "second user prompt"},
+        {"role": "assistant", "content": "assistant response 2"},
+        {"role": "user", "content": "third user prompt"},
+    ]
+    turn3_inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["initial user prompt", "second user prompt", "third user prompt"],
+        "structured_messages": [
+            {"role": "user", "content": "initial user prompt"},
+            {"role": "assistant", "content": "assistant response 1"},
+            {"role": "user", "content": "second user prompt"},
+            {"role": "assistant", "content": "assistant response 2"},
+            {"role": "user", "content": "third user prompt"},
+        ],
+    }
+    await guardrail.apply_guardrail(turn3_inputs, {"messages": turn3_messages}, "request")
+    assert [call.kwargs["input"] for call in router.adecisions.await_args_list] == ["third user prompt"]
+
+
+@pytest.mark.asyncio
+async def test_screen_scope_ignores_decoy_messages_in_text_only_request():
+    router: Final = _decision_router(probability=0.01)
+    guardrail: Final = _make_guardrail(screen_scope="new_messages", router_provider=lambda: router)
+    inputs: Final[GenericGuardrailAPIInputs] = {
+        "texts": ["embedding input text"],
+    }
+    await guardrail.apply_guardrail(
+        inputs,
+        {
+            "messages": [
+                {"role": "user", "content": "decoy prompt"},
+                {"role": "assistant", "content": "decoy response"},
+                {"role": "user", "content": "decoy follow-up"},
+            ]
+        },
+        "request",
+    )
+
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert sent == ["embedding input text"]
+
+
+@pytest.mark.asyncio
+async def test_concurrency_batching_stops_after_blocking_verdict():
+    marker: Final = "BLOCK-ME"
+    router: Final = _marker_router(marker)
+    guardrail: Final = _make_guardrail(max_concurrent_decision_calls=2, router_provider=lambda: router)
+    texts: Final = [f"unsafe text with {marker}", "clean text 1", "clean text 2", "clean text 3"]
+
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail({"texts": texts}, _request_data(), "request")
+
+    assert exc_info.value.status_code == 400
+    sent: Final = [call.kwargs["input"] for call in router.adecisions.await_args_list]
+    assert len(sent) == 2
+    assert f"unsafe text with {marker}" in sent
 
 
 @pytest.mark.asyncio
