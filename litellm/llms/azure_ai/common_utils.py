@@ -16,10 +16,18 @@ from litellm.types.router import GenericLiteLLMParams
 AzureAIApiKeyHeader = Literal["Authorization", "api-key", "Api-Key", "Ocp-Apim-Subscription-Key"]
 FOUNDRY_HOST_SUFFIX: Final = ".services.ai.azure.com"
 AZURE_OPENAI_V1_HOST_SUFFIXES: Final = (FOUNDRY_HOST_SUFFIX, ".openai.azure.com")
+AZURE_OPENAI_RESOURCE_HOST_SUFFIXES: Final = (".openai.azure.com", ".cognitiveservices.azure.com")
 OPENAI_V1_PATH: Final = ("openai", "v1")
 CHAT_COMPLETIONS_PATH: Final = ("chat", "completions")
 _OPENAI_V1_ROUTES: Final = (CHAT_COMPLETIONS_PATH, ("responses",), ("responses", "compact"))
 FOUNDRY_PROJECT_PATH_PREFIX: Final = ("api", "projects")
+
+
+def is_openai_v1_resource_base(base_url: httpx.URL) -> bool:
+    path: Final = base_url.path.rstrip("/")
+    if path == "/openai":
+        return base_url.host.endswith((*AZURE_OPENAI_V1_HOST_SUFFIXES, *AZURE_OPENAI_RESOURCE_HOST_SUFFIXES))
+    return path == "" and base_url.host.endswith(AZURE_OPENAI_RESOURCE_HOST_SUFFIXES)
 
 
 def _path_segments(base_url: httpx.URL) -> tuple[str, ...]:

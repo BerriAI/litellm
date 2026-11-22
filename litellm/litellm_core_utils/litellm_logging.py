@@ -784,6 +784,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.enqueue_deferred_logging: Callable[[], None] | None = None
         self._async_success_scheduled: bool = False
         self._async_success_enqueued: bool = False
+        self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Exception], Awaitable[None]] | None = None
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -2389,6 +2390,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._async_success_scheduled:
             return False
         self._async_success_scheduled = True
+        return True
+
+    def claim_sync_success_log(self) -> bool:
+        if self.stream:
+            return True
+        if self._sync_success_scheduled:
+            return False
+        self._sync_success_scheduled = True
         return True
 
     def mark_logging_complete(
@@ -4295,6 +4304,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
+        if not self.claim_sync_success_log():
+            return
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict

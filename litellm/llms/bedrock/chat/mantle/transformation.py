@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.prompt_templates.image_handling import async_inline_remote_media
-from litellm.llms.anthropic.chat.transformation import JsonModeRequest
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig, JsonModeRequest
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
@@ -148,7 +148,12 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         litellm_params: Mapping[str, object],
     ) -> Mapping[str, object]:
         profile_fields: Final = {"user_profile_id": request["user_profile_id"]} if "user_profile_id" in request else {}
-        return {**extra_body, **profile_fields}
+        return {
+            **AnthropicConfig.transform_extra_body(
+                self, extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+            ),
+            **profile_fields,
+        }
 
     @property
     def has_custom_stream_wrapper(self) -> bool:
