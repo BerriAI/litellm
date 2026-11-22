@@ -246,10 +246,12 @@ def _parent_langfuse_trace_header(
     parent_logged_params: Final = object_mapping(
         parent_logging.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
     )
-    logged_params: Final = {**parent_kwargs, **(parent_logged_params or {})}
+    logged_params: Final = {**(parent_logged_params or {}), **parent_kwargs}
     params: Final = {
         **logged_params,
-        "metadata": logged_params.get("metadata") or logged_params.get("litellm_metadata"),
+        "metadata": parent_kwargs["litellm_metadata"]
+        if "litellm_metadata" in parent_kwargs
+        else logged_params.get("metadata"),
     }
     trace_id: Final = request_langfuse_trace_id(
         params,

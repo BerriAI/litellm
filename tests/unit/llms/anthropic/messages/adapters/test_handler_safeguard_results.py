@@ -517,16 +517,19 @@ async def _send_parent_request(
     litellm_metadata: Mapping[str, object],
     parent_ids: Mapping[str, str],
     request_headers: Mapping[str, str] | None = None,
+    anthropic_metadata: Mapping[str, str] | None = None,
 ) -> None:
-    parent_logging: Final = Logging(
+    parent_logging, _ = litellm.utils.function_setup(
+        "anthropic_messages",
+        litellm.utils.Rules(),
+        datetime.now(),
         model="fireworks_ai/kimi",
         messages=list(MESSAGES),
         stream=False,
-        call_type="anthropic_messages",
-        start_time=datetime.now(),
         litellm_call_id="parent-call",
-        function_id="parent",
         litellm_trace_id=parent_ids.get("litellm_trace_id", "trace-the-parent-minted"),
+        litellm_metadata=dict(litellm_metadata),
+        **({} if anthropic_metadata is None else {"metadata": dict(anthropic_metadata)}),
     )
     backend: Final = _Backend(stream=False)
     router_deployment_call: Final = litellm.acompletion
@@ -557,6 +560,7 @@ async def _send_parent_request(
             litellm_router=router,
             litellm_metadata=dict(litellm_metadata),
             litellm_logging_obj=parent_logging,
+            **({} if anthropic_metadata is None else {"metadata": dict(anthropic_metadata)}),
             safeguards=SAFEGUARDS,
             context_management={"edits": [{"type": "compact_20260112"}]},
             **({} if request_headers is None else {"proxy_server_request": {"headers": dict(request_headers)}}),
@@ -695,29 +699,44 @@ def _langfuse_trace(logged_call: Mapping[str, object]) -> tuple[object, bool]:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "parent_metadata, parent_ids, request_headers, parent_trace",
+    "parent_metadata, parent_ids, request_headers, anthropic_metadata, parent_trace",
     [
         (
             {"session_id": "claude-code-session"},
             {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
             {"x-claude-code-session-id": "claude-code-session"},
+            None,
             "parent-call",
         ),
-        ({}, {}, None, "trace-the-parent-minted"),
+        (
+            {"session_id": "claude-code-session"},
+            {"litellm_session_id": "claude-code-session", "litellm_trace_id": "claude-code-session"},
+            {"x-claude-code-session-id": "claude-code-session"},
+            {"user_id": '{"device_id":"laptop","session_id":"claude-code-session"}'},
+            "parent-call",
+        ),
+        ({}, {}, None, None, "trace-the-parent-minted"),
         (
             {},
             {},
             {"langfuse_existing_trace_id": "trace-the-client-continues"},
+            None,
             "trace-the-client-continues",
         ),
     ],
-    ids=["claude-code-session-header", "no-session-sent", "client-continues-its-own-langfuse-trace"],
+    ids=[
+        "claude-code-session-header",
+        "claude-code-sends-its-anthropic-metadata-user-id",
+        "no-session-sent",
+        "client-continues-its-own-langfuse-trace",
+    ],
 )
 async def test_the_classifier_and_summary_join_the_parent_requests_langfuse_trace_without_renaming_it(
     monkeypatch: pytest.MonkeyPatch,
     parent_metadata: Mapping[str, object],
     parent_ids: Mapping[str, str],
     request_headers: Mapping[str, str] | None,
+    anthropic_metadata: Mapping[str, str] | None,
     parent_trace: str,
 ) -> None:
     await _drain_logging_worker()
@@ -726,7 +745,12 @@ async def test_the_classifier_and_summary_join_the_parent_requests_langfuse_trac
     monkeypatch.setattr(litellm, "_async_success_callback", [logged])
 
     await _send_parent_request(
-        _classifier_and_summarizer_router(), {}, {**LITELLM_METADATA, **parent_metadata}, parent_ids, request_headers
+        _classifier_and_summarizer_router(),
+        {},
+        {**LITELLM_METADATA, **parent_metadata},
+        parent_ids,
+        request_headers,
+        anthropic_metadata,
     )
 
     assert {
