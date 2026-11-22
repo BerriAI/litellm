@@ -51,6 +51,8 @@ mod tests {
             routed: None,
             target_order: None,
             candidate_ids: vec!["d1".to_owned()],
+            excluded: Arc::from([]),
+            failover_excluded: Arc::from([]),
             retry: 0,
             fallback_depth: 0,
             fallback_level: 0,
