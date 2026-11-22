@@ -423,6 +423,12 @@ fn request_beta_headers_config() {
     });
 }
 
+fn non_empty_string(value: Option<Bound<'_, PyAny>>) -> Option<String> {
+    value
+        .and_then(|value| value.extract::<String>().ok())
+        .filter(|value| !value.is_empty())
+}
+
 fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
     PythonSettings::ProviderDefaults
         .read_or_unset(py)?
@@ -850,15 +856,27 @@ impl MessagesPythonHost {
             _ => None,
         };
         let bedrock = custom_llm_provider.as_deref() == Some(BEDROCK_PROVIDER) || mantle.is_some();
+        let deployment_base_model = match non_empty_string(argument("base_model")?) {
+            Some(base_model) => Some(base_model),
+            None => non_empty_string(
+                argument("model_info")?.and_then(|info| info.get_item("base_model").ok()),
+            ),
+        };
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
                 &model,
                 custom_llm_provider.as_deref(),
+                deployment_base_model.as_deref(),
                 argument("model_info")?,
             )?,
             None if bedrock => {
-                let requested = self.capabilities(py, &model, custom_llm_provider.as_deref())?;
+                let requested = self.capabilities(
+                    py,
+                    &model,
+                    custom_llm_provider.as_deref(),
+                    deployment_base_model.as_deref(),
+                )?;
                 MessagesModelCapabilities {
                     bedrock: with_invoke_flags(
                         super::model_catalog::bedrock_capabilities(
@@ -871,7 +889,12 @@ impl MessagesPythonHost {
                     ..requested
                 }
             }
-            None => self.capabilities(py, &model, custom_llm_provider.as_deref())?,
+            None => self.capabilities(
+                py,
+                &model,
+                custom_llm_provider.as_deref(),
+                deployment_base_model.as_deref(),
+            )?,
         };
         let vertex = match custom_llm_provider.as_deref() {
             Some(VERTEX_AI_PROVIDER) => VertexShaping {
@@ -991,11 +1014,12 @@ impl MessagesPythonHost {
         py: Python<'_>,
         model: &str,
         custom_llm_provider: Option<&str>,
+        base_model: Option<&str>,
     ) -> PyResult<MessagesModelCapabilities> {
         from_py(
             &py.import(MODEL_CAPABILITIES_MODULE)?
                 .getattr("anthropic_model_capabilities")?
-                .call1((model, custom_llm_provider))?,
+                .call1((model, custom_llm_provider, base_model))?,
         )
     }
 

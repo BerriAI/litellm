@@ -56,6 +56,21 @@ def test_capabilities_come_from_the_model_map_under_the_callers_provider(monkeyp
     }
 
 
+@pytest.mark.parametrize(
+    ("base_model", "takes_profile_id"),
+    [("anthropic/claude-test-profile", True), (None, False)],
+    ids=["base_model_flagged", "no_base_model"],
+)
+def test_an_unlisted_model_takes_the_user_profile_id_its_base_model_is_flagged_for(
+    monkeypatch: pytest.MonkeyPatch, base_model: str | None, takes_profile_id: bool
+) -> None:
+    _flag_model(monkeypatch, "claude-test-profile", supports_anthropic_user_profile_id=True)
+
+    capabilities: Final = anthropic_model_capabilities("anthropic/claude-test-unlisted", None, base_model)
+
+    assert capabilities["supports_anthropic_user_profile_id"] is takes_profile_id
+
+
 def test_unmapped_model_keeps_sampling_params_and_no_reasoning_features() -> None:
     capabilities: Final = anthropic_model_capabilities("anthropic/not-a-real-model", None)
 

@@ -66,16 +66,28 @@ def _fingerprint(model: str, custom_llm_provider: str | None, resolved_model: st
     )
 
 
-def anthropic_model_capabilities(model: str, custom_llm_provider: str | None) -> dict[str, object]:
+def anthropic_model_capabilities(
+    model: str, custom_llm_provider: str | None, base_model: str | None = None
+) -> dict[str, object]:
     """The capability probes the Rust messages route reads, once per model-map state: each probe
     walks the model map (``get_model_info`` plus generalization matching), and the route asks on
     every request."""
-    resolved_model, provider = _resolved_provider(model, custom_llm_provider)
-    cached: Final = _capabilities(
-        _fingerprint(model, custom_llm_provider, resolved_model, provider), resolved_model, provider
-    )
+    cached: Final = _cached_capabilities(model, custom_llm_provider)
     tiers: Final = as_str_mapping(cached["effort_tiers"])
-    return {**cached, "effort_tiers": dict(tiers) if tiers is not None else cached["effort_tiers"]}
+    return {
+        **cached,
+        "effort_tiers": dict(tiers) if tiers is not None else cached["effort_tiers"],
+        "supports_anthropic_user_profile_id": any(
+            _cached_capabilities(candidate, custom_llm_provider)["supports_anthropic_user_profile_id"]
+            for candidate in (model, base_model)
+            if candidate
+        ),
+    }
+
+
+def _cached_capabilities(model: str, custom_llm_provider: str | None) -> Mapping[str, object]:
+    resolved_model, provider = _resolved_provider(model, custom_llm_provider)
+    return _capabilities(_fingerprint(model, custom_llm_provider, resolved_model, provider), resolved_model, provider)
 
 
 @lru_cache(maxsize=256)

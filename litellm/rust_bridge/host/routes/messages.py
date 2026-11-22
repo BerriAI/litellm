@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
-from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils, deployment_base_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
@@ -1582,6 +1582,7 @@ def _affinity_extra_headers(
             native_anthropic_messages=True,
             model=model,
             configured_headers=_merged_headers(headers, extra_headers),
+            base_model=deployment_base_model(request, request.get("model_info")),
         ),
     )
     added: Final = add_provider_affinity_header(merged, _handler_params(request), default_header)
