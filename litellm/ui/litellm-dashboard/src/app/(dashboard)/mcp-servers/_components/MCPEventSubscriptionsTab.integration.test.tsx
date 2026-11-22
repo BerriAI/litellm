@@ -1,7 +1,8 @@
 import React from "react";
+import { NuqsTestingAdapter } from "nuqs/adapters/testing";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { MCPEventSubscription } from "@/components/mcp_tools/types";
 
@@ -30,12 +31,14 @@ const SUBSCRIPTION: MCPEventSubscription = {
   created_at: null,
 };
 
-function renderTab(canManage: boolean) {
+function renderTab(canManage: boolean, searchParams = "") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
-      <MCPEventSubscriptionsTab accessToken="sk-admin" canManage={canManage} />
-    </QueryClientProvider>,
+    <NuqsTestingAdapter searchParams={searchParams} hasMemory>
+      <QueryClientProvider client={client}>
+        <MCPEventSubscriptionsTab accessToken="sk-admin" canManage={canManage} />
+      </QueryClientProvider>
+    </NuqsTestingAdapter>,
   );
 }
 
@@ -44,6 +47,14 @@ describe("MCPEventSubscriptionsTab", () => {
     networking.fetchMCPEventSubscriptions.mockResolvedValue({ subscriptions: [SUBSCRIPTION] });
     networking.terminateMCPEventSubscription.mockResolvedValue({ ...SUBSCRIPTION, status: "terminated" });
     networking.sendMCPEventTestDelivery.mockResolvedValue({ delivered: true, status: 200 });
+  });
+
+  it("reads a bookmarked subscription page and requests the previous page", async () => {
+    renderTab(false, "?subscriptionOffset=500");
+    await userEvent.click(await screen.findByRole("button", { name: "Previous page" }));
+    await screen.findByText("build.failed");
+    expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 500, 1);
+    expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 0, 1);
   });
 
   it("lists webhook subscriptions with their arguments, callback host and last error", async () => {
