@@ -48,6 +48,8 @@ from .cmd_quoting import quote_for_cmd
 
 ENV_KEY: Final = "env"
 API_KEY_HELPER_KEY: Final = "apiKeyHelper"
+OTEL_HEADERS_HELPER_KEY: Final = "otelHeadersHelper"
+OTEL_HEADERS_HELPER_FLAG: Final = "--otel-headers"
 MODEL_KEY: Final = "model"
 STATUS_LINE_KEY: Final = "statusLine"
 ANTHROPIC_BASE_URL_KEY: Final = "ANTHROPIC_BASE_URL"
@@ -66,8 +68,12 @@ TELEMETRY_ENV: Final = MappingProxyType(
         "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
         "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
         "OTEL_TRACES_EXPORTER": "otlp",
+        "OTEL_LOGS_EXPORTER": "otlp",
         "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
         "OTEL_LOG_USER_PROMPTS": "1",
+        "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+        "OTEL_LOG_TOOL_DETAILS": "1",
+        "OTEL_LOG_TOOL_CONTENT": "1",
     }
 )
 ANTHROPIC_DEFAULT_MODEL_ENV_KEYS: Final = (
@@ -87,7 +93,7 @@ OWNED_ENV_KEYS: Final = (
     OTLP_ENDPOINT_KEY,
     OTLP_HEADERS_KEY,
 )
-OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
+OWNED_TOP_LEVEL_KEYS: Final = (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, MODEL_KEY, STATUS_LINE_KEY)
 OWNED_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in OWNED_ENV_KEYS), *OWNED_TOP_LEVEL_KEYS)
 _CREDENTIAL_ENV_KEYS: Final = frozenset((ANTHROPIC_API_KEY_KEY, ANTHROPIC_AUTH_TOKEN_KEY))
 _CREDENTIAL_PATHS: Final = (*(f"{ENV_KEY}.{key}" for key in sorted(_CREDENTIAL_ENV_KEYS)), API_KEY_HELPER_KEY)
@@ -479,15 +485,17 @@ def with_status_line(settings: Mapping[str, JsonValue], command: str) -> Mapping
 
 
 def _telemetry_env(base_url: str, credential: ClaudeCredential) -> tuple[tuple[str, str], ...]:
-    """Claude Code's own spans, sent to the gateway that takes its model calls and under the same key, so
-    each typed message arrives as a turn. An `apiKeyHelper` key changes on renewal and telemetry has no
-    place to rerun it, so that login keeps telemetry off."""
-    if not isinstance(credential, StaticToken):
-        return ()
+    """Claude Code's own traces and logs, sent to the gateway that takes its model calls and under the same
+    key: Lens shows a session from these alone. A StaticToken goes in the headers variable. An ApiKeyHelper
+    key changes on renewal, so its headers come from `otelHeadersHelper`, which Claude Code reruns."""
     return (
         *TELEMETRY_ENV.items(),
         (OTLP_ENDPOINT_KEY, base_url.rstrip("/")),
-        (OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),
+        *(
+            ((OTLP_HEADERS_KEY, f"Authorization=Bearer {credential.token}"),)
+            if isinstance(credential, StaticToken)
+            else ()
+        ),
     )
 
 
@@ -507,7 +515,7 @@ def merge_claude_settings(
     exported in the shell would otherwise win over the helper. The other credential slots are removed either
     way, since Claude Code given two credentials may send the wrong one.
     ENABLE_TOOL_SEARCH and CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY get their defaults only when
-    missing. A StaticToken also turns on Claude Code's trace telemetry, pointed at the proxy (see _telemetry_env). `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
+    missing. Claude Code's trace and log telemetry is turned on, pointed at the proxy (see _telemetry_env). `default_model` is the top-level `model` and env.ANTHROPIC_MODEL (see StartOn);
     `tier_model` is `lite autoroute start`'s knob that points every ANTHROPIC_DEFAULT_*_MODEL at one
     group. Apart from those tier keys, exactly OWNED_PATHS are touched.
     """
@@ -519,7 +527,11 @@ def merge_claude_settings(
                 (ENABLE_TOOL_SEARCH_KEY, ENABLE_TOOL_SEARCH_VALUE),
                 (ENABLE_GATEWAY_MODEL_DISCOVERY_KEY, ENABLE_GATEWAY_MODEL_DISCOVERY_VALUE),
             ),
-            ((key, value) for key, value in current_env.items() if key not in _CREDENTIAL_ENV_KEYS),
+            (
+                (key, value)
+                for key, value in current_env.items()
+                if key not in _CREDENTIAL_ENV_KEYS and key != OTLP_HEADERS_KEY
+            ),
             ((ANTHROPIC_BASE_URL_KEY, base_url.rstrip("/")),),
             ((ANTHROPIC_AUTH_TOKEN_KEY, credential.token if isinstance(credential, StaticToken) else ""),),
             _telemetry_env(base_url, credential),
@@ -532,10 +544,15 @@ def merge_claude_settings(
             (
                 (key, value)
                 for key, value in (with_status_line(settings, status_line) if status_line else settings).items()
-                if key not in (API_KEY_HELPER_KEY, ENV_KEY)
+                if key not in (API_KEY_HELPER_KEY, OTEL_HEADERS_HELPER_KEY, ENV_KEY)
             ),
             ((ENV_KEY, env),),
-            ((API_KEY_HELPER_KEY, credential.command),) if isinstance(credential, ApiKeyHelper) else (),
+            (
+                (API_KEY_HELPER_KEY, credential.command),
+                (OTEL_HEADERS_HELPER_KEY, f"{credential.command} {OTEL_HEADERS_HELPER_FLAG}"),
+            )
+            if isinstance(credential, ApiKeyHelper)
+            else (),
             ((MODEL_KEY, default_model),) if default_model is not None else (),
         )
     )
@@ -786,6 +803,8 @@ __all__ = (
     "ENV_KEY",
     "LAUNCH_KEY_OVERLAY_PREFIX",
     "MODEL_KEY",
+    "OTEL_HEADERS_HELPER_FLAG",
+    "OTEL_HEADERS_HELPER_KEY",
     "OVERLAY_FILE_NAME",
     "OWNED_ENV_KEYS",
     "OWNED_PATHS",
