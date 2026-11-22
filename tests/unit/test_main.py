@@ -13449,3 +13449,36 @@ def test_a_sync_mock_timeout_still_waits_for_the_read_timeout(
         )
 
     assert clock.slept == (10.0,)
+
+
+@pytest.mark.parametrize(
+    "mock,tool_names",
+    [
+        ({"mock_response": "hi"}, ()),
+        (
+            {
+                "mock_tool_calls": [
+                    {"id": "call-1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+                ]
+            },
+            ("lookup",),
+        ),
+    ],
+    ids=["mock_response", "mock_tool_calls"],
+)
+def test_a_mocked_completion_still_logs_only_the_read_timeout(
+    mock: Mapping[str, object], tool_names: tuple[str, ...], local_model_cost_map: None
+) -> None:
+    logging_obj: Final = _completion_logging_obj(f"mocked-split-timeout-{tool_names}")
+
+    response: Final = litellm.completion(
+        model=_MISTRAL_MODEL,
+        messages=[{"role": "user", "content": "hi"}],
+        timeout=_SPLIT_TIMEOUT,
+        litellm_logging_obj=logging_obj,
+        **mock,
+    )
+
+    message: Final = response.choices[0].message
+    assert tuple(call.function.name for call in message.tool_calls or ()) == tool_names
+    assert logging_obj.litellm_params["timeout"] == 10.0
