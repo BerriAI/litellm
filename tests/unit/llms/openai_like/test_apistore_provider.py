@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Final
 
@@ -6,6 +7,7 @@ import pytest
 import respx
 
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
 _DEFAULT_API_BASE: Final = "https://api.apistore.cloud/v1"
@@ -114,6 +116,10 @@ def test_catalog_row_matches_its_backup_and_fits_its_context(model: str):
     assert 0 < row["cache_read_input_token_cost"] < row["input_cost_per_token"] < row["output_cost_per_token"]
 
 
+# Wednesday 10:00 UTC+8, inside API Store's peak hours, when every model bills its standard rates
+_WEEKDAY_PEAK: Final = datetime(2026, 11, 18, 2, 0, tzinfo=timezone.utc)
+
+
 @pytest.mark.usefixtures("local_model_cost_map")
 @pytest.mark.parametrize("model", _CATALOG_MODELS)
 def test_chat_response_is_priced_at_its_catalog_row(model: str):
@@ -123,9 +129,64 @@ def test_chat_response_is_priced_at_its_catalog_row(model: str):
         usage=litellm.Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200),
     )
 
-    cost: Final = litellm.completion_cost(completion_response=response, model=model)
+    with pinned_billing_time(_WEEKDAY_PEAK):
+        cost: Final = litellm.completion_cost(completion_response=response, model=model)
 
     assert cost == pytest.approx(1000 * row["input_cost_per_token"] + 200 * row["output_cost_per_token"])
+
+
+_LONG_PROMPT_MODELS: Final = tuple(
+    (model, int(key.removeprefix("input_cost_per_token_above_").removesuffix("k_tokens")) * 1000)
+    for model in _CATALOG_MODELS
+    for key in _PRIMARY_PRICES[model]
+    if key.startswith("input_cost_per_token_above_")
+)
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(("model", "threshold"), _LONG_PROMPT_MODELS)
+def test_long_prompt_bills_the_whole_request_at_the_long_prompt_rates(model: str, threshold: int):
+    row: Final = _PRIMARY_PRICES[model]
+    suffix: Final = f"_above_{threshold // 1000}k_tokens"
+
+    def cost(prompt_tokens: int) -> float:
+        response = litellm.ModelResponse(
+            model=model.removeprefix("apistore/"),
+            usage=litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=1000, total_tokens=prompt_tokens + 1000),
+        )
+        return litellm.completion_cost(completion_response=response, model=model)
+
+    assert cost(threshold) == pytest.approx(
+        threshold * row["input_cost_per_token"] + 1000 * row["output_cost_per_token"]
+    )
+    assert cost(threshold + 1) == pytest.approx(
+        (threshold + 1) * row[f"input_cost_per_token{suffix}"] + 1000 * row[f"output_cost_per_token{suffix}"]
+    )
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("moment", "off_peak"),
+    (
+        (datetime(2026, 11, 18, 2, 0, tzinfo=timezone.utc), False),  # Wednesday 10:00 UTC+8, peak
+        (datetime(2026, 11, 18, 5, 0, tzinfo=timezone.utc), True),  # Wednesday 13:00 UTC+8, lunch break
+        (datetime(2026, 11, 18, 7, 0, tzinfo=timezone.utc), False),  # Wednesday 15:00 UTC+8, peak
+        (datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc), True),  # Wednesday 20:00 UTC+8
+        (datetime(2026, 11, 21, 2, 0, tzinfo=timezone.utc), True),  # Saturday 10:00 UTC+8
+        (datetime(2026, 11, 23, 1, 30, tzinfo=timezone.utc), False),  # Monday 09:30 UTC+8, peak
+    ),
+)
+def test_deepseek_is_billed_at_off_peak_rates_outside_weekday_peak_hours(moment: datetime, off_peak: bool):
+    for model in ("apistore/deepseek-v4-1-flash", "apistore/deepseek-v4-1-flash-economy"):
+        row = _PRIMARY_PRICES[model]
+        rates = row["off_peak_pricing"] if off_peak else row
+        response = litellm.ModelResponse(
+            model=model.removeprefix("apistore/"),
+            usage=litellm.Usage(prompt_tokens=1000, completion_tokens=200, total_tokens=1200),
+        )
+        with pinned_billing_time(moment):
+            cost = litellm.completion_cost(completion_response=response, model=model)
+        assert cost == pytest.approx(1000 * rates["input_cost_per_token"] + 200 * rates["output_cost_per_token"])
 
 
 def test_apistore_model_missing_from_cost_map_uses_provider_defaults():
