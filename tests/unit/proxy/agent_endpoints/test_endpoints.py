@@ -1825,3 +1825,34 @@ def test_okta_identity_providers_list_only_opted_in_issuers_with_audience(monkey
     assert response.status_code == 200
     assert response.json() == ["https://a.okta.example/oauth2/aus1", "https://b.okta.example"]
     assert _make_app_with_role(LitellmUserRoles.INTERNAL_USER).get("/v1/agents/identity/providers/okta").status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("issuer", "status", "message"),
+    [
+        pytest.param(
+            "https://acme.okta.example/oauth2/aus1", 400, "agent_identity_provider: okta first", id="not_opted_in"
+        ),
+        pytest.param("https://acme.okta.example/path/aus1", 422, "string_pattern_mismatch", id="not_okta"),
+    ],
+)
+def test_okta_identity_that_cannot_resolve_is_refused_before_registration(
+    monkeypatch: pytest.MonkeyPatch, issuer: str, status: int, message: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    database: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth())
+    body: Final = {
+        "agent_name": "okta-agent",
+        "agent_card_params": {},
+        "identity": {"provider": "okta", "issuer": issuer, "client_id": "0oa1"},
+    }
+
+    response: Final = client.post("/v1/agents", json=body)
+
+    assert response.status_code == status, response.text
+    assert message in response.text
+    database.db.litellm_agentstable.create.assert_not_called()
