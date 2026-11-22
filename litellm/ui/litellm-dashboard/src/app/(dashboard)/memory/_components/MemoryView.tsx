@@ -1,9 +1,12 @@
 "use client";
 
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { PaginationState } from "@tanstack/react-table";
-import { Plus } from "lucide-react";
+import { Database, Plus } from "lucide-react";
 import React, { useCallback, useMemo, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 
@@ -176,29 +179,32 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   };
 
   return (
-    <div className="w-full p-6">
-      <div className="flex flex-col gap-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-semibold text-foreground">{t("memory.view.title")}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              <Trans
-                i18nKey="memory.view.intro"
-                components={{
-                  endpoint: (
-                    <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
-                      /v1/memory
-                    </code>
-                  ),
-                }}
-              />
-            </p>
-          </div>
-          <Button onClick={() => setIsCreateOpen(true)}>
-            <Plus />
-            {t("memory.view.newMemory")}
-          </Button>
-        </div>
+    <Page>
+      <PageContent>
+        <PageHeader>
+          <PageHeaderTitle>
+            <Database />
+            {t("memory.view.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>
+            <Trans
+              i18nKey="memory.view.intro"
+              components={{
+                endpoint: (
+                  <code className="rounded-sm border border-border bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+                    /v1/memory
+                  </code>
+                ),
+              }}
+            />
+          </PageHeaderDescription>
+          <PageHeaderControls>
+            <Button onClick={() => setIsCreateOpen(true)}>
+              <Plus />
+              {t("memory.view.newMemory")}
+            </Button>
+          </PageHeaderControls>
+        </PageHeader>
 
         <MemoryTable
           data={rows}
@@ -215,7 +221,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
           onEditClick={handleEdit}
           onDeleteClick={handleDelete}
         />
-      </div>
+      </PageContent>
 
       {/* Detail drawer */}
       <MemoryDetailDrawer row={detailRow} onClose={() => setDetailRow(null)} />
@@ -255,7 +261,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
         confirmLoading={deleteMutation.isPending}
         requiredConfirmation={deleteRow?.key}
       />
-    </div>
+    </Page>
   );
 };
 

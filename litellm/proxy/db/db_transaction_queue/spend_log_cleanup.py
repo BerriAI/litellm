@@ -248,6 +248,27 @@ def _cutoff_text(cutoff: Cutoff) -> str:
     return cutoff.isoformat() if isinstance(cutoff, datetime) else cutoff
 
 
+_EXPIRED_GUARDRAIL_INDEX_ROWS_SQL: Final = """
+    WITH RECURSIVE guardrails AS (
+        (SELECT guardrail_id FROM "LiteLLM_SpendLogGuardrailIndex" ORDER BY guardrail_id LIMIT 1)
+        UNION ALL
+        SELECT (
+            SELECT g.guardrail_id FROM "LiteLLM_SpendLogGuardrailIndex" g
+            WHERE g.guardrail_id > guardrails.guardrail_id ORDER BY g.guardrail_id LIMIT 1
+        )
+        FROM guardrails WHERE guardrails.guardrail_id IS NOT NULL
+    )
+    SELECT expired.request_id, expired.guardrail_id FROM guardrails
+    CROSS JOIN LATERAL (
+        SELECT request_id, guardrail_id FROM "LiteLLM_SpendLogGuardrailIndex"
+        WHERE guardrail_id = guardrails.guardrail_id AND start_time < $1::{cutoff_cast}
+        ORDER BY start_time
+        LIMIT $2
+    ) expired
+    LIMIT $2
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class TableCleanupResult:
     """Outcome of pruning one table, so the caller can report why a run ended."""
@@ -788,7 +809,7 @@ class SpendLogCleanup:
         )
 
     async def _count_remaining(
-        self, prisma_client: PrismaClient, cutoff_date: Cutoff, table_name: str, time_column: str, deadline: float
+        self, prisma_client: PrismaClient, cutoff_date: Cutoff, table_name: str, expired_rows: str, deadline: float
     ) -> int | None:
         """
         Count expired rows still outstanding, stopping at a cap.
@@ -798,13 +819,7 @@ class SpendLogCleanup:
         SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP index entries. A result equal to
         the cap means "at least this many".
         """
-        count_sql: Final = f"""
-            SELECT count(*)::int AS remaining FROM (
-                SELECT 1 FROM "{table_name}"
-                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
-                LIMIT $2
-            ) capped
-            """
+        count_sql: Final = f"SELECT count(*)::int AS remaining FROM ({expired_rows}) capped"
         timeout_ms: Final = self._timeout_ms(deadline)
         try:
             async with db_span("count_expired_rows", table_name), bounded_tx(prisma_client, timeout_ms) as tx:
@@ -826,9 +841,13 @@ class SpendLogCleanup:
         time_column: str,
         deadline: float,
         batch_cap: int | None = None,
+        expired_rows_sql: str | None = None,
     ) -> TableCleanupResult:
         """
         Delete a table's rows older than the cutoff in batches.
+
+        `expired_rows_sql` selects the key columns of at most $2 rows expired at cutoff $1,
+        for a table whose indexes cannot serve the default `time_column < $1` scan.
 
         Stops at whichever bound is reached first: the backlog running out, the
         shared wall-clock deadline, the per-table batch cap (`batch_cap` when a
@@ -837,12 +856,18 @@ class SpendLogCleanup:
         """
         max_batches: Final = self.max_batches if batch_cap is None else batch_cap
         key_list: Final = ", ".join(f'"{col}"' for col in key_columns)
+        expired_rows: Final = (
+            f"""SELECT {key_list} FROM "{table_name}"
+                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
+                LIMIT $2"""
+            if expired_rows_sql is None
+            else expired_rows_sql
+        )
+        # bounded-ok: the IN slot is a SELECT subquery capped by LIMIT $2, never a spliced value list
         delete_sql: Final = f"""
             DELETE FROM "{table_name}"
             WHERE ({key_list}) IN (
-                SELECT {key_list} FROM "{table_name}"
-                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
-                LIMIT $2
+                {expired_rows}
             )
             """
         total_deleted = 0
@@ -856,14 +881,14 @@ class SpendLogCleanup:
                     total_deleted,
                 )
                 return await self._finish_table(
-                    prisma_client, cutoff_date, table_name, time_column, total_deleted, "budget_exhausted", deadline
+                    prisma_client, cutoff_date, table_name, expired_rows, total_deleted, "budget_exhausted", deadline
                 )
             if run_count >= max_batches:
                 verbose_proxy_logger.info(
                     "Max batches reached for %s cleanup, remaining rows will be deleted in next run", table_name
                 )
                 return await self._finish_table(
-                    prisma_client, cutoff_date, table_name, time_column, total_deleted, "batch_cap_reached", deadline
+                    prisma_client, cutoff_date, table_name, expired_rows, total_deleted, "batch_cap_reached", deadline
                 )
             # Find rows and delete them in one go without fetching to application
             batch_started_at = self._clock()
@@ -885,7 +910,13 @@ class SpendLogCleanup:
                         total_deleted,
                     )
                     return await self._finish_table(
-                        prisma_client, cutoff_date, table_name, time_column, total_deleted, "budget_exhausted", deadline
+                        prisma_client,
+                        cutoff_date,
+                        table_name,
+                        expired_rows,
+                        total_deleted,
+                        "budget_exhausted",
+                        deadline,
                     )
                 # A single batch failure (e.g. Prisma/DB timeout) must not abort
                 # the whole run — subsequent batches may still succeed.
@@ -912,7 +943,7 @@ class SpendLogCleanup:
                         total_deleted,
                     )
                     return await self._finish_table(
-                        prisma_client, cutoff_date, table_name, time_column, total_deleted, "aborted", deadline
+                        prisma_client, cutoff_date, table_name, expired_rows, total_deleted, "aborted", deadline
                     )
                 await asyncio.sleep(SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS)
                 continue
@@ -923,7 +954,7 @@ class SpendLogCleanup:
                     table_name,
                 )
                 return await self._finish_table(
-                    prisma_client, cutoff_date, table_name, time_column, total_deleted, "aborted", deadline
+                    prisma_client, cutoff_date, table_name, expired_rows, total_deleted, "aborted", deadline
                 )
 
             consecutive_failures = 0
@@ -934,7 +965,7 @@ class SpendLogCleanup:
             if deleted_count == 0:
                 verbose_proxy_logger.info("No more %s rows to delete. Total deleted: %s", table_name, total_deleted)
                 return await self._finish_table(
-                    prisma_client, cutoff_date, table_name, time_column, total_deleted, "exhausted", deadline
+                    prisma_client, cutoff_date, table_name, expired_rows, total_deleted, "exhausted", deadline
                 )
 
             total_deleted += deleted_count
@@ -949,7 +980,7 @@ class SpendLogCleanup:
         prisma_client: PrismaClient,
         cutoff_date: Cutoff,
         table_name: str,
-        time_column: str,
+        expired_rows: str,
         rows_deleted: int,
         stop_reason: StopReason,
         deadline: float,
@@ -967,7 +998,7 @@ class SpendLogCleanup:
         """
         if self._clock() >= deadline:
             return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
-        remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, time_column, deadline)
+        remaining: Final = await self._count_remaining(prisma_client, cutoff_date, table_name, expired_rows, deadline)
         if remaining is not None:
             SpendLogCleanupMetrics.set_rows_remaining(table_name, remaining)
         return TableCleanupResult(table_name=table_name, rows_deleted=rows_deleted, stop_reason=stop_reason)
@@ -996,6 +1027,19 @@ class SpendLogCleanup:
             key_columns=("request_id", "tool_name"),
             time_column="start_time",
             deadline=deadline,
+        )
+
+    async def _delete_old_guardrail_index_rows(
+        self, prisma_client: PrismaClient, cutoff_date: datetime, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_date,
+            table_name="LiteLLM_SpendLogGuardrailIndex",
+            key_columns=("request_id", "guardrail_id"),
+            time_column="start_time",
+            deadline=deadline,
+            expired_rows_sql=_EXPIRED_GUARDRAIL_INDEX_ROWS_SQL.format(cutoff_cast=_cutoff_cast(cutoff_date)),
         )
 
     async def _delete_old_autorouter_session_rows(
@@ -1062,7 +1106,7 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
         """
-        Prune the spend logs and the tool index rows derived from them.
+        Prune the spend logs and the tool and guardrail index rows derived from them.
 
         When the table is range-partitioned, whole expired partitions are dropped
         first because that reclaims disk immediately. Expired rows can still sit in
@@ -1090,13 +1134,18 @@ class SpendLogCleanup:
             verbose_proxy_logger.info("Dropped %d expired spend-log partitions: %s", len(dropped), dropped)
 
         logs_result: Final = await self._delete_old_logs(
-            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=3, now=self._clock())
         )
         verbose_proxy_logger.info("Deleted %s logs", logs_result.rows_deleted)
 
-        index_result: Final = await self._delete_old_tool_index_rows(prisma_client, cutoff_date, deadline)
+        index_result: Final = await self._delete_old_tool_index_rows(
+            prisma_client, cutoff_date, self._group_deadline(deadline, groups_remaining=2, now=self._clock())
+        )
         verbose_proxy_logger.info("Deleted %s expired tool index rows", index_result.rows_deleted)
-        return (logs_result, index_result)
+
+        guardrail_result: Final = await self._delete_old_guardrail_index_rows(prisma_client, cutoff_date, deadline)
+        verbose_proxy_logger.info("Deleted %s expired guardrail index rows", guardrail_result.rows_deleted)
+        return (logs_result, index_result, guardrail_result)
 
     async def _clean_spend_logs_by_size(
         self, prisma_client: PrismaClient, rule: SizeRule, deadline: float

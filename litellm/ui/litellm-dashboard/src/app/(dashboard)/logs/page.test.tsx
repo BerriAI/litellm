@@ -65,6 +65,13 @@ describe("LogsPage", () => {
     useOrganizationsMock.mockReturnValue({ data: [] });
   });
 
+  it("shows the local page title above the log controls", () => {
+    renderAs("Admin");
+
+    expect(screen.getByRole("heading", { level: 1, name: "Logs" })).toBeVisible();
+    expect(screen.getByText("Review requests, audit activity, and deleted resources.")).toBeVisible();
+  });
+
   it("keeps request and audit logs here while traces live in Lens", () => {
     renderAs("Admin");
 

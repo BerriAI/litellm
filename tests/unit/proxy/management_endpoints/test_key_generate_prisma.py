@@ -82,6 +82,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
+from litellm.proxy.proxy_server import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.proxy.management_endpoints.ui_sso import (
     LiteLLM_UpperboundKeyGenerateParams,
 )
@@ -99,8 +101,15 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import RustAuthStores, install_rust_auth_stores
 
 proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
 
 
 request_data = {
@@ -133,54 +142,6 @@ def prisma_client():
     litellm.proxy.proxy_server.user_custom_key_generate = None
 
     return prisma_client
-
-
-@pytest.mark.asyncio()
-@pytest.mark.flaky(retries=6, delay=1)
-@pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
-async def test_new_user_response(prisma_client):
-    try:
-        print("prisma client=", prisma_client)
-
-        setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-        setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
-
-        await litellm.proxy.proxy_server.prisma_client.connect()
-        from litellm.proxy.proxy_server import user_api_key_cache
-
-        _team_id = "ishaan-special-team_{}".format(uuid.uuid4())
-        await new_team(
-            NewTeamRequest(
-                team_id=_team_id,
-            ),
-            http_request=Request(scope={"type": "http"}),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-                api_key=MASTER_KEY,
-                user_id="1234",
-            ),
-        )
-
-        _response = await new_user(
-            data=NewUserRequest(
-                models=["azure-gpt-3.5"],
-                team_id=_team_id,
-                tpm_limit=20,
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_role=LitellmUserRoles.PROXY_ADMIN,
-                    api_key=MASTER_KEY,
-                    user_id="1234",
-                ),
-            )
-        )
-        print(_response)
-        assert _response.models == ["azure-gpt-3.5"]
-        assert _response.team_id == _team_id
-        assert _response.tpm_limit == 20
-
-    except Exception as e:
-        print("Got Exception", e)
-        pytest.fail(f"Got exception {e}")
 
 
 @pytest.mark.parametrize(
@@ -262,7 +223,7 @@ def test_generate_and_call_with_valid_key(prisma_client, api_route):
             generated_key = key.key
             bearer_token = "Bearer " + generated_key
 
-            assert generated_key not in user_api_key_cache.in_memory_cache.cache_dict
+            assert user_api_key_cache.get_local(AuthObject.virtual_key(generated_key)) is None
 
             value_from_prisma = await prisma_client.get_data(
                 token=generated_key,
@@ -467,9 +428,7 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
     setattr(litellm, "max_budget", 0.00001)
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    user_api_key_cache.set_cache(
-        key="{}:spend".format(litellm_proxy_budget_name), value=0
-    )
+    user_api_key_cache.set_cache(key=AuthObject.global_proxy_spend(), value=0)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
     import logging
@@ -883,7 +842,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         from litellm.proxy.proxy_server import ProxyDBLogger
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        user_api_key_cache.in_memory_cache.cache_dict = {}
+        user_api_key_cache.flush_cache()
         setattr(litellm.proxy.proxy_server, "proxy_batch_write_at", 1)
 
         from litellm import Choices, Message, ModelResponse, Usage
@@ -2244,7 +2203,7 @@ async def test_auth_vertex_ai_route(prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable(monkeypatch):
+async def test_user_api_key_auth_db_unavailable(monkeypatch, rust_auth_stores: RustAuthStores):
     """
     Test that user_api_key_auth handles DB connection failures appropriately when:
     1. DB connection fails during token validation
@@ -2254,6 +2213,8 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch):
 
     # Mock dependencies
     class MockPrismaClient:
+        db = prisma_with_empty_config().db
+
         async def get_data(self, *args, **kwargs):
             print("MockPrismaClient.get_data() called")
             raise httpx.ConnectError("Failed to connect to DB")
@@ -2262,19 +2223,11 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch):
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
+    rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
     setattr(
         litellm.proxy.proxy_server,
@@ -2301,10 +2254,11 @@ async def test_user_api_key_auth_db_unavailable(monkeypatch):
     assert isinstance(result, UserAPIKeyAuth)
     assert result.key_name == "failed-to-connect-to-db"
     assert result.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID
+    assert rust_auth_stores.key.lookups == [(hash_token("sk-987656789"), False)]
 
 
 @pytest.mark.asyncio
-async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
+async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch, rust_auth_stores: RustAuthStores):
     """
     Test that user_api_key_auth raises an exception when:
     This is default behavior
@@ -2315,6 +2269,8 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
 
     # Mock dependencies
     class MockPrismaClient:
+        db = prisma_with_empty_config().db
+
         async def get_data(self, *args, **kwargs):
             print("MockPrismaClient.get_data() called")
             raise httpx.ConnectError("Failed to connect to DB")
@@ -2323,19 +2279,11 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
             print("MockPrismaClient.connect() called")
             pass
 
-    class MockDualCache:
-        async def async_get_cache(self, *args, **kwargs):
-            return None
-
-        async def async_set_cache(self, *args, **kwargs):
-            pass
-
-        async def set_cache(self, *args, **kwargs):
-            pass
+    rust_auth_stores.key.rows[hash_token("sk-987656789")] = httpx.ConnectError("Failed to connect to DB")
 
     # Set up test environment
     setattr(litellm.proxy.proxy_server, "prisma_client", MockPrismaClient())
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", MockDualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     setattr(litellm.proxy.proxy_server, "general_settings", {})
     setattr(litellm.proxy.proxy_server, "master_key", MASTER_KEY)
 
@@ -2349,6 +2297,7 @@ async def test_user_api_key_auth_db_unavailable_not_allowed(monkeypatch):
             request=request,
             api_key="Bearer sk-987656789",
         )
+    assert rust_auth_stores.key.lookups == [(hash_token("sk-987656789"), False)]
 
 
 ## E2E Virtual Key + Secret Manager Tests #########################################
@@ -2528,5 +2477,3 @@ def test_should_track_cost_callback():
         team_id=None,
         end_user_id="1234",
     )
-
-

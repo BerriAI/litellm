@@ -12,6 +12,7 @@ export interface UseMarginConfigProps {
 
 export interface UseMarginConfigReturn {
   marginConfig: MarginConfig;
+  isConfigOwned: boolean;
   setMarginConfig: React.Dispatch<React.SetStateAction<MarginConfig>>;
   fetchMarginConfig: () => Promise<void>;
   saveMarginConfig: (config: MarginConfig) => Promise<void>;
@@ -33,6 +34,7 @@ export interface AddMarginParams {
 export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMarginConfigReturn {
   const { t } = useTranslation();
   const [marginConfig, setMarginConfig] = useState<MarginConfig>({});
+  const [isConfigOwned, setIsConfigOwned] = useState(false);
 
   const fetchMarginConfig = useCallback(async () => {
     try {
@@ -50,6 +52,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       if (response.ok) {
         const data = await response.json();
         setMarginConfig(data.values || {});
+        setIsConfigOwned(data.source === "config");
       } else {
         console.error("Failed to fetch margin config");
       }
@@ -82,10 +85,12 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
           const errorMessage =
             errorData.detail?.error || errorData.detail || t("costTracking.marginConfig.toasts.updateFailedFallback");
           toast.fromError(errorMessage);
+          await fetchMarginConfig();
         }
       } catch (error) {
         console.error("Error updating margin config:", error);
         toast.fromError(t("costTracking.marginConfig.toasts.updateFailed"));
+        await fetchMarginConfig();
       }
     },
     [accessToken, fetchMarginConfig, t],
@@ -101,8 +106,8 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       }
 
       let providerValue: string;
-      if (selectedProvider === "global") {
-        providerValue = "global";
+      if (selectedProvider === "global" || selectedProvider === "customer") {
+        providerValue = selectedProvider;
       } else {
         const backendValue = getProviderBackendValue(selectedProvider);
         if (!backendValue) {
@@ -114,8 +119,8 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
 
       if (marginConfig[providerValue]) {
         const displayName =
-          providerValue === "global"
-            ? t("costTracking.marginConfig.global")
+          providerValue === "global" || providerValue === "customer"
+            ? t(`costTracking.marginConfig.${providerValue}`)
             : Providers[selectedProvider as keyof typeof Providers];
         toast.fromError(t("costTracking.marginConfig.toasts.duplicate", { name: displayName }));
         return false;
@@ -129,6 +134,9 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
           return false;
         }
         marginValue = percentValue / 100;
+      } else if (providerValue === "customer") {
+        toast.fromError(t("costTracking.marginConfig.toasts.customerPercentageOnly"));
+        return false;
       } else {
         const fixedValue = parseFloat(fixedAmountValue);
         if (isNaN(fixedValue) || fixedValue < 0) {
@@ -174,6 +182,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
 
   return {
     marginConfig,
+    isConfigOwned,
     setMarginConfig,
     fetchMarginConfig,
     saveMarginConfig,

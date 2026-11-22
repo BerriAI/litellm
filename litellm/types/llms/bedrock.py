@@ -4,12 +4,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-from .openai import ChatCompletionToolCallChunk
+from .openai import ChatCompletionFileObjectFile, ChatCompletionImageUrlObject, ChatCompletionToolCallChunk
 
 
 class CachePointBlock(TypedDict, total=False):
@@ -17,13 +17,38 @@ class CachePointBlock(TypedDict, total=False):
     ttl: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class SystemContentBlock(TypedDict, total=False):
     text: str
     cachePoint: CachePointBlock
+    guardContent: ReadOnly[GuardrailConverseContentBlock]
 
 
-class SourceBlock(TypedDict):
-    bytes: str | None  # base 64 encoded string
+class S3Location(TypedDict):
+    uri: ReadOnly[str]
+    bucketOwner: NotRequired[ReadOnly[str]]
+
+
+class SourceBlock(TypedDict, total=False):
+    bytes: ReadOnly[str | None]  # base 64 encoded string
+    s3Location: ReadOnly[S3Location]
+
+
+class S3MediaImageUrlObject(ChatCompletionImageUrlObject, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+class S3MediaFileObjectFile(ChatCompletionFileObjectFile, total=False):
+    bucket_owner: ReadOnly[object]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
@@ -68,6 +93,7 @@ class SearchResultBlock(TypedDict, total=False):
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    video: ReadOnly[VideoBlock]
     searchResult: SearchResultBlock
     json: dict
     text: str
@@ -103,16 +129,6 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 
 class BedrockConverseGptReasoningEffortBlock(TypedDict):
     effort: ReadOnly[str]
-
-
-class GuardrailConverseTextBlock(TypedDict, total=False):
-    text: str
-
-
-class GuardrailConverseContentBlock(TypedDict, total=False):
-    """Content block for selective guardrail evaluation in Bedrock Converse API"""
-
-    text: GuardrailConverseTextBlock
 
 
 class CitationWebLocationBlock(TypedDict, total=False):
@@ -454,6 +470,9 @@ class Document(TypedDict):
     snippet: str
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ServerSentEvent:
     def __init__(
         self,
@@ -487,8 +506,8 @@ class ServerSentEvent:
     def data(self) -> str:
         return self._data
 
-    def json(self) -> Any:
-        return json.loads(self.data)
+    def json(self) -> object:
+        return _DECODED_JSON.validate_python(json.loads(self.data))
 
     @override
     def __repr__(self) -> str:

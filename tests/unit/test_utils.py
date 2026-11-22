@@ -13,7 +13,7 @@ import queue
 import threading
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from functools import partial
@@ -60,12 +60,14 @@ from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, headers
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.db.request_error_tracking import status_code_from_metadata
+from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import is_valid_api_key
 from litellm.responses.main import aresponses, responses
 from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, STREAM_OPTIONS_STASH_KEYS
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import CredentialLiteLLMParams, GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import (
     CredentialItem,
@@ -126,6 +128,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
 )
 from litellm.litellm_core_utils.model_cost_table import publish
+from litellm.litellm_core_utils.model_retirement import is_hidden_as_retired
 
 
 @pytest.mark.parametrize("root_base_model", [42, ["gemini-3.5-flash"], {"model": "gemini-3.5-flash"}])
@@ -482,6 +485,28 @@ def test_supports_video_input_reads_its_own_cost_map_flag(
     assert litellm.supports_video_input(model) is video_input
     assert litellm.supports_audio_input(model) is audio_input
     assert litellm.get_model_info(model)["supports_video_input"] is video_input
+
+
+@pytest.mark.parametrize("openai_breakpoint", [True, False])
+def test_get_model_info_reports_the_openai_breakpoint_and_bedrock_cache_point_flags_apart(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, openai_breakpoint: bool
+) -> None:
+    model: Final = "bedrock/split-cache-flags-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "bedrock",
+            "mode": "chat",
+            "supports_openai_prompt_cache_breakpoint": openai_breakpoint,
+            "supports_bedrock_converse_cache_point": not openai_breakpoint,
+        },
+    )
+    info: Final = litellm.get_model_info(model)
+    assert (info["supports_openai_prompt_cache_breakpoint"], info["supports_bedrock_converse_cache_point"]) == (
+        openai_breakpoint,
+        not openai_breakpoint,
+    )
 
 
 @pytest.mark.parametrize("continuation", [True, False])
@@ -1226,6 +1251,8 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_pdf_input": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
+            "supports_bedrock_converse_cache_point": {"type": "boolean"},
+            "supports_openai_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_thinking_cache_preservation": {"type": "boolean"},
             "supports_prompt_caching": {"type": "boolean"},
             "supports_response_schema": {"type": "boolean"},
@@ -1254,6 +1281,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_continuation": {"type": "boolean"},
             "supports_multimodal": {"type": "boolean"},
             "uses_embed_content": {"type": "boolean"},
+            "supports_logprobs": {"type": "boolean"},
             "supports_reasoning": {"type": "boolean"},
             "supports_minimal_reasoning_effort": {"type": "boolean"},
             "supports_low_reasoning_effort": {"type": "boolean"},
@@ -4058,8 +4086,390 @@ class TestIsStreamingRequest:
     def test_non_streaming_call_type_enum(self):
         assert _is_streaming_request(kwargs={}, call_type=CallTypes.acompletion) is False
 
+    @pytest.mark.parametrize("call_type", [CallTypes.aspeech, CallTypes.aspeech.value, CallTypes.speech])
+    def test_speech_with_stream_true_is_not_a_streaming_request(self, call_type):
+        assert _is_streaming_request(kwargs={"stream": True}, call_type=call_type) is False
+
     def test_stream_true_overrides_non_streaming_call_type(self):
         assert _is_streaming_request(kwargs={"stream": True}, call_type=CallTypes.acompletion) is True
+
+
+class _SpeechLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+        self.failed_payloads: Final[asyncio.Queue[dict[str, object]]] = asyncio.Queue()
+        self.sync_failed_payloads: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.logged_payloads.put(kwargs["standard_logging_object"])
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.failed_payloads.put(kwargs["standard_logging_object"])
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.sync_failed_payloads.put(kwargs["standard_logging_object"])
+
+
+class _SyncSpeechLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_payloads: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.logged_payloads.put(kwargs["standard_logging_object"])
+
+
+class _GatedAsyncAudio(httpx.AsyncByteStream):
+    def __init__(self, first: bytes, rest: bytes | Exception, gate: asyncio.Event | None = None) -> None:
+        self._first: Final = first
+        self._rest: Final = rest
+        self._gate: Final = gate
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first
+        if self._gate is not None:
+            await self._gate.wait()
+        if isinstance(self._rest, Exception):
+            raise self._rest
+        yield self._rest
+
+
+class _SyncAudio(httpx.SyncByteStream):
+    def __init__(self, first: bytes, rest: bytes) -> None:
+        self._first: Final = first
+        self._rest: Final = rest
+        self.rest_sent_at: float | None = None
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self._first
+        self.rest_sent_at = time.time()
+        yield self._rest
+
+
+_SPEECH_API_BASE: Final = "http://localhost:12348"
+_SPEECH_ARGS: Final = MappingProxyType(
+    {
+        "model": "elevenlabs/eleven_multilingual_v2",
+        "input": "hello there",
+        "voice": "21m00Tcm4TlvDq8ikWAM",
+        "api_base": _SPEECH_API_BASE,
+        "api_key": "fake_elevenlabs_api_key",
+    }
+)
+
+
+async def _aspeech(stream: bool) -> HttpxBinaryResponseContent:
+    return await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
+
+
+def _mock_elevenlabs_audio(respx_mock: respx.MockRouter, audio: httpx.AsyncByteStream | httpx.SyncByteStream) -> None:
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=audio)
+    )
+
+
+def _audio_summary(num_bytes: int) -> dict[str, object]:
+    return {"object": "binary", "content_type": "audio/mpeg", "num_bytes": num_bytes}
+
+
+def _logged_end(payload: dict[str, object]) -> float:
+    end_time: Final = payload["endTime"]
+    assert isinstance(end_time, float)
+    return end_time
+
+
+@pytest.fixture
+def speech_logger(monkeypatch: pytest.MonkeyPatch) -> _SpeechLogger:
+    logger: Final = _SpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return logger
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_logs_streamed_audio_like_buffered_audio(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
+        return_value=httpx.Response(status_code=200, content=b"audio", headers={"content-type": "audio/mpeg"})
+    )
+
+    async def logged_speech(stream: bool) -> dict[str, object]:
+        response: Final = await _aspeech(stream=stream)
+        assert await response.aread() == b"audio"
+        return await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    buffered: Final = await logged_speech(stream=False)
+    streamed: Final = await logged_speech(stream=True)
+
+    assert streamed["status"] == "success"
+    assert streamed["call_type"] == buffered["call_type"]
+    assert streamed["response_cost"] == buffered["response_cost"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_is_logged_when_the_audio_ends(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    rest_released: Final = asyncio.Event()
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"rest", rest_released))
+
+    response: Final = await _aspeech(stream=True)
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    audio_still_arriving_at: Final = time.time()
+    rest_released.set()
+    assert b"".join([chunk async for chunk in audio]) == b"rest"
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
+    assert _logged_end(logged) >= audio_still_arriving_at
+    assert logged["error_information"] != {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("upstream_error", "raised"),
+    [
+        (httpx.ReadError("upstream reset"), litellm.APIConnectionError),
+        (httpx.ReadTimeout("upstream stalled"), litellm.Timeout),
+    ],
+)
+async def test_aspeech_stream_broken_mid_clip_is_billed_as_a_failure(
+    respx_mock: respx.MockRouter,
+    speech_logger: _SpeechLogger,
+    upstream_error: httpx.TransportError,
+    raised: type[Exception],
+) -> None:
+    respx_mock.post(url__regex=rf"{_SPEECH_API_BASE}/v1/text-to-speech/.*").mock(
+        side_effect=[
+            httpx.Response(
+                status_code=200,
+                headers={"content-type": "audio/mpeg"},
+                stream=_GatedAsyncAudio(b"first", rest),
+            )
+            for rest in (b"rest", upstream_error)
+        ]
+    )
+
+    finished: Final = await _aspeech(stream=True)
+    await finished.aread()
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+    broken: Final = await _aspeech(stream=True)
+    with pytest.raises(raised):
+        await broken.aread()
+    await broken.aclose()
+    failed: Final = await asyncio.wait_for(speech_logger.failed_payloads.get(), timeout=5)
+
+    assert failed["status"] == "failure"
+    assert isinstance(logged["response_cost"], float) and logged["response_cost"] > 0
+    assert failed["response_cost"] == logged["response_cost"]
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+    assert speech_logger.logged_payloads.empty()
+    assert speech_logger.sync_failed_payloads.empty()
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_is_logged_with_the_audio_sent(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
+
+    response: Final = await _aspeech(stream=True)
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert logged["status"] == "success"
+    assert logged["response"] == _audio_summary(len(b"first"))
+    assert logged["error_information"] == {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+
+
+class _SpendRowLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: Final[asyncio.Queue[SpendLogsPayload]] = asyncio.Queue()
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        await self.rows.put(get_logging_payload(kwargs, response_obj, start_time, end_time))
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_marks_the_spend_row_as_a_client_disconnect(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spend_rows: Final = _SpendRowLogger()
+    monkeypatch.setattr(litellm, "callbacks", [spend_rows])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata={"user_api_key": "hashed-key"})
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    row: Final = await asyncio.wait_for(spend_rows.rows.get(), timeout=5)
+
+    assert row["status"] == "success"
+    assert json.loads(row["metadata"])["error_information"] == {
+        "error_code": "499",
+        "error_message": "Client disconnected the request",
+        "error_class": "ClientDisconnected",
+    }
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_closed_mid_clip_leaves_the_callers_metadata_untouched(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spend_rows: Final = _SpendRowLogger()
+    monkeypatch.setattr(litellm, "callbacks", [spend_rows])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"never sent", asyncio.Event()))
+    caller_metadata: Final = {"user_api_key": "hashed-key"}
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=True, metadata=caller_metadata)
+    audio: Final = await response.aiter_bytes()
+    assert await anext(audio) == b"first"
+    await response.aclose()
+    await asyncio.wait_for(spend_rows.rows.get(), timeout=5)
+
+    assert caller_metadata == {"user_api_key": "hashed-key"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize("stream", [1, "true"])
+async def test_aspeech_stream_other_than_true_buffers_the_audio(
+    respx_mock: respx.MockRouter, speech_logger: _SpeechLogger, stream: object
+) -> None:
+    _mock_elevenlabs_audio(respx_mock, _GatedAsyncAudio(b"first", b"rest"))
+
+    response: Final = await litellm.aspeech(**_SPEECH_ARGS, stream=stream)
+    logged: Final = await asyncio.wait_for(speech_logger.logged_payloads.get(), timeout=5)
+
+    assert response.content == b"firstrest"
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
+
+
+class _SpeechRejected(Exception):
+    pass
+
+
+class _RejectingGuardrail(CustomGuardrail):
+    async def async_post_call_success_deployment_hook(self, request_data, response, call_type) -> None:
+        raise _SpeechRejected
+
+
+class _AudioThatFailsToClose(httpx.AsyncByteStream):
+    def __init__(self) -> None:
+        self.close_attempts: int = 0
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield b"first"
+
+    async def aclose(self) -> None:
+        self.close_attempts += 1
+        raise httpx.ReadError("the provider connection broke while closing")
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+async def test_aspeech_stream_failing_to_close_keeps_the_guardrail_rejection(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _AudioThatFailsToClose()
+    monkeypatch.setattr(litellm, "callbacks", [_RejectingGuardrail()])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    _mock_elevenlabs_audio(respx_mock, audio)
+
+    with pytest.raises(_SpeechRejected):
+        await _aspeech(stream=True)
+
+    assert audio.close_attempts == 1
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_is_logged_when_the_audio_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _SyncAudio(b"first", b"rest")
+    _mock_elevenlabs_audio(respx_mock, audio)
+    speech_logger: Final = _SyncSpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
+
+    response: Final = litellm.speech(**_SPEECH_ARGS, stream=True)
+    assert response.read() == b"firstrest"
+    logged: Final = speech_logger.logged_payloads.get(timeout=5)
+
+    assert logged["response"] == _audio_summary(len(b"firstrest"))
+    assert audio.rest_sent_at is not None and _logged_end(logged) >= audio.rest_sent_at
+
+
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future[object]:
+        future: Final = Future[object]()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_success_handler_runs_when_the_audio_ends(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _SyncAudio(b"first", b"rest")
+    _mock_elevenlabs_audio(respx_mock, audio)
+    speech_logger: Final = _SyncSpeechLogger()
+    monkeypatch.setattr(litellm, "callbacks", [speech_logger])
+    monkeypatch.setattr("litellm.utils.executor", _InlineExecutor())
+
+    response: Final = litellm.speech(**_SPEECH_ARGS, stream=True)
+    logged_at_headers: Final = speech_logger.logged_payloads.qsize()
+    assert response.read() == b"firstrest"
+
+    assert logged_at_headers == 0
+    assert speech_logger.logged_payloads.get_nowait()["response"] == _audio_summary(len(b"firstrest"))
+
+
+class _SyncAudioThatRecordsClose(httpx.SyncByteStream):
+    def __init__(self) -> None:
+        self.closed: bool = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b"first"
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _ResponseMetadataFailed(Exception):
+    pass
+
+
+def _fail_response_metadata(**_: object) -> None:
+    raise _ResponseMetadataFailed
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_speech_stream_failing_after_the_headers_closes_the_audio(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audio: Final = _SyncAudioThatRecordsClose()
+    _mock_elevenlabs_audio(respx_mock, audio)
+    monkeypatch.setattr("litellm.utils.update_response_metadata", _fail_response_metadata)
+
+    with pytest.raises(_ResponseMetadataFailed):
+        litellm.speech(**_SPEECH_ARGS, stream=True)
+
+    assert audio.closed
 
 
 class TestCallbackAsyncSyncSeparation:
@@ -4244,6 +4654,55 @@ def test_function_setup_lets_other_threads_drop_callbacks_while_it_sets_up_logge
     drops_on_compare.drop_thread.join()
 
     assert drops_on_compare.drop_finished_during_logger_setup
+
+
+class _DynamicCallbacksThatDropFromAnotherThreadWhenRead:
+    def __init__(self, dropped: tuple[object, ...]) -> None:
+        self.dropped: Final = dropped
+        self.drop_thread: threading.Thread | None = None
+
+    def __iter__(self) -> Iterator[object]:
+        if self.drop_thread is None:
+            self.drop_thread = threading.Thread(
+                target=litellm.logging_callback_manager.drop_callbacks, args=(self.dropped,)
+            )
+            self.drop_thread.start()
+            self.drop_thread.join(timeout=0.2)
+        return iter(())
+
+
+def test_function_setup_does_not_re_add_a_callback_another_thread_drops_while_it_reads_callbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dropped: Final = CustomLogger()
+    dynamic_callbacks: Final = _DynamicCallbacksThatDropFromAnotherThreadWhenRead((dropped,))
+    callback_list_names: Final = (
+        "input_callback",
+        "success_callback",
+        "failure_callback",
+        "service_callback",
+        "_async_input_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    )
+    monkeypatch.setattr(litellm.utils, "callback_list", ["initialized"])
+    for list_name in callback_list_names:
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "callbacks", [dropped])
+
+    litellm.utils.function_setup(
+        "completion",
+        litellm.utils.Rules(),
+        datetime.now(),
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        litellm_call_id="callbacks-read-under-lock",
+        callbacks=dynamic_callbacks,
+    )
+    assert dynamic_callbacks.drop_thread is not None
+    dynamic_callbacks.drop_thread.join()
+
+    assert not any(dropped in getattr(litellm, list_name) for list_name in ("callbacks", *callback_list_names))
 
 
 class TestMetadataNoneHandling:
@@ -8522,7 +8981,7 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
 
 def test_get_model_info_gemini(monkeypatch):
     """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    Check rate-limit metadata for supported non-video Gemini model families.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -8531,6 +8990,7 @@ def test_get_model_info_gemini(monkeypatch):
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
+            and "video" not in info.get("supported_output_modalities", [])
             and "gemma" not in model
             and "learnlm" not in model
             and "imagen" not in model
@@ -8540,6 +9000,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
+            and "genie" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -9798,6 +10259,82 @@ def test_validate_environment_ollama_failed():
         assert kv["missing_keys"] == ["OLLAMA_API_BASE"]
 
 
+def _live_together_ai_cost_map_rows() -> frozenset[str]:
+    return frozenset(
+        key
+        for key, value in litellm.model_cost.items()
+        if value.get("litellm_provider") == "together_ai" and not is_hidden_as_retired(value)
+    )
+
+
+def _resolves_to_a_provider(model: str) -> bool:
+    try:
+        litellm.get_llm_provider(model=model)
+    except litellm.BadRequestError:
+        return False
+    return True
+
+
+_TOGETHER_AI_KEY_NAMES: Final = ("TOGETHER_API_KEY", "TOGETHER_AI_API_KEY", "TOGETHERAI_API_KEY", "TOGETHER_AI_TOKEN")
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefixed_together_ai_ids(
+    monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
+) -> None:
+    claimed_by_other_providers: Final = frozenset(
+        itertools.chain.from_iterable(
+            models for provider, models in litellm.models_by_provider.items() if provider != "together_ai"
+        )
+    )
+    bare_ids: Final = frozenset(
+        key.removeprefix("together_ai/") for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")
+    )
+    unresolved_bare_ids: Final = tuple(
+        sorted(bare_id for bare_id in bare_ids - claimed_by_other_providers if not _resolves_to_a_provider(bare_id))
+    )
+    bare_and_prefixed_ids: Final = (
+        *unresolved_bare_ids,
+        *(f"together_ai/{bare_id}" for bare_id in unresolved_bare_ids),
+    )
+
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in bare_and_prefixed_ids}
+
+    assert unresolved_bare_ids
+    assert without_key == dict.fromkeys(
+        bare_and_prefixed_ids, {"keys_in_environment": False, "missing_keys": ["TOGETHERAI_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(bare_and_prefixed_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
+def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    monkeypatch.setattr(
+        litellm,
+        "together_ai_models",
+        frozenset((*litellm.together_ai_models, *(f"together_ai/{model}" for model in shared_bare_ids))),
+    )
+
+    for key_name in (*_TOGETHER_AI_KEY_NAMES, "WANDB_API_KEY"):
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+    monkeypatch.setenv("WANDB_API_KEY", "wandb-test-key")
+    with_key: Final = {model: validate_environment(model=model) for model in shared_bare_ids}
+
+    assert shared_bare_ids
+    assert without_key == dict.fromkeys(
+        shared_bare_ids, {"keys_in_environment": False, "missing_keys": ["WANDB_API_KEY"]}
+    )
+    assert with_key == dict.fromkeys(shared_bare_ids, {"keys_in_environment": True, "missing_keys": []})
+
+
 def test_get_supported_openai_params() -> None:
     assert isinstance(get_supported_openai_params("gpt-4"), list)
 
@@ -11030,6 +11567,36 @@ def test_check_valid_key_returns_false_for_http_unauthorized() -> None:
         assert upstream.calls.last.request.headers["Authorization"] == "Bearer invalid-test-key"
 
 
+def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "model_fallbacks", ["anthropic/claude-haiku-5-5"])
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    upstream: Final[respx.MockRouter]
+
+    with respx.mock(assert_all_called=False) as upstream:
+        _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
+            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+        )
+        fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
+            200,
+            json={
+                "id": "msg_test",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+        valid_key: Final = check_valid_key(model="gpt-5-mini", api_key="invalid-test-key")
+
+    assert valid_key is False
+    assert not fallback_route.called
+
+
 def test_check_valid_key_returns_true_for_successful_completion() -> None:
     response_body: Final = {
         "id": "chatcmpl-test",
@@ -11184,6 +11751,32 @@ def test_get_valid_models_returns_static_fireworks_models_without_endpoint_check
     assert set(actual_models) == expected_models
     assert actual_models
     assert expected_models <= set(env_inferred_models)
+
+
+def test_get_valid_models_lists_each_live_together_ai_model_once_under_its_cost_map_key() -> None:
+    listed: Final = get_valid_models(check_provider_endpoint=False, custom_llm_provider="together_ai")
+    listed_bare_ids: Final = {model.removeprefix("together_ai/") for model in listed}
+    live_rows: Final = {key for key in _live_together_ai_cost_map_rows() if key.startswith("together_ai/")}
+
+    assert listed
+    assert len(listed_bare_ids) == len(listed)
+    assert set(listed) == live_rows
+
+
+@pytest.mark.parametrize("together_ai_key_name", _TOGETHER_AI_KEY_NAMES)
+def test_get_valid_models_infers_together_ai_from_any_together_ai_key_name(
+    monkeypatch: pytest.MonkeyPatch,
+    together_ai_key_name: str,
+) -> None:
+    for key_name in _TOGETHER_AI_KEY_NAMES:
+        monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+    monkeypatch.setenv(together_ai_key_name, "together-test-key")
+    with_key: Final = [model for model in get_valid_models() if model.startswith("together_ai/")]
+
+    assert with_key
+    assert without_key == []
+    assert sorted(with_key) == sorted(get_valid_models(custom_llm_provider="together_ai"))
 
 
 def test_get_valid_models_uses_the_litellm_params_anthropic_api_key() -> None:

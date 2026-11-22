@@ -119,6 +119,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingPlugin,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
     validate_litellm_params_strictly,
 )
 from litellm.types.utils import (
@@ -132,6 +133,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import (
     ModelInfoLookupMiss,
+    base_fields_replaced_by,
     catalog_with_runtime_registrations,
     get_potential_model_names,
     get_secret,
@@ -339,10 +341,11 @@ def _inherited_off_peak_base_rates(
     backend_entry: Final = _backend_cost_entry(host, backend_model, provider)
     if backend_entry is None:
         return {}
+    superseded: Final = base_fields_replaced_by(model_info)
     return {
         field: copy.deepcopy(value)
         for field, value in backend_entry.items()
-        if model_info.get(field) is None and value is not None
+        if model_info.get(field) is None and value is not None and field not in superseded
     }
 
 
@@ -1123,7 +1126,12 @@ class HostRegistry(HostModelInfo):
         found, written into the entry's params."""
         entry: Final = self._build_entry(build, index)
         references: Final = tuple(as_str_mapping(ref) or {} for ref in refs)
-        values: Final = tuple(get_secret(str(reference["name"])) for reference in references)
+        values: Final = tuple(
+            str(reference["name"])
+            if holds_secret_pointer(str(reference["key"]))
+            else get_secret(str(reference["name"]))
+            for reference in references
+        )
         entry.litellm_params.update(
             {str(reference["key"]): value for reference, value in zip(references, values, strict=True)}
         )

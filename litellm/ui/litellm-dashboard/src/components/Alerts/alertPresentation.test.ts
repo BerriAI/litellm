@@ -31,6 +31,48 @@ describe("alert presentation", () => {
     expect(presentation.description).toContain(formatted);
     expect(presentation.baseline).toBe(baseline);
   });
+  it("presents a prompt cache incident without reading it as a metric or deprecation alert", () => {
+    const presentation = presentAlert({
+      source: "performance",
+      alert: {
+        ...saved,
+        type: "prompt_cache",
+        resource_type: "deployment",
+        resource_id: "claude-east",
+        evidence: {
+          config_fingerprint: "config-1",
+          prefix_fingerprint: "prefix-1",
+          provider: "anthropic",
+          provider_model: "claude-test",
+          consecutive_misses: 3,
+          proven_write_tokens: 2048,
+          ttl_seconds: 300,
+        },
+      },
+    });
+    expect(presentation.title).toBe("Prompt cache usage advisory for claude-east");
+    expect(presentation.description).toContain("3 observed requests to claude-test reported no cache usage");
+    expect(presentation.description).toContain("not necessarily consecutive and do not prove a caching outage");
+    expect(presentation.description).not.toContain("prefix-1");
+    expect([presentation.resourceType, presentation.href, presentation.history]).toEqual([
+      "deployment",
+      undefined,
+      null,
+    ]);
+    const expectedDetails = {
+      deploymentId: "claude-east",
+      model: "claude-test",
+      misses: 3,
+      provenWriteTokens: 2048,
+      ttlSeconds: 300,
+      firstMiss: saved.window_start,
+      lastMiss: saved.window_end,
+    };
+    expect(presentation.promptCache).toEqual(expectedDetails);
+  });
+  it("keeps metric alerts on their chart", () => {
+    expect(presentAlert({ source: "performance", alert: saved }).promptCache).toBeNull();
+  });
   it("links to the resource with an inclusive eight-day window", () => {
     expect(activityLink(saved)).toBe(
       "/ui/teams?team=example-team&detail_tab=activity&activity_from=2026-01-01&activity_to=2026-01-08",

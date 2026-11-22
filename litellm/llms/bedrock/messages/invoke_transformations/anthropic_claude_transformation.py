@@ -1,5 +1,4 @@
-from collections.abc import AsyncIterator, Mapping, Sequence
-from types import MappingProxyType
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -32,36 +31,23 @@ from litellm.llms.anthropic.messages.native.transformation import (
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
-from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
-    bedrock_invoke_guardrail_headers,
 )
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
-    bedrock_native_output_format,
-    bedrock_native_output_retry_requested,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
-    for_bedrock_json_tool_retry,
     get_anthropic_beta_from_headers,
-    is_bedrock_native_output_rejection,
-    json_object_or_none,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
-    requests_output_config_format,
     strip_unsupported_bedrock_invoke_output_config_keys,
     supports_bedrock_prompt_cache_ttl,
     tools_without_eager_input_streaming,
-    warn_bedrock_native_output_rejected,
-)
-from litellm.llms.bedrock.request_metadata import (
-    bedrock_request_metadata_headers,
-    merge_bedrock_invoke_headers,
 )
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -71,8 +57,6 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.bedrock import BedrockInvokeAnthropicMessagesRequest
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
-from litellm.types.utils import GenericStreamingChunk as GChunk
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -116,6 +100,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def drops_dangerous_tool_use_beta_without_safeguards(self) -> bool:
         return True
 
+    def supports_diagnostics(self) -> bool:
+        return False
+
     def model_specific_anthropic_betas(self, model: str, litellm_params: GenericLiteLLMParams) -> frozenset[str]:
         if bedrock_supports_per_turn_control(
             model, _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None))
@@ -136,62 +123,6 @@ class AmazonAnthropicClaudeMessagesConfig(
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
-
-    def native_output_fallback_litellm_params(
-        self,
-        model: str,
-        anthropic_messages_optional_request_params: Mapping[str, object],
-        litellm_params: GenericLiteLLMParams,
-    ) -> GenericLiteLLMParams | None:
-        model_info: Final = _MODEL_INFO.validate_python(litellm_params.model_info)
-        if not (
-            bedrock_native_output_retry_requested(
-                model, anthropic_messages_optional_request_params, model_info=model_info
-            )
-        ):
-            return None
-        legacy_output_format: Final = json_object_or_none(
-            anthropic_messages_optional_request_params.get("output_format")
-        )
-        output_config: Final = json_object_or_none(anthropic_messages_optional_request_params.get("output_config"))
-        output_config_format: Final = (
-            json_object_or_none(output_config.get("format")) if output_config is not None else None
-        )
-        output_format: Final = legacy_output_format if legacy_output_format is not None else output_config_format
-        if output_format is None or (bedrock_native_output_format(model, output_format, model_info=model_info) is None):
-            return None
-        retry_params: Final = for_bedrock_json_tool_retry({"model_info": model_info})
-        retry_model_info: Final = _MODEL_INFO.validate_python(retry_params.get("model_info"))
-        return litellm_params.model_copy(update={"model_info": retry_model_info})
-
-    def should_retry_anthropic_messages_without_native_output(
-        self, e: httpx.HTTPStatusError, request_body: Mapping[str, object], model: str
-    ) -> bool:
-        if not requests_output_config_format(request_body) or not is_bedrock_native_output_rejection(
-            e.response.status_code, e.response.text
-        ):
-            return False
-        warn_bedrock_native_output_rejected(model, e.response.text)
-        return True
-
-    def validate_anthropic_messages_environment(
-        self,
-        headers: dict,
-        model: str,
-        messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
-        raw_guardrail_config: Final = litellm_params.get("guardrailConfig")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # litellm_params is an untyped dict param
-        guardrail_headers: Final = (
-            ()
-            if raw_guardrail_config is None
-            else tuple(bedrock_invoke_guardrail_headers(raw_guardrail_config).items())  # pyright: ignore[reportUnknownArgumentType]  # read from the untyped dict param
-        )
-        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
-        return merge_bedrock_invoke_headers(headers, guardrail_headers, metadata_headers, owned_names), api_base  # pyright: ignore[reportUnknownArgumentType]  # headers is an untyped dict param
 
     def sign_request(
         self,
@@ -920,199 +851,3 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request = self._strip_unsupported_bedrock_invoke_fields(anthropic_messages_request)
 
         return anthropic_messages_request
-
-    def get_async_streaming_response_iterator(
-        self,
-        model: str,
-        httpx_response: httpx.Response,
-        request_body: dict,
-        litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
-        aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
-            model=model,
-        )
-        completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
-        )
-        # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
-        return self.bedrock_sse_wrapper(
-            completion_stream=completion_stream,
-            litellm_logging_obj=litellm_logging_obj,
-            request_body=request_body,
-        )
-
-    async def bedrock_sse_wrapper(
-        self,
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
-        litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
-    ):
-        """
-        Bedrock invoke does not return SSE formatted data. This function is a wrapper to ensure litellm chunks are SSE formatted.
-
-        Bedrock's Anthropic-compatible streaming usually puts cache usage fields
-        (cache_creation_input_tokens, cache_read_input_tokens) on message_stop.
-        Some deployments (including GovCloud) emit the cache breakdown only on
-        ``message_start.message.usage``; ``message_delta`` / ``message_stop`` then
-        repeat uncached ``input_tokens`` only. We promote cache fields from
-        ``message_stop`` onto ``message_delta``, and when those are absent we
-        merge them from ``message_start`` so logging/cost sees a consistent usage
-        object (fixes negative input costs: LIT-2411).
-        """
-        from litellm.llms.anthropic.messages.native.streaming_iterator import (
-            BaseAnthropicMessagesStreamingIterator,
-        )
-
-        handler: Final = BaseAnthropicMessagesStreamingIterator(
-            litellm_logging_obj=litellm_logging_obj,
-            request_body=request_body,
-        )
-
-        patched_stream: Final = self._promote_message_stop_usage(completion_stream)
-
-        sse_stream: Final = handler.async_sse_wrapper(patched_stream)
-        try:
-            async for chunk in sse_stream:
-                yield chunk
-        finally:
-            # Close the inner generator deterministically so a client disconnect
-            # (GeneratorExit here) reaches async_sse_wrapper's partial-spend logging
-            # now instead of at garbage collection. See LIT-5839.
-            await sse_stream.aclose()
-
-    @staticmethod
-    def _merge_message_start_cache_into_delta_usage(
-        delta_usage: dict[str, object],
-        start_usage: Mapping[str, object] | None,
-    ) -> None:
-        """
-        Copy cache breakdown from message_start onto message_delta usage when
-        those keys are missing on the delta (GovCloud / some Bedrock streams).
-        """
-        if not start_usage:
-            return
-        for field in ("cache_creation_input_tokens", "cache_read_input_tokens"):
-            if field not in delta_usage:
-                val = start_usage.get(field)
-                if val is not None:
-                    delta_usage[field] = val
-        if "cache_creation" not in delta_usage:
-            cc: Final = start_usage.get("cache_creation")
-            if cc is not None:
-                delta_usage["cache_creation"] = cc
-
-    @staticmethod
-    async def _promote_message_stop_usage(
-        completion_stream: AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict],
-    ) -> AsyncIterator[bytes | GenericStreamingChunk | ModelResponseStream | dict]:
-        """
-        Promote cache usage fields onto message_delta from message_stop (and,
-        when stop lacks them, from message_start).  Ensures the final usage
-        chunk that logging/cost sees is always self-consistent.
-        """
-        _CACHE_FIELDS: Final = ("cache_creation_input_tokens", "cache_read_input_tokens")
-        pending_delta: dict[str, Any] | None = None
-        start_usage_snapshot: Mapping[str, object] | None = None
-
-        async for chunk in completion_stream:
-            if not isinstance(chunk, dict):
-                if pending_delta is not None:
-                    yield pending_delta
-                    pending_delta = None
-                yield chunk
-                continue
-
-            chunk_type = chunk.get("type")
-
-            if chunk_type == "message_start":
-                msg: dict[str, object] = cast(dict[str, object], chunk.get("message") or {})
-                u = msg.get("usage")
-                if isinstance(u, dict):
-                    start_usage_snapshot = dict(u)
-                if pending_delta is not None:
-                    yield pending_delta
-                    pending_delta = None
-                yield chunk
-                continue
-
-            if chunk_type == "message_delta":
-                pending_delta = cast(dict[str, Any], chunk)
-                continue
-
-            if chunk_type == "message_stop" and pending_delta is not None:
-                stop_usage = dict(chunk.get("usage") or {})
-                delta_usage = dict(pending_delta.get("usage") or {})
-
-                for field in _CACHE_FIELDS:
-                    if field in stop_usage:
-                        delta_usage[field] = stop_usage[field]
-
-                raw_input = stop_usage.get("input_tokens")
-                if raw_input is not None:
-                    delta_usage["input_tokens"] = raw_input if isinstance(raw_input, int) else 0
-
-                AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
-                    delta_usage, start_usage_snapshot
-                )
-
-                if delta_usage:
-                    pending_delta["usage"] = delta_usage
-
-                yield pending_delta
-                pending_delta = None
-                yield chunk
-                continue
-
-            if pending_delta is not None:
-                yield pending_delta
-                pending_delta = None
-
-            yield chunk
-
-        if pending_delta is not None:
-            delta_usage = dict(pending_delta.get("usage") or {})
-            AmazonAnthropicClaudeMessagesConfig._merge_message_start_cache_into_delta_usage(
-                delta_usage, start_usage_snapshot
-            )
-            if delta_usage:
-                pending_delta["usage"] = delta_usage
-            yield pending_delta
-
-
-class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
-    def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
-        """
-        Parse the chunk data into anthropic /messages format
-
-        Bedrock returns usage metrics using camelCase keys. Convert these to
-        the Anthropic `/v1/messages` specification so callers receive a
-        consistent response shape when streaming.
-
-        Token counts already present in the chunk's own Anthropic usage block
-        win over the invocationMetrics-derived ones, and cache token fields
-        (``cache_read_input_tokens`` / ``cache_creation_input_tokens`` on
-        ``message_stop.usage``, or ``cacheReadInputTokenCount`` /
-        ``cacheWriteInputTokenCount`` inside the invocation metrics) are
-        preserved: ``invocationMetrics.inputTokenCount`` excludes cache reads
-        and writes, so replacing the whole usage block with input/output counts
-        alone drops the cache breakdown, ``_promote_message_stop_usage`` has
-        nothing left to promote, and cache tokens end up billed at $0.
-        """
-        amazon_bedrock_invocation_metrics: Final = chunk_data.pop("amazon-bedrock-invocationMetrics", {})
-        if amazon_bedrock_invocation_metrics:
-            existing_usage: Final = chunk_data.get("usage")
-            preserved_usage: Final = existing_usage if isinstance(existing_usage, dict) else MappingProxyType({})
-            metrics_usage: Final = MappingProxyType(
-                {
-                    anthropic_key: amazon_bedrock_invocation_metrics[metrics_key]
-                    for anthropic_key, metrics_key in (
-                        ("input_tokens", "inputTokenCount"),
-                        ("output_tokens", "outputTokenCount"),
-                        ("cache_read_input_tokens", "cacheReadInputTokenCount"),
-                        ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
-                    )
-                    if metrics_key in amazon_bedrock_invocation_metrics
-                }
-            )
-            chunk_data["usage"] = {**metrics_usage, **preserved_usage}
-        return chunk_data

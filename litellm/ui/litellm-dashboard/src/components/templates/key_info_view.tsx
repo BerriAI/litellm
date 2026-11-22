@@ -3,13 +3,13 @@ import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";
 import { useProjects } from "@/app/(dashboard)/hooks/projects/useProjects";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { formatBudgetResetTime } from "@/utils/budgetUtils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { canModifyKey as canModifyVirtualKey } from "@/utils/keyPermissions";
 import { ArrowLeft, Info } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -60,12 +60,9 @@ import { extractMcpEntitlement } from "../mcp_server_management/mcpEntitlement";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/RegenerateKeyModal";
 import { parseErrorMessage } from "../shared/errorUtils";
-import {
-  InheritedBudgetHint,
-  inheritedBudgetGates,
-  keyOwnerBudgetSource,
-  teamMemberBudgetGate,
-} from "../shared/InheritedBudgetHint";
+import { AppliedBudgetsCard } from "../shared/AppliedBudgetsCard";
+import { appliedBudgets } from "../shared/appliedBudgets";
+import { inheritedBudgetGates, keyOwnerBudgetSource, teamMemberBudgetGate } from "../shared/InheritedBudgetHint";
 import { KeyEditView } from "./key_edit_view";
 import { keyOrganizationId } from "./keyEditFieldNormalizers";
 import { isTeamAdminEditingMemberKey, teamAdminMemberKeyPayload } from "./teamAdminMemberKeyPayload";
@@ -130,11 +127,9 @@ export default function KeyInfoView({
   const { teams: teamsData } = useTeams();
   const { data: organizations } = useOrganizations();
   const { data: projects } = useProjects();
-  const { data: uiSettingsData } = useUISettings();
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
   const { data: allMcpServers } = useMCPServers();
   const { data: allMcpToolsets } = useMCPToolsets();
-  const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const [isEditing, setIsEditing] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -145,14 +140,12 @@ export default function KeyInfoView({
   const { mutate: setKeyBlockedState, isPending: blockLoading } = useSetKeyBlockedState();
   // Add local state to maintain key data and track regeneration
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
-  const memberBudgetTeamIds = useMemo(
-    () =>
-      currentKeyData?.max_budget === null && currentKeyData.team_id && currentKeyData.user_id
-        ? [currentKeyData.team_id]
-        : [],
+  const memberBudgetUserIds = useMemo(
+    (): Record<string, string[]> =>
+      currentKeyData?.team_id && currentKeyData.user_id ? { [currentKeyData.team_id]: [currentKeyData.user_id] } : {},
     [currentKeyData],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetTeamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [keyDataUpdateHeldUntilModalClose, setKeyDataUpdateHeldUntilModalClose] = useState<Partial<KeyResponse> | null>(
     null,
@@ -519,14 +512,7 @@ export default function KeyInfoView({
     return t("keyDetail.keyInfoView.timestamp", { date: dateStr, time: timeStr });
   };
 
-  const canModifyKey =
-    isProxyAdminRole(userRole || "") ||
-    (teamsData &&
-      isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
-        userID || "",
-      )) ||
-    (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
+  const canModifyKey = canModifyVirtualKey(currentKeyData, teamsData, userID, userRole);
 
   const isKeyAdmin =
     isProxyAdminRole(userRole || "") ||
@@ -591,13 +577,11 @@ export default function KeyInfoView({
 
   const hasOwnBudget = currentKeyData.max_budget !== null;
   const ownerUser = keyOwnerBudgetSource(currentKeyData, applyUserBudgetToTeamKeys);
-  const memberGate = hasOwnBudget
-    ? null
-    : teamMemberBudgetGate(
-        teamMemberBudgets[currentKeyData.team_id ?? ""],
-        currentKeyData.user_id,
-        currentKeyData.user?.user_email,
-      );
+  const memberGate = teamMemberBudgetGate(
+    teamMemberBudgets[currentKeyData.team_id ?? ""],
+    currentKeyData.user_id,
+    currentKeyData.user?.user_email,
+  );
   const budgetDisplay = (() => {
     if (hasOwnBudget) return `$${formatNumberWithCommas(currentKeyData.max_budget, 2)}`;
     if (memberGate)
@@ -606,7 +590,11 @@ export default function KeyInfoView({
       });
     return t("keyDetail.keyInfoView.budget.unlimited");
   })();
-  const inheritedGates = hasOwnBudget ? [] : inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate);
+  const budgetsThatApply = appliedBudgets(
+    currentKeyData,
+    currentKeyData.key_alias || t("shared.appliedBudgets.thisKey"),
+    inheritedBudgetGates(parentTeam, parentOrg, ownerUser, memberGate),
+  );
   const budgetResetTime = formatBudgetResetTime(currentKeyData.budget_reset_at);
 
   return (
@@ -806,13 +794,12 @@ export default function KeyInfoView({
                 <div className="mt-2">
                   <h3 className="text-lg font-medium">${formatNumberWithCommas(currentKeyData.spend, 4)}</h3>
                   <p className="text-sm">
-                    {memberGate
+                    {memberGate && !hasOwnBudget
                       ? t("keyDetail.keyInfoView.overview.teamMemberSpend", {
                           spend: formatNumberWithCommas(memberGate.spend ?? 0, 4),
                           maxBudget: formatNumberWithCommas(memberGate.maxBudget, 2),
                         })
                       : t("keyDetail.keyInfoView.overview.ofBudget", { budget: budgetDisplay })}
-                    <InheritedBudgetHint gates={inheritedGates} />
                   </p>
                   {budgetResetTime && (
                     <p className="text-sm">
@@ -845,6 +832,8 @@ export default function KeyInfoView({
                   </p>
                 </div>
               </Card>
+
+              <AppliedBudgetsCard budgets={budgetsThatApply} className="sm:col-span-2" />
 
               <Card className="block p-6">
                 <p className="text-sm">{t("keyDetail.keyInfoView.overview.rateLimits")}</p>
@@ -1060,21 +1049,19 @@ export default function KeyInfoView({
                     </p>
                   </div>
 
-                  {enableProjectsUI && (
-                    <div>
-                      <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.project")}</p>
-                      <p className="text-sm">
-                        {currentKeyData.project_id
-                          ? (() => {
-                              const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
-                              return project?.project_alias
-                                ? `${project.project_alias} (${currentKeyData.project_id})`
-                                : currentKeyData.project_id;
-                            })()
-                          : t("keyDetail.keyInfoView.settings.notSet")}
-                      </p>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.project")}</p>
+                    <p className="text-sm">
+                      {currentKeyData.project_id
+                        ? (() => {
+                            const project = projects?.find((p) => p.project_id === currentKeyData.project_id);
+                            return project?.project_alias
+                              ? `${project.project_alias} (${currentKeyData.project_id})`
+                              : currentKeyData.project_id;
+                          })()
+                        : t("keyDetail.keyInfoView.settings.notSet")}
+                    </p>
+                  </div>
 
                   <div>
                     <p className="text-sm font-medium">{t("keyDetail.keyInfoView.settings.organization")}</p>

@@ -2,10 +2,13 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
 from litellm.models.alert import AlertDetection, MetricEvidence
 from litellm.models.performance_alert import (
     SCOPES,
+    AlertThreshold,
+    PerformanceAlertThresholds,
     PerformanceScope,
     ResourceWindow,
     SweepState,
@@ -44,6 +47,55 @@ def _types(**changes: object) -> tuple[str, ...]:
 
 def test_steady_usage_raises_nothing() -> None:
     assert _types() == ()
+
+
+@pytest.mark.parametrize(
+    ("kind", "changes", "minimum", "too_high"),
+    (
+        ("spend", {"spend": 40}, 20, 31),
+        ("traffic", {"requests": 2000}, 500, 1001),
+        ("latency", {"response_ms": 300_000}, 150, 201),
+        ("reliability", {"failed": 20}, 0.005, 0.011),
+    ),
+)
+def test_custom_multiplier_and_minimum_both_control_each_existing_rule(
+    kind: str, changes: dict[str, object], minimum: float, too_high: float
+) -> None:
+    window: Final = _window(**changes)
+    assert detect("team", window, DAY) == ()
+    thresholds: Final = PerformanceAlertThresholds.model_validate(
+        {kind: {"multiplier": 2, "minimum_increase": minimum}}
+    )
+    detected: Final = detect("team", window, DAY, thresholds)
+    assert tuple(alert.type for alert in detected) == (kind,)
+    for threshold in (
+        AlertThreshold(multiplier=5, minimum_increase=minimum),
+        AlertThreshold(multiplier=2, minimum_increase=too_high),
+    ):
+        assert detect("team", window, DAY, thresholds.model_copy(update={kind: threshold})) == ()
+
+
+@pytest.mark.parametrize(
+    "settings",
+    (
+        {"spend": {"multiplier": 1, "minimum_increase": 1}},
+        {"spend": {"multiplier": True, "minimum_increase": 1}},
+        {"latency": {"multiplier": 2, "minimum_increase": -1}},
+        {"traffic": {"multiplier": float("inf"), "minimum_increase": 1}},
+        {"reliability": {"multiplier": 2, "minimum_increase": 1.01}},
+        {"new_rule": {"multiplier": 2, "minimum_increase": 1}},
+    ),
+)
+def test_thresholds_reject_invalid_values_and_new_rules(settings: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        PerformanceAlertThresholds.model_validate(settings)
+
+
+def test_zero_minimum_does_not_report_a_zero_error_rate_as_an_increase() -> None:
+    thresholds: Final = PerformanceAlertThresholds.model_validate(
+        {"reliability": {"multiplier": 2, "minimum_increase": 0}}
+    )
+    assert detect("team", _window(failed=0, base_failed=0), DAY, thresholds) == ()
 
 
 @pytest.mark.parametrize("scope", SCOPES)

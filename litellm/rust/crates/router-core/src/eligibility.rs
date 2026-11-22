@@ -5,6 +5,7 @@
 
 use std::{collections::BTreeSet, sync::Arc};
 
+use litellm_python_compat::{json::from_json, pydantic::lax_bool};
 use serde_json::{Map, Value};
 
 use crate::{error::Error, registry::Deployment, resolve::Caller};
@@ -38,18 +39,7 @@ fn endpoint_path(endpoint: &str) -> String {
 fn enforce_flag(value: Option<&Value>) -> Option<bool> {
     match value {
         None | Some(Value::Null) => Some(false),
-        Some(Value::Bool(flag)) => Some(*flag),
-        Some(Value::Number(number)) => match number.as_f64() {
-            Some(0.0) => Some(false),
-            Some(1.0) => Some(true),
-            _ => None,
-        },
-        Some(Value::String(text)) => match text.to_lowercase().as_str() {
-            "0" | "off" | "f" | "false" | "n" | "no" => Some(false),
-            "1" | "on" | "t" | "true" | "y" | "yes" => Some(true),
-            _ => None,
-        },
-        Some(_) => None,
+        Some(value) => lax_bool(&from_json(value.clone())),
     }
 }
 

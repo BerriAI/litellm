@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_http::{HttpClientConfig, HttpClientPool};
 
 use crate::{Error, KeyManagementSettings, KeyManagementSystem, SecretManager};

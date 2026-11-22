@@ -30,10 +30,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-from litellm.proxy.common_utils.user_api_key_cache import (
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
-)
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
@@ -44,10 +40,11 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
 from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
 from litellm.proxy.spend_tracking.committed_spend import drop_committed_spend
 from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import end_user_counter
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import find_many_in
-from litellm.repositories.table_repositories import EndUserRepository
+from litellm.repositories.end_user_repository import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
@@ -130,7 +127,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
     customer keeps being served unrestricted until the TTL expires: auth reads end users
     cache-first, and the cached restricted-id registry decides whether the row is read at all.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -140,7 +137,7 @@ async def _evict_end_user_cache_keys(cache_keys: Sequence[str]) -> None:
 
 def _end_user_cache_keys(user_ids: Sequence[str]) -> tuple[str, ...]:
     """The per-id entries plus the registry, which any restriction change can move ids in or out of."""
-    return (*(end_user_cache_key(user_id) for user_id in user_ids), end_user_restricted_registry_cache_key())
+    return (*(AuthObject.end_user(user_id).key for user_id in user_ids), AuthObject.end_user_restricted_registry().key)
 
 
 def _to_customer_response(record: BaseModel) -> CustomerResponse:
@@ -555,10 +552,11 @@ def customer_daily_activity_is_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     dependencies=[Depends(user_api_key_auth)],
 )
 async def end_user_info(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     end_user_id: str = fastapi.Query(description="End User ID in the request parameters"),
 ) -> CustomerResponse:
     """
-    Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
+    [Admin-only] Get information about an end-user. An `end_user` is a customer (external user) of the proxy.
 
     Parameters:
     - end_user_id (str, required): The unique identifier for the end-user
@@ -571,6 +569,12 @@ async def end_user_info(
     """
     try:
         from litellm.proxy.proxy_server import prisma_client
+
+        if not customer_daily_activity_is_admin(user_api_key_dict):
+            raise HTTPException(
+                status_code=401,
+                detail={"error": f"Admin-only endpoint. Your user role={user_api_key_dict.user_role}"},
+            )
 
         if prisma_client is None:
             raise HTTPException(

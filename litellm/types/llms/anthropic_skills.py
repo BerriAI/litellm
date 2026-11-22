@@ -3,7 +3,6 @@ Type definitions for Anthropic Skills API
 """
 
 from collections.abc import Sequence
-from typing import Any
 
 from typing_extensions import TypedDict
 
@@ -105,7 +104,7 @@ class CreateSkillVersionRequest(TypedDict, total=False):
     instructions: str | None
     """Instructions for this version"""
 
-    metadata: dict[str, Any] | None
+    metadata: dict[str, object] | None
     """Additional metadata"""
 
 
@@ -130,7 +129,7 @@ class SkillVersion(LiteLLMBaseModel):
     instructions: str | None = None
     """Instructions for this version"""
 
-    metadata: dict[str, Any] | None = None
+    metadata: dict[str, object] | None = None
     """Additional metadata"""
 
     type: str = "skill.version"
