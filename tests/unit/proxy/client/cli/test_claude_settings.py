@@ -436,7 +436,7 @@ class TestMergeClaudeSettings:
             "OTEL_LOG_TOOL_DETAILS": "1",
             "OTEL_LOG_TOOL_CONTENT": "1",
             "OTEL_LOG_RAW_API_BODIES": "1",
-            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "1048576",
+            "CLAUDE_CODE_OTEL_CONTENT_MAX_LENGTH": "16777216",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4000",
             "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token-abc",
         }
