@@ -1650,6 +1650,10 @@ class _RequestExclusionSampler(Sampler):
         return f"RequestExclusion({self.delegate.get_description()})"
 
 
+def _unwrapped(processor: SpanProcessor) -> SpanProcessor:
+    return processor
+
+
 def build_tracer_provider(
     config: OpenTelemetryV2Config,
     exporter: SpanExporter | None = None,
@@ -1658,6 +1662,7 @@ def build_tracer_provider(
     tenant_overrides: bool = False,
     strip_message_content: bool = False,
     console_default: bool = False,
+    wrap_processor: Callable[[SpanProcessor], SpanProcessor] | None = None,
 ) -> TracerProvider:
     """Build the shared :class:`TracerProvider`.
 
@@ -1693,8 +1698,9 @@ def build_tracer_provider(
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
 
+    wrapped: Final = wrap_processor or _unwrapped
     if exporter is not None:
-        provider.add_span_processor(_processor_for(exporter, use_simple_processor))
+        provider.add_span_processor(wrapped(_processor_for(exporter, use_simple_processor)))
         return provider
 
     langfuse_mapped: Final = _maps_langfuse(config)
@@ -1705,12 +1711,14 @@ def build_tracer_provider(
             continue
         if is_unconfigured_placeholder(spec) and not console_default:
             continue
-        processor = _spec_processor(
-            spec,
-            use_simple_processor,
-            strip_message_content,
-            strip_destination_langfuse_attributes=spec.owner is not ExporterOwner.LANGFUSE_OTEL,
-            langfuse_mapped=langfuse_mapped,
+        processor = wrapped(
+            _spec_processor(
+                spec,
+                use_simple_processor,
+                strip_message_content,
+                strip_destination_langfuse_attributes=spec.owner is not ExporterOwner.LANGFUSE_OTEL,
+                langfuse_mapped=langfuse_mapped,
+            )
         )
         owner = spec.owner.value if tenant_overrides and spec.owner is not None else None
         scope = _operator_scope(config, spec)

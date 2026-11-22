@@ -691,3 +691,76 @@ async fn the_constructor_cold_storage_owner_turns_batch_files_off(
     assert_eq!(requests.len(), 1);
     assert!(requests[0].url.path().starts_with(path));
 }
+
+#[rstest]
+#[case::exact_limit(13, Some(b"thirteen-byte".as_slice()))]
+#[case::one_byte_short(12, None)]
+#[tokio::test]
+async fn a_bounded_download_stops_at_the_byte_limit(
+    #[case] max_bytes: usize,
+    #[case] expected: Option<&[u8]>,
+) {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex("^/logs/base/object.json$"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"thirteen-byte".to_vec()))
+        .mount(&server)
+        .await;
+    let (sink, _) = sink(&server, json!({}));
+
+    let bounded = sink.download_bounded("base/object.json", max_bytes).await;
+    let unbounded = sink.download("base/object.json").await;
+
+    assert_eq!(bounded.as_deref(), expected);
+    assert_eq!(unbounded.as_deref(), Some(b"thirteen-byte".as_slice()));
+}
+
+async fn chunked_object(chunks: &'static [&'static [u8]]) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = socket.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n".to_vec();
+            response.extend_from_slice(b"Connection: close\r\n\r\n");
+            for chunk in chunks {
+                response.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+                response.extend_from_slice(chunk);
+                response.extend_from_slice(b"\r\n");
+            }
+            response.extend_from_slice(b"0\r\n\r\n");
+            let _ = socket.write_all(&response).await;
+            let _ = socket.shutdown().await;
+        }
+    });
+    format!("http://{address}")
+}
+
+#[rstest]
+#[case::exact_limit(13, Some(b"thirteen-byte".as_slice()))]
+#[case::exceeded_while_streaming(12, None)]
+#[tokio::test]
+async fn a_bounded_download_without_a_length_stops_while_accumulating_chunks(
+    #[case] max_bytes: usize,
+    #[case] expected: Option<&[u8]>,
+) {
+    let endpoint = chunked_object(&[b"thirteen", b"-byte"]).await;
+    let unused = MockServer::start().await;
+    let (sink, _) = sink(&unused, json!({"s3_endpoint_url": endpoint}));
+
+    let bounded = sink.download_bounded("base/object.json", max_bytes).await;
+    let unbounded = sink.download("base/object.json").await;
+
+    assert_eq!(bounded.as_deref(), expected);
+    assert_eq!(unbounded.as_deref(), Some(b"thirteen-byte".as_slice()));
+}

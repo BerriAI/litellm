@@ -19,27 +19,38 @@ import time
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeVar
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import Span as RecordingSpan
-from opentelemetry.sdk.trace import SpanProcessor
-from opentelemetry.trace import Span, get_current_span
+from opentelemetry.sdk.trace import SpanProcessor, TracerProvider
+from opentelemetry.trace import Span, Tracer, get_current_span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 from typing_extensions import override
 
 import litellm
+from litellm.integrations.lens.content import ContentLimits, ContentStore, content_signing_key
 from litellm.integrations.lens.remote import LensConnection
+from litellm.integrations.lens.trace_content import ContentAttributes, TraceContentSpool
+from litellm.integrations.otel.emitter import SpanEmitter
 from litellm.integrations.otel.logger import OpenTelemetryV2
+from litellm.integrations.otel.mappers import resolve_mappers
+from litellm.integrations.otel.mappers.base import SpanData
+from litellm.integrations.otel.mappers.utils import output_messages, serialize_messages
 from litellm.integrations.otel.model.config import ExporterSpec, OpenTelemetryV2Config
 from litellm.integrations.otel.model.metadata import LLMCallEvent, RequestIdentity
+from litellm.integrations.otel.model.payloads import LLMCallSpanData
+from litellm.integrations.otel.model.semconv import GenAI
+from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.model.utils import to_ns
 from litellm.integrations.otel.plumbing.context import extract_traceparent
+from litellm.integrations.otel.plumbing.providers import build_tracer_provider
 from litellm.litellm_core_utils.harness_context import (
     CODEX_MARKERS,
     SYSTEM_REMINDER_MARKERS,
@@ -398,6 +409,8 @@ _INTEGRATION: Final = "langsmith.metadata.ls_integration"
 _TASK: Final = "lens.task"
 _SESSION_ATTRIBUTE: Final = "gen_ai.conversation.id"
 _TOOL_STEP_TRACER: Final = "litellm.lens.tool_steps"
+_TOOL_ARGUMENTS: Final = "gen_ai.tool.call.arguments"
+_TOOL_RESULT: Final = "gen_ai.tool.call.result"
 _CALL_FACTS: Final[ContextVar[Mapping[str, str]]] = ContextVar("lens_call_facts", default=MappingProxyType({}))
 LENS_TRACE_PATH: Final = "/v1/traces"
 
@@ -443,8 +456,55 @@ class _LensTraceConfig(OpenTelemetryV2Config):
         return (init_settings,)
 
 
+def _model_content(messages_in: tuple[Mapping[str, object], ...], outputs: tuple[object, ...]) -> ContentAttributes:
+    serialized: Final = (
+        (GenAI.INPUT_MESSAGES, serialize_messages(messages_in)),
+        (GenAI.OUTPUT_MESSAGES, serialize_messages(outputs)),
+    )
+    return MappingProxyType({key: value for key, value in serialized if value is not None})
+
+
+def _tool_content(arguments: str, result: str) -> ContentAttributes:
+    return MappingProxyType({_TOOL_ARGUMENTS: arguments, _TOOL_RESULT: result})
+
+
+class _LensSpanEmitter(SpanEmitter):
+    """Takes oversized model-call content into the spool before any mapper, attribute limit or exporter sees it."""
+
+    def __init__(self, spool: TraceContentSpool, tracer: Tracer, config: OpenTelemetryV2Config) -> None:
+        super().__init__(tracer, config, mappers=resolve_mappers(config.mapper_names))
+        self.spool: Final = spool
+
+    @override
+    def finish_span(self, role: SpanRole, span: Span, data: SpanData, *, end_time_ns: int | None = None) -> None:
+        if (
+            role is not SpanRole.LLM_CALL
+            or not isinstance(data, LLMCallSpanData)
+            or not isinstance(span, RecordingSpan)
+        ):
+            return super().finish_span(role, span, data, end_time_ns=end_time_ns)
+        outputs: Final = tuple(output_messages(data))
+        admission: Final = self.spool.admission((data.messages_in, outputs))
+        if admission is None or not self.spool.capture(
+            span, data.identity, admission, partial(_model_content, data.messages_in, outputs)
+        ):
+            return super().finish_span(role, span, data, end_time_ns=end_time_ns)
+        return super().finish_span(role, span, replace(data, messages_in=(), choices_out=()), end_time_ns=end_time_ns)
+
+
 class _LensTraceLogger(OpenTelemetryV2):
     """Model-call spans only, on a private provider, so a gateway's own OTel callbacks are left as they are."""
+
+    def __init__(
+        self,
+        config: OpenTelemetryV2Config,
+        tracer_provider: TracerProvider,
+        spool: TraceContentSpool | None = None,
+    ) -> None:
+        super().__init__(config=config, callback_name=LENS_TRACE_CALLBACK, tracer_provider=tracer_provider)
+        self.spool: Final = spool
+        if spool is not None:
+            self._emitter = _LensSpanEmitter(spool, self.tracer, self.config)
 
     @override
     def _init_otel_logger_on_litellm_proxy(self) -> None:
@@ -497,27 +557,40 @@ class _LensTraceLogger(OpenTelemetryV2):
             _AGENT_TRACE.reset(placed)
             _CALL_FACTS.reset(token)
         session_id: Final = call.session_id or made_by.derived_session
-        if span is not None and session_id and agent_trace is None:
-            self._emit_tool_steps(made_by, session_id, to_ns(start_time))
+        if span is not None and session_id and agent_trace is None and call.payload is not None:
+            self._emit_tool_steps(made_by, RequestIdentity.from_payload(call.payload), session_id, to_ns(start_time))
         return span
 
-    def _emit_tool_steps(self, made_by: AgentCall, session_id: str, at_ns: int | None) -> None:
+    def _emit_tool_steps(
+        self, made_by: AgentCall, identity: RequestIdentity, session_id: str, at_ns: int | None
+    ) -> None:
         """One zero-length step per tool result, at the start of the model call whose prompt carries it."""
         tracer: Final = self.tracer_provider.get_tracer(_TOOL_STEP_TRACER)
+        captured: Final = self._capture_span_content()
         for exchange in made_by.tool_exchanges:
-            tracer.start_span(
+            content: Final = _tool_content(exchange.arguments, exchange.result) if captured else MappingProxyType({})
+            admission: Final = (
+                self.spool.admission((exchange.arguments, exchange.result))
+                if self.spool is not None and content
+                else None
+            )
+            step: Final = tracer.start_span(
                 f"execute_tool {exchange.name}",
                 start_time=at_ns,
                 attributes={
                     "gen_ai.operation.name": "execute_tool",
                     "gen_ai.tool.name": exchange.name,
                     "gen_ai.tool.call.id": exchange.call_id,
-                    "gen_ai.tool.call.arguments": exchange.arguments,
-                    "gen_ai.tool.call.result": exchange.result,
+                    **({} if admission is not None else content),
                     **made_by.attributes(session_id),
                     _SESSION_ATTRIBUTE: session_id,
                 },
-            ).end(end_time=at_ns)
+            )
+            if admission is not None and self.spool is not None and isinstance(step, RecordingSpan):
+                _ = self.spool.capture(
+                    step, identity, admission, partial(_tool_content, exchange.arguments, exchange.result)
+                )
+            step.end(end_time=at_ns)
 
 
 class _CallFactsProcessor(SpanProcessor):
@@ -529,20 +602,29 @@ class _CallFactsProcessor(SpanProcessor):
 
 
 @asynccontextmanager
-async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None]:
+async def export_traces(
+    connection: LensConnection, store: ContentStore | None = None, limits: ContentLimits = ContentLimits()
+) -> AsyncGenerator[None, None]:
+    config: Final = _LensTraceConfig(
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                traces_endpoint=connection.endpoint(LENS_TRACE_PATH),
+                headers=f"Authorization=Bearer {connection.token}",
+                resource_attributes={"lens.session.capture": "true", "lens.session.attribute": _SESSION_ATTRIBUTE},
+            )
+        ],
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    spool: Final = (
+        None
+        if store is None
+        else TraceContentSpool(store, content_signing_key(connection.token), asyncio.get_running_loop(), limits)
+    )
     trace_logger: Final = _LensTraceLogger(
-        config=_LensTraceConfig(
-            exporters=[
-                ExporterSpec(
-                    kind="otlp_http",
-                    traces_endpoint=connection.endpoint(LENS_TRACE_PATH),
-                    headers=f"Authorization=Bearer {connection.token}",
-                    resource_attributes={"lens.session.capture": "true", "lens.session.attribute": _SESSION_ATTRIBUTE},
-                )
-            ],
-            capture_message_content=CaptureMessageContent.SPAN_ONLY,
-        ),
-        callback_name=LENS_TRACE_CALLBACK,
+        config,
+        build_tracer_provider(config, tenant_overrides=True, wrap_processor=None if spool is None else spool.processor),
+        spool,
     )
     trace_logger.tracer_provider.add_span_processor(_CallFactsProcessor())
     manager: Final = litellm.logging_callback_manager
@@ -551,4 +633,6 @@ async def export_traces(connection: LensConnection) -> AsyncGenerator[None, None
         yield None
     finally:
         manager.remove_callback_from_all_lists(trace_logger)
+        if spool is not None:
+            await spool.aclose()
         await asyncio.to_thread(trace_logger.tracer_provider.shutdown)
