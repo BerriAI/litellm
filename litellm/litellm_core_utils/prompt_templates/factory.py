@@ -1737,13 +1737,33 @@ def _gemini_tool_media_part(
             drop_params=drop_params,
         )
     except litellm.ImageFetchError as exc:
-        verbose_logger.warning("Failed to process media in tool response: %s", exc)
+        _skip_unfetched_tool_media(
+            content,
+            exc.message.removeprefix("litellm.BadRequestError: "),
+            model=model,
+            custom_llm_provider=custom_llm_provider or "gemini",
+            drop_params=drop_params,
+        )
         return None
     except litellm.BadRequestError:
         raise
     except Exception as exc:
-        verbose_logger.warning("Failed to process media in tool response: %s", exc)
+        _skip_unfetched_tool_media(
+            content, str(exc), model=model, custom_llm_provider=custom_llm_provider or "gemini", drop_params=drop_params
+        )
         return None
+
+
+def _skip_unfetched_tool_media(
+    content: Mapping[str, object], reason: str, *, model: str | None, custom_llm_provider: str, drop_params: bool
+) -> None:
+    if content.get("type") == "video_url" and not drop_params:
+        raise litellm.BadRequestError(
+            message=f"Could not download the video in a tool result. {reason} Fix the link or set drop_params=True.",
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        )
+    verbose_logger.warning("Failed to process media in tool response: %s", reason)
 
 
 def _function_response_media(part: VertexPartType) -> FunctionResponsePartType | None:

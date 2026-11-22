@@ -2752,6 +2752,65 @@ def test_gemini_tool_media_fetch_failure_preserves_tool_text() -> None:
     assert result == {"function_response": {"name": "lookup", "response": {"ok": True}}}
 
 
+def _tool_result_with(part: Mapping[str, object]) -> ChatCompletionToolMessage:
+    return cast(
+        ChatCompletionToolMessage,
+        {"role": "tool", "name": "find_clip", "content": [{"type": "text", "text": '{"ok":true}'}, part]},
+    )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str,
+) -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+    message: Final = _tool_result_with({"type": "video_url", "video_url": {"url": video_url}})
+
+    with respx.mock as router:
+        router.get(video_url).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(message, None, custom_llm_provider=custom_llm_provider)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            message, None, custom_llm_provider=custom_llm_provider, drop_params=True
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = _tool_result_with({"type": part_type, part_type: {"url": media_url}})
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, None, custom_llm_provider="gemini")
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
 _YOUTUBE_LINK: Final = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
 _YOUTUBE_TOOL_RESULT: Final = {
     "role": "tool",
