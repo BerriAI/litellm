@@ -330,6 +330,24 @@ describe("KeyInfoView", () => {
     expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime$340.50");
   });
 
+  it("shows lifetime spend for a key that never resets, since it can be edited to reset later", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+    const neverResets = { ...MOCK_KEY_DATA, spend: 12, total_spend: 12, budget_duration: null, budget_reset_at: null };
+
+    renderWithProviders(
+      <KeyInfoView
+        keyData={neverResets}
+        onClose={() => {}}
+        keyId="test-key-id"
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    expect(await screen.findByTestId("key-period-spend")).toHaveTextContent("$12.00");
+    expect(screen.getByTestId("key-lifetime-spend")).toHaveTextContent("Lifetime$12.00");
+  });
+
   it("shows a team-member budget for a key without its own budget", async () => {
     vi.mocked(useAuthorized).mockReturnValue(authorizedForTeamBudget);
     vi.mocked(teamInfoCall).mockResolvedValue({

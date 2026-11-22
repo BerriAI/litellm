@@ -266,7 +266,9 @@ async def forward(
 
 @router.get("/service", response_model=ServiceConnection)
 async def lens_service(request: Request, log_team_lookup: LogTeamLookupDependency) -> ServiceConnection:
-    return await service_connection(await delegated_identity(await page_auth(request), log_team_lookup))
+    return await service_connection(
+        await delegated_identity(await page_auth(request), log_team_lookup), str(request.base_url)
+    )
 
 
 def admin_page(path: str) -> bool:
