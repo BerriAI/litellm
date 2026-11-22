@@ -2824,7 +2824,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [
@@ -4834,7 +4835,8 @@
                 {
                   "type": "null"
                 }
-              ]
+              ],
+              "title": "Identity"
             },
             "kill_switch": {
               "anyOf": [
