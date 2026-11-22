@@ -1509,11 +1509,7 @@ async def test_cached_virtual_key_applies_proxy_default_budget_to_new_end_user(
         assert result.end_user_id == end_user_id
 
 
-BILLED_GOOGLE_MODEL_ROUTES: Final = tuple(
-    route
-    for route in LiteLLMRoutes.google_routes.value
-    if "{model_name:path}" in route and not route.endswith(":countTokens")
-)
+GOOGLE_MODEL_ROUTES: Final = tuple(route for route in LiteLLMRoutes.google_routes.value if "{model_name:path}" in route)
 
 
 @pytest.mark.parametrize(
@@ -1521,7 +1517,7 @@ BILLED_GOOGLE_MODEL_ROUTES: Final = tuple(
     ["", "gemini-text", "gemini-text:v1"],
     ids=["model-only-in-body", "model-in-url", "model-with-a-colon-in-url"],
 )
-@pytest.mark.parametrize("template", BILLED_GOOGLE_MODEL_ROUTES)
+@pytest.mark.parametrize("template", GOOGLE_MODEL_ROUTES)
 @pytest.mark.asyncio
 async def test_zero_budget_key_is_refused_on_google_model_routes(
     monkeypatch: pytest.MonkeyPatch, template: str, model_in_url: str

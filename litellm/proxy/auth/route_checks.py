@@ -654,7 +654,7 @@ class RouteChecks:
         if not isinstance(route, str):
             return False
 
-        def _placeholder_to_regex(match: re.Match) -> str:
+        def _placeholder_to_regex(match: re.Match[str]) -> str:
             placeholder: Final = match.group(0).strip("{}")
             if not placeholder.endswith(":path"):
                 return r"[^/]+"

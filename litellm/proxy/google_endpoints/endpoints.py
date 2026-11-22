@@ -28,6 +28,7 @@ from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 def _google_repeated_field(value: JsonValue) -> JsonValue:
@@ -159,13 +160,21 @@ def _google_error_response(request: Request, error: ProxyException) -> JSONRespo
     )
 
 
+def _google_count_tokens_model(model_name: str, data: object) -> str:
+    if model_name:
+        return model_name
+    body_model: Final = _REQUEST_BODY.validate_python(data).get("model")
+    return body_model if isinstance(body_model, str) else ""
+
+
 def _google_count_tokens_request(model_name: str, data: object) -> TokenCountRequest:
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
 
     validated_data: Final = TypeAdapter(_GoogleCountTokensRequest).validate_python(data)
+    counted_model: Final = _google_count_tokens_model(model_name, data)
     contents: Final = [dict(content) for content in validated_data.contents]
     messages: Final = _DECODED_JSON.validate_python(
-        GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
+        GoogleGenAIAdapter().translate_generate_content_to_completion(counted_model, contents).get("messages", [])
     )
     system: Final = (
         [
@@ -187,7 +196,7 @@ def _google_count_tokens_request(model_name: str, data: object) -> TokenCountReq
     ]
     return TokenCountRequest.model_validate(
         {
-            "model": model_name,
+            "model": counted_model,
             "contents": contents,
             "messages": messages,
             "system": system,

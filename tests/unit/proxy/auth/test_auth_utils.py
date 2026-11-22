@@ -1752,6 +1752,21 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
     assert get_model_from_request(request_data=request_data, route=route) == url_model
 
 
+@pytest.mark.parametrize(
+    "route, url_model",
+    [("/v1beta/models/premium-model:countTokens", "premium-model"), ("/models/premium-model:7b:countTokens", "premium-model:7b")],
+)
+def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
+    monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"completion_model": "forced-model"})
+    monkeypatch.setattr(proxy_server, "user_model", "cli-model")
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == url_model
+
+
 @pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize(
     "route, path_params",
