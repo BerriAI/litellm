@@ -570,6 +570,9 @@ class LiteLLMRoutes(enum.Enum):
     agent_routes = agent_inference_routes + agent_management_routes
 
     google_routes = [
+        "/v1/models/{model_name:path}:countTokens",
+        "/v1/models/{model_name:path}:generateContent",
+        "/v1/models/{model_name:path}:streamGenerateContent",
         "/v1beta/models/{model_name:path}:countTokens",
         "/v1beta/models/{model_name:path}:generateContent",
         "/v1beta/models/{model_name:path}:streamGenerateContent",

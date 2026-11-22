@@ -3,14 +3,170 @@
 Test to verify the Google GenAI proxy API endpoints
 """
 
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
+from fastapi.testclient import TestClient
+from httpx_sse import EventSource
+from jsonschema import validate
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.utils import TokenCountResponse
+
+_GOOGLE_PREFIXES: Final = ("/v1", "/v1beta", "")
+_GOOGLE_V1_MODELS: Final = ("routed-google-model", "provider/routed-google-model")
+_GOOGLE_V1_CONTENTS: Final = [{"role": "user", "parts": [{"text": "Hello"}]}]
+_GOOGLE_V1_REPLY: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "Hello from the provider"}]}, "index": 0}],
+    "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 5, "totalTokenCount": 8},
+}
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
+
+
+@pytest.fixture
+def native_google_proxy(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> Iterator[TestClient]:
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": model,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.8-flash",
+                    "api_key": "test-key",
+                    "api_base": "https://google-v1.test",
+                },
+            }
+            for model in _GOOGLE_V1_MODELS
+        ],
+        num_retries=0,
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "master_key", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    client: Final = TestClient(proxy_server.app)
+    try:
+        yield client
+    finally:
+        client.close()
+        router.retire()
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+@pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
+def test_google_generate_content_aliases_return_the_provider_content(
+    native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
+) -> None:
+    upstream: Final = respx_mock.post("https://google-v1.test/models/gemini-3.8-flash:generateContent").respond(
+        200, json=_GOOGLE_V1_REPLY
+    )
+
+    response: Final = native_google_proxy.post(
+        f"{prefix}/models/{model}:generateContent", json={"contents": _GOOGLE_V1_CONTENTS}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == _GOOGLE_V1_REPLY
+    assert upstream.call_count == 1
+    assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+@pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
+def test_google_stream_aliases_return_provider_events_without_an_openai_terminator(
+    native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
+) -> None:
+    frame: Final = f"data: {json.dumps(_GOOGLE_V1_REPLY)}\n\n"
+    upstream: Final = respx_mock.post(
+        url__regex=r"https://google-v1\.test/models/gemini-3\.8-flash:streamGenerateContent(?:\?.*)?$"
+    ).respond(200, text=frame, headers={"content-type": "text/event-stream"})
+
+    response: Final = native_google_proxy.post(
+        f"{prefix}/models/{model}:streamGenerateContent?alt=sse", json={"contents": _GOOGLE_V1_CONTENTS}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/event-stream")
+    events: Final = tuple(EventSource(response).iter_sse())
+    assert all(event.data != "[DONE]" for event in events)
+    assert tuple(_JSON_OBJECT.validate_json(event.data) for event in events) == (_GOOGLE_V1_REPLY,)
+    assert upstream.call_count == 1
+    assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+@pytest.mark.parametrize("model", _GOOGLE_V1_MODELS)
+def test_google_count_aliases_return_the_provider_token_count(
+    native_google_proxy: TestClient, respx_mock: respx.MockRouter, prefix: str, model: str
+) -> None:
+    upstream: Final = respx_mock.post("https://google-v1.test/v1beta/models/gemini-3.8-flash:countTokens").respond(
+        200, json={"totalTokens": 23}
+    )
+
+    response: Final = native_google_proxy.post(
+        f"{prefix}/models/{model}:countTokens", json={"contents": _GOOGLE_V1_CONTENTS}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["totalTokens"] == 23
+    assert response.json()["litellm_count_source"] == "provider"
+    assert upstream.call_count == 1
+    assert _JSON_OBJECT.validate_json(upstream.calls.last.request.content)["contents"] == _GOOGLE_V1_CONTENTS
+
+
+def test_google_v1_aliases_preserve_openai_model_listing(native_google_proxy: TestClient) -> None:
+    response: Final = native_google_proxy.get("/v1/models")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["object"] == "list"
+    assert "routed-google-model" in {model["id"] for model in response.json()["data"]}
+
+
+def test_google_v1_aliases_preserve_openai_model_retrieval(native_google_proxy: TestClient) -> None:
+    response: Final = native_google_proxy.get("/v1/models/routed-google-model")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == "routed-google-model"
+    assert response.json()["object"] == "model"
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+@pytest.mark.parametrize("operation", ("generateContent", "streamGenerateContent", "countTokens"))
+def test_google_openapi_accepts_requests_with_tools(prefix: str, operation: str) -> None:
+    with _build_test_client() as client:
+        response: Final = client.get("/openapi.json")
+
+    assert response.status_code == 200, response.text
+    schema: Final = response.json()["paths"][f"{prefix}/models/{{model_name}}:{operation}"]["post"]["requestBody"][
+        "content"
+    ]["application/json"]["schema"]
+    validate(
+        instance={
+            "contents": _GOOGLE_V1_CONTENTS,
+            "systemInstruction": {"parts": [{"text": "Be concise"}]},
+            "tools": [{"functionDeclarations": [{"name": "lookup", "description": "Look up a value"}]}],
+            "generationConfig": {"temperature": 0.2},
+        },
+        schema=schema,
+    )
+
+
+@pytest.mark.parametrize("prefix", _GOOGLE_PREFIXES)
+def test_google_openapi_describes_streaming_responses_as_sse(prefix: str) -> None:
+    with _build_test_client() as client:
+        response: Final = client.get("/openapi.json")
+
+    assert response.status_code == 200, response.text
+    content: Final = response.json()["paths"][f"{prefix}/models/{{model_name}}:streamGenerateContent"]["post"]["responses"][
+        "200"
+    ]["content"]
+    assert content == {"text/event-stream": {"schema": {"type": "string"}}}
 
 
 def _build_test_client():

@@ -10,6 +10,8 @@ Regression coverage for the guardrail route table bugs:
 
 from typing import Final
 
+import pytest
+
 from litellm.litellm_core_utils.api_route_to_call_types import (
     get_call_types_for_route,
 )
@@ -22,8 +24,10 @@ class TestGenerateContentRouteResolution:
         assert call_types is not None
         assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
-    def test_v1beta_generate_content_route_resolves(self):
-        call_types = get_call_types_for_route("/v1beta/models/gemini-2.5-flash:generateContent")
+    @pytest.mark.parametrize("prefix", ("/v1beta", "/v1"))
+    @pytest.mark.parametrize("model", ("routed-model", "provider/routed-model"))
+    def test_versioned_generate_content_route_resolves(self, prefix: str, model: str) -> None:
+        call_types: Final = get_call_types_for_route(f"{prefix}/models/{model}:generateContent")
         assert call_types is not None
         assert list(call_types) == [CallTypes.agenerate_content, CallTypes.generate_content]
 
@@ -35,8 +39,10 @@ class TestGenerateContentRouteResolution:
             CallTypes.generate_content_stream,
         ]
 
-    def test_v1beta_stream_generate_content_route_resolves(self):
-        call_types = get_call_types_for_route("/v1beta/models/gemini-2.5-flash:streamGenerateContent")
+    @pytest.mark.parametrize("prefix", ("/v1beta", "/v1"))
+    @pytest.mark.parametrize("model", ("routed-model", "provider/routed-model"))
+    def test_versioned_stream_generate_content_route_resolves(self, prefix: str, model: str) -> None:
+        call_types: Final = get_call_types_for_route(f"{prefix}/models/{model}:streamGenerateContent")
         assert call_types is not None
         assert list(call_types) == [
             CallTypes.agenerate_content_stream,

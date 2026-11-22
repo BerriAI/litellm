@@ -696,7 +696,7 @@ class RouteChecks:
 
     @staticmethod
     def _route_matches_allowed_route(route: str, allowed_route: str) -> bool:
-        """The route itself or anything under it, never a sibling that only shares the prefix."""
+        """Match a route prefix without granting Google actions through model discovery."""
         return auth_route_matches_prefix(route, allowed_route)
 
     @staticmethod

@@ -6,6 +6,14 @@ Interface to interact with Google GenAI Functions in the native Google interface
 
 This module provides a native interface to Google's Generative AI API, allowing you to use Google's content generation capabilities with both streaming and non-streaming modes, in both synchronous and asynchronous contexts.
 
+## Proxy routes
+
+The proxy accepts POST requests to `/v1/models/{model}:generateContent`, `/v1/models/{model}:streamGenerateContent`, and `/v1/models/{model}:countTokens`. The existing `/v1beta/models/...` and `/models/...` routes remain available.
+
+These prefixes are aliases for the same handlers. Selecting `/v1` on the proxy does not select the provider API version. The configured provider integration still controls the upstream API version, including its use of beta endpoints.
+
+An API key granted `/v1/models` or `/models` can list and retrieve models without gaining access to these actions. Grant `google_routes`, `llm_api_routes`, or a specific action path to allow Google GenAI requests.
+
 ## Available Functions
 
 ### Non-Streaming Functions

@@ -3,7 +3,10 @@
 
 use litellm_config::RouteList;
 
-use super::{RouteAllowlist, matches_wildcard};
+use super::{
+    RouteAllowlist, matches_wildcard,
+    table::{GOOGLE_MODEL_ACTIONS, MODEL_DISCOVERY_ROUTES},
+};
 
 /// A `denied_passthrough_routes` entry that matched decides `Denied`; with none, `Denied` means
 /// nothing granted the route.
@@ -114,6 +117,19 @@ pub fn matches_prefix(route: &str, allowed_route: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// A model discovery grant must not also grant inference through a Google action.
+pub fn matches_key_route_prefix(route: &str, allowed_route: &str) -> bool {
+    let normalized = route.strip_suffix('\n').unwrap_or(route);
+    if MODEL_DISCOVERY_ROUTES.contains(&allowed_route)
+        && GOOGLE_MODEL_ACTIONS
+            .iter()
+            .any(|&action| normalized.ends_with(action))
+    {
+        return false;
+    }
+    matches_prefix(route, allowed_route)
+}
+
 /// `_route_matches_denied_route`. A `/` entry denies every route.
 pub fn matches_denied(route: &str, denied_route: &str) -> bool {
     let normalized = denied_route.trim_end_matches('/');
@@ -144,6 +160,23 @@ mod tests {
     #[case::shorter("/proxy", "/proxy-6", false)]
     fn prefix(#[case] route: &str, #[case] allowed: &str, #[case] expected: bool) {
         assert_eq!(matches_prefix(route, allowed), expected);
+    }
+
+    #[rstest]
+    #[case::list("/v1/models", "/v1/models", true)]
+    #[case::retrieve("/v1/models/model", "/v1/models", true)]
+    #[case::colon_in_model_id("/v1/models/ft:model", "/v1/models", true)]
+    #[case::generate("/v1/models/model:generateContent", "/v1/models", false)]
+    #[case::stream("/v1/models/provider/model:streamGenerateContent", "/v1/models", false)]
+    #[case::count("/v1/models/model:countTokens", "/v1/models", false)]
+    #[case::trailing_newline("/v1/models/model:generateContent\n", "/v1/models", false)]
+    #[case::action_on_colon_model("/v1/models/a:b:generateContent", "/v1/models", false)]
+    #[case::unversioned("/models/model:generateContent", "/models", false)]
+    #[case::explicit_action("/v1/models/model:generateContent", "/v1/models/model:generateContent", true)]
+    #[case::broad_version_grant("/v1/models/model:generateContent", "/v1", true)]
+    #[case::passthrough("/custom/models/model:generateContent", "/custom", true)]
+    fn key_route_prefix(#[case] route: &str, #[case] allowed: &str, #[case] expected: bool) {
+        assert_eq!(matches_key_route_prefix(route, allowed), expected);
     }
 
     #[rstest]
