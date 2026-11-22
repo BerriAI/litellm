@@ -60,6 +60,7 @@ from litellm.types.agents import AgentCaller
 from litellm.proxy.auth import auth_checks
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
     RustObjectPermissionRepository,
     RustTagRepository,
     RustTeamMembershipRepository,
@@ -135,6 +136,7 @@ from tests.unit.proxy.rust_auth_stores import (
     GroupBudget,
     RustAuthStores,
     install_rust_auth_stores,
+    native_database_failure,
 )
 
 
@@ -2183,6 +2185,76 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
 
     # Verify that `new_team` was NEVER called, because the team was found.
     mock_new_team.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_writer", [False, True], ids=["reader", "writer"])
+async def test_a_team_read_that_loses_its_connection_is_retried_once_on_the_same_database(
+    monkeypatch: pytest.MonkeyPatch, use_writer: bool
+):
+    flaky: Final = AsyncMock(side_effect=[native_database_failure("unreachable"), _team_json(team_id="team-a")])
+    other: Final = AsyncMock(return_value=None)
+    _install_store(monkeypatch, RustTeamRepository, other if use_writer else flaky, flaky if use_writer else other)
+
+    team: Final = await _get_team_db_check(team_id="team-a", prisma_client=MagicMock(), use_writer=use_writer)
+
+    assert team is not None
+    assert (team.team_id, flaky.await_count, other.await_count) == ("team-a", 2, 0)
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_that_loses_its_connection_twice_raises_the_retry_failure(monkeypatch: pytest.MonkeyPatch):
+    retry_failure: Final = native_database_failure("unreachable")
+    reads: Final = AsyncMock(
+        side_effect=[native_database_failure("unreachable"), retry_failure, _team_json(team_id="team-a")]
+    )
+    _install_store(monkeypatch, RustTeamRepository, reads)
+
+    with pytest.raises(NativeDatabaseFailure) as raised:
+        await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+    assert (raised.value is retry_failure, reads.await_count) == (True, 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["capacity", "other"])
+async def test_a_team_read_that_fails_with_its_connection_intact_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, kind: Literal["capacity", "other"]
+):
+    failure: Final = native_database_failure(kind)
+    reads: Final = AsyncMock(side_effect=[failure, _team_json(team_id="team-a")])
+    _install_store(monkeypatch, RustTeamRepository, reads)
+
+    with pytest.raises(NativeDatabaseFailure) as raised:
+        await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+    assert (raised.value is failure, reads.await_count) == (True, 1)
+
+
+async def _lose_the_connection_late(**kwargs: object) -> None:
+    await asyncio.sleep(PROXY_DB_LOOKUP_DEADLINE_SECONDS * 0.75)
+    raise native_database_failure("unreachable")
+
+
+def test_a_team_read_and_its_retry_share_one_lookup_deadline(_clear_db_lookup_stall, monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    async def scenario(loop: AutojumpClockLoop) -> None:
+        attempts: Final = iter((_lose_the_connection_late, _stall_forever))
+
+        async def read(team_id: str) -> None:
+            await next(attempts)()
+
+        reads: Final = AsyncMock(side_effect=read)
+        _install_store(monkeypatch, RustTeamRepository, reads)
+        started: Final = loop.time()
+
+        with pytest.raises(DBLookupDeadlineExceeded):
+            await _get_team_db_check(team_id="team-a", prisma_client=MagicMock())
+
+        assert (loop.time() - started, reads.await_count) == (pytest.approx(PROXY_DB_LOOKUP_DEADLINE_SECONDS), 2)
+
+    _run_on_autojump_clock(scenario)
 
 
 # Vector Store Auth Check Tests

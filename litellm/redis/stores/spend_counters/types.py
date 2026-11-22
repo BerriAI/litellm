@@ -22,6 +22,8 @@ CustomerCounterScope: TypeAlias = Literal[
     "app",
     "app_customer_org",
     "app_customer_member",
+    "app_group",
+    "app_group_customer_org",
 ]
 
 
@@ -50,6 +52,8 @@ def parse_customer_window_counter(
         "app",
         "app_customer_org",
         "app_customer_member",
+        "app_group",
+        "app_group_customer_org",
     ):
         return None
     duration, at, start = window.rpartition("@")

@@ -5662,6 +5662,14 @@ def _db_managed_general_settings_keys() -> frozenset[str]:
     return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
 
 
+def _reject_required_customer_headers_update(fields: Iterable[str]) -> None:
+    if REQUIRED_CUSTOMER_HEADERS_SETTING in fields:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "general_settings.required_customer_headers can only be set in the YAML config file."},
+        )
+
+
 def _bind_general_settings_store(settings: SettingsStore) -> None:
     global general_settings
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
@@ -5878,6 +5886,9 @@ class ProxyConfig:
         )
 
     def _load_yaml_settings_stores(self, config: Mapping[str, object]) -> None:
+        yaml_settings: Final = as_str_mapping(config.get("general_settings"))
+        if yaml_settings is not None and REQUIRED_CUSTOMER_HEADERS_SETTING in yaml_settings:
+            REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(yaml_settings[REQUIRED_CUSTOMER_HEADERS_SETTING])
         for section, store in self._settings_stores.items():
             _reload_settings_store(section, store, config.get(section))
 
@@ -6088,6 +6099,8 @@ class ProxyConfig:
 
     def reject_config_owned_writes(self, *, section_name: str, changed_keys: Mapping[str, JsonValue]) -> None:
         """Refuse a write to a setting the config file owns, rather than storing a value that never applies."""
+        if section_name == "general_settings":
+            _reject_required_customer_headers_update(changed_keys)
         store: Final = self._settings_stores.get(cast(Section, section_name))
         if store is None:
             return
@@ -20993,6 +21006,8 @@ async def update_config(
         request_body: Final[Mapping[str, JsonValue]] = TypeAdapter(Mapping[str, JsonValue]).validate_python(
             await request.json()
         )
+        raw_general_settings: Final = as_str_mapping(request_body.get("general_settings"))
+        _reject_required_customer_headers_update(raw_general_settings or ())
         raw_router_settings: Final = request_body.get("router_settings")
         if isinstance(raw_router_settings, dict):
             supported_router_settings: Final = RUNTIME_UPDATABLE_ROUTER_SETTINGS | (
@@ -21311,6 +21326,7 @@ async def update_config_general_settings(
             detail={"error": CommonProxyErrors.not_allowed_access.value},
         )
 
+    _reject_required_customer_headers_update((data.field_name,))
     requested_value: Final = _requested_field_value(data)
     if data.field_name in _GENERAL_SETTINGS_UI_LITELLM_FIELDS:
         return await _persist_general_settings_ui_litellm_field(data.field_name, requested_value, user_api_key_dict)

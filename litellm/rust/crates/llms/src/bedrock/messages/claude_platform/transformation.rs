@@ -19,7 +19,8 @@ use serde_json::Value;
 use crate::{
     Error, ErrorDetail,
     anthropic::messages::transformation::{
-        ANTHROPIC_MESSAGES_CONFIG, transform_messages_request, update_headers_with_safeguards_beta,
+        ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_requested_version,
+        transform_messages_request, update_headers_with_safeguards_beta,
     },
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
@@ -190,6 +191,16 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
             without_route_prefix(request),
             &context.warning_dropped_disabled_thinking(),
         )
+    }
+
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        _url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -641,5 +652,36 @@ mod tests {
     ) {
         assert_eq!(is_claude_platform_route(model), platform);
         assert_eq!(logged_model(model), logged);
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", None)]
+    #[case::sdk_1("2023-06-01", Some(1.0))]
+    fn temperature_follows_the_forwarded_api_version(
+        #[case] version: &str,
+        #[case] temperature: Option<f64>,
+    ) {
+        let body = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .request_body(
+                serde_json::from_value(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 1.0,
+                    "messages": [{"role": "user", "content": "hi"}]
+                }))
+                .unwrap(),
+                &vec![("anthropic-version".to_string(), version.to_string())],
+                "https://aws-external-anthropic.us-west-2.api.aws/v1/messages",
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(litellm_llms_types::recognized::Recognized::known)
+                .copied(),
+            temperature
+        );
     }
 }
