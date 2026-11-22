@@ -11,14 +11,16 @@ from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import seal_cursor
 from litellm.proxy.mcp_server.events.webhooks.delivery import CallbackResponse
 from litellm.proxy.mcp_server.events.webhooks.outgoing import binding_of
-from litellm.proxy.mcp_server.events.webhooks.reauth import Authorized, Reauthorization
-from litellm.proxy.mcp_server.events.webhooks.store import QueuedDelivery, SubscriptionRow
+from litellm.proxy.mcp_server.events.webhooks.reauth import Authorized, Reauthorization, Revoked, Unavailable
+from litellm.proxy.mcp_server.events.webhooks.settlement import SUSPEND_AFTER_FAILURES
+from litellm.proxy.mcp_server.events.webhooks.signing import verify
+from litellm.proxy.mcp_server.events.webhooks.store import Activation, QueuedDelivery, SubscriptionRow
 from litellm.proxy.mcp_server.events.webhooks.worker import RETRY_DELAYS_SECONDS, DeliveryWorker
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import CallbackFailure
-from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
 
-from ..fakes import SETTINGS, occurrence, runtime, server
+from ..fakes import SETTINGS, FakeUpstream, occurrence, runtime, screen_blocking, server
 from .memory_store import MemoryStore
 
 KEY: Final = bytes(range(32))
@@ -104,6 +106,142 @@ def _store(row: SubscriptionRow = ROW, body: object = None, attempt: int = 0) ->
     return MemoryStore(rows={row.id: row}, queue={"d1": _delivery(event, attempt)})
 
 
+@pytest.mark.asyncio
+async def test_an_event_is_signed_with_the_client_secret_renamed_and_resealed() -> None:
+    store: Final = _store()
+    client: Final = _Client(200)
+    assert await _worker(store, client).run_once() == 1
+    body, headers = client.posts[0]
+    assert verify((KEY,), headers, body, int(NOW.timestamp()))
+    assert headers["x-mcp-subscription-id"] == "sub_1" and headers["webhook-id"] == "msg_gw"
+    delivered: Final = json.loads(body)
+    assert (delivered["name"], delivered["eventId"]) == ("ci-build.failed", "evt_1")
+    assert delivered["cursor"] == ROW.cursor
+    assert store.queue == {} and store.rows["sub_1"].last_delivery_at == NOW
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_flag_reuses_the_event_id_as_the_webhook_id() -> None:
+    client: Final = _Client(200)
+    legacy: Final = server(events=MCPServerEventsConfig(enabled=True, legacy_webhook_id_equals_event_id=True))
+    await _worker(_store(), client, target=legacy).run_once()
+    assert client.posts[0][1]["webhook-id"] == "evt_1"
+
+
+@pytest.mark.parametrize(("attempt", "delay"), tuple(enumerate(RETRY_DELAYS_SECONDS)))
+@pytest.mark.asyncio
+async def test_failures_retry_on_the_backoff_ladder(attempt: int, delay: int) -> None:
+    store: Final = _store(attempt=attempt)
+    await _worker(store, _Client(503)).run_once()
+    assert (store.queue["d1"].attempt, store.queue["d1"].next_attempt_at) == (
+        attempt + 1,
+        NOW + timedelta(seconds=delay),
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_event_that_exhausts_its_retries_is_counted_and_reported_as_a_gap() -> None:
+    store: Final = _store(attempt=len(RETRY_DELAYS_SECONDS))
+    client: Final = _Client("timeout")
+    await _worker(store, client).run_once()
+    row: Final = store.rows["sub_1"]
+    assert (row.consecutive_failures, row.last_error, row.failed_since, row.status) == (1, "timeout", NOW, "active")
+    (queued,) = store.queue.values()
+    sent_cursor: Final = client.bodies()[0]["cursor"]
+    assert (queued.prepared, json.loads(queued.body)) == (True, {"type": "gap", "cursor": sent_cursor})
+
+
+@pytest.mark.asyncio
+async def test_sustained_failure_suspends_the_subscription() -> None:
+    store: Final = _store(ROW.model_copy(update={"consecutive_failures": SUSPEND_AFTER_FAILURES - 1}), attempt=3)
+    await _worker(store, _Client(500)).run_once()
+    assert store.rows["sub_1"].status == "suspended"
+
+
+@pytest.mark.parametrize("status", (410, 413))
+@pytest.mark.asyncio
+async def test_gone_and_too_large_are_never_retried(status: int) -> None:
+    store: Final = _store()
+    await _worker(store, _Client(status)).run_once()
+    assert store.queue == {} and store.rows["sub_1"].consecutive_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_a_revoked_caller_ends_the_subscription_with_a_signed_terminated_envelope() -> None:
+    store: Final = _store()
+    client: Final = _Client(200)
+    await _worker(store, client, outcome=Revoked("key")).run_once()
+    assert client.bodies() == [
+        {"type": "terminated", "error": {"code": -32024, "message": "Forbidden", "data": {"reason": "Access revoked"}}}
+    ]
+    assert store.rows["sub_1"].status == "terminated" and store.queue == {}
+
+
+@pytest.mark.asyncio
+async def test_a_transient_reauthorization_failure_delays_without_spending_an_attempt() -> None:
+    store: Final = _store()
+    client: Final = _Client(200)
+    await _worker(store, client, outcome=Unavailable("database down")).run_once()
+    assert client.posts == [] and store.rows["sub_1"].status == "active"
+    assert (store.queue["d1"].attempt, store.queue["d1"].next_attempt_at) == (0, NOW + timedelta(seconds=30))
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_event_becomes_a_gap_with_the_skipped_position() -> None:
+    client: Final = _Client(200)
+    await _worker(_store(), client, screen=screen_blocking()).run_once()
+    delivered: Final = client.bodies()[0]
+    assert delivered["type"] == "gap"
+    assert delivered["cursor"] == ROW.cursor
+
+
+@pytest.mark.asyncio
+async def test_events_over_the_caller_budget_become_a_gap() -> None:
+    client: Final = _Client(200)
+    store: Final = _store()
+    second: Final = _delivery(occurrence("evt_2", "42").model_dump(by_alias=True, mode="json")).model_copy(
+        update={"delivery_id": "d2", "webhook_id": "msg_gw2"}
+    )
+    store.queue["d2"] = second
+    await _worker(store, client, settings=EventsSettings(enabled=True, max_events_per_minute=1)).run_once()
+    assert sorted(str(body.get("type", body.get("eventId"))) for body in client.bodies()) == ["evt_1", "gap"]
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_terminated_is_forwarded_and_ends_the_subscription() -> None:
+    client: Final = _Client(200)
+    store: Final = _store(
+        body={"type": "terminated", "error": {"code": -32023, "message": "NotFound", "data": {"kind": "event"}}}
+    )
+    await _worker(store, client).run_once()
+    assert client.bodies()[0]["type"] == "terminated" and store.rows["sub_1"].status == "terminated"
+    assert client.posts[0][1]["webhook-id"].startswith("msg_terminated_")
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_gap_is_forwarded_with_a_resealed_cursor() -> None:
+    client: Final = _Client(200)
+    await _worker(_store(body={"type": "gap", "cursor": "77"}), client).run_once()
+    assert client.bodies()[0]["cursor"] == ROW.cursor
+
+
+@pytest.mark.parametrize("status", ("terminated", "pending"))
+@pytest.mark.asyncio
+async def test_deliveries_for_inactive_rows_are_dropped(status: str) -> None:
+    store: Final = _store(ROW.model_copy(update={"status": status}))
+    client: Final = _Client(200)
+    await _worker(store, client).run_once()
+    assert client.posts == [] and store.queue == {}
+
+
+@pytest.mark.asyncio
+async def test_expired_subscriptions_are_terminated_quietly() -> None:
+    store: Final = _store(ROW.model_copy(update={"refresh_before": NOW - timedelta(seconds=1)}))
+    client: Final = _Client(200)
+    await _worker(store, client).expire()
+    assert store.rows["sub_1"].status == "terminated" and client.posts == [] and store.queue == {}
+
+
 def test_a_sealed_gap_cursor_falls_back_to_the_last_known_watermark() -> None:
     from litellm.proxy.mcp_server.events.webhooks.outgoing import gap
 
@@ -130,6 +268,104 @@ class _SlowClient(_Client):
 ROTATED: Final = "whsec_" + base64.b64encode(bytes(range(1, 33))).decode()
 
 
+@pytest.mark.parametrize("status", (200, 503))
+@pytest.mark.asyncio
+async def test_a_termination_during_an_inflight_delivery_stays_terminated(status: int) -> None:
+    store: Final = _store()
+
+    async def admin_terminates() -> None:
+        await store.terminate("sub_1")
+
+    await _worker(store, _SlowClient(admin_terminates, status)).run_once()
+    assert store.rows["sub_1"].status == "terminated"
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_during_an_inflight_delivery_keeps_the_new_secret_and_cursor() -> None:
+    store: Final = _store()
+    activation: Final = Activation(
+        client_secret=ROTATED,
+        upstream_subscription_id="up_1",
+        upstream_refresh_before=None,
+        refresh_before=None,
+        cursor="mcp_state_v1.fresh",
+    )
+
+    async def client_refreshes() -> None:
+        assert await store.activate("sub_1", activation)
+
+    await _worker(store, _SlowClient(client_refreshes)).run_once()
+    assert (store.rows["sub_1"].client_secret, store.rows["sub_1"].cursor) == (ROTATED, "mcp_state_v1.fresh")
+
+
+@pytest.mark.asyncio
+async def test_a_retry_resends_the_first_build_without_spending_the_event_budget_again() -> None:
+    store: Final = _store()
+    client: Final = _Client(503, 200)
+    tight: Final = EventsSettings(enabled=True, public_base_url="https://gw.example", max_events_per_minute=1)
+    worker: Final = _worker(store, client, settings=tight)
+    await worker.run_once()
+    store.queue["d1"] = store.queue["d1"].model_copy(update={"next_attempt_at": NOW})
+    await worker.run_once()
+    (first_body, first_headers), (second_body, second_headers) = client.posts
+    assert (second_body, second_headers["webhook-id"]) == (first_body, first_headers["webhook-id"])
+    assert json.loads(second_body)["eventId"] == "evt_1"
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_gap_keeps_its_webhook_id_across_retries() -> None:
+    store: Final = _store(body={"type": "gap", "cursor": "41"})
+    client: Final = _Client(503, 200)
+    worker: Final = _worker(store, client)
+    await worker.run_once()
+    store.queue["d1"] = store.queue["d1"].model_copy(update={"next_attempt_at": NOW})
+    await worker.run_once()
+    assert client.posts[0][1]["webhook-id"] == client.posts[1][1]["webhook-id"]
+    assert client.posts[0][1]["webhook-id"].startswith("msg_gap_")
+
+
+@pytest.mark.asyncio
+async def test_a_subscription_past_its_deadline_receives_nothing() -> None:
+    store: Final = _store(row=ROW.model_copy(update={"refresh_before": NOW - timedelta(seconds=1)}))
+    client: Final = _Client(200)
+    await _worker(store, client).run_once()
+    assert client.posts == [] and store.queue == {}
+
+
+@pytest.mark.asyncio
+async def test_a_delivered_message_stays_a_duplicate_until_its_tombstone_is_purged() -> None:
+    store: Final = _store()
+    await _worker(store, _Client(200)).run_once()
+    replay: Final = _delivery(occurrence().model_dump(by_alias=True, mode="json"))
+    assert await store.enqueue(replay) is False
+    await store.purge_delivered(NOW + timedelta(minutes=11))
+    assert await store.enqueue(replay) is True
+
+
+@pytest.mark.parametrize(
+    ("body", "sent"),
+    (
+        (None, False),
+        ({"type": "gap", "cursor": "41"}, True),
+        ({"type": "terminated", "error": {"code": -32024, "message": "Forbidden"}}, True),
+    ),
+)
+@pytest.mark.asyncio
+async def test_a_suspended_subscription_receives_only_gap_and_terminated_notices(body: object, sent: bool) -> None:
+    store: Final = _store(row=ROW.model_copy(update={"status": "suspended"}), body=body)
+    client: Final = _Client(200)
+    await _worker(store, client).run_once()
+    assert (len(client.posts) == 1) is sent
+
+
+@pytest.mark.asyncio
+async def test_turning_events_off_stops_a_running_worker_from_sending() -> None:
+    store: Final = _store()
+    client: Final = _Client(200)
+    assert await _worker(store, client, settings=EventsSettings(enabled=False)).run_once() == 0
+    assert client.posts == [] and "d1" in store.queue
+
+
 @pytest.mark.asyncio
 async def test_an_abandoned_event_stays_queued_when_its_gap_cannot_be_written() -> None:
     store: Final = _store(attempt=len(RETRY_DELAYS_SECONDS))
@@ -138,6 +374,80 @@ async def test_an_abandoned_event_stays_queued_when_its_gap_cannot_be_written() 
     with pytest.raises(ConnectionError):
         await _worker(store, _Client("timeout")).process(claimed)
     assert "d1" in store.queue
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_claim_was_taken_over_cannot_change_the_delivery() -> None:
+    store: Final = _store()
+    (stale,) = await store.claim(NOW, NOW + timedelta(seconds=1), 16)
+    (current,) = await store.claim(NOW + timedelta(seconds=2), NOW + timedelta(seconds=300), 16)
+    await store.finish(stale, NOW)
+    await store.reschedule(stale, 3, NOW)
+    assert ("d1" in store.queue, store.queue["d1"].attempt, store.queue["d1"].claim_id) == (True, 0, current.claim_id)
+    await store.finish(current, NOW)
+    assert "d1" not in store.queue
+
+
+@pytest.mark.asyncio
+async def test_a_terminated_notice_that_exhausts_its_retries_still_ends_the_subscription() -> None:
+    terminated: Final = {"type": "terminated", "error": {"code": -32024, "message": "Forbidden"}}
+    store: Final = _store(body=terminated, attempt=len(RETRY_DELAYS_SECONDS))
+    await _worker(store, _Client("timeout")).run_once()
+    assert (store.rows["sub_1"].status, store.queue) == ("terminated", {})
+
+
+@pytest.mark.asyncio
+async def test_the_expiry_sweep_spares_a_subscription_renewed_after_it_was_read() -> None:
+    expiring: Final = ROW.model_copy(update={"refresh_before": NOW - timedelta(minutes=1)})
+    store: Final = MemoryStore(rows={"sub_1": expiring})
+    stale: Final = await store.expired(NOW)
+    store.rows["sub_1"] = expiring.model_copy(update={"refresh_before": NOW + timedelta(hours=1)})
+    assert (len(stale), await store.end_if_expired("sub_1", NOW), store.rows["sub_1"].status) == (1, False, "active")
+
+
+@pytest.mark.parametrize("notify", (True, False))
+@pytest.mark.asyncio
+async def test_terminating_twice_notifies_once_and_always_ends_the_upstream_subscription(notify: bool) -> None:
+    from litellm.proxy.mcp_server.events.errors import forbidden
+    from litellm.proxy.mcp_server.events.webhooks.termination import terminate
+
+    store: Final = MemoryStore(rows={"sub_1": ROW})
+    upstream: Final = FakeUpstream(responses={"events/unsubscribe": {}})
+    client: Final = _Client()
+    events_runtime: Final = runtime((server(),), upstream=upstream)
+    for _ in range(2):
+        await terminate(
+            ROW, forbidden("Key revoked"), store, SETTINGS, events_runtime, client, lambda _id: server(), notify=notify
+        )
+    assert (len(client.posts), [method for method, *_ in upstream.calls], store.rows["sub_1"].status) == (
+        1 if notify else 0,
+        ["events/unsubscribe"],
+        "terminated",
+    )
+
+
+@pytest.mark.asyncio
+async def test_one_failing_delivery_does_not_cancel_the_rest_of_the_batch() -> None:
+    from litellm.proxy.mcp_server.events.webhooks.worker import (
+        CLAIM_BATCH,
+        CONCURRENCY,
+        LEASE_SECONDS,
+        PROCESS_DEADLINE_SECONDS,
+    )
+
+    class _OneBroken(MemoryStore):
+        async def get(self, subscription_id: str) -> SubscriptionRow | None:
+            if subscription_id == "sub_broken":
+                raise ConnectionError("row lookup failed")
+            return await super().get(subscription_id)
+
+    event: Final = occurrence("evt_1", "41").model_dump(by_alias=True, mode="json")
+    broken: Final = _delivery(event).model_copy(update={"delivery_id": "d2", "subscription_id": "sub_broken"})
+    store: Final = _OneBroken(rows={"sub_1": ROW}, queue={"d1": _delivery(event), "d2": broken})
+    client: Final = _Client()
+    assert await _worker(store, client).run_once() == 2
+    assert len(client.posts) == 1
+    assert -(-CLAIM_BATCH // CONCURRENCY) * PROCESS_DEADLINE_SECONDS < LEASE_SECONDS
 
 
 @pytest.mark.parametrize("status,attempt", [(200, 0), (500, len(RETRY_DELAYS_SECONDS))])

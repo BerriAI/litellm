@@ -1,10 +1,13 @@
+import asyncio
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
+import anyio
 from opentelemetry import trace
 
+from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.events.catalog import gateway_name
 from litellm.proxy.mcp_server.events.config import EventsSettings, events_settings
 from litellm.proxy.mcp_server.events.errors import forbidden
@@ -27,9 +30,11 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import (
 )
 from litellm.proxy.mcp_server.events.webhooks.signing import parse_secret, signed_headers
 from litellm.proxy.mcp_server.events.webhooks.store import (
+    LIVE_STATUSES,
     EventStore,
     QueuedDelivery,
     SubscriptionRow,
+    default_store,
 )
 from litellm.proxy.mcp_server.events.webhooks.termination import notify_termination, registered_server
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster
@@ -39,6 +44,13 @@ from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 RETRY_DELAYS_SECONDS: Final = (30, 120, 480)
 UNAVAILABLE_DELAY_SECONDS: Final = 30
+CLAIM_BATCH: Final = 16
+CONCURRENCY: Final = 8
+LEASE_SECONDS: Final = 300
+PROCESS_DEADLINE_SECONDS: Final = 60.0
+DELIVERED_RETENTION: Final = timedelta(minutes=10)
+_IDLE_SECONDS: Final = 1.0
+_HOUSEKEEPING_SECONDS: Final = 30.0
 _TRACER: Final = trace.get_tracer("litellm.mcp.events")
 
 
@@ -64,6 +76,68 @@ class DeliveryWorker:
         self._post = post
         self._clock = clock
         self._lookup = lookup
+
+    async def run_forever(self) -> None:
+        next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
+        while True:
+            next_housekeeping = await self._tick(next_housekeeping)
+
+    async def _tick(self, next_housekeeping: float) -> float:
+        """One delivery batch, a sweep when due, and an idle pause when nothing was due; returns the next sweep time."""
+        handled: Final = await self._run_guarded()
+        due: Final = time.monotonic() >= next_housekeeping
+        if due:
+            await self._expire_guarded()
+        if not handled:
+            await asyncio.sleep(_IDLE_SECONDS)
+        return time.monotonic() + _HOUSEKEEPING_SECONDS if due else next_housekeeping
+
+    async def _run_guarded(self) -> int:
+        try:
+            return await self.run_once()
+        except Exception as error:  # noqa: BLE001  # the worker must survive a failed batch and retry it
+            verbose_logger.warning("MCP event delivery batch failed: %s", error)
+            return 0
+
+    async def _expire_guarded(self) -> None:
+        try:
+            await self.expire()
+        except Exception as error:  # noqa: BLE001  # a failed sweep is retried on the next one
+            verbose_logger.warning("MCP event subscription sweep failed: %s", error)
+
+    async def run_once(self) -> int:
+        if not self._settings().enabled:
+            return 0
+        now: Final = self._clock()
+        claimed: Final = await self._store.claim(now, now + timedelta(seconds=LEASE_SECONDS), CLAIM_BATCH)
+        limiter: Final = anyio.CapacityLimiter(CONCURRENCY)
+
+        async def bounded(delivery: QueuedDelivery) -> None:
+            async with limiter:
+                await self._process_isolated(delivery)
+
+        async with anyio.create_task_group() as group:
+            for delivery in claimed:
+                group.start_soon(bounded, delivery)
+        return len(claimed)
+
+    async def _process_isolated(self, delivery: QueuedDelivery) -> None:
+        """One delivery, bounded well inside its lease so no other replica can claim it mid-send; a failure is
+        retried after the lease lapses instead of cancelling the rest of the batch."""
+        try:
+            with anyio.move_on_after(PROCESS_DEADLINE_SECONDS):
+                await self.process(delivery)
+        except Exception as error:  # noqa: BLE001  # one failing delivery must not cancel the batch
+            verbose_logger.warning("MCP event delivery %s failed: %s", delivery.delivery_id, error)
+
+    async def expire(self) -> None:
+        now: Final = self._clock()
+        for row in await self._store.expired(now):
+            if await self._store.end_if_expired(row.id, now):
+                await self._store.drop_deliveries(row.id)
+        await self._store.purge_delivered(now - DELIVERED_RETENTION)
+        for status in LIVE_STATUSES:
+            EventMetrics.set_subscriptions(status, await self._store.count_status(status))
 
     async def process(self, delivery: QueuedDelivery) -> None:
         row: Final = await self._store.get(delivery.subscription_id)
@@ -178,3 +252,23 @@ class DeliveryWorker:
 def _is_control(delivery: QueuedDelivery) -> bool:
     """A gap or terminated notice, which a suspended subscription still receives."""
     return envelope_type(delivery.body) in ("gap", "terminated")
+
+
+class _WorkerHandle:
+    def __init__(self) -> None:
+        self.task: asyncio.Task[None] | None = None
+
+    def start(self, settings: Callable[[], EventsSettings] = events_settings) -> None:
+        if (self.task is not None and not self.task.done()) or not settings().enabled:
+            return
+        store: Final = default_store()
+        if store is None:
+            return
+        self.task = asyncio.get_running_loop().create_task(DeliveryWorker(store, settings).run_forever())
+
+
+_handle: Final = _WorkerHandle()
+
+
+def start_delivery_worker() -> None:
+    _handle.start()
