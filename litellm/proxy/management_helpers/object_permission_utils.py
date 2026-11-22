@@ -116,11 +116,13 @@ async def prepare_object_permission_upsert(
         else {}
     )
     reject_app_grant_change(new_object_permission.get("apps"), existing_fields.get("apps"), can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
-        prisma_client=prisma_client,
-    )
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=new_object_permission.get(field),
+            existing_mcp_tool_permissions=existing_fields.get(field),
+            prisma_client=prisma_client,
+            field=field,
+        )
     merged: Final[dict[str, object]] = {
         key: value
         for key, value in (
@@ -135,6 +137,11 @@ async def prepare_object_permission_upsert(
         **(
             {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
             if "mcp_tool_permissions" in merged
+            else {}
+        ),
+        **(
+            {"mcp_event_permissions": safe_dumps(merged["mcp_event_permissions"])}
+            if "mcp_event_permissions" in merged
             else {}
         ),
     }
@@ -251,17 +258,25 @@ async def set_object_permission(
     }
 
     reject_app_grant_change(clean_data.get("apps"), None, can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=clean_data.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=None,
-        prisma_client=prisma_client,
-    )
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=clean_data.get(field),
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+            field=field,
+        )
 
-    # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
-    if "mcp_tool_permissions" in clean_data:
-        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
+    # Serialize the JSON permission columns to strings for GraphQL compatibility
+    serialized: Final = {
+        **clean_data,
+        **{
+            column: safe_dumps(clean_data[column])
+            for column in ("mcp_tool_permissions", "mcp_event_permissions")
+            if column in clean_data
+        },
+    }
 
-    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
+    created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=serialized)
 
     data_json["object_permission_id"] = created_permission.object_permission_id
     data_json.pop("object_permission")
@@ -370,6 +385,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
     prisma_client: PrismaClient | None,
+    field: str = "mcp_tool_permissions",
 ) -> None:
     """
     A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:
@@ -398,8 +414,9 @@ async def reject_ambiguous_mcp_tool_permission_keys(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail={
             "error": (
-                f"Ambiguous mcp_tool_permissions key: {collisions}. "
-                "Key tool permissions by server_id when servers share a name or alias."
+                f"Ambiguous {field} key: {collisions}. "
+                f"Key {'event' if field == 'mcp_event_permissions' else 'tool'} permissions by server_id "
+                "when servers share a name or alias."
             )
         },
     )
@@ -682,6 +699,8 @@ def _extract_requested_mcp_server_ids(
     Includes:
     - mcp_servers list
     - Keys from mcp_tool_permissions
+
+    mcp_event_permissions only narrow event types on servers granted elsewhere, so their keys grant nothing.
     """
     if not object_permission or not isinstance(object_permission, dict):
         return set()
