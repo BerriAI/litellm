@@ -8567,7 +8567,10 @@
       "routerSettings": "配置路由和负载均衡",
       "telemetry": "选择此代理收集哪些匿名用量遥测数据，并查看最近一次报告",
       "loggingAndAlerts": "配置日志和告警",
-      "adminPanel": "访问管理面板与设置"
+      "adminPanel": "访问管理面板与设置",
+      "controlCanaries": "向已配置的管控发送真实请求，查看哪些生效",
+      "cacheMiss": "查看提示缓存未命中的原因及其成本",
+      "planLab": "用草稿订阅方案回放支出日志"
     },
     "sidebarAccountMenu": {
       "toggles": {

@@ -8636,7 +8636,10 @@
       "routerSettings": "Configure routing and load balancing settings",
       "telemetry": "Choose which anonymous usage telemetry this proxy collects and see the last report",
       "loggingAndAlerts": "Set up logging and alert configurations",
-      "adminPanel": "Access admin panel and settings"
+      "adminPanel": "Access admin panel and settings",
+      "controlCanaries": "Fire real requests at your configured controls and see which ones hold",
+      "cacheMiss": "See why prompt cache misses happened and what they cost",
+      "planLab": "Replay spend logs against a draft subscription plan"
     },
     "sidebarAccountMenu": {
       "toggles": {
