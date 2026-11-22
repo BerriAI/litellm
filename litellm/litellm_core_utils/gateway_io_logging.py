@@ -607,9 +607,9 @@ def _resolve_credential_info(litellm_params: Mapping[str, Any]) -> tuple[str | N
         if isinstance(override_name, str) and override_name:
             src = internal_meta.get("_gateway_credential_source")
             return override_name, str(src) if isinstance(src, str) and src else "model_config"
-    dep_cred = litellm_params.get("litellm_credential_name")
-    if isinstance(dep_cred, str) and dep_cred:
-        return dep_cred, "deployment_default"
+    deployment_credential = litellm_params.get("litellm_credential_name")
+    if isinstance(deployment_credential, str) and deployment_credential:
+        return deployment_credential, "deployment_default"
     return None, "unspecified"
 
 
@@ -838,7 +838,7 @@ def build_gateway_io_metadata(
         standard_logging_payload=standard_logging_payload,
         response_obj=response_obj,
     )
-    resp_headers, resp_proc_header = _sanitize_headers(
+    resp_headers, response_process_header = _sanitize_headers(
         raw_resp_headers,
         credential_label=None,
         strip_provider_prefix=True,
@@ -857,28 +857,28 @@ def build_gateway_io_metadata(
             sanitized_model=sanitized_model,
             sanitized_model_group=sanitized_model_group,
         )
-    resp_ap = (
+    response_access_programs = (
         response_obj_dict.get("access_programs")
         if response_obj_dict
         else getattr(response_obj, "access_programs", None)
     )
-    if resp_ap is not None:
+    if response_access_programs is not None:
         external_ingress["access_programs"] = _sanitize_safe_nested(
-            resp_ap,
+            response_access_programs,
             runtime_secrets=runtime_secrets,
             credential_name=cred_name,
             ip_redactor=ip_redactor,
         )
     if is_failure:
-        san_err = sanitized_error_info if isinstance(sanitized_error_info, Mapping) else {}
+        sanitized_error = sanitized_error_info if isinstance(sanitized_error_info, Mapping) else {}
         err_cls = (
-            san_err.get("error_class")
+            sanitized_error.get("error_class")
             or err_map.get("error_class")
             or (type(exc).__name__ if exc is not None else None)
         )
         if err_cls:
             external_ingress["error_type"] = str(err_cls)
-        err_msg = san_err.get("error_message")
+        err_msg = sanitized_error.get("error_message")
         if isinstance(err_msg, str) and err_msg:
             scrubbed_err, _ = _scrub_text(
                 err_msg,
@@ -888,8 +888,8 @@ def build_gateway_io_metadata(
                 ip_redactor=ip_redactor,
             )
             external_ingress["error_message"] = _truncate_str(scrubbed_err, MAX_ERROR_MSG_LEN)
-    if resp_proc_header:
-        external_ingress["litellm_process"] = {"header": resp_proc_header}
+    if response_process_header:
+        external_ingress["litellm_process"] = {"header": response_process_header}
 
     return {
         "internal": {
