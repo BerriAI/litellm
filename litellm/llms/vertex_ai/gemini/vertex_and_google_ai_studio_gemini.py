@@ -750,12 +750,23 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
+        return self._function_tools(value, optional_params, pin_consts=True)
+
+    def _function_tools(
+        self,
+        value: list[dict[str, object]],  # mutable-ok: the tools list the caller sent
+        optional_params: dict[str, object],  # mutable-ok: the build adds toolConfig to the request's params
+        pin_consts: bool,
+    ) -> list[Tools]:  # mutable-ok: mirrors _map_function's return
+        tools_have_const: Final = has_const(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         return with_pins_that_fit(
-            partial(self._build_function_tools, value, optional_params),
-            has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+            partial(self._build_function_tools, value, optional_params, copy_tools=tools_have_const),
+            pin_consts and tools_have_const,
         )
 
-    def _build_function_tools(self, value: list[dict], optional_params: dict, pin_consts: bool = True) -> list[Tools]:
+    def _build_function_tools(
+        self, value: list[dict], optional_params: dict, pin_consts: bool, *, copy_tools: bool
+    ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
 
@@ -763,6 +774,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             pin_consts: Whether to send each scalar `const` as a one-value enum
+            copy_tools: Whether to build from a copy so the caller's tools stay as sent
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -782,7 +794,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
         tools_json: Final = cast(JsonValue, value)  # cast-ok: tools are JSON request data
-        schema_value: Final[JsonValue] = deepcopy(tools_json) if pin_consts else tools_json
+        schema_value: Final[JsonValue] = deepcopy(tools_json) if copy_tools else tools_json
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
@@ -1343,13 +1355,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response_params: Final[dict[str, object]] = {}  # mutable-ok: the transformation writes the schema into it
         self.apply_response_schema_transformation(response_format, response_params, model)
         tools: Final = [
-            with_pins_that_fit(
-                partial(
-                    self._build_function_tools,
-                    cast(list[dict], request_params[param]),  # cast-ok: a tools list
-                    {},
-                ),
-                has_const(cast(JsonValue, request_params[param])),  # cast-ok: tools are JSON request data
+            self._function_tools(
+                cast(list[dict[str, object]], request_params[param]),  # cast-ok: a tools list
+                {},
+                pin_consts=True,
             )
             for param in tool_params
         ]
@@ -1431,9 +1440,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["logprobs"] = value
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
-                mapped_tools = with_pins_that_fit(
-                    partial(self._build_function_tools, value, optional_params),
-                    pins_fit and has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
+                mapped_tools = self._function_tools(
+                    cast(list[dict[str, object]], value),  # cast-ok: the branch checked a non-empty tools list
+                    cast(dict[str, object], optional_params),  # cast-ok: the request's params, keyed by name
+                    pin_consts=pins_fit,
                 )
                 optional_params = self._add_tools_to_optional_params(optional_params, mapped_tools)
             elif param == "tool_choice" and (isinstance(value, str) or isinstance(value, dict)):

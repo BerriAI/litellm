@@ -10392,34 +10392,6 @@ def test_vertex_sends_a_tool_parameter_const_as_its_type_and_the_one_enum_value_
     assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["kind"] == expected_kind
 
 
-def test_vertex_leaves_the_callers_tools_unchanged_so_a_reused_tool_keeps_its_const() -> None:
-    tools: Final = [
-        {
-            "type": "function",
-            "function": {
-                "name": "pay",
-                "strict": True,
-                "parameters": {
-                    "type": "object",
-                    "properties": {"kind": {"const": 7}, "source": {"type": "string", "const": "ledger-7"}},
-                    "additionalProperties": False,
-                },
-            },
-        }
-    ]
-    sent_before: Final = json.dumps(tools)
-
-    for _ in range(2):
-        VertexGeminiConfig().map_openai_params(
-            non_default_params={"tools": tools},
-            optional_params={},
-            model="gemini-2.5-flash",
-            drop_params=False,
-        )
-
-    assert json.dumps(tools) == sent_before
-
-
 def test_vertex_pins_a_const_in_a_tool_whose_parameters_root_is_a_ref() -> None:
     card: Final = {
         "type": "object",
@@ -10504,6 +10476,53 @@ def _tools_through_chat(tools: list[dict[str, object]]) -> _SentDeclarations:
 
 def _tools_through_map_function(tools: list[dict[str, object]]) -> _SentDeclarations:
     return cast(_SentDeclarations, VertexGeminiConfig().map_function(value=tools, optional_params={}))
+
+
+@pytest.mark.parametrize(
+    ("tool_const_count", "response_const_count"),
+    [
+        (0, 0),
+        (_TEN_CHARACTER_CONSTS_IN_BUDGET, 0),
+        (_TEN_CHARACTER_CONSTS_IN_BUDGET // 2, _TEN_CHARACTER_CONSTS_IN_BUDGET // 2),
+    ],
+    ids=["in-budget", "tools-over-budget", "tools-and-response-format-over-budget"],
+)
+def test_vertex_leaves_the_callers_tools_unchanged_so_a_reused_tool_keeps_its_const(
+    tool_const_count: int, response_const_count: int
+) -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "pay",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"kind": {"const": 7}, "source": {"type": "string", "const": "ledger-7"}},
+                    "additionalProperties": False,
+                },
+            },
+        },
+        _tool("record", _ten_character_const_properties(range(tool_const_count))),
+    ]
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "tags",
+            "schema": {"type": "object", "properties": _ten_character_const_properties(range(response_const_count))},
+        },
+    }
+    sent_before: Final = json.dumps(tools)
+
+    for _ in range(2):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"tools": tools, **({"response_format": response_format} if response_const_count else {})},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert json.dumps(tools) == sent_before
 
 
 @pytest.mark.parametrize("map_tools", [_tools_through_chat, _tools_through_map_function], ids=["chat", "map-function"])
