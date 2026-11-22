@@ -13,6 +13,24 @@ from litellm.exceptions import BadRequestError
 ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS: Final = frozenset({"openai", "azure", "litellm_proxy"})
 _FIRST_AZURE_API_VERSION_WITH_TOOL_CHOICE: Final = "2023-12-01"
 
+HOSTED_TOOL_CHOICE_TYPES: Final = frozenset(
+    {
+        "file_search",
+        "tool_search",
+        "web_search",
+        "web_search_preview",
+        "web_search_preview_2025_03_11",
+        "computer",
+        "computer_use",
+        "computer_use_preview",
+        "code_interpreter",
+        "image_generation",
+        "mcp",
+        "shell",
+        "apply_patch",
+    }
+)
+
 CHAT_ALLOWED_TOOLS_LAYOUT: Final = (
     '{"type": "allowed_tools", "allowed_tools": {"mode": "auto" | "required", "tools": [<at least one tool>]}}'
 )
@@ -85,6 +103,64 @@ def drops_unsupported_allowed_tools_tool_choice(
             f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
             "Send only the allowed tools in `tools` with tool_choice='auto' or 'required', or set drop_params=True "
             "to drop the tool_choice, which lets the model call any tool in `tools`."
+        ),
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
+
+
+def hosted_tool_choice_type(tool_choice: object) -> str | None:
+    """The hosted tool a Responses API ``tool_choice`` forces, such as ``web_search``, or ``None`` for any other choice."""
+    try:
+        choice_type: Final = _TOOL_CHOICE_TYPE.validate_python(tool_choice).type
+    except ValidationError:
+        return None
+    return choice_type if choice_type in HOSTED_TOOL_CHOICE_TYPES else None
+
+
+def _forced_mcp_server(tool_choice: object) -> str | None:
+    match tool_choice:
+        case {"type": "mcp", "server_label": str() as server_label}:
+            return server_label
+        case _:
+            return None
+
+
+def _why_drop_params_keeps_the_choice(hosted: str) -> str:
+    if hosted != "mcp":
+        return (
+            "drop_params does not drop it, since that would let the model answer without the tool the request required."
+        )
+    return (
+        "drop_params drops an mcp tool_choice only together with the hosted MCP tool it names, when this provider "
+        "cannot run that server. Here drop_params is off, no hosted MCP tool with that server_label was sent, the "
+        "server runs on the LiteLLM MCP gateway, or the provider runs it itself, so dropping only the choice would let "
+        "the model answer without the tool the request required."
+    )
+
+
+def raise_if_hosted_tool_choice_unsupported(
+    tool_choice: object,
+    custom_llm_provider: str,
+    model: str,
+    mcp_servers_to_drop: frozenset[str] = frozenset(),
+) -> None:
+    """Anthropic drops a tool_choice dict it does not recognise and Bedrock sends a tool named "", so a forced hosted
+    tool stops here with a 400 on providers that cannot run it. The one exception is an ``mcp`` choice naming a server
+    in ``mcp_servers_to_drop``, the hosted MCP tools drop_params drops on this call: the provider config drops the
+    choice together with that tool, and a provider that runs the server itself calls this again without them."""
+    hosted: Final = hosted_tool_choice_type(tool_choice)
+    if (
+        hosted is None
+        or custom_llm_provider in ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS
+        or _forced_mcp_server(tool_choice) in mcp_servers_to_drop
+    ):
+        return
+    raise BadRequestError(
+        message=(
+            f"tool_choice type '{hosted}' forces an OpenAI hosted tool and is only supported for "
+            f"{', '.join(sorted(ALLOWED_TOOLS_TOOL_CHOICE_PROVIDERS))}, got custom_llm_provider={custom_llm_provider}. "
+            f"{_why_drop_params_keeps_the_choice(hosted)}"
         ),
         model=model,
         llm_provider=custom_llm_provider,

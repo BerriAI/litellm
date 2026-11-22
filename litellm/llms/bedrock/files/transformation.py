@@ -42,7 +42,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     extract_file_data,
     text_completion_prompt_to_messages,
 )
-from litellm.litellm_core_utils.tool_fields import HOSTED_MCP_BATCH_ROW_REMEDY, tool_params_without_hosted_mcp
+from litellm.litellm_core_utils.tool_fields import hosted_mcp_batch_row_remedy, tool_params_without_hosted_mcp
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.batch_records import (
@@ -1012,6 +1012,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         messages: Final = map_developer_role_to_system_role(openai_request_body.get("messages", []))
         optional_params: Final = {k: v for k, v in openai_request_body.items() if k not in ["model", "messages"]}
         drop_params: Final = row_or_deployment_drop_params(openai_request_body, deployment_drop_params)
+        hosted_mcp_remedy: Final = hosted_mcp_batch_row_remedy(openai_request_body.get("drop_params"))
 
         # --- Anthropic: use existing AmazonAnthropicClaudeConfig ---
         if provider == LlmProviders.ANTHROPIC:
@@ -1038,7 +1039,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                         model=model,
                         route="bedrock",
                         drop_params=drop_params,
-                        remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                        remedy=hosted_mcp_remedy,
                     )
                 ),
             )
@@ -1070,7 +1071,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                     model=model,
                     route="bedrock",
                     drop_params=drop_params,
-                    remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                    remedy=hosted_mcp_remedy,
                 ),
                 optional_params={},
                 model=model,
@@ -1093,7 +1094,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 model=model,
                 route="bedrock",
                 drop_params=drop_params,
-                remedy=HOSTED_MCP_BATCH_ROW_REMEDY,
+                remedy=hosted_mcp_remedy,
             ),
         }
 

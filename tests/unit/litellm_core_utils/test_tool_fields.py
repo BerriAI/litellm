@@ -400,10 +400,31 @@ def test_dropping_a_hosted_mcp_tool_removes_it_from_an_allowed_tools_choice(layo
 
 
 @pytest.mark.parametrize("layout", ["responses", "chat"])
-def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_leaves_the_model_no_tool_to_call(layout: str) -> None:
+def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_drops_the_choice_and_keeps_the_function_tools(
+    layout: str,
+) -> None:
     params: Final = tool_params_without_hosted_mcp(
         {
             "tools": [_HOSTED_MCP_TOOL, _GOOD_TOOL],
+            "tool_choice": _allowed_tools_choice(layout, [_ALLOWED_DEEPWIKI]),
+            "parallel_tool_calls": False,
+            "temperature": 0.2,
+        },
+        model="deepseek-v4-flash",
+        route="deepseek",
+        drop_params=True,
+    )
+
+    assert params == {"tools": [_GOOD_TOOL], "parallel_tool_calls": False, "temperature": 0.2}
+
+
+@pytest.mark.parametrize("layout", ["responses", "chat"])
+def test_an_allowed_tools_choice_naming_only_dropped_mcp_tools_leaves_no_tool_params_when_no_tool_is_left(
+    layout: str,
+) -> None:
+    params: Final = tool_params_without_hosted_mcp(
+        {
+            "tools": [_HOSTED_MCP_TOOL],
             "tool_choice": _allowed_tools_choice(layout, [_ALLOWED_DEEPWIKI]),
             "parallel_tool_calls": False,
             "temperature": 0.2,

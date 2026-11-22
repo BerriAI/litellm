@@ -3,6 +3,7 @@ from functools import cache
 from types import MappingProxyType
 from typing import Final, cast, get_type_hints
 
+from litellm.litellm_core_utils.allowed_tools_tool_choice import hosted_tool_choice_type
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.types.llms.openai import ResponseInputParam, ResponsesAPIOptionalRequestParams
 
@@ -35,6 +36,7 @@ def responses_batch_body_to_chat_body(
     and the tool params translate identically in batch and real time. Like real time, the
     record's fields are forwarded as sent instead of validated against the SDK TypedDicts,
     whose required keys (a function tool's `strict`, an image part's `detail`) clients omit.
+    Under drop_params an `mcp` tool_choice is left out, since a batch row cannot run any MCP server.
     """
     from litellm.responses.litellm_completion_transformation.transformation import (
         LiteLLMCompletionResponsesConfig,
@@ -48,9 +50,17 @@ def responses_batch_body_to_chat_body(
         )
     model: Final = openai_request_body.get("model")
     chat_input: Final = cast(str | ResponseInputParam, responses_input)  # cast-ok: forwarded as sent
+    row_drop_params: Final = openai_request_body.get("drop_params")
+    effective_drop_params: Final = row_drop_params if drop_params is None else drop_params
+    forwarded_keys: Final = (
+        _responses_request_keys() - {"tool_choice"}
+        if drops_unsupported_params(effective_drop_params)
+        and hosted_tool_choice_type(openai_request_body.get("tool_choice")) == "mcp"
+        else _responses_request_keys()
+    )
     responses_request: Final = cast(  # cast-ok: client-supplied fields forwarded verbatim, as real time does
         ResponsesAPIOptionalRequestParams,
-        _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in _responses_request_keys()),
+        _frozen_mapping((key, value) for key, value in openai_request_body.items() if key in forwarded_keys),
     )
     return LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # transformer declares a bare dict return
         model=model if isinstance(model, str) else "",

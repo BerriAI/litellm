@@ -6718,9 +6718,8 @@ def _function_tool(name: str) -> dict[str, object]:
 @pytest.mark.usefixtures(httpx_transport.__name__)
 @respx.mock
 @pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
-@pytest.mark.parametrize("server_label", ["deepwiki", "unsent"])
 def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
-    monkeypatch: pytest.MonkeyPatch, server_label: str, function_names: tuple[str, ...]
+    monkeypatch: pytest.MonkeyPatch, function_names: tuple[str, ...]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
@@ -6734,7 +6733,7 @@ def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_
         model="gemini/gemini-3.8-flash",
         input="Weather in Paris?",
         tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
-        tool_choice={"type": "mcp", "server_label": server_label},
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
         drop_params=True,
         api_key="gemini-test-key",
     )
@@ -6742,6 +6741,27 @@ def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_
     sent: Final = json.loads(gemini.calls.last.request.content)
     assert "toolConfig" not in sent
     assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_stays_a_400_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'"):
+        litellm.responses(
+            model="gemini/gemini-3.8-flash",
+            input="Weather in Paris?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+            tool_choice={"type": "mcp", "server_label": "unsent"},
+            drop_params=True,
+            api_key="gemini-test-key",
+        )
+
+    assert not gemini.called
 
 
 @pytest.mark.usefixtures(httpx_transport.__name__)

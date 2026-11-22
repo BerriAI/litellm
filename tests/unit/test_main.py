@@ -654,6 +654,78 @@ def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock
     assert "tool_choice" not in json.loads(route.calls[0].request.content)
 
 
+_DEEPWIKI_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+
+
+def test_drop_params_drops_an_mcp_tool_choice_together_with_the_hosted_mcp_tool_it_names(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*"
+    ).respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == [
+        "get_time",
+        "get_weather",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("model", "tools", "drop_params"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], False, id="drop-params-off"),
+        pytest.param("gemini/gemini-3.8-flash", _TWO_TOOLS, True, id="server-not-sent"),
+        pytest.param(
+            "anthropic/claude-haiku-5-5", [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], True, id="provider-runs-the-server"
+        ),
+    ],
+)
+def test_an_mcp_tool_choice_stays_a_400_when_drop_params_does_not_drop_its_server(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    tools: list[dict[str, object]],
+    drop_params: bool,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",

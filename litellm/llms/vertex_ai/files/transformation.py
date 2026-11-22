@@ -40,7 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body, row_or_deployment_drop_params
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -853,7 +853,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        responses_batch_body_to_chat_body(
+            openai_request_body,
+            custom_llm_provider="vertex_ai",
+            drop_params=row_or_deployment_drop_params(openai_request_body, deployment_params.get("drop_params")),
+        )
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )

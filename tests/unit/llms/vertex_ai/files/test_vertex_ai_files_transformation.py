@@ -2379,3 +2379,30 @@ class TestVertexClaudeBatch:
         (row,) = (json.loads(line) for line in body.splitlines())
         assert row["custom_id"] == "a"
         assert row["response"]["body"]["choices"][0]["message"]["content"] == "first"
+
+
+def test_batch_responses_row_drops_an_mcp_tool_choice_under_its_deployments_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {
+        "custom_id": "r1",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": "gemini-3.8-flash",
+            "input": "hi",
+            "max_output_tokens": 10,
+            "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+            "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+        },
+    }
+
+    (row,) = _uploaded_rows(
+        config,
+        {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.8-flash", "drop_params": True},
+        [entry],
+    )
+
+    assert "toolConfig" not in row["request"]
+    assert "get_weather" in json.dumps(row)
