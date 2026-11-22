@@ -1256,3 +1256,56 @@ async def test_a_delegated_response_is_charged_once_to_a_budget_that_covers_seve
     )
 
     assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:*:1d") == pytest.approx(delegated_cost)
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_at_the_regional_price_of_its_session():
+    model: Final = next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai"
+        and info.get("mode") == "chat"
+        and info.get("regional_processing_uplift_multiplier_eu", 1.0) > 1.0
+    )
+    regional_cost: Final = litellm.model_cost[model]["regional_processing_uplift_multiplier_eu"] * (
+        1000 * litellm.model_cost[model]["input_cost_per_token"]
+        + 500 * litellm.model_cost[model]["output_cost_per_token"]
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": regional_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "data_residency": "eu",
+                "metadata": {"user_api_key_model_max_budget": {model: {"budget_limit": 1.0, "time_period": "1d"}}},
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": model,
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") == pytest.approx(regional_cost), model

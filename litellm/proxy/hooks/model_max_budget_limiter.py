@@ -895,9 +895,11 @@ def _live_delegated_costs(kwargs: Mapping[str, object], response_obj: object) ->
     custom_llm_provider: Final = kwargs.get("custom_llm_provider")
     if not isinstance(custom_llm_provider, str):
         return ()
+    data_residency: Final = (as_str_mapping(kwargs.get("litellm_params")) or {}).get("data_residency")
     return live_delegated_model_costs(
         tuple(result for result in response_obj.results if isinstance(result, Mapping)),  # pyright: ignore[reportUnknownVariableType, reportUnnecessaryIsInstance]  # realtime results are typed dicts
         custom_llm_provider,
+        data_residency if isinstance(data_residency, str) else None,
     )
 
 
