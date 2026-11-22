@@ -445,6 +445,7 @@ from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_t
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
+from litellm.llms.openai.live.handler import LiveAttach, LiveProviderFrameGate
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.messages.dispatch import messages_target
@@ -921,6 +922,8 @@ from litellm.proxy.plugin_routes import (
 from litellm.proxy.plugin_routes import (
     router as plugin_router,
 )
+from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_client_frame
+from litellm.proxy.realtime_endpoints.sideband import SESSION_NOT_ADMITTED_CODE
 from litellm.proxy.spend_tracking.spend_event_producer import (
     CollectorSettings,
     SpendEventProducer,
@@ -14351,12 +14354,20 @@ async def _route_realtime_websocket_session(
     request_path: str | None = None,
     live_session_start: Mapping[str, object] | None = None,
     is_translation: bool = False,
+    sideband_call_id: str | None = None,
+    live_attach: LiveAttach | None = None,
+    pinned_deployment_id: str | None = None,
+    live_client_frame_gate: LiveProviderFrameGate | None = None,
 ) -> None:
     # Only use explicit parameters, not all query params
     query_model: Final = route_model if is_translation else model
-    query_params: Final = cast(  # cast-ok: cached tuples contain only the declared realtime query keys
-        RealtimeQueryParams,
-        dict(_realtime_query_params_template(query_model, intent)),
+    query_params: Final[RealtimeQueryParams] = (
+        {"call_id": sideband_call_id}
+        if sideband_call_id is not None
+        else cast(  # cast-ok: cached tuples contain only the declared realtime query keys
+            RealtimeQueryParams,
+            dict(_realtime_query_params_template(query_model, intent)),
+        )
     )
 
     data: dict[str, object] = {
@@ -14368,8 +14379,21 @@ async def _route_realtime_websocket_session(
     # Pass guardrails into data so pre-call guardrail processing picks them up
     if guardrails:
         data["guardrails"] = [g.strip() for g in guardrails.split(",") if g.strip()]
-    if live_session_start is not None:
-        data["live_session_start"] = live_session_start
+    data.update(
+        {
+            name: value
+            for name, value in (
+                ("live_session_start", live_session_start),
+                ("live_attach", live_attach),
+                ("live_client_frame_gate", live_client_frame_gate),
+            )
+            if value is not None
+        }
+    )
+    if pinned_deployment_id:
+        from litellm.router_rust.invoke.endpoints import PINNED_DEPLOYMENT_KEY
+
+        data[PINNED_DEPLOYMENT_KEY] = pinned_deployment_id
 
     # Use raw ASGI headers (already lowercase bytes) to avoid extra work
     headers_list: Final = list(websocket.scope.get("headers") or [])
@@ -14412,9 +14436,17 @@ async def _route_realtime_websocket_session(
             route_type="_arealtime",
         )
     except Exception as e:
-        verbose_proxy_logger.exception("Realtime pre-call error")
+        if sideband_call_id is None and live_attach is None:
+            verbose_proxy_logger.exception("Realtime pre-call error")
+        else:
+            verbose_proxy_logger.warning("The proxy's sideband was not admitted to its call: %s", e)
         await _reject_realtime_session(
-            websocket, user_api_key_dict, code=1011, reason="Pre-call error", error_message=str(e)
+            websocket,
+            user_api_key_dict,
+            code=1011,
+            reason="Pre-call error",
+            error_message=str(e),
+            error_code=None if sideband_call_id is None and live_attach is None else SESSION_NOT_ADMITTED_CODE,
         )
         return
     except BaseException:
@@ -14482,6 +14514,7 @@ async def _authorize_live_session_model(
     authorize_session_model: LiveSessionModelAuthorizer,
     websocket: WebSocket,
     model: str,
+    session: object,
 ) -> UserAPIKeyAuth:
     session_auth: Final = await authorize_session_model(websocket, model)
     try:
@@ -14499,6 +14532,7 @@ async def _authorize_live_session_model(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        await authorize_live_delegation(session, session_auth)
     except BaseException:
         await _release_realtime_budget_reservation(session_auth)
         raise
@@ -14559,7 +14593,7 @@ async def live_sessions_websocket_endpoint(
     await _release_realtime_budget_reservation(upgrade_auth)
     try:
         session_auth: Final = await _authorize_live_session_model(
-            authorize_session_model, websocket, session_start.model
+            authorize_session_model, websocket, session_start.model, session_start.frame.get("session")
         )
     except (ProxyException, HTTPException) as error:
         denial_message: Final = error.message if isinstance(error, ProxyException) else str(error.detail)
@@ -14588,6 +14622,7 @@ async def live_sessions_websocket_endpoint(
         guardrails=None,
         request_path=websocket.url.path,
         live_session_start=session_start.frame,
+        live_client_frame_gate=lambda client_frame, provider: live_client_frame(client_frame, provider, session_auth),
     )
 
 
