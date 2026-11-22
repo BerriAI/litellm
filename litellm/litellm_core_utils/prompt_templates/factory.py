@@ -1525,14 +1525,14 @@ def _is_downloadable_or_base64_url(url: str) -> bool:
 
 
 def _skip_unfetched_tool_result_video(
-    reason: str, exc: Exception | None, *, drop_params: bool, model: str | None, custom_llm_provider: str
+    reason: str, *, drop_params: bool, model: str | None, custom_llm_provider: str
 ) -> None:
     if not drop_params:
         raise BadRequestError(
             message=f"Could not download the video in a tool result. {reason} Fix the link or set drop_params=True.",
             model=model or "",
             llm_provider=custom_llm_provider,
-        ) from exc
+        ) from None
     verbose_logger.warning("Dropped a tool result video that could not be downloaded, since drop_params=True")
 
 
@@ -1582,17 +1582,15 @@ def _gemini_tool_result_video_blob(
     if not _is_downloadable_or_base64_url(url):
         return _skip_unfetched_tool_result_video(
             "The link must be an http(s) URL or a base64 data URL.",
-            None,
             drop_params=drop_params,
             model=model,
             custom_llm_provider=custom_llm_provider,
         )
     try:
         video: Final = convert_to_anthropic_image_obj(url, format=None)
-    except litellm.ImageFetchError as exc:
+    except litellm.ImageFetchError:
         return _skip_unfetched_tool_result_video(
-            exc.message.removeprefix("litellm.BadRequestError: "),
-            exc,
+            "The link is unreachable, too large, or not a video.",
             drop_params=drop_params,
             model=model,
             custom_llm_provider=custom_llm_provider,

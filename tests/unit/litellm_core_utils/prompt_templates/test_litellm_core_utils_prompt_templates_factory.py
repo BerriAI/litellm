@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, TypeAlias
@@ -1919,6 +1920,22 @@ def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless
 
     assert excinfo.value.llm_provider == custom_llm_provider
     assert dropped == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": signed_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
