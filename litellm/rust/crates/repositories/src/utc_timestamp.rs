@@ -2,8 +2,13 @@
 //! RFC 3339 strings ending in `+00:00`, which Python's
 //! `datetime.fromisoformat` reads on every supported version (3.10 rejects a `Z` suffix).
 
-use chrono::{NaiveDateTime, SecondsFormat};
+use chrono::{DateTime, NaiveDateTime, SecondsFormat};
 use serde::Serializer;
+
+/// `at` as the UTC wall time a `timestamp(3)` column stores, or `None` for a time chrono cannot hold.
+pub(crate) fn naive_utc(at: jiff::Timestamp) -> Option<NaiveDateTime> {
+    DateTime::from_timestamp_micros(at.as_microsecond()).map(|at| at.naive_utc())
+}
 
 /// Writes `value` as RFC 3339 in UTC with a `+00:00` offset.
 pub(crate) fn serialize<S: Serializer>(

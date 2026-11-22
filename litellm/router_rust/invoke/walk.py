@@ -11,8 +11,10 @@ its parent. Each scope here is one such dict. The root level's dict is the calle
 reads a failed request's walk off it), so a fresh call's root writes reach that dict as well.
 """
 
+import contextlib
+import weakref
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm.exceptions import logged_class_name
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
@@ -41,7 +43,12 @@ _WALK_KEYS: Final = (
 _SERVED_KEYS: Final = ("model_info", "deployment")
 # The walk state `run_async_fallback` hands every hop as kwargs.
 _HOP_KWARGS: Final = ("fallback_depth", "max_fallbacks", "attempted_targets", "include_fallback_errors")
-_RETRY_RECORD_KEYS: Final = ("previous_models", "request_retry_count")
+_RETRY_RECORD_KEYS: Final = (
+    "previous_models",
+    "request_retry_count",
+    "failed_fallback_attempts",
+    "client_seen_attempt",
+)
 
 
 def _reentrant_hop_stamps(request: Mapping[str, object], field: str) -> Mapping[str, object]:
@@ -65,6 +72,11 @@ class _Scope:
     ) -> None:
         self.metadata: Final = metadata
         self.kwargs: Final = kwargs
+
+
+class _Crumb(NamedTuple):
+    error: weakref.ref[BaseException]
+    record: Mapping[str, object]
 
 
 def _breadcrumb(
@@ -146,7 +158,16 @@ def log_retry_into(
 class WalkMetadata:
     """The metadata each level of one call's walk holds, by scope."""
 
-    __slots__ = ("_attempted", "_field", "_live", "_params_base_model", "_request", "_scopes")
+    __slots__ = (
+        "_attempted",
+        "_crumbs",
+        "_failed_hops",
+        "_field",
+        "_live",
+        "_params_base_model",
+        "_request",
+        "_scopes",
+    )
 
     def __init__(
         self,
@@ -166,6 +187,8 @@ class WalkMetadata:
         self._params_base_model: Final = params_base_model
         self._scopes: Final[dict[int, _Scope]] = {0: _Scope(root, {})}  # mutable-ok: filled as the walk hops
         self._attempted: AttemptedFallbackTargets | None = None
+        self._crumbs: Final[dict[int, _Crumb]] = {}  # mutable-ok: filled as attempts fail
+        self._failed_hops: tuple[Mapping[str, object], ...] = ()
         # A call whose retry and fallback wrappers stamp the request itself; a stream's recovery
         # re-enters below them.
         self._live: Final = live
@@ -293,6 +316,7 @@ class WalkMetadata:
         if error is None:
             return
         record: Final = _breadcrumb(metadata, str(event.get("model")), error, self._params_base_model)
+        self._remember(error, record)
         earlier: Final = metadata.get("previous_models")
         kept: Final = _kept_breadcrumbs(earlier)
         count: Final = metadata.get("request_retry_count")
@@ -302,6 +326,56 @@ class WalkMetadata:
             scope,
             {"previous_models": metadata["previous_models"], "request_retry_count": metadata["request_retry_count"]},
         )
+
+    def _remember(self, error: BaseException, record: Mapping[str, object]) -> None:
+        """``record`` is ``error``'s breadcrumb. Held weakly, since an error holds its request through
+        its traceback; a builtin error takes no weak reference and is not remembered."""
+        with contextlib.suppress(TypeError):
+            self._crumbs[id(error)] = _Crumb(weakref.ref(error), record)
+
+    def _record_of(self, error: BaseException) -> Mapping[str, object] | None:
+        """The breadcrumb recorded for ``error`` itself, not for a freed error whose id it reuses."""
+        crumb: Final = self._crumbs.get(id(error))
+        return crumb.record if crumb is not None and crumb.error() is error else None
+
+    def _logged_bucket(self) -> dict[str, object] | None:  # mutable-ok: the logging object's own dict
+        """The metadata the request's logging object holds, which each SDK call replaces."""
+        litellm_params: Final = getattr(self._request.get("litellm_logging_obj"), "litellm_params", None)
+        logged: Final = litellm_params.get(self._field) if isinstance(litellm_params, dict) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Logging.litellm_params is untyped
+        return logged if isinstance(logged, dict) else None  # pyright: ignore[reportUnknownVariableType]  # same untyped dict
+
+    def log_failed_hop(self, event: Mapping[str, object], error: BaseException | None) -> None:
+        """A ``fallback_done`` event for a hop that failed: the hop's last attempt joins the walk's
+        failed hops. No SDK call follows that attempt, so the ``previous_models`` the logging object
+        holds never has it, and it is kept apart so it takes none of the ``RETRY_BREADCRUMB_LIMIT`` slots."""
+        if error is None:
+            return
+        metadata: Final = self._scope(event.get("scope")).metadata
+        recorded: Final = self._record_of(error)
+        record: Final = (
+            _breadcrumb(metadata, str(metadata.get("model_group")), error, self._params_base_model)
+            if recorded is None
+            else recorded
+        )
+        if any(hop is record for hop in self._failed_hops):
+            return
+        self._remember(error, record)
+        self._failed_hops = (*self._failed_hops, record)
+
+    def log_client_seen(self, error: BaseException) -> None:
+        """The request failed with ``error``: the logging object's metadata gets every failed hop's
+        last attempt (``failed_fallback_attempts``) and, when ``error`` is one a recorded attempt
+        raised, that attempt (``client_seen_attempt``). An error no attempt raised, like a deadline
+        that cut a call short, names none."""
+        logged: Final = self._logged_bucket()
+        if logged is None:
+            return
+        seen: Final = self._record_of(error)
+        logged["failed_fallback_attempts"] = self._failed_hops
+        if seen is None:
+            _ = logged.pop("client_seen_attempt", None)
+        else:
+            logged["client_seen_attempt"] = seen
 
     def deployment_that_just_failed(self, step: Mapping[str, object]) -> str | None:
         """``_deployment_that_just_failed``: the deployment the metadata an attempt inherits names,

@@ -31,7 +31,7 @@ describe("RoleMappings", () => {
 
   it("should display Group Claim and Default Role with correct values and display names", () => {
     const testCases: Array<{ role: RoleMappingsType["default_role"]; displayName: string; groupClaim: string }> = [
-      { role: "internal_user_viewer", displayName: "Internal Viewer", groupClaim: "custom-groups-1" },
+      { role: "internal_user_viewer", displayName: "Internal User Viewer", groupClaim: "custom-groups-1" },
       { role: "internal_user", displayName: "Internal User", groupClaim: "custom-groups-2" },
       { role: "proxy_admin_viewer", displayName: "Proxy Admin Viewer", groupClaim: "custom-groups-3" },
       { role: "proxy_admin", displayName: "Proxy Admin", groupClaim: "custom-groups-4" },
@@ -81,7 +81,7 @@ describe("RoleMappings", () => {
     expect(screen.getAllByText("Proxy Admin").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Proxy Admin Viewer").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Internal User").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Internal Viewer").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Internal User Viewer").length).toBeGreaterThan(0);
     expect(screen.getByText("admin-group-1")).toBeInTheDocument();
     expect(screen.getByText("admin-group-2")).toBeInTheDocument();
     expect(screen.getByText("admin-group-3")).toBeInTheDocument();

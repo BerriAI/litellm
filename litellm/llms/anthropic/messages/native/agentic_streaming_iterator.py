@@ -54,6 +54,7 @@ AGENTIC_LOOP_LIMIT_ERROR_SSE_BYTES: Final = (
     b'Raise max_agentic_loops to allow more loops."}}\n\n'
 )
 _DECODED_JSON: Final = TypeAdapter(object)
+_AGENTIC_HOOK_RESULT: Final = TypeAdapter(object)
 _HOLD_START_EVENTS: Final = frozenset(("message_delta", "message_stop"))
 _CONTENT_BLOCK_EVENTS: Final = frozenset(("content_block_start", "content_block_delta", "content_block_stop"))
 
@@ -438,16 +439,18 @@ class AgenticAnthropicStreamingIterator:
                 verbose_logger.debug("AgenticStreamingIterator: Could not rebuild response from SSE bytes")
                 return
 
-            result: Final[object] = await self._http_handler._call_agentic_completion_hooks(
-                response=rebuilt,
-                model=self._model,
-                messages=self._messages,
-                anthropic_messages_provider_config=self._anthropic_messages_provider_config,
-                anthropic_messages_optional_request_params=self._anthropic_messages_optional_request_params,
-                logging_obj=self._logging_obj,
-                stream=True,
-                custom_llm_provider=self._custom_llm_provider,
-                kwargs=self._kwargs,
+            result: Final[object] = _AGENTIC_HOOK_RESULT.validate_python(
+                await self._http_handler._call_agentic_completion_hooks(
+                    response=rebuilt,
+                    model=self._model,
+                    messages=self._messages,
+                    anthropic_messages_provider_config=self._anthropic_messages_provider_config,
+                    anthropic_messages_optional_request_params=self._anthropic_messages_optional_request_params,
+                    logging_obj=self._logging_obj,
+                    stream=True,
+                    custom_llm_provider=self._custom_llm_provider,
+                    kwargs=self._kwargs,
+                )
             )
 
             if result is None:

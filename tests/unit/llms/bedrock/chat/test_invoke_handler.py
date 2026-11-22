@@ -1485,6 +1485,34 @@ async def test_converse_stream_assembled_response_keeps_served_tier(
     )
 
 
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+async def test_invoke_stream_with_empty_generation_assembles_a_complete_response(
+    _aws_test_credentials: None, async_mode: bool
+) -> None:
+    empty_generation: Final = _bedrock_event_stream_frame({"generation": "", "stop_reason": "stop"})
+
+    def handle_request(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=empty_generation, headers=_event_stream_headers())
+
+    request: Final = {
+        "model": "bedrock/invoke/meta.llama4-maverick-17b-instruct-v1:0",
+        "messages": [{"role": "user", "content": "hi"}],
+        "aws_region_name": "us-east-1",
+        "stream": True,
+        "complete_response": True,
+    }
+    transport: Final = httpx.MockTransport(handle_request)
+    response: Final = (
+        await litellm.acompletion(**request, client=AsyncHTTPHandler(transport=transport))
+        if async_mode
+        else litellm.completion(**request, client=HTTPHandler(client=httpx.Client(transport=transport)))
+    )
+
+    assert isinstance(response, litellm.ModelResponse), response
+    assert (response.choices[0].finish_reason, response.choices[0].message.content) == ("stop", "")
+
+
 def _unknown_event_frame() -> bytes:
     return _converse_event_frame("somethingBedrockAddedLater", {"message": _UPSTREAM_REJECTION})
 

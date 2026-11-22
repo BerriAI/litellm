@@ -9,6 +9,7 @@ interface ChatShellContextValue {
   accessToken: string;
   userId: string;
   userEmail: string;
+  userAlias?: string | null;
   userRole: string;
   premiumUser: boolean;
   selectedMCPServers: string[];
@@ -40,6 +41,7 @@ interface ChatShellProviderProps {
   accessToken: string;
   userId: string;
   userEmail: string;
+  userAlias?: string | null;
   userRole: string;
   premiumUser: boolean;
   children: React.ReactNode;
@@ -49,6 +51,7 @@ export function ChatShellProvider({
   accessToken,
   userId,
   userEmail,
+  userAlias,
   userRole,
   premiumUser,
   children,
@@ -76,6 +79,7 @@ export function ChatShellProvider({
         accessToken,
         userId,
         userEmail,
+        userAlias,
         userRole,
         premiumUser,
         selectedMCPServers,

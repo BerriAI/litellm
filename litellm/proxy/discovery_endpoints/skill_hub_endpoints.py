@@ -62,6 +62,7 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     build_agent_skill_archive,
     read_skill_archive_members,
 )
+from litellm.proxy.discovery_endpoints.skill_download_export import router as download_export_router
 from litellm.proxy.discovery_endpoints.skill_hub_mutations import (
     SkillMutationError,
     archive_writer,
@@ -103,6 +104,7 @@ from litellm.types.proxy.skill_hub import (
 )
 
 router: Final = APIRouter(prefix="/skill-hub/skills", tags=["Skills Hub"])
+router.include_router(download_export_router)
 router.add_api_route(
     "/{plugin_name}/downloads", get_plugin_downloads, methods=["GET"], response_model=PluginDownloadsResponse
 )

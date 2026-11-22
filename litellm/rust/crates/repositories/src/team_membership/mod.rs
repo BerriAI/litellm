@@ -2,4 +2,6 @@ mod queries;
 mod repository;
 
 pub use queries::TeamMembership;
-pub use repository::TeamMembershipRepository;
+pub use repository::{
+    AddedMember, MemberAdd, MemberBudget, NewMemberBudget, TeamMembershipRepository,
+};
