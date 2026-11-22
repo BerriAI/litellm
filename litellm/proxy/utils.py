@@ -138,8 +138,6 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import (
-    EmbeddingResponse,
-    ImageResponse,
     ModelResponse,
     ModelResponseStream,
     Router,
@@ -209,6 +207,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     Logging,
     deployment_pricing_model_info,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.redact_messages import drop_token_ids
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
@@ -5168,10 +5167,10 @@ class ProxyLogging:
     async def async_post_call_streaming_hook(
         self,
         data: dict,
-        response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
-    ):
+    ) -> object:
         """
         Allow user to modify outgoing streaming data -> per chunk
 
@@ -5193,7 +5192,7 @@ class ProxyLogging:
         response_str: str | None = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
-        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+        elif is_str_keyed_dict(response) and self.is_a2a_streaming_response(response):
             from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
             response_str = extract_text_from_a2a_response(response)
@@ -5242,9 +5241,6 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
-                        )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,

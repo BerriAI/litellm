@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Annotated, Any, Final, Literal, TypeAlias
+from typing import Annotated, Final, Literal, TypeAlias
 
 from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
 from typing_extensions import ReadOnly, TypedDict
@@ -23,7 +23,7 @@ class LiteLLM_VectorStoreConfig(TypedDict, total=False):
     """Parameters for initializing a vector store on Litellm proxy config.yaml"""
 
     vector_store_name: str
-    litellm_params: dict[str, Any] | None
+    litellm_params: dict[str, object] | None
 
 
 class LiteLLM_ManagedVectorStore(TypedDict, total=False):
@@ -42,7 +42,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     litellm_credential_name: str | None
 
     # litellm_params
-    litellm_params: dict[str, Any] | None
+    litellm_params: dict[str, object] | None
 
     # access control fields
     team_id: str | None

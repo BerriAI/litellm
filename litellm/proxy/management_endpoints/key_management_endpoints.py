@@ -53,8 +53,10 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     has_attributes,
     int_of,
+    iter_items,
     require_attributes,
     sum_of,
+    without,
 )
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
@@ -5111,9 +5113,34 @@ async def delete_key_fn(
         raise handle_exception_on_proxy(e)
 
 
+class _QueriedKeyOwner(Protocol):
+    @property
+    def user_id(self) -> str | None: ...
+
+    @property
+    def team_id(self) -> str | None: ...
+
+
+class _ListedKeyRow(_QueriedKeyOwner, Protocol):
+    @property
+    def token(self) -> str | None: ...
+
+
+def _dict_or_none(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _listed_key_model_max_budget(key_dump: Mapping[str, object]) -> object:
+    own_budget: Final = key_dump.get("model_max_budget")
+    if own_budget:
+        return own_budget
+    budget_table: Final = _dict_or_none(key_dump.get("litellm_budget_table"))
+    return budget_table.get("model_max_budget") if budget_table is not None else None
+
+
 async def _build_model_max_budget_usage(
     api_key_hash: str,
-    model_max_budget: Mapping[str, Mapping[str, object]],
+    model_max_budget: object,
     user_api_key_cache: DualCache | None,
 ) -> dict[str, dict[str, object]]:
     return await build_model_max_budget_usage(
@@ -5125,7 +5152,7 @@ async def _build_model_max_budget_usage(
 
 
 async def _build_budget_limits_usage(
-    budget_limits: Sequence[object] | str | None, api_key_hash: str
+    budget_limits: object, api_key_hash: str
 ) -> Mapping[str, Mapping[str, object]] | None:
     return await build_budget_limits_usage(
         budget_limits=budget_limits,
@@ -5190,12 +5217,15 @@ async def info_key_fn_v2(
         if not tokens_to_query:
             return {"key": data.keys, "info": []}
 
-        key_info: Final = await prisma_client.get_data(token=tokens_to_query, table_name="key", query_type="find_all")
-        if not key_info:
+        key_rows: Final = _DECODED_JSON.validate_python(
+            await prisma_client.get_data(token=tokens_to_query, table_name="key", query_type="find_all")
+        )
+        if not key_rows:
             return {"key": data.keys, "info": []}
 
         filtered_key_info: Final = []
-        for k in key_info:
+        for key_row in iter_items(key_rows):
+            k = require_attributes(key_row, _ListedKeyRow, "token", "user_id", "team_id")
             if not await _can_user_query_key_info(
                 user_api_key_dict=user_api_key_dict,
                 key=k.token,
@@ -5203,15 +5233,14 @@ async def info_key_fn_v2(
             ):
                 continue
             try:
-                k_dict = k.model_dump()
+                k_dump = require_attributes(k, _KeyRowDumpable, "model_dump").model_dump()
             except Exception:
-                k_dict = k.dict()
-            k_token_hash = k_dict.pop("token", None)
+                k_dump = _legacy_model_dict(require_attributes(k, _LegacyDumpable, "dict"))
+            k_dict = without(k_dump, "token")
+            dumped_token = k_dump.get("token")
+            k_token_hash = dumped_token if isinstance(dumped_token, str) else None
 
-            model_max_budget = k_dict.get("model_max_budget") or {}
-            budget_table = k_dict.get("litellm_budget_table") or {}
-            if not model_max_budget and isinstance(budget_table, dict):
-                model_max_budget = budget_table.get("model_max_budget") or {}
+            model_max_budget = _listed_key_model_max_budget(k_dump)
             if model_max_budget and k_token_hash:
                 k_dict["model_max_budget_usage"] = await _build_model_max_budget_usage(
                     api_key_hash=k_token_hash,
@@ -5220,7 +5249,7 @@ async def info_key_fn_v2(
                 )
             if k_token_hash:
                 budget_limits_usage = await _build_budget_limits_usage(
-                    budget_limits=k_dict.get("budget_limits"),
+                    budget_limits=k_dump.get("budget_limits"),
                     api_key_hash=k_token_hash,
                 )
                 if budget_limits_usage is not None:
@@ -8559,7 +8588,7 @@ async def key_health(
 async def _can_user_query_key_info(
     user_api_key_dict: UserAPIKeyAuth,
     key: str | None,
-    key_info: LiteLLM_VerificationToken,
+    key_info: _QueriedKeyOwner,
 ) -> bool:
     """
     Helper to check if the user has access to the key's info

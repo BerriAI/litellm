@@ -104,7 +104,7 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
 
     model: str | None = None
-    messages: list[dict[str, Any]] | None = None
+    messages: list[dict[str, object]] | None = None
     tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
     optional_params: dict[str, object] = Field(default_factory=dict)

@@ -558,7 +558,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: str,
-    ) -> Any:
+    ) -> object:
         pass
 
     async def async_post_call_streaming_iterator_hook(

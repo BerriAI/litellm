@@ -112,6 +112,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    is_str_keyed_dict,
     object_items,
     object_mapping,
 )
@@ -840,6 +841,10 @@ def _as_success_dispatcher(logging_obj: _DispatchesSuccessHandlers) -> _Dispatch
 
 class _ClosesAsync(Protocol):
     def aclose(self) -> Awaitable[object]: ...
+
+
+class _DumpsStreamChunk(Protocol):
+    def model_dump(self, *, mode: str, exclude_none: bool) -> object: ...
 
 
 class _DeferredLoggingSlot(Protocol):
@@ -5689,14 +5694,14 @@ class ProxyBaseLLMRequestProcessing:
                     if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                         response_str = litellm.get_response_string(response_obj=chunk)
                         str_so_far += response_str
-                    elif hasattr(chunk, "model_dump"):
+                    elif has_attributes(chunk, _DumpsStreamChunk, "model_dump"):
                         try:
                             d = chunk.model_dump(mode="json", exclude_none=True)
-                            if isinstance(d, dict):
+                            if is_str_keyed_dict(d):
                                 str_so_far += _content_text(d)
                         except Exception:
                             pass
-                    elif isinstance(chunk, dict):
+                    elif is_str_keyed_dict(chunk):
                         str_so_far += str(chunk.get("content", ""))
 
                     model_name = request_data.get("model", "")
