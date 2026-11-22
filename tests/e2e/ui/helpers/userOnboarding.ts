@@ -48,9 +48,12 @@ export async function expectUnrestrictedDashboard(page: Page): Promise<void> {
   expect(session.password_reset_required === true, "login must not require a password reset").toBe(false);
   await virtualKeys.click();
   await expect(page).toHaveURL(/\/ui\/api-keys\/?$/);
-  await expect(page.getByRole("main").getByRole("heading", { name: "Virtual Keys", exact: true })).toBeVisible({
-    timeout: 30_000,
-  });
+  await expect(
+    page
+      .getByRole("main")
+      .getByRole("heading", { name: "Virtual Keys", exact: true })
+      .and(page.locator(":not([data-slot='sidebar-inset'] > header *)")),
+  ).toBeVisible({ timeout: 30_000 });
   const info = await page.request.get(endpoint("/user/info"), {
     headers: { Authorization: `Bearer ${session.key}` },
     params: { user_id: session.user_id },

@@ -23,8 +23,9 @@ use pyo3::{
 use rstest::rstest;
 use support::{
     HookScript, Interpreter, Log, MachineFactory, OpScript, Synthetic, binding, call_options,
-    failing_machine, handed, hooks, interpreter, lifecycle_module, open_stream, read_all,
-    run_composed, run_scripted, settled, success_machine,
+    draining_streaming_machine, failing_machine, handed, hooks, interpreter, lifecycle_module,
+    open_stream, open_stream_from, read_all, run_composed, run_scripted, settled, success_machine,
+    tailed_streaming_machine,
 };
 
 fn observed(capacity: usize) -> (CallOptions, impl FnMut() -> Vec<CallEvent>) {
@@ -400,6 +401,153 @@ fn a_stream_carries_its_head_before_the_first_chunk(
         );
         assert_eq!(log.entries(), ["started", "begin", "opened"]);
         assert_eq!(read_all(py, &stream, asynchronous), ["first", "second"]);
+    });
+}
+
+#[rstest]
+fn chunks_on_the_unobserved_tail_reach_the_caller_without_the_stream_hooks(
+    #[from(interpreter)] _python: Interpreter,
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let stream = open_stream_from(
+            py,
+            tailed_streaming_machine(),
+            hooks(&log, HookScript::Plain),
+            call_options(asynchronous),
+        );
+        assert_eq!(
+            read_all(py, &stream, asynchronous),
+            ["first", "second", "trailer"]
+        );
+        assert_eq!(
+            log.entries(),
+            [
+                "started",
+                "begin",
+                "opened",
+                "delivered",
+                "delivered",
+                "succeeded:None",
+                "adapter.close"
+            ]
+        );
+    });
+}
+
+#[rstest]
+#[case::complete(false, &["delivered", "succeeded:None", "adapter.close"])]
+#[case::failed(true, &["failed:DetachedStream:classified: upstream stream failed", "adapter.close"])]
+fn a_draining_stream_reports_its_outcome_to_hooks_after_the_caller_closes(
+    #[from(interpreter)] _python: Interpreter,
+    #[case] fails: bool,
+    #[case] terminal_events: &[&str],
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let stream = open_stream_from(
+            py,
+            draining_streaming_machine(true, std::time::Duration::ZERO, fails),
+            hooks(&log, HookScript::Plain),
+            call_options(asynchronous),
+        );
+        if asynchronous {
+            for method in ["__anext__", "aclose"] {
+                let stop = stream
+                    .call_method0(method)
+                    .unwrap()
+                    .call_method1("send", (py.None(),))
+                    .unwrap_err();
+                assert!(stop.is_instance_of::<PyStopIteration>(py));
+            }
+        } else {
+            stream.call_method0("__next__").unwrap();
+            stream.call_method0("close").unwrap();
+        }
+        let events = ["started", "begin", "opened", "delivered", "delivered"];
+        assert_eq!(log.entries(), [events.as_slice(), terminal_events].concat());
+    });
+}
+
+#[rstest]
+#[case::draining(
+    true,
+    false,
+    "cancelled",
+    &["started", "begin", "opened", "delivered", "delivered", "delivered", "succeeded:None", "adapter.close"]
+)]
+#[case::drain_fails(
+    true,
+    true,
+    "cancelled",
+    &["started", "begin", "opened", "delivered", "delivered", "failed:DetachedStream:classified: upstream stream failed", "adapter.close"]
+)]
+#[case::not_draining(false, false, "cancelled", &["started", "begin", "opened", "delivered", "adapter.close"])]
+fn a_caller_cancelled_mid_read_leaves_only_a_draining_stream_reading_on(
+    #[from(interpreter)] _python: Interpreter,
+    #[case] drain: bool,
+    #[case] fails: bool,
+    #[case] outcome: &str,
+    #[case] logged: &[&str],
+) {
+    Python::attach(|py| {
+        let log = Log::default();
+        let opened = handed(
+            py,
+            run_call(
+                py,
+                move |_, _, request| {
+                    Ok(draining_streaming_machine(
+                        drain,
+                        std::time::Duration::from_millis(200),
+                        fails,
+                    )(request))
+                },
+                support::StreamingBinding,
+                hooks(&log, HookScript::Plain),
+                PyDict::new(py).unbind(),
+                call_options(true),
+            ),
+            true,
+        )
+        .unwrap();
+        let locals = PyDict::new(py);
+        locals.set_item("opened", opened).unwrap();
+        py.run(
+            c"
+import asyncio
+
+async def read_then_cancel():
+    stream = await opened
+    await stream.__anext__()
+    reading = asyncio.ensure_future(stream.__anext__())
+    await asyncio.sleep(0.05)
+    reading.cancel()
+    try:
+        await reading
+    except asyncio.CancelledError:
+        outcome = 'cancelled'
+    else:
+        outcome = 'read'
+    await stream.aclose()
+    return outcome
+
+outcome = asyncio.run(read_then_cancel())
+",
+            Some(&locals),
+            Some(&locals),
+        )
+        .unwrap();
+        let actual: String = locals
+            .get_item("outcome")
+            .unwrap()
+            .unwrap()
+            .extract()
+            .unwrap();
+        assert_eq!(actual, outcome);
+        assert_eq!(log.entries(), logged);
     });
 }
 

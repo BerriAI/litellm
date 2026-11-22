@@ -12,6 +12,7 @@ Covers the three defects from the ticket:
 
 import cProfile
 import json
+import re
 import sys
 import tempfile
 import time
@@ -269,6 +270,77 @@ async def test_pre_call_hook_records_secrets_found_only_in_tool_payloads():
     recorded = _recorded(data)
     assert recorded["guardrail_response"] == "mask"
     assert recorded["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_credentials_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the deploy config."},
+                    {"type": "input_json", "data": {"deploy": {"env": f"AWS_ACCESS_KEY_ID={AWS_KEY}"}, "replicas": 2}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"deploy": {"env": "AWS_ACCESS_KEY_ID=[REDACTED]"}, "replicas": 2}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_redacts_secret_keys_inside_decisions_json_input():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "Check the key usage."},
+                    {"type": "input_json", "data": {"usage": {AWS_KEY: {"calls": 3}}}},
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][1]["data"] == {"usage": {"[REDACTED]": {"calls": 3}}}
+    assert _recorded(data)["masked_entity_count"] == {"AWS Access Key": 1}
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_keeps_every_value_when_secret_keys_redact_to_the_same_name():
+    data = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_json",
+                        "data": {AWS_KEYS[0]: {"calls": 3}, AWS_KEYS[1]: {"calls": 5}, "[REDACTED]": {"calls": 7}},
+                    },
+                ],
+            }
+        ],
+        "metadata": {},
+    }
+    await _guardrail().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(), cache=DualCache(), data=data, call_type="adecisions"
+    )
+    assert data["input"][0]["content"][0]["data"] == {
+        "[REDACTED] (2)": {"calls": 3},
+        "[REDACTED] (3)": {"calls": 5},
+        "[REDACTED]": {"calls": 7},
+    }
 
 
 @pytest.mark.parametrize(
@@ -986,7 +1058,10 @@ def _assignment_flood(n: int) -> str:
     return f"api_key: '{OPENAI_KEY}'\n" + "\n".join(f"password{i}=aB3dE6gH9jK2mN5p{i}" for i in range(n))
 
 
-def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+_MEASUREMENTS: Final = 3
+
+
+def _profiled_calls(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
     previous_profiler: Final = sys.getprofile()
     profile: Final = cProfile.Profile()
     try:
@@ -994,6 +1069,24 @@ def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> in
     finally:
         sys.setprofile(previous_profiler)
     return sum(entry.callcount for entry in profile.getstats())
+
+
+def _calls_to_redact(guardrail: _ENTERPRISE_SecretDetection, content: str) -> int:
+    """Fewest calls over repeated runs, which leaves out a one-off recompile of patterns evicted from the `re` cache."""
+    return min(_profiled_calls(guardrail, content) for _ in range(_MEASUREMENTS))
+
+
+def test_calls_to_redact_ignores_a_regex_cache_eviction() -> None:
+    guardrail: Final = _guardrail()
+    content: Final = _quote_run(1_000)
+    guardrail.redact_text(content)
+    warm: Final = _calls_to_redact(guardrail, content)
+
+    re.purge()
+
+    evicted: Final = _calls_to_redact(guardrail, content)
+
+    assert evicted <= 1.25 * warm, (warm, evicted)
 
 
 @pytest.mark.parametrize(

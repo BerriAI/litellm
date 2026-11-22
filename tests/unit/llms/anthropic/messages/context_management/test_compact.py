@@ -29,10 +29,10 @@ from litellm.llms.anthropic.messages.context_management.editors.compact import (
     _augment_system_with_summary,
     _extract_summary_text,
     _select_last_user_question,
-    slice_around_compaction_block,
     _strip_compaction_blocks,
     apply_client_compaction_block_history,
     apply_compact_20260112,
+    slice_around_compaction_block,
 )
 from litellm.llms.anthropic.messages.context_management.result import (
     PolyfillResult,
@@ -45,8 +45,9 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, RateLimitUnverifiableError
 from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 MODEL = "openai/gpt-4o"
 
@@ -1397,26 +1398,25 @@ async def test_summary_model_runs_only_when_every_scope_of_the_caller_grants_it(
 
 
 async def test_summary_model_denied_when_team_membership_read_hits_a_db_outage(
-    proxy_auth_state: ProxyAuthState,
+    proxy_auth_state: ProxyAuthState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A member-level scope that cannot be read fails closed: the summary
     model is not invoked while the membership row is unreachable."""
-
-    class _UnreachableMembershipPrisma:
-        class db:
-            class litellm_teammembership:
-                @staticmethod
-                async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
-                    raise httpx.ConnectError("All connection attempts failed")
-
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team_membership=FakeTeamMembershipStore(
+                rows={("user-outage", "team-outage"): httpx.ConnectError("All connection attempts failed")}
+            )
+        ),
+    )
     proxy_auth_state.seed(LiteLLM_TeamTableCachedObj(team_id="team-outage", models=["claude-haiku-4-5"]))
     summary_call: Final = AsyncMock(return_value=_make_mock_response("<summary>x</summary>"))
 
-    with patch("litellm.proxy.proxy_server.prisma_client", _UnreachableMembershipPrisma()):
-        result: Final = await _compact_as(
-            _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage", user_id="user-outage"),
-            summary_call,
-        )
+    result: Final = await _compact_as(
+        _fake_user_api_key_auth(key_models=["all-proxy-models"], team_id="team-outage", user_id="user-outage"),
+        summary_call,
+    )
 
     summary_call.assert_not_awaited()
     assert result.applied_edits[0].get("error") == "summary_model_access_denied"
@@ -1537,6 +1537,7 @@ async def test_summary_model_denied_when_user_over_model_budget():
 
 
 async def test_summary_model_denied_when_team_member_over_model_budget(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as proxy_server
     from litellm.caching.dual_cache import DualCache
     from litellm.llms.anthropic.messages.context_management.constants import COMPACT_SUMMARY_MODEL_SETTING_KEY
     from litellm.models.team_membership import LiteLLM_TeamMembership
@@ -1548,14 +1549,10 @@ async def test_summary_model_denied_when_team_member_over_model_budget(monkeypat
     )
     from litellm.proxy.auth.auth_checks import get_team_member_default_budget
     from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
-    from litellm.proxy.common_utils.user_api_key_cache import (
-        UserApiKeyCache,
-        team_membership_reservation_cache_key,
-    )
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
     from litellm.proxy.proxy_server import general_settings
-
-    import litellm.proxy.proxy_server as proxy_server
+    from litellm.redis.stores.auth_cache import AuthObject
 
     budget_id: Final = "summary-budget"
     member_budget: Final = {"claude-haiku-4-5": {"max_budget": 0.0, "budget_duration": "1d"}}
@@ -1575,17 +1572,17 @@ async def test_summary_model_denied_when_team_member_over_model_budget(monkeypat
         litellm_budget_table=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget={}),
     )
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_member_default_budget:{budget_id}",
+        key=AuthObject.team_member_default_budget(budget_id),
         value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=member_budget),
         model_type=LiteLLM_BudgetTable,
     )
     await user_api_key_cache.async_set_cache(
-        key=f"team_id:{team_id}",
+        key=AuthObject.team(team_id),
         value=team_object,
         model_type=LiteLLM_TeamTableCachedObj,
     )
@@ -1749,38 +1746,31 @@ def _proxy_logging_like_the_live_proxy(active_limiter: object) -> MagicMock:
     return proxy_logging
 
 
-class _FakeRateLimiter:
-    """Minimal stand-in for ``_PROXY_MaxParallelRequestsHandler_v3`` exposing
-    just the descriptor-build + read-only check surface the editor consults."""
+class _FakeRateLimiter(ParallelRequestLimiterHook):
+    """Minimal stand-in for the proxy's ``ParallelRequestLimiterHook`` answering
+    just the read-only caller-model check the editor consults."""
 
-    def __init__(self, overall_code: str, raises: Exception | None = None):
+    def __init__(self, overall_code: str, raises: Exception | None = None):  # the stand-in holds no native engine
         self._overall_code = overall_code
         self._raises = raises
         self.read_only_checked = False
 
-    def create_rate_limit_descriptors(self, **kwargs):
-        return [
-            {
-                "key": "api_key",
-                "value": "hashed-token",
-                "rate_limit": {"requests_per_unit": 10},
-            }
-        ]
-
-    def _add_team_model_rate_limit_descriptor_from_metadata(self, **kwargs):
-        return None
-
-    def _add_project_model_rate_limit_descriptor_from_metadata(self, **kwargs):
-        return None
-
-    def create_organization_rate_limit_descriptor(self, *args, **kwargs):
-        return []
-
-    async def should_rate_limit(self, **kwargs):
-        self.read_only_checked = kwargs.get("read_only") is True
+    async def caller_model_rate_limit_response(self, user_api_key_dict, model):
+        self.read_only_checked = True
         if self._raises is not None:
             raise self._raises
         return {"overall_code": self._overall_code}
+
+
+async def _fake_caller_model_check(limiter: _FakeRateLimiter, user_api_key_dict, model):
+    return await limiter.caller_model_rate_limit_response(user_api_key_dict, model)
+
+
+def _check_through_fake():
+    """Route the limiter module's caller-model check to the stand-in the proxy hands out."""
+    return patch(
+        "litellm.proxy.hooks.parallel_request_limiter_v3.caller_model_rate_limit_response", _fake_caller_model_check
+    )
 
 
 @pytest.mark.parametrize(
@@ -1813,6 +1803,7 @@ async def test_summary_model_rate_limit_check_errors(limiter_error, summary_call
             mock_call,
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        _check_through_fake(),
     ):
         result = await apply_compact_20260112(
             model=MODEL,
@@ -1855,6 +1846,7 @@ async def test_summary_model_denied_when_over_rate_limit():
             mock_call,
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        _check_through_fake(),
     ):
         result = await apply_compact_20260112(
             model=MODEL,
@@ -1891,6 +1883,7 @@ async def test_summary_model_allowed_when_within_rate_limit():
             mock_call,
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+        _check_through_fake(),
     ):
         result = await apply_compact_20260112(
             model=MODEL,
@@ -1912,12 +1905,12 @@ async def test_summary_model_allowed_while_the_caller_holds_the_keys_only_parall
     caller's own in-flight slot must not trip a ``max_parallel_requests`` gauge."""
     from litellm.caching.caching import DualCache
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
     from litellm.proxy.utils import InternalUsageCache, hash_token
+    from tests._support.rust_parallel_request_limiter import RustParallelRequestLimiter
 
     messages = _simple_messages()
     mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
-    limiter = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    limiter = RustParallelRequestLimiter(internal_usage_cache=InternalUsageCache(DualCache()))
     auth = UserAPIKeyAuth(
         api_key=hash_token("sk-compact-parallel-slot"), max_parallel_requests=1, models=["all-proxy-models"]
     )
@@ -2814,21 +2807,20 @@ def test_build_summary_messages_keeps_midturn_system_correction_in_place():
 
 
 async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
-    from tests.unit.litellm_core_utils.event_loop_lag import (
-        assert_loop_stayed_free,
-        timed_with_loop_lags,
-        warm_tokenizer,
-    )
-
     from litellm.llms.anthropic.messages.context_management.constants import (
         COMPACT_SUMMARY_MODEL_SETTING_KEY,
     )
     from litellm.proxy.proxy_server import general_settings
+    from tests.unit.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        uncounted_text,
+        warm_tokenizer,
+    )
 
     monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "claude-haiku-4-5")
     warm_tokenizer(MODEL)
-    messages = [{"role": "user", "content": text * 100}, *_simple_messages()]
+    messages = [{"role": "user", "content": uncounted_text()}, *_simple_messages()]
     result, took, lags = await timed_with_loop_lags(
         lambda: apply_compact_20260112(
             model=MODEL,

@@ -5,6 +5,9 @@ import { TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION } from "@/components/team/team
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import type { Member } from "../networking";
 
+const KEY_GENERATE_ROUTE = "/key/generate";
+const SERVICE_ACCOUNT_KEY_GENERATE_ROUTE = "/key/service-account/generate";
+
 export type AnotherUserScope = "any_user" | "team_members" | "none";
 
 export interface TeamMembers {
@@ -21,6 +24,25 @@ export interface KeyOwnerViewer {
 export const administersTeam = (team: TeamMembers | null, userId: string | null): boolean =>
   userId !== null && isUserTeamAdminForSingleTeam(team?.members_with_roles ?? null, userId);
 
+export interface KeyCreationTeam extends TeamMembers {
+  readonly team_member_permissions?: readonly string[] | null;
+}
+
+export const canCreateKeyInTeam = (
+  team: KeyCreationTeam,
+  { userRole, userId }: Pick<KeyOwnerViewer, "userRole" | "userId">,
+  owner: string = "you",
+): boolean => {
+  if (isProxyAdminRole(userRole ?? "") || administersTeam(team, userId)) return true;
+  return (
+    userId !== null &&
+    team.members_with_roles?.some((member) => member.user_id === userId) === true &&
+    team.team_member_permissions?.includes(
+      owner === "service_account" ? SERVICE_ACCOUNT_KEY_GENERATE_ROUTE : KEY_GENERATE_ROUTE,
+    ) === true
+  );
+};
+
 export const anotherUserScope = ({
   userRole,
   userId,
@@ -35,17 +57,19 @@ export const anotherUserScope = ({
 export const effectiveKeyOwner = (requestedOwner: string, scope: AnotherUserScope): string =>
   requestedOwner === "another_user" && scope === "none" ? "you" : requestedOwner;
 
+export const keyOwnerOption = (user: {
+  user_id: string;
+  user_email?: string | null;
+  user_alias?: string | null;
+}): SearchSelectOption => {
+  const identity = user.user_email?.trim() || user.user_alias?.trim();
+  return { value: user.user_id, label: identity ? `${identity} (${user.user_id})` : user.user_id };
+};
+
 export const teamMemberOwnerOptions = (team: TeamMembers | null, viewerId: string | null): SearchSelectOption[] => {
   if (!administersTeam(team, viewerId)) return [];
   return (team?.members_with_roles ?? []).flatMap((member) =>
-    member.user_id && member.user_id !== viewerId
-      ? [
-          {
-            value: member.user_id,
-            label: member.user_email ? `${member.user_email} (${member.user_id})` : member.user_id,
-          },
-        ]
-      : [],
+    member.user_id && member.user_id !== viewerId ? [keyOwnerOption({ ...member, user_id: member.user_id })] : [],
   );
 };
 

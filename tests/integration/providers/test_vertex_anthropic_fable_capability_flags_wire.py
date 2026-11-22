@@ -11,7 +11,7 @@ from typing import Final
 from urllib.parse import parse_qs
 
 from integration._support.client import Gateway, Scenario
-from integration._support.vertex import service_account_json
+from integration._support.vertex import assert_vertex_authorization, service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -87,7 +87,7 @@ def _peer(on_body: Callable[[dict[str, JsonValue]], bytes]) -> Callable[[Request
             assert form["grant_type"] == ["urn:ietf:params:oauth:grant-type:jwt-bearer"], form
             return Reply(body=json.dumps({"access_token": _TOKEN, "token_type": "Bearer", "expires_in": 3600}).encode())
         assert request.method == "POST" and request.target == _TARGET, (request.method, request.target)
-        assert request.headers["authorization"] == f"Bearer {_TOKEN}", request.headers
+        assert_vertex_authorization(request.headers["authorization"], _PROJECT, oauth_token=_TOKEN)
         body: Final = _JSON_OBJECT.validate_json(request.body)
         assert body["anthropic_version"] == "vertex-2023-10-16", body
         return Reply(body=on_body(body))

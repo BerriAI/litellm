@@ -4,57 +4,45 @@ use axum::{
 };
 use litellm_error::Source;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
 pub enum Error {
     #[error("missing or invalid bearer token")]
+    #[strum(serialize = "invalid_token")]
     InvalidToken,
-    #[error("invalid UI credentials or session")]
-    InvalidSession,
+    #[error("missing or invalid API key")]
+    #[strum(serialize = "invalid_api_key")]
+    InvalidApiKey,
     #[error("credential has expired")]
+    #[strum(serialize = "expired")]
     Expired,
     #[error("operation is not permitted")]
+    #[strum(serialize = "forbidden")]
     Forbidden,
     #[error("authentication service unavailable")]
+    #[strum(serialize = "unavailable")]
     Unavailable(#[source] Source),
-    #[error("gateway authentication unavailable")]
-    Secret(#[from] litellm_secrets::Error),
-    #[error("UI session unavailable")]
-    Session(#[from] tower_sessions::session::Error),
     #[error("gateway auth not configured")]
+    #[strum(serialize = "unconfigured")]
     Unconfigured,
-    #[error("UI_USERNAME and UI_PASSWORD must be nonempty")]
-    UiUnconfigured,
     #[error("authenticated request context is missing")]
+    #[strum(serialize = "missing_identity")]
     MissingIdentity,
-    #[error("UI session layer is not installed")]
-    MissingSessionLayer,
 }
 
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::InvalidToken | Self::InvalidSession | Self::Expired => StatusCode::UNAUTHORIZED,
+            Self::InvalidToken | Self::InvalidApiKey | Self::Expired => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
-            Self::Secret(_)
-            | Self::Session(_)
-            | Self::Unconfigured
-            | Self::UiUnconfigured
-            | Self::MissingIdentity
-            | Self::MissingSessionLayer => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Unconfigured | Self::MissingIdentity => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 
     pub fn is_denied(&self) -> bool {
         match self {
-            Self::InvalidToken | Self::InvalidSession | Self::Expired | Self::Forbidden => true,
-            Self::Unavailable(_)
-            | Self::Secret(_)
-            | Self::Session(_)
-            | Self::Unconfigured
-            | Self::UiUnconfigured
-            | Self::MissingIdentity
-            | Self::MissingSessionLayer => false,
+            Self::InvalidToken | Self::InvalidApiKey | Self::Expired | Self::Forbidden => true,
+            Self::Unavailable(_) | Self::Unconfigured | Self::MissingIdentity => false,
         }
     }
 }

@@ -26,6 +26,10 @@ directory that a `GROUPS` entry in `run.py` selects. There is no manifest and no
 tests. A product bug the test exposes is `pytest.skip("BUG: <symptom>")` at the top of the body, not a
 fix in the test and not a deletion. Needs no network, proxy, DB or Redis: `tests/unit`
 
+A test that starts its own process or opens its own socket but needs no proxy also lives here, in a
+`*_real_io.py` file next to the domain it covers, because `tests/unit` is in-process. It asks for none of
+the gateway fixtures, so it runs as plain pytest inside its group
+
 GitHub Actions integration groups run every file here except the OCI and sandbox tests, which no CI runs, and
 the files in `GITHUB_FILES` in `run.py`. `test-integration.yml` runs the same groups through the same
 `run_integration.sh` on GitHub Actions, on main every three hours from 8am to 8pm Pacific Monday to Saturday,

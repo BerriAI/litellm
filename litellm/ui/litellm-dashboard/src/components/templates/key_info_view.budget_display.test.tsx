@@ -1,6 +1,5 @@
 import { renderWithProviders } from "../../../tests/test-utils";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
@@ -182,6 +181,8 @@ const makeOrganization = (overrides: Partial<Organization>): Organization =>
 const mockOrganizations = (organizations: Organization[]) =>
   vi.mocked(useOrganizations).mockReturnValue({ data: organizations } as ReturnType<typeof useOrganizations>);
 
+const appliedBudgetRows = () => within(screen.getByTestId("applied-budgets")).queryAllByRole("listitem");
+
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
@@ -206,7 +207,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     // defaults to 0 decimals — so $0.10 rendered as "$0".
     // After the fix it must render "$0.10".
     await waitFor(() => {
-      expect(screen.getByText(/of \$0\.10/)).toBeInTheDocument();
+      expect(screen.getByText("of $0.10")).toBeInTheDocument();
     });
     expect(screen.queryByText(/of \$0$/)).not.toBeInTheDocument();
   });
@@ -223,7 +224,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     );
     await waitFor(() => {
       // 2-decimal formatting -> "$100.00"
-      expect(screen.getByText(/of \$100\.00/)).toBeInTheDocument();
+      expect(screen.getByText("of $100.00")).toBeInTheDocument();
     });
   });
 
@@ -242,9 +243,9 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     });
   });
 
-  it("never pairs key spend with the team budget: shows Unlimited plus an inherited-budget hint", async () => {
+  it("never pairs key spend with the team budget: shows Unlimited and lists the team budget under Budgets that apply", async () => {
     vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
+      teams: [makeTeam({ ...TEST_BUDGET_TEAM_FIELDS, spend: 300 })],
       setTeams: vi.fn(),
     });
     renderWithProviders(
@@ -259,18 +260,23 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    expect(screen.queryByText(/of \$1,200\.00/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/\(Team: Test Budget/)).not.toBeInTheDocument();
-    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
+    expect(screen.queryByText("of $1,200.00")).not.toBeInTheDocument();
+    const rows = appliedBudgetRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Test Budget");
+    expect(rows[0]).toHaveTextContent("$300.00 of $1,200.00");
+    expect(rows[0]).toHaveTextContent("Resets every 30d");
+    expect(within(rows[0]).getByRole("meter")).toHaveAttribute("aria-valuetext", "25% used");
   });
 
-  it("lists the organization budget in the hint when the team's org has one", async () => {
+  it("lists the organization budget when the team's org has one", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ team_id: "team-456", team_alias: "Org Team", organization_id: "org-1" })],
       setTeams: vi.fn(),
     });
-    mockOrganizations([makeOrganization({ litellm_budget_table: { max_budget: 5000, budget_duration: null } })]);
+    mockOrganizations([
+      makeOrganization({ spend: 4900, litellm_budget_table: { max_budget: 5000, budget_duration: null } }),
+    ]);
     renderWithProviders(
       <KeyInfoView
         keyData={{ ...MOCK_KEY_DATA, max_budget: null, team_id: "team-456" } as unknown as KeyResponse}
@@ -283,12 +289,14 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Organization Acme Org: $5,000.00");
-    expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("Team Org Team");
+    const rows = appliedBudgetRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Acme Org");
+    expect(rows[0]).toHaveTextContent("$4,900.00 of $5,000.00");
+    expect(rows[0]).toHaveTextContent("Does not reset");
   });
 
-  it("lists the owner's user budget in the hint for a personal key with no budget of its own", async () => {
+  it("lists the owner's user budget for a personal key with no budget of its own", async () => {
     renderWithProviders(
       <KeyInfoView
         keyData={
@@ -314,11 +322,14 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Budget Owner: $1,500.00 / 1mo");
+    const rows = appliedBudgetRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toHaveTextContent("Budget Owner");
+    expect(rows[0]).toHaveTextContent("$1,500.00 limit");
+    expect(rows[0]).toHaveTextContent("Resets every 1mo");
   });
 
-  it("omits the owner's user budget from the hint for a team key when apply_user_budget_to_team_keys is off", async () => {
+  it("omits the owner's user budget for a team key when apply_user_budget_to_team_keys is off", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
       setTeams: vi.fn(),
@@ -335,12 +346,12 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
-    expect(screen.getByTestId("inherited-budget-hint")).not.toHaveTextContent("User Budget Owner");
+    const card = screen.getByTestId("applied-budgets");
+    expect(card).toHaveTextContent("Test Budget");
+    expect(card).not.toHaveTextContent("Budget Owner");
   });
 
-  it("lists the owner's user budget in the hint for a team key when apply_user_budget_to_team_keys is on", async () => {
+  it("lists the owner's user budget for a team key when apply_user_budget_to_team_keys is on", async () => {
     vi.mocked(useApplyUserBudgetToTeamKeys).mockReturnValue(true);
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam(TEST_BUDGET_TEAM_FIELDS)],
@@ -358,12 +369,13 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    await userEvent.setup().hover(screen.getByLabelText("question-circle"));
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("Team Test Budget: $1,200.00 / 30d");
-    expect(screen.getByTestId("inherited-budget-hint")).toHaveTextContent("User Budget Owner: $1,500.00 / 1mo");
+    const rows = appliedBudgetRows();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("Test Budget");
+    expect(rows[1]).toHaveTextContent("Budget Owner");
   });
 
-  it("renders 'Unlimited' with no hint when neither key, team, nor org has a budget", async () => {
+  it("says no budget limits the key when neither key, team, nor org has a budget", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ team_id: "team-789", team_alias: "Free Team" })],
       setTeams: vi.fn(),
@@ -380,17 +392,16 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
     await waitFor(() => {
       expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
+    expect(screen.getByTestId("applied-budgets")).toHaveTextContent("No budget limits this key");
+    expect(appliedBudgetRows()).toHaveLength(0);
   });
 
-  it("shows no hint when the key has its own budget even if the team has one", async () => {
-    vi.mocked(useTeams).mockReturnValue({
-      teams: [makeTeam({ team_id: "team-123", team_alias: "Test Budget", max_budget: 1200 })],
-      setTeams: vi.fn(),
-    });
+  it("keeps the team budget visible next to the key's own budget, since both are enforced", async () => {
+    const nearlySpentTeam = { team_id: "team-123", team_alias: "Test Budget", max_budget: 1200, spend: 1100 };
+    vi.mocked(useTeams).mockReturnValue({ teams: [makeTeam(nearlySpentTeam)], setTeams: vi.fn() });
     renderWithProviders(
       <KeyInfoView
-        keyData={{ ...MOCK_KEY_DATA, max_budget: 25, team_id: "team-123" } as unknown as KeyResponse}
+        keyData={{ ...MOCK_KEY_DATA, max_budget: 25, spend: 5, team_id: "team-123" } as unknown as KeyResponse}
         onClose={() => {}}
         keyId={"test-key-id"}
         onKeyDataUpdate={() => {}}
@@ -398,9 +409,15 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/of \$25\.00/)).toBeInTheDocument();
+      expect(screen.getByText("of $25.00")).toBeInTheDocument();
     });
-    expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();
+    const rows = appliedBudgetRows();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveTextContent("lit-2845-budget-display");
+    expect(rows[0]).toHaveTextContent("$5.00 of $25.00");
+    expect(rows[0]).not.toHaveTextContent("Closest to limit");
+    expect(rows[1]).toHaveTextContent("Test Budget");
+    expect(rows[1]).toHaveTextContent("Closest to limit");
   });
 });
 
@@ -444,7 +461,7 @@ describe("KeyInfoView budget reset visibility", () => {
       />,
     );
     await waitFor(() => {
-      expect(screen.getByText(/of \$0\.10/)).toBeInTheDocument();
+      expect(screen.getByText("of $0.10")).toBeInTheDocument();
     });
     expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
   });

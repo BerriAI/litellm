@@ -14,8 +14,7 @@ import { marketplaceCommand, skillInstallCommand } from "./hubSnippets";
 import { InspectorHeader } from "./InspectorHeader";
 
 function sourceValue(source: Plugin["source"]) {
-  const link = getSourceLink(source);
-  const href = link && source.source === "git-subdir" && source.path ? `${link}/tree/main/${source.path}` : link;
+  const href = getSourceLink(source);
   if (!href) return getSourceDisplayText(source) || null;
   return (
     <Button

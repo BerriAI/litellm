@@ -17,6 +17,8 @@ from litellm.proxy.list_api.common import (
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.management_helpers.customer_hierarchy import (
+    BudgetGroupScope,
+    BudgetSort,
     CustomerHierarchy,
     CustomerPortalLimits,
     ErrorCode,
@@ -28,6 +30,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,  # pyright: ignore[reportUnknownVariableType]  # legacy decorator is untyped
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     CustomerMember,
@@ -54,13 +57,18 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
     {
         ErrorCode.CAPACITY_BUSY: (
             503,
-            "Customer portal busy",
-            "Customer portal capacity is being updated. Retry the request.",
+            "Customer Management busy",
+            "Customer Management capacity is being updated. Retry the request.",
+        ),
+        ErrorCode.TRANSACTION_TIMEOUT: (
+            504,
+            "Customer Management operation timed out",
+            "Customer Management operation timed out. The transaction was rolled back. Retry the request.",
         ),
         ErrorCode.FREE_TIER_LIMIT: (
             403,
-            "Free customer portal limit reached",
-            "Free customer portal limit reached: up to 5 customer organizations, 5 teams per organization and "
+            "Customer Management free tier limit reached",
+            "Customer Management free tier limit reached: up to 5 customer organizations, 5 teams per organization and "
             "5 members per team without a LiteLLM Enterprise license. Upgrade to Enterprise to remove the limits: "
             "https://www.litellm.ai/enterprise",
         ),
@@ -75,7 +83,7 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
         ErrorCode.TEMPLATE_NOT_IN_ORG: (
             422,
             "Template not in organization",
-            "Budget template must belong to the member's organization.",
+            "Budget template must belong to the selected member or organization budget group catalog.",
         ),
         ErrorCode.HAS_CHILDREN: (409, "Has children", "Delete the customer's children before deleting the parent."),
         ErrorCode.INVALID_TEMPLATE_NAMES: (
@@ -84,7 +92,11 @@ _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyTy
             "Budget template names must be unique within the organization.",
         ),
         ErrorCode.TEMPLATE_IN_USE: (409, "Template in use", "A default or referenced template cannot be deleted."),
-        ErrorCode.BUDGET_REQUIRED: (422, "Budget required", "A member requires a template or a budget override."),
+        ErrorCode.BUDGET_REQUIRED: (
+            422,
+            "Budget required",
+            "A member requires a preset, a custom budget, or a budget override.",
+        ),
         ErrorCode.INCREASE_NOT_ALLOWED: (
             422,
             "Increase not allowed",
@@ -155,11 +167,11 @@ def customer_actor(auth: Annotated[UserAPIKeyAuth, Depends(require_customer_admi
 
 
 def get_customer_hierarchy() -> CustomerHierarchy:
-    from litellm.proxy.proxy_server import premium_user, prisma_client
+    from litellm.proxy.proxy_server import premium_user, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise_public(Failure(ErrorCode.DATABASE_UNAVAILABLE))
-    return CustomerHierarchy(prisma_client, premium_user=premium_user)
+    return CustomerHierarchy(prisma_client, premium_user=premium_user, cache=user_api_key_cache)
 
 
 def resolve(result: T | Failure) -> T:
@@ -210,10 +222,184 @@ def get_user_api_key_cache() -> UserApiKeyCache:
 AuthCache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
 
+async def configure_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: str,
+    hierarchy: CustomerHierarchy,
+    scope: BudgetGroupScope,
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.configure_templates(None, data, actor, scope=scope)))
+
+
+@router.get(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable organization budget groups and their revision. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.get_budget_groups(None)))
+
+
+@router.patch(
+    "/customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete organization budget group list with its expected_revision. "
+    "default_budget_template names the group assigned to new organizations that omit budget and budget_id, "
+    "or null for no organization-level limit. Existing organizations are unchanged by default selection. "
+    "Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+    cache: AuthCache,
+) -> BudgetGroups:
+    groups: Final = await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.ORGANIZATION)
+    members, aliases = resolve(
+        await hierarchy.transaction(
+            lambda store: store.organization_group_consumers(tuple(group.budget_id for group in groups.default_budgets))
+        )
+    )
+    await forget_customer_hierarchies(members, cache)
+    await forget_customer_organization_aliases(aliases, cache)
+    return groups
+
+
+@router.get(
+    "/app_customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable app × customer organization budget groups, independently of organization groups. "
+    "Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_customer_organization_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(
+            lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP_ORGANIZATION)
+        )
+    )
+
+
+@router.patch(
+    "/app_customer_organization_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete app × customer organization budget group list with its expected_revision. "
+    "default_budget_template must be null. Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_customer_organization_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_ORGANIZATION)
+
+
+@router.get(
+    "/app_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable overall app budget groups, their new-app default and revision, independently of app × customer "
+    "organization groups. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(await hierarchy.transaction(lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP)))
+
+
+@router.patch(
+    "/app_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete overall app budget group list with its expected_revision. "
+    "default_budget_template names the group assigned to new apps that omit budget and budget_id, or null for no default. "
+    "Existing groups retain omitted settings and window reset dates. "
+    "Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP)
+
+
+@router.get(
+    "/app_group_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable app group budget groups, their new-group default and revision, independently of app × customer "
+    "organization groups. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_group_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP_GROUP))
+    )
+
+
+@router.patch(
+    "/app_group_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete app group budget group list with its expected_revision. "
+    "default_budget_template names the group assigned to new app groups that omit budget and budget_id, or null for no default. "
+    "Existing groups retain omitted settings and window reset dates. "
+    "Stale revisions or referenced deletions return 409. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_group_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_GROUP)
+
+
+@router.get(
+    "/app_customer_member_budget_groups",
+    response_model=BudgetGroups,
+    description="List reusable app × customer member budget groups and their revision. "
+    "Independent of overall app, organization, and app × organization groups. Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def get_app_customer_member_budget_groups(
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return resolve(
+        await hierarchy.transaction(lambda store: store.get_budget_groups(None, scope=BudgetGroupScope.APP_MEMBER))
+    )
+
+
+@router.patch(
+    "/app_customer_member_budget_groups",
+    response_model=BudgetGroups,
+    description="Save the complete app × customer member budget group list with its expected_revision. "
+    "default_budget_template must be null. Assign per-app defaults through default_customer_member_budget_id. "
+    "Existing groups retain omitted settings and reset dates. Stale revisions or referenced deletions return 409. "
+    "Proxy admins only.",
+)
+@management_endpoint_wrapper
+async def configure_app_customer_member_budget_groups(
+    data: BudgetGroupsUpdate,
+    actor: Annotated[str, Depends(customer_actor)],
+    hierarchy: Annotated[CustomerHierarchy, Depends(get_customer_hierarchy)],
+) -> BudgetGroups:
+    return await configure_budget_groups(data, actor, hierarchy, BudgetGroupScope.APP_MEMBER)
+
+
 @router.get(
     "/customer_portal/limits",
     response_model=CustomerPortalLimits,
-    description="Get customer portal free-tier limits and current capacity. Proxy admins only.",
+    summary="Get Customer Management Limits",
+    description="Get Customer Management free-tier limits and current capacity. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def get_customer_portal_limits(
@@ -226,7 +412,8 @@ async def get_customer_portal_limits(
     "/customer_organizations",
     status_code=201,
     response_model=Organization,
-    description="Create a customer organization with resolved budgets. Proxy admins only.",
+    description="Create a customer organization with resolved budgets. Omit budget and budget_id to use the configured "
+    "organization budget group default. Explicit null opts out of the default. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def create_customer_organization(
@@ -407,9 +594,12 @@ async def list_customer_teams(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_org_id: str | None = None,
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[Team]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size))
+    result: Final = resolve(await hierarchy.list_teams(parent_org_id, page, size, sort))
     return list_response(result, request, page, size)
 
 
@@ -435,7 +625,7 @@ async def create_customer_member(
         "Create or update a customer member by customer_member_id within a customer org identified by "
         "customer_org_id or customer_org_alias. If both are supplied they must match. "
         "A new customer member with no parent_team_id joins the customer org's default customer team, created if necessary. An existing customer member keeps its customer teams, and a supplied parent_team_id becomes its first customer team. "
-        "Alias, budget_id, budget_override and budget_override_expires_at follow the existing customer member models. "
+        "Alias, budget_id, budget, budget_override and budget_override_expires_at follow the customer member models. "
         "Omitted update fields retain their values. Moving between customer teams in the same customer org is allowed. "
         "Moving between customer orgs or selecting another customer org's customer team returns 409. "
         "Returns 200 with created=true for creation and created=false for updates. Repeated identical calls are no-ops. "
@@ -470,7 +660,9 @@ async def get_customer_member(
 @router.patch(
     "/customer_members/{customer_member_id}",
     response_model=CustomerMember,
-    description="Update a customer member and its budgets. Proxy admins only.",
+    description="Update a customer member and its budgets. Supply parent_team_ids to replace its teams within the "
+    "same organization, with the first team as default. Identity, budget counters and historical usage are retained. "
+    "Historical usage stays attributed to the original team. Proxy admins only.",
 )
 @management_endpoint_wrapper
 async def update_customer_member(
@@ -505,7 +697,10 @@ async def delete_customer_member(
     "/customer_members",
     response_model=ListResponse[CustomerMember],
     dependencies=(Depends(reject_duplicate_list_params),),
-    description="List customer members with page-number pagination and resolved budgets. Proxy admins only.",
+    description=(
+        "List customer members with page-number pagination and resolved budgets. "
+        "search filters by customer member ID or alias before paginating. Proxy admins only."
+    ),
 )
 @management_endpoint_wrapper
 async def list_customer_members(
@@ -515,9 +710,17 @@ async def list_customer_members(
     page_size: Annotated[int, Query(ge=1)] = 50,
     parent_team_id: str | None = None,
     parent_org_id: str | None = None,
+    search: Annotated[str, Query(description="Case-insensitive substring of the customer member ID or alias")] = "",
+    sort: Annotated[
+        BudgetSort | None, Query(description="Sort by displayed budget limit, with uncapped rows last.")
+    ] = None,
 ) -> ListResponse[CustomerMember]:
     size: Final = min(page_size, 100)
-    result: Final = resolve(await hierarchy.list_members(parent_team_id, page, size, parent_org_id=parent_org_id))
+    result: Final = resolve(
+        await hierarchy.list_members(
+            parent_team_id, page, size, parent_org_id=parent_org_id, search=search.strip(), sort=sort
+        )
+    )
     return list_response(result, request, page, size)
 
 
