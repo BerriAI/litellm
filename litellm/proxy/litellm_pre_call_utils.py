@@ -610,6 +610,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "standard_logging_object",
     "litellm_roi_estimator",
     "proxy_server_request",
+    "litellm_api_version",
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
