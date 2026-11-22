@@ -1,11 +1,11 @@
 import math
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache, partial
-from itertools import accumulate, chain, repeat, starmap, takewhile
+from itertools import accumulate, chain, starmap
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast, get_type_hints
 
@@ -766,20 +766,6 @@ def _json_children(node: JsonValue) -> Iterable[JsonValue]:
             return ()
 
 
-def _children_off_path(entry: tuple[JsonValue, frozenset[int]]) -> Iterable[tuple[JsonValue, frozenset[int]]]:
-    node, ancestors = entry
-    path: Final = ancestors | {id(node)}
-    return (
-        (child, path) for child in _json_children(node) if isinstance(child, (dict, list)) and id(child) not in path
-    )
-
-
-def _next_json_level(
-    level: tuple[tuple[JsonValue, frozenset[int]], ...], _: None
-) -> tuple[tuple[JsonValue, frozenset[int]], ...]:
-    return tuple(chain.from_iterable(map(_children_off_path, level)))
-
-
 def _enum_bytes(node: JsonValue) -> int:
     match node:
         case {"enum": list() as values}:
@@ -796,9 +782,19 @@ def _is_integer_enum(node: JsonValue) -> bool:
             return False
 
 
-def _json_nodes(schema: JsonValue) -> Iterable[JsonValue]:
-    levels: Final = takewhile(bool, accumulate(repeat(None), _next_json_level, initial=((schema, frozenset[int]()),)))
-    return (node for node, _ in chain.from_iterable(levels))
+def _json_nodes(schema: JsonValue) -> Iterator[JsonValue]:
+    on_path: Final = {id(schema)}
+    frames: Final = [(schema, iter(_json_children(schema)))]
+    yield schema
+    while frames:
+        node, children = frames[-1]
+        if (child := next((c for c in children if isinstance(c, (dict, list)) and id(c) not in on_path), None)) is None:
+            frames.pop()
+            on_path.discard(id(node))
+            continue
+        yield child
+        on_path.add(id(child))
+        frames.append((child, iter(_json_children(child))))
 
 
 def has_const(schema: JsonValue) -> bool:
