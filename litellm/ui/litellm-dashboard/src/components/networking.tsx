@@ -1932,6 +1932,7 @@ interface UiSpendLogsParams {
   span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
+  model_group?: string;
   /** Filter by model ID (litellm model deployment id) */
   model_id?: string;
   key_alias?: string;
