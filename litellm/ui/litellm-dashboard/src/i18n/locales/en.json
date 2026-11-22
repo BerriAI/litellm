@@ -886,7 +886,7 @@
   },
   "vectorStores": {
     "page": {
-      "title": "Vector Store Management",
+      "title": "Vector Stores",
       "lastRefreshed": "Last Refreshed: {{time}}",
       "refresh": "Refresh",
       "description": "You can use vector stores to store and retrieve LLM embeddings.",
@@ -3780,7 +3780,7 @@
         "removing": "Removing…",
         "remove": "Remove"
       },
-      "title": "Cost Tracking Settings",
+      "title": "Cost Tracking",
       "description": "Configure cost discounts and margins for different LLM providers. Changes are saved automatically.",
       "loading": "Loading configuration...",
       "discounts": {
@@ -3798,6 +3798,7 @@
       },
       "margins": {
         "title": "Fee/Price Margin",
+        "configOwnedHint": "Controlled by config.yaml. Edit litellm_settings.cost_margin_config there.",
         "description": "Add fees or margins to LLM costs for internal billing and cost recovery",
         "addButton": "+ Add Provider Margin",
         "emptyTitle": "No provider margins configured",
@@ -4114,7 +4115,7 @@
   "costOptimization": {
     "view": {
       "title": "Cost Optimization",
-      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Models + Endpoints, on the Auto-Routers tab",
+      "description": "Track and configure the mechanisms that save you money: prompt compression and prompt caching. Auto routers live under Model Management, on the Auto-Routers tab",
       "tabs": {
         "overall": "Overall",
         "compression": "Prompt Compression",
@@ -8552,7 +8553,7 @@
         "home": "Home",
         "virtualKeys": "Virtual Keys",
         "playground": "Playground",
-        "modelsAndEndpoints": "Models + Endpoints",
+        "modelsAndEndpoints": "Model Management",
         "agentic": "Agentic",
         "agents": "Agents",
         "workflowRuns": "Workflow Runs",
@@ -9094,7 +9095,7 @@
         "reset": "Theme settings reset to default!",
         "resetFailed": "Failed to reset theme settings"
       },
-      "title": "UI Theme Customization",
+      "title": "UI Theme",
       "description": "Customize your LiteLLM admin dashboard with a custom logo and favicon.",
       "logoUrl": {
         "label": "Custom Logo URL",
@@ -17080,6 +17081,7 @@
         "teamName": "Team Name",
         "teamId": "Team ID",
         "createdAt": "Created At",
+        "noMetadata": "No custom metadata",
         "models": "Models",
         "defaultMemberModels": "Default Member Models",
         "modelAliases": "Model Aliases",

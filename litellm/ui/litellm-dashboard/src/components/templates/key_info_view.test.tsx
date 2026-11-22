@@ -216,6 +216,7 @@ describe("KeyInfoView", () => {
     premiumUser: true,
     token: "test-token",
     userEmail: null,
+    userAlias: null,
     disabledPersonalKeyCreation: null,
     isLoading: false,
     isAuthorized: true,

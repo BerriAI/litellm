@@ -3638,6 +3638,7 @@ class LiteLLM_ProjectTableCachedObj(LiteLLM_ProjectTable):
 class LiteLLM_UserTableFiltered(LiteLLMBaseModel):  # done to avoid exposing sensitive data
     user_id: str
     user_email: str | None = None
+    user_alias: str | None = None
 
 
 from litellm.models.access_group import (  # noqa: E402
