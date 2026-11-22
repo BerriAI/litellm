@@ -10,7 +10,12 @@ from pydantic import TypeAdapter
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, require_attributes
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    get_or_create_hidden_params,
+    served_from_cache,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
@@ -1646,7 +1651,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         usage: Final[object] = getattr(every_chunk, "usage", None)
         if not isinstance(usage, Usage):
             return built
-        return built.model_copy(update={"usage": usage})
+        billed: Final = built.model_copy(update={"usage": usage})
+        set_hidden_params(
+            billed,
+            {
+                **(get_hidden_params(built) or {}),
+                "response_cost": (get_hidden_params(every_chunk) or {}).get("response_cost"),
+            },
+        )
+        return billed
 
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """

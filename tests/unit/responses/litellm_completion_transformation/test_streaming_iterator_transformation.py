@@ -2382,6 +2382,33 @@ def test_a_cut_stream_bills_the_input_and_cache_tokens_the_provider_reported_bef
     assert usage.output_tokens == litellm.token_counter(model="claude-haiku-4-5", text=first_delta.delta)
 
 
+def test_a_cut_stream_logs_the_cost_of_the_usage_it_bills() -> None:
+    wrapper: Final = _anthropic_stream_cut_after_message_start(
+        Usage(
+            prompt_tokens=4321,
+            completion_tokens=1,
+            total_tokens=4322,
+            cache_read_input_tokens=4000,
+            cache_creation_input_tokens=300,
+        )
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=wrapper,
+        request_input="What is the weather in San Francisco?",
+        responses_api_request={},
+        custom_llm_provider="anthropic",
+    )
+    next(event for event in iterator if isinstance(event, OutputTextDeltaEvent))
+
+    incomplete: Final = iterator.partial_response_on_disconnect()
+
+    assert incomplete is not None and incomplete.response.usage is not None
+    billed_cost: Final = getattr(incomplete.response.usage, "cost", None)
+    assert isinstance(billed_cost, float) and billed_cost > 0
+    assert wrapper.logging_obj.response_cost_calculator(result=incomplete.response) == pytest.approx(billed_cost)
+
+
 def test_a_cut_stream_bills_the_relayed_text_when_the_wrapper_kept_no_chunks_of_its_own() -> None:
     iterator: Final = LiteLLMCompletionStreamingIterator(
         model="claude-haiku-4-5",
