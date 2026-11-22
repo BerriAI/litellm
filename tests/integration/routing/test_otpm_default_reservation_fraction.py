@@ -101,9 +101,10 @@ def _chat(rig: Rig, group: str, **params: int | bool) -> httpx.Response:
     )
 
 
-def _await_forwarded_chat(upstream: Wire) -> Request:
+def _await_forwarded_stream(upstream: Wire) -> dict[str, object]:
     request: Final = upstream.received.get(timeout=60)
-    return _await_forwarded_chat(upstream) if is_model_info_probe(request) else request
+    body: Final = None if is_model_info_probe(request) else JSON_OBJECT.validate_json(request.body)
+    return body if body is not None and body.get("stream") is True else _await_forwarded_stream(upstream)
 
 
 def _utc_minute() -> str:
@@ -117,7 +118,7 @@ def _admissions_beside_a_held_stream(rig: Rig, group: str) -> Admissions:
     with ThreadPoolExecutor(max_workers=1) as pool:
         held: Final = pool.submit(_chat, rig, group, stream=True)
         try:
-            forwarded: Final = JSON_OBJECT.validate_json(_await_forwarded_chat(rig.upstream).body)
+            forwarded: Final = _await_forwarded_stream(rig.upstream)
             over: Final = _chat(rig, group, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION + 1)
             fits: Final = _chat(rig, group, max_tokens=OTPM_LIMIT - DEFAULT_RESERVATION)
             ended: Final = _utc_minute()
