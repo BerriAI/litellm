@@ -2740,6 +2740,7 @@ async fn a_failed_order_level_falls_back_to_the_next_level_its_pick_can_use(
     assert_eq!(host.selected(), expected);
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_failed_chat_level_never_falls_back_to_a_batch_only_level() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
@@ -2996,10 +2997,7 @@ async fn a_rate_limit_keeps_chat_on_its_only_deployment_and_moves_only_batch_cal
         .await
         .unwrap();
     let picked = host.selected()[after_failure..].to_vec();
-    assert_eq!(
-        (picked[0].as_str(), picked[1].as_str()),
-        expected
-    );
+    assert_eq!((picked[0].as_str(), picked[1].as_str()), expected);
 }
 
 fn openai_batch_then_azure_batch_only() -> RouterConfig {
@@ -3012,9 +3010,10 @@ fn openai_batch_then_azure_batch_only() -> RouterConfig {
     .unwrap()
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_rate_limited_batch_create_moves_batch_creates_to_the_azure_batch_only_peer_and_keeps_chat()
-{
+ {
     let host = Arc::new(ScriptedHost::default());
     *host.first_failure.lock() = Some(failure(FailureKind::RateLimit, 429));
     let router = router(
@@ -3073,7 +3072,12 @@ async fn a_reported_rate_limit_moves_only_batch_calls_off_a_chat_deployment_besi
             router
                 .healthy(&Op::from("acompletion"), &request)
                 .await
-                .map(|c| c.healthy.iter().map(|d| d.id.to_string()).collect::<Vec<_>>())
+                .map(|c| {
+                    c.healthy
+                        .iter()
+                        .map(|d| d.id.to_string())
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default()
         }
     };
@@ -3088,6 +3092,7 @@ async fn a_reported_rate_limit_moves_only_batch_calls_off_a_chat_deployment_besi
     );
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_rate_limited_team_chat_deployment_beside_a_batch_only_sibling_stays_up_and_is_retried() {
     let host = Arc::new(ScriptedHost::default());
@@ -3801,6 +3806,36 @@ async fn a_web_search_request_skips_the_deployments_that_declare_no_support() {
             .unwrap();
         assert_eq!(picked.id, "a2");
     }
+}
+
+#[rstest]
+#[case::beside_a_batch_only_one(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"},
+     "model_info": {"id": "c1", "mode": "chat", "supports_web_search": false}},
+    {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
+]))]
+#[case::alone(json!([
+    {"model_name": "primary", "litellm_params": {"model": "azure/chat"},
+     "model_info": {"id": "c1", "mode": "chat", "supports_web_search": false}},
+]))]
+#[tokio::test]
+async fn a_web_search_call_the_azure_chat_deployment_cannot_take_never_goes_to_its_batch_only_peer(
+    #[case] model_list: serde_json::Value,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({"model_list": model_list})).unwrap();
+    let router = router(config, json!({}), Arc::new(ScriptedHost::default()));
+    let request = RouterRequest {
+        web_search: true,
+        ..request()
+    };
+    let error = router
+        .select(&Op::from("acompletion"), &request)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&error, Error::NoHealthyDeployments { model, .. } if model == "primary"),
+        "{error:?}"
+    );
 }
 
 #[rstest]

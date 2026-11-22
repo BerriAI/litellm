@@ -76,6 +76,9 @@ pub struct Candidates {
     /// Every deployment the caller may use (after the team filter).
     pub all: Vec<Arc<Deployment>>,
     pub healthy: Vec<Arc<Deployment>>,
+    /// The call skips the group's batch-only deployments, decided before a capability filter
+    /// drops any of the group's other deployments.
+    pub skips_batch_only: bool,
     /// The provider-prefixed spelling the name resolved under (`get_pattern`), when the host
     /// was asked for one.
     pub wildcard_request: Option<String>,
@@ -98,8 +101,8 @@ impl Candidates {
 
     /// How many of `all` the request can route to: a call outside the batch and file APIs does
     /// not count the batch-only deployments it skips.
-    pub(crate) fn routable(&self, request: &RouterRequest) -> usize {
-        if skips_batch_only(request, &self.all) {
+    pub(crate) fn routable(&self) -> usize {
+        if self.skips_batch_only {
             return self.all.iter().filter(|d| !d.serves_only_batches()).count();
         }
         self.all.len()
@@ -280,11 +283,10 @@ fn pinned_to_batch_only(request: &RouterRequest, pool: &[Arc<Deployment>]) -> bo
 }
 
 fn without_batch_only_deployments(
-    request: &RouterRequest,
-    all: &[Arc<Deployment>],
+    skips_batch_only: bool,
     healthy: Vec<Arc<Deployment>>,
 ) -> Vec<Arc<Deployment>> {
-    if !skips_batch_only(request, all) {
+    if !skips_batch_only {
         return healthy;
     }
     healthy
@@ -401,6 +403,7 @@ impl<H: RouterHost> Call<'_, H> {
                 },
             });
         }
+        let skip_batch_only = skips_batch_only(request, &all);
         // `filter_web_search_deployments` runs before `request_deployments` is read, so every later
         // stage sees the group without the deployments it dropped.
         if request.web_search && !inputs.count_only && !resolution.kind.is_single() {
@@ -460,9 +463,7 @@ impl<H: RouterHost> Call<'_, H> {
             Vec::new()
         } else {
             let ids: Vec<String> = all.iter().map(|d| d.id.clone()).collect();
-            self.health()
-                .cooling(&ids, !skips_batch_only(request, &all))
-                .await?
+            self.health().cooling(&ids, !skip_batch_only).await?
         };
         // Health-check filtering runs before the cooldown filter, except for a deployment named
         // by its id and the healthy count a retry decision reads.
@@ -519,7 +520,7 @@ impl<H: RouterHost> Call<'_, H> {
             healthy.retain(|d| !excluded.iter().any(|id| id.as_str() == Some(d.id.as_str())));
         }
         if !resolution.kind.is_single() && !listed {
-            healthy = without_batch_only_deployments(request, &all, healthy);
+            healthy = without_batch_only_deployments(skip_batch_only, healthy);
         }
         let request_order = request.target_order.filter(|_| !inputs.fallback_hop);
         // `async_callback_filter_deployments` runs after the cooldown and blocked filters on every
@@ -551,7 +552,7 @@ impl<H: RouterHost> Call<'_, H> {
                 healthy
             } else {
                 let healthy = without_deployments_that_cannot_batch(request, &all, healthy);
-                without_batch_only_deployments(request, &all, healthy)
+                without_batch_only_deployments(skip_batch_only, healthy)
             };
             return Ok(Candidates {
                 name: name.to_owned(),
@@ -559,6 +560,7 @@ impl<H: RouterHost> Call<'_, H> {
                 kind: resolution.kind,
                 all,
                 healthy,
+                skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
             });
@@ -597,6 +599,7 @@ impl<H: RouterHost> Call<'_, H> {
                 kind: resolution.kind,
                 all,
                 healthy,
+                skips_batch_only: skip_batch_only,
                 wildcard_request,
                 served_as: None,
             });
@@ -776,6 +779,7 @@ impl<H: RouterHost> Call<'_, H> {
             kind: resolution.kind,
             all,
             healthy,
+            skips_batch_only: skip_batch_only,
             wildcard_request,
             served_as: None,
         })
@@ -981,7 +985,10 @@ mod tests {
         #[case] expected: Vec<&str>,
     ) {
         let pool = vec![chat(), declared("batch", batch_params, "batch")];
-        let kept = without_batch_only_deployments(&RouterRequest::default(), &pool, pool.clone());
+        let kept = without_batch_only_deployments(
+            skips_batch_only(&RouterRequest::default(), &pool),
+            pool.clone(),
+        );
         assert_eq!(ids(&kept), expected);
     }
 
@@ -1016,7 +1023,7 @@ mod tests {
         #[case] healthy: Vec<Arc<Deployment>>,
         #[case] expected: Vec<&str>,
     ) {
-        let kept = without_batch_only_deployments(&request, &all, healthy);
+        let kept = without_batch_only_deployments(skips_batch_only(&request, &all), healthy);
         assert_eq!(ids(&kept), expected);
     }
 }

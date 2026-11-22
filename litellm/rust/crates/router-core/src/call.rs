@@ -944,7 +944,7 @@ impl<H: RouterHost> Call<'_, H> {
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
             .await
-            .map(|c| counted(&c, c.routable(request)))
+            .map(|c| counted(&c, c.routable()))
             .unwrap_or(0);
 
         for retry in 0..=num_retries {
@@ -1368,6 +1368,7 @@ impl<H: RouterHost> Call<'_, H> {
                     kind: ResolveKind::Group,
                     all: vec![deployment.clone()],
                     healthy: vec![deployment.clone()],
+                    skips_batch_only: skips_batch_only(request, std::slice::from_ref(&deployment)),
                     wildcard_request: None,
                     served_as: None,
                 };
@@ -1514,7 +1515,7 @@ impl<H: RouterHost> Call<'_, H> {
             .dynamic
             .fallback_targets(&[candidates.model_group.as_str()])
             .is_some();
-        let batch_call = !skips_batch_only(request, &candidates.all);
+        let batch_call = !candidates.skips_batch_only;
         let shape = GroupShape::of_failure(batch_call, has_fallback_group, |batch_call| {
             // The deployment's own group decides, also when the call named the deployment by id.
             snapshot

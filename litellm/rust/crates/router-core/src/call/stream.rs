@@ -382,12 +382,7 @@ impl<H: RouterHost> Call<'_, H> {
         let (healthy, all) = self
             .candidates(snapshot, op, request, &target.group, &counting())
             .await
-            .map(|c| {
-                (
-                    counted(&c, c.healthy.len()),
-                    counted(&c, c.routable(request)),
-                )
-            })
+            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.routable())))
             .unwrap_or((0, 0));
         let mut inputs = SelectInputs {
             target_order: target.order,

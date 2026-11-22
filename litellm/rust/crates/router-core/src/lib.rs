@@ -634,7 +634,12 @@ impl Router {
                 .group(&deployment.model_name)
                 .is_some_and(|group| deployment.peers_in(&group, batch_call) == 1)
                 && !report.requested_group.as_deref().is_some_and(|group| {
-                    routing_group_has_alternatives(&snapshot.registry, group, &deployment, batch_call)
+                    routing_group_has_alternatives(
+                        &snapshot.registry,
+                        group,
+                        &deployment,
+                        batch_call,
+                    )
                 })
                 && !team_model_has_alternatives(&snapshot.registry, &deployment, batch_call)
         });
