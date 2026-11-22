@@ -3804,3 +3804,27 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name() -> None:
+    namespace = "mcp__codex_apps__github_enterprise_connector_prod"
+    data = {
+        "input": [
+            {"type": "message", "role": "user", "content": "find the open issues"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "namespace": namespace,
+                "name": "search_issues_in_repository",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "[]"},
+        ]
+    }
+
+    messages = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
+        call_type=CallTypes.aresponses, data=data
+    )
+
+    assert [call["function"]["name"] for message in messages for call in message.get("tool_calls") or ()] == [
+        "mcp__codex_apps__github_enterprise_connector_prod__search_issues_in_repository"
+    ]

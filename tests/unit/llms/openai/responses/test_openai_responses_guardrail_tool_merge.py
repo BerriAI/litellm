@@ -260,6 +260,20 @@ def test_edited_mcp_tool_is_rewritten():
     assert list(merged) == edited
 
 
+@pytest.mark.parametrize("kept", [0, 1], ids=["first_server_kept", "second_server_kept"])
+def test_editing_one_mcp_server_and_dropping_another_with_the_same_label_sends_the_edit(kept):
+    original = [
+        {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy/mcp/jira", "require_approval": "never"},
+        {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy/mcp/github", "require_approval": "never"},
+    ]
+    groups = _groups(original)
+    edited = {**_flat(groups)[kept], "require_approval": "always"}
+
+    merged = merge_guardrailed_tools(original, groups, [edited])
+
+    assert merged == (edited,)
+
+
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():
     injected = {"type": "function", "function": {"name": "b", "description": "d", "parameters": {"type": "object"}}}
 

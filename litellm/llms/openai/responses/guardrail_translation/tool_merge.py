@@ -101,7 +101,7 @@ def _paired(kept: Sequence[int], candidates: Sequence[int], *, rebuilt: bool) ->
 
 
 def _class_resolution(
-    kept: tuple[int, ...], candidates: tuple[int, ...], top_level: Sequence[Tool | None]
+    kept: tuple[int, ...], candidates: tuple[int, ...], rebuildable: Sequence[Tool | None]
 ) -> _Resolution | None:
     if not kept or len(kept) >= len(candidates):
         return _Resolution(
@@ -109,9 +109,9 @@ def _class_resolution(
             passed=kept[len(candidates) :],
             remaining=candidates[len(kept) :],
         )
-    if any(top_level[candidate] is None for candidate in candidates):
+    if any(rebuildable[candidate] is None for candidate in candidates):
         return None
-    rebuilt: Final = any(top_level[candidate] != top_level[candidates[0]] for candidate in candidates)
+    rebuilt: Final = any(rebuildable[candidate] != rebuildable[candidates[0]] for candidate in candidates)
     return _Resolution(pairs=_paired(kept, candidates, rebuilt=rebuilt), remaining=candidates[len(kept) :])
 
 
@@ -125,7 +125,7 @@ def _classes(tools: Sequence[Tool], indexes: Sequence[int], *, with_description:
 def _round(
     originals: Sequence[Tool],
     guardrailed: Sequence[Tool],
-    top_level: Sequence[Tool | None],
+    rebuildable: Sequence[Tool | None],
     previous: _Resolution,
     *,
     with_description: bool,
@@ -133,7 +133,7 @@ def _round(
     candidate_classes: Final = _classes(originals, previous.remaining, with_description=with_description)
     kept_classes: Final = _classes(guardrailed, previous.passed, with_description=with_description)
     resolved: Final = tuple(
-        _class_resolution(kept, candidate_classes.get(view, ()), top_level) for view, kept in kept_classes.items()
+        _class_resolution(kept, candidate_classes.get(view, ()), rebuildable) for view, kept in kept_classes.items()
     )
     if any(resolution is None for resolution in resolved):
         return None
@@ -147,16 +147,16 @@ def _round(
 
 
 def _content_matches(
-    originals: Sequence[Tool], guardrailed: Sequence[Tool], top_level: Sequence[Tool | None]
+    originals: Sequence[Tool], guardrailed: Sequence[Tool], rebuildable: Sequence[Tool | None]
 ) -> tuple[_Match | None, ...] | None:
     start: Final = _Resolution(passed=tuple(range(len(guardrailed))), remaining=tuple(range(len(originals))))
-    exact: Final = _round(originals, guardrailed, top_level, start, with_description=True)
+    exact: Final = _round(originals, guardrailed, rebuildable, start, with_description=True)
     if exact is None:
         return None
-    loose: Final = _round(originals, guardrailed, top_level, exact, with_description=False)
+    loose: Final = _round(originals, guardrailed, rebuildable, exact, with_description=False)
     if loose is None:
         return None
-    leftover: Final = _class_resolution(loose.passed, loose.remaining, top_level)
+    leftover: Final = _class_resolution(loose.passed, loose.remaining, rebuildable)
     if leftover is None:
         return None
     match_by_index: Final = MappingProxyType(dict(chain(loose.pairs, leftover.pairs)))
@@ -168,12 +168,12 @@ def _positioned_matches(
     guardrailed: Sequence[Tool],
     flattened_positions: Sequence[int],
     guardrailed_positions: Sequence[int],
-    top_level_functions: Mapping[int, Tool],
+    rebuildable_originals: Mapping[int, Tool],
 ) -> tuple[tuple[int, _Match], ...] | None:
     matches: Final = _content_matches(
         tuple(map(flattened.__getitem__, flattened_positions)),
         tuple(map(guardrailed.__getitem__, guardrailed_positions)),
-        tuple(map(top_level_functions.get, flattened_positions)),
+        tuple(map(rebuildable_originals.get, flattened_positions)),
     )
     if matches is None:
         return None
@@ -200,12 +200,12 @@ def _guardrailed_keys(
     flattened: Sequence[Tool],
     flattened_positions: Mapping[str, tuple[int, ...]],
     guardrailed: Sequence[Tool],
-    top_level_functions: Mapping[int, Tool],
+    rebuildable_originals: Mapping[int, Tool],
 ) -> _GuardrailedKeys | None:
     keys: Final = tuple(map(_chat_tool_key, guardrailed))
     positions: Final = _key_positions(keys)
     realigned: Final = tuple(
-        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, top_level_functions)
+        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, rebuildable_originals)
         for key, kept in positions.items()
         if len(flattened_positions.get(key, ())) > 1
     )
@@ -327,15 +327,18 @@ def _merged_original(
     )
 
 
-def _top_level_functions(
+def _rebuilds_from_chat_tools(original: Tool, group: Sequence[Tool]) -> bool:
+    return original.get("type") == "function" or tuple(group) == (original,)
+
+
+def _rebuildable_originals(
     original_tools: Sequence[Tool], flattened_groups: Sequence[Sequence[Tool]]
 ) -> Mapping[int, Tool]:
     owners: Final = chain.from_iterable(
-        repeat(original, len(group)) for original, group in zip(original_tools, flattened_groups)
+        repeat(original if _rebuilds_from_chat_tools(original, group) else None, len(group))
+        for original, group in zip(original_tools, flattened_groups)
     )
-    return MappingProxyType(
-        {position: original for position, original in enumerate(owners) if original.get("type") == "function"}
-    )
+    return MappingProxyType({position: original for position, original in enumerate(owners) if original is not None})
 
 
 def merge_guardrailed_tools(
@@ -349,7 +352,7 @@ def merge_guardrailed_tools(
     flattened_positions: Final = _key_positions(flattened_names)
     flattened_keys: Final = _indexed_keys(flattened_names, flattened_positions)
     realigned: Final = _guardrailed_keys(
-        flattened, flattened_positions, guardrailed, _top_level_functions(original_tools, flattened_groups)
+        flattened, flattened_positions, guardrailed, _rebuildable_originals(original_tools, flattened_groups)
     )
     if realigned is None:
         return None
