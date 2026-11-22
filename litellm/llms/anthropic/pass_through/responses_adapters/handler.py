@@ -17,6 +17,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, normalize_drop_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
@@ -53,6 +54,26 @@ def _record_bridged_response(responses_kwargs: Mapping[str, object], result: Res
     logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
     if logging_obj is not None:
         logging_obj.record_bridged_responses_api_response(result)
+
+
+SYSTEM_PLACEMENT_PARAMS: Final = (
+    "additional_drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    dropped: Final = drop_policy(request_params).additional_drop_params
+    top_level: Final = {key: request_params.get(key) for key in SYSTEM_PLACEMENT_PARAMS if key not in dropped}
+    effective: Final = {**top_level, **extra_body}
+    return bool(effective.get("previous_response_id") or effective.get("conversation")) or (
+        effective.get("truncation") == "auto"
+    )
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -230,7 +251,9 @@ def _build_responses_kwargs(
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
     )
+    system_instructions: Final = responses_kwargs.get("instructions")
 
     # Normalize reasoning effort based on model capabilities
     # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
@@ -273,6 +296,16 @@ def _build_responses_kwargs(
             responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    caller_extra_body: Final = as_str_mapping(responses_kwargs.get("extra_body")) or {}
+    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in caller_extra_body:
+            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
 
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
@@ -328,7 +361,7 @@ def _messages_without_rejected_reasoning(
 async def _aresponses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _ResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -339,14 +372,14 @@ async def _aresponses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        replay_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(replayed_messages))
         return replay_kwargs, await litellm.aresponses(**replay_kwargs)
 
 
 def _responses_without_rejected_reasoning(
     messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
 ) -> tuple[Mapping[str, object], _SyncResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = without_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
@@ -357,7 +390,7 @@ def _responses_without_rejected_reasoning(
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
+        replay_kwargs: Final = without_stored_instructions(responses_kwargs_for(replayed_messages))
         return replay_kwargs, litellm.responses(**replay_kwargs)
 
 
