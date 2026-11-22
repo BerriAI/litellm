@@ -1,5 +1,6 @@
 """Access and budget checks for what a GPT-Live session delegates to, and the provider names of its models."""
 
+import functools
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -77,20 +78,35 @@ def _tool_requests(value: JsonValue) -> Iterator[Mapping[str, JsonValue]]:
     return (mapping for mapping in _mappings(value) if "tools" in mapping)
 
 
-def _delegated_tool_requests(session: object) -> tuple[Mapping[str, JsonValue], ...]:
+def _inspected_delegation(session: object) -> JsonValue:
+    """The session's delegation, refused when the proxy cannot read all of it and so cannot check all of it."""
+    if not isinstance(session, Mapping) or _DELEGATION_KEY not in session:
+        return None
     try:
-        parsed: Final = _JSON.validate_python(session)
-    except ValidationError:
-        return ()
-    return tuple(_tool_requests(parsed.get(_DELEGATION_KEY))) if isinstance(parsed, dict) else ()
+        delegation: Final = _JSON.validate_python(session[_DELEGATION_KEY])
+    except ValidationError as error:
+        raise _uninspectable_delegation() from error
+    below_the_inspected_depth: Final = functools.reduce(_next_level, range(_MAX_DELEGATION_DEPTH), (delegation,))
+    if below_the_inspected_depth:
+        raise _uninspectable_delegation()
+    return delegation
+
+
+def _uninspectable_delegation() -> ProxyException:
+    return ProxyException(
+        message=f"session.delegation is not JSON nested at most {_MAX_DELEGATION_DEPTH} levels deep, so it is refused",
+        type=ProxyErrorTypes.bad_request_error,
+        param="session.delegation",
+        code=400,
+    )
+
+
+def _delegated_tool_requests(session: object) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(_tool_requests(_inspected_delegation(session)))
 
 
 def live_delegation(session: object) -> LiveDelegation:
-    try:
-        parsed: Final = _JSON.validate_python(session)
-    except ValidationError:
-        return LiveDelegation(models=(), vector_store_ids=())
-    delegation: Final = parsed.get(_DELEGATION_KEY) if isinstance(parsed, dict) else None
+    delegation: Final = _inspected_delegation(session)
     return LiveDelegation(
         models=tuple(dict.fromkeys(_named(delegation, "model"))),
         vector_store_ids=tuple(dict.fromkeys(_named(delegation, "vector_store_ids"))),
@@ -254,7 +270,7 @@ async def live_client_frame(client_frame: str, provider: str, caller: UserAPIKey
     try:
         frame: Final = _JSON.validate_json(client_frame)
     except ValidationError:
-        return LiveClientFrame(frame=client_frame)
+        return LiveClientFrame(frame=client_frame, denial=str(_uninspectable_delegation().message))
     session: Final = as_str_mapping(frame.get("session")) if isinstance(frame, dict) else None
     if session is None or not isinstance(frame, dict):
         return LiveClientFrame(frame=client_frame)

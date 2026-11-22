@@ -252,7 +252,7 @@ async def test_a_relayed_client_frame_keeps_a_tools_schema_as_the_caller_wrote_i
 async def test_a_tools_schema_nested_many_levels_deep_is_relayed_as_the_caller_wrote_it() -> None:
     schema: Final = functools.reduce(
         lambda inner, _: {"type": "object", "properties": {"parameters": inner}},
-        range(40),
+        range(20),
         {"type": "object", "default": {"model": "text-group"}},
     )
     tool: Final = {"type": "function", "name": "nested", "parameters": schema}
@@ -268,6 +268,35 @@ async def test_a_tools_schema_nested_many_levels_deep_is_relayed_as_the_caller_w
         "type": "session.update",
         "session": _session({"model": "gpt-6-luna", "tools": [tool]}),
     }
+
+
+def _delegation_nested(levels: int) -> dict[str, object]:
+    """A delegation to a model the key cannot use, under `levels` nested arrays in a tool schema's default."""
+    default: Final = functools.reduce(lambda inner, _: [inner], range(levels), {"model": "gpt-6-terra"})
+    return _session({"model": "text-group", "tools": [{"type": "function", "name": "deep", "default": default}]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+@pytest.mark.parametrize(
+    "levels", [20, 70, 205], ids=["within-the-inspected-depth", "below-the-inspected-depth", "too-deep-to-parse"]
+)
+async def test_a_model_the_key_cannot_use_is_not_relayed_however_deep_the_delegation_names_it(levels: int) -> None:
+    relayed: Final = await live_client_frame(
+        json.dumps({"type": "session.update", "session": _delegation_nested(levels)}),
+        "openai",
+        _key(["live-group", "text-group"]),
+    )
+
+    assert relayed.denial is not None
+
+
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+def test_create_refuses_a_delegation_nested_below_the_inspected_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    response: Final = _create(_key(["all-proxy-models"]), _delegation_nested(70), monkeypatch)
+
+    assert response.status_code == 400, response.text
+    assert "session.delegation" in response.text
 
 
 @pytest.mark.asyncio

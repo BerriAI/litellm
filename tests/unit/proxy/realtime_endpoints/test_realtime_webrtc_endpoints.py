@@ -2145,20 +2145,29 @@ async def test_a_key_the_proxy_has_cached_is_read_for_a_realtime_call_while_the_
 
 
 @pytest.mark.asyncio
-async def test_a_token_carries_its_whole_caller_when_the_minting_key_cannot_be_read(
+async def test_a_token_minted_while_its_key_cannot_be_read_still_names_the_key_so_the_call_reads_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-    from litellm.proxy.realtime_endpoints.endpoints import _caller_auth_for_token, _stored_key_to_mint_from
+    from litellm.proxy.realtime_endpoints.endpoints import (
+        _caller_auth_for_token,
+        _caller_auth_from_token,
+        _stored_key_to_mint_from,
+    )
 
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", _UnreachableDatabase())
     caller: Final = UserAPIKeyAuth(token="caller-key-hash", team_id="team-a", rpm_limit=3)
 
-    stored: Final = await _stored_key_to_mint_from("caller-key-hash")
+    stored, names_key = await _stored_key_to_mint_from(caller)
+    token: Final = {
+        "caller_auth": _caller_auth_for_token(caller, stored),
+        **({"key": caller.token} if names_key else {}),
+    }
 
-    assert stored is None
-    assert _caller_auth_for_token(caller, stored)["rpm_limit"] == 3
+    assert (token["caller_auth"]["rpm_limit"], token["key"]) == (3, "caller-key-hash")
+    _stored_keys(monkeypatch, {})
+    assert await _caller_auth_from_token(token, None, None) is None, "the key was deleted after the token was minted"
 
 
 @pytest.mark.parametrize(
