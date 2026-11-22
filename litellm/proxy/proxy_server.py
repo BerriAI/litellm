@@ -389,6 +389,7 @@ from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyRespons
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.lens.proxy.adapter import router as lens_router
+from litellm.integrations.lens.proxy.pages import router as lens_pages_router
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -23093,6 +23094,7 @@ app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
 app.include_router(lens_router)
+app.include_router(lens_pages_router)
 app.include_router(plugin_router)
 app.include_router(cost_tracking_settings_router)
 app.include_router(subscription_accounts_router)
