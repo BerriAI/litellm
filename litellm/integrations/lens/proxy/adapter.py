@@ -3,14 +3,14 @@ import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from functools import partial
-from ipaddress import ip_address
+from ipaddress import IPv6Address, ip_address
 from typing import Annotated, Final
 from urllib.parse import urlencode, urlsplit
 
 import httpx
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict
 from starlette.responses import RedirectResponse
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
@@ -121,27 +121,26 @@ class ServiceConnection(BaseModel):
 
 
 def _local_host(host: str) -> bool:
-    normalized: Final = host.rstrip(".").lower()
+    normalized: Final = host.removeprefix("[").removesuffix("]").rstrip(".").lower()
     if normalized == "localhost" or normalized.endswith(".localhost"):
         return True
     try:
         address: Final = ip_address(normalized)
     except ValueError:
         return False
-    return address.is_loopback or address.is_unspecified
+    effective: Final = address.ipv4_mapped if isinstance(address, IPv6Address) and address.ipv4_mapped else address
+    return effective.is_loopback or effective.is_unspecified
 
 
 def lens_browser_url(lens_url: str, gateway_url: str) -> str:
     try:
-        target: Final = urlsplit(lens_url)
-        gateway: Final = urlsplit(gateway_url)
-        if target.scheme not in ("http", "https") or not target.hostname:
-            return ""
+        target: Final = AnyHttpUrl(lens_url)
+        gateway: Final = AnyHttpUrl(gateway_url) if gateway_url else None
         if target.username is not None or target.password is not None:
             return ""
         if target.query or target.fragment:
             return ""
-        if _local_host(target.hostname) and not _local_host(gateway.hostname or ""):
+        if _local_host(target.host or "") and not _local_host((gateway.host or "") if gateway else ""):
             return ""
         return lens_url.rstrip("/")
     except ValueError:
