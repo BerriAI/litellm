@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.aws_partition import get_aws_partition, is_bedro
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
+from litellm.litellm_core_utils.model_latest_aliases import is_model_latest_alias
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
@@ -557,6 +558,14 @@ def _names_a_gemini_api_model(model_id: str) -> bool:
     return "/" not in model_id and uses_vertex_gemini_api(model_id)
 
 
+def _ids_a_routed_call_resolves(
+    provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...], endpoint_serves_the_catalog: bool
+) -> tuple[str, ...]:
+    if not routing_prefix or not endpoint_serves_the_catalog:
+        return provider_model_ids
+    return tuple(model_id for model_id in provider_model_ids if not is_model_latest_alias(model_id, provider))
+
+
 def _model_ids_a_route_can_reach(
     provider: str, routing_prefix: str, provider_model_ids: tuple[str, ...]
 ) -> tuple[str, ...]:
@@ -612,7 +621,11 @@ def _ids_routing_to_catalog_models(
     name_regex: Final = re.compile(PatternMatchRouter().pattern_to_regex(name_pattern))
     catalog_matches: Final = (
         deployment_regex.fullmatch(f"{provider_id_prefix}{model_id}")
-        for model_id in _model_ids_a_route_can_reach(provider, routing_prefix, provider_model_ids)
+        for model_id in _model_ids_a_route_can_reach(
+            provider,
+            routing_prefix,
+            _ids_a_routed_call_resolves(provider, routing_prefix, provider_model_ids, endpoint_serves_the_catalog),
+        )
     )
     listed_ids: Final = (
         (
