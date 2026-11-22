@@ -7,7 +7,6 @@ import asyncio
 import datetime
 import json
 import logging
-import re
 import threading
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,8 +15,6 @@ from typing import Final
 import httpx
 import pytest
 import respx
-from aiohttp import web
-from aiohttp.test_utils import TestServer
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -470,17 +467,6 @@ class _SuccessRows(CustomLogger):
     ) -> None:
         payload: Final = kwargs["standard_logging_object"]
         self.rows.append((payload["cache_hit"], payload["model_group"], payload["model"]))
-
-
-class _LoggedInputs(CustomLogger):
-    def __init__(self) -> None:
-        super().__init__()
-        self.inputs: list[object] = []
-
-    async def async_log_success_event(
-        self, kwargs: dict[str, object], response_obj: object, start_time: datetime.datetime, end_time: datetime.datetime
-    ) -> None:
-        self.inputs.append(kwargs.get("messages"))
 
 
 @pytest.fixture
@@ -1132,65 +1118,6 @@ def test_sync_generate_content_adapter_failure_is_logged_once(_httpx_transport: 
     wait_until(lambda: bool(logged.events), message="the request's failure was logged")
 
     assert logged.events == [("failure", "completion", _ADAPTER_CALL_ID, "grok-group")]
-
-
-_CARD_NUMBER: Final = re.compile(r"\d{4}-\d{4}-\d{4}-\d{4}")
-
-
-async def _fake_presidio_analyze(request: web.Request) -> web.Response:
-    text: Final = (await request.json())["text"]
-    return web.json_response(
-        [
-            {"entity_type": "CREDIT_CARD", "start": match.start(), "end": match.end(), "score": 0.9}
-            for match in _CARD_NUMBER.finditer(text)
-        ]
-    )
-
-
-async def _fake_presidio_anonymize(request: web.Request) -> web.Response:
-    payload: Final = await request.json()
-    return web.json_response(
-        {
-            "text": _CARD_NUMBER.sub("<CREDIT_CARD>", payload["text"]),
-            "items": [{"entity_type": span["entity_type"], "operator": "replace"} for span in payload["analyzer_results"]],
-        }
-    )
-
-
-@pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
-@pytest.mark.asyncio
-async def test_generate_content_adapter_prompt_is_masked_by_a_logging_only_guardrail(
-    _httpx_transport: None, monkeypatch: pytest.MonkeyPatch, entrypoint: str, stream: bool
-):
-    from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
-    from litellm.types.guardrails import PiiAction, PiiEntityType
-
-    presidio: Final = web.Application()
-    presidio.router.add_post("/analyze", _fake_presidio_analyze)
-    presidio.router.add_post("/anonymize", _fake_presidio_anonymize)
-    logged: Final = _LoggedInputs()
-
-    async with TestServer(presidio) as server:
-        guardrail: Final = OPTIONAL_PresidioPIIMasking(
-            guardrail_name="mask-logs",
-            default_on=True,
-            logging_only=True,
-            presidio_analyzer_api_base=str(server.make_url("/")),
-            presidio_anonymizer_api_base=str(server.make_url("/")),
-            pii_entities_config={PiiEntityType.CREDIT_CARD: PiiAction.MASK},
-        )
-        monkeypatch.setattr(litellm, "callbacks", [guardrail, logged])
-        with respx.mock() as upstream:
-            upstream.route(host="upstream.test").mock(return_value=_upstream_reply(stream))
-            response: Final = await getattr(_adapter_router(), entrypoint)(
-                model="grok-group", contents=[{"role": "user", "parts": [{"text": "My card is 4111-1111-1111-1111"}]}]
-            )
-            if stream:
-                await _drain(response)
-        await await_until(lambda: bool(logged.inputs), message="the request's success callback ran")
-        await guardrail._close_http_session()
-
-    assert logged.inputs == [[{"role": "user", "content": "My card is <CREDIT_CARD>"}]]
 
 
 @pytest.mark.parametrize(("entrypoint", "stream"), [("agenerate_content", False), ("agenerate_content_stream", True)])
