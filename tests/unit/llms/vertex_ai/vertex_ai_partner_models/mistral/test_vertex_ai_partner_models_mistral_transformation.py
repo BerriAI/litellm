@@ -182,7 +182,7 @@ MISTRAL_TOOL_CALL_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
 SENT_MAPPINGS: Final = TypeAdapter(list[Mapping[str, object]])
 
 
-def _tool_call(tool_call_id: str | None, name: str) -> dict[str, object]:
+def _tool_call(tool_call_id: object, name: str) -> dict[str, object]:
     return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
 
 
@@ -288,17 +288,47 @@ async def test_mistral_chat_maps_a_tool_call_id_the_same_way_on_sync_and_async_r
     assert sync_messages[1]["tool_call_id"] != "call_abc123"
 
 
-def test_mistral_chat_sends_a_tool_call_without_an_id_as_is(local_model_cost_map):
+@pytest.mark.parametrize("tool_call_id", [None, 12345], ids=["no-id", "integer-id"])
+def test_mistral_chat_sends_a_tool_call_whose_id_is_not_a_string_as_is(tool_call_id: object, local_model_cost_map):
     config: Final = ProviderConfigManager.get_provider_chat_config(
         model="mistral-medium-3", provider=LlmProviders.VERTEX_AI
     )
-    tool_call: Final = _tool_call(None, "get_weather")
+    tool_call: Final = _tool_call(tool_call_id, "get_weather")
 
     sent: Final = config.transform_messages(
-        messages=[{"role": "assistant", "content": None, "tool_calls": [tool_call]}], model="mistral-medium-3"
+        messages=[
+            {"role": "assistant", "content": None, "tool_calls": [tool_call]},
+            {"role": "tool", "tool_call_id": tool_call_id, "content": "18C"},
+        ],
+        model="mistral-medium-3",
     )
 
     assert sent[0]["tool_calls"] == [tool_call]
+    assert sent[1].get("tool_call_id") == tool_call_id
+
+
+@pytest.mark.parametrize("model", ["vertex_ai/mistral-medium-3", "vertex_ai/mistral-ocr-2505"])
+def test_mistral_chat_sends_penalties_and_n_to_every_vertex_mistral_name(
+    model: str, local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            presence_penalty=0.1,
+            frequency_penalty=0.2,
+            n=2,
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    sent: Final = SENT_BODY.validate_json(_sent_mistral_request(send, monkeypatch).content)
+
+    assert {key: sent.get(key) for key in ("presence_penalty", "frequency_penalty", "n")} == {
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.2,
+        "n": 2,
+    }
 
 
 @pytest.mark.parametrize("model", ["vertex_ai/mistral-medium-3", "vertex_ai/mistral-ocr-2505"])

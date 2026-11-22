@@ -68,7 +68,8 @@ def with_mistral_tool_call_ids(message: AllMessageValues) -> AllMessageValues:
 
 
 def _with_mistral_tool_call_id(tool_call: ChatCompletionAssistantToolCall) -> ChatCompletionAssistantToolCall:
-    tool_call_id: Final = tool_call.get("id")
-    if tool_call_id is None:
-        return tool_call
-    return {**tool_call, "id": mistral_tool_call_id(tool_call_id)}
+    match tool_call.get("id"):
+        case str(tool_call_id):
+            return {**tool_call, "id": mistral_tool_call_id(tool_call_id)}
+        case _:
+            return tool_call
