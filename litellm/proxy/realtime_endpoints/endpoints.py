@@ -561,14 +561,10 @@ async def create_realtime_client_secret(
             call_type=call_type,
         )
 
-        deployment_id: Final = (
-            None
-            if is_translation_request
-            else await _serving_deployment_id(
-                llm_router,
-                model,
-                data,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dict
-            )
+        deployment_id: Final = await _serving_deployment_id(
+            llm_router,
+            model,
+            data,  # pyright: ignore[reportUnknownArgumentType]  # untyped request dict
         )
         if deployment_id is not None:
             data[PINNED_DEPLOYMENT_KEY] = deployment_id

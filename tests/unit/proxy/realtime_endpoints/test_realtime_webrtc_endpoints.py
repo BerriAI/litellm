@@ -2269,7 +2269,9 @@ def test_realtime_calls_read_the_minting_key_as_it_is_stored_when_the_call_start
     assert started == expected_caller
 
 
+@pytest.mark.parametrize("route", ["/v1/realtime", "/v1/realtime/translations"], ids=["realtime", "translation"])
 def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(
+    route: str,
     proxy_app: FastAPI,
     mock_add_litellm_data: AddLitellmDataToRequest,
     mock_pre_call_hook: PreCallHook,
@@ -2332,13 +2334,13 @@ def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(
         logging.post_call_failure_hook = AsyncMock()
         for _ in range(8):
             minted = client.post(
-                "/v1/realtime/client_secrets",
+                f"{route}/client_secrets",
                 headers={"Authorization": "Bearer sk-test-master-key"},
                 json={"model": "realtime-group"},
             )
             assert minted.status_code == 200, minted.text
             answered = client.post(
-                "/v1/realtime/calls",
+                f"{route}/calls",
                 headers={"Authorization": f"Bearer {minted.json()['value']}"},
                 content=b"v=0\r\n",
             )

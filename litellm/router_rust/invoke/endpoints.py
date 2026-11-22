@@ -204,7 +204,15 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
-_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset({"_arealtime", "acreate_realtime_client_secret", "arealtime_calls"})
+_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset(
+    {
+        "_arealtime",
+        "acreate_realtime_client_secret",
+        "arealtime_calls",
+        "acreate_realtime_translation_client_secret",
+        "arealtime_translation_calls",
+    }
+)
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
