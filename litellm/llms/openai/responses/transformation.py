@@ -767,12 +767,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if not normalized.startswith("gpt-"):
             return {}
         for prefix, tier in rules:
-            is_exact = normalized == prefix
-            is_dated = (
-                normalized.startswith(prefix)
-                and normalized[len(prefix)] == "-"
-            )
-            if is_exact or is_dated:
+            if normalized == prefix or normalized.startswith(prefix + "-"):
                 if tier.lower() in ("", "none"):
                     return {}
                 merged_ap: dict[str, object] = (
