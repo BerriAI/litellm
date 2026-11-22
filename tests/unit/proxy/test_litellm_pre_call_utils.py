@@ -7477,6 +7477,27 @@ class TestPromotedTraceControlFields:
         assert litellm_metadata.get("user_api_key_user_id") != "forged"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "path, body",
+        [
+            (
+                "/v1/messages",
+                {"model": "claude-sonnet-4-5", "max_tokens": 32, "messages": [{"role": "user", "content": "hi"}]},
+            ),
+            ("/v1/responses", {"model": "gpt-4.1-mini", "input": "say resp"}),
+        ],
+    )
+    async def test_a_forged_litellm_api_version_reaches_neither_metadata_bucket(
+        self, path: str, body: dict[str, object]
+    ):
+        updated = await self._run(
+            path, {**body, "metadata": {"litellm_api_version": "forged", "spend_logs_metadata": {"a": 1}}}
+        )
+
+        assert "litellm_api_version" not in updated["metadata"]
+        assert updated["litellm_metadata"].get("litellm_api_version") != "forged"
+
+    @pytest.mark.asyncio
     async def test_chat_completions_route_is_untouched(self):
         updated = await self._run(
             "/v1/chat/completions",
