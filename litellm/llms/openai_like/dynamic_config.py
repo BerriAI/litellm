@@ -294,10 +294,10 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
 
         def validate_environment(
             self,
-            headers: dict,
+            headers: dict[str, str],
             model: str,
             litellm_params: GenericLiteLLMParams | None,
-        ) -> dict:
+        ) -> dict[str, str]:
             litellm_params = litellm_params or GenericLiteLLMParams()
             api_key: Final = (
                 resolve_nousresearch_api_key(litellm_params.api_key, model, headers=headers)
