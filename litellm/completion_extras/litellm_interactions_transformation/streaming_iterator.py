@@ -48,9 +48,11 @@ from .continuation import (
     output_tokens_of,
     resends_input_on_resume,
 )
+from .grounding import GROUNDING_STEP_TYPES, VertexMetadata, vertex_metadata_of
 from .response_transformation import (
     FinishReason,
     annotations_for_block,
+    attach_vertex_metadata,
     map_interactions_status_to_finish_reason,
     parse_output_content_blocks,
     shifted,
@@ -250,7 +252,10 @@ class InteractionsChatStreamingIterator:
         self._pending_thought_signature: str | None = None
         self._segment_signed_tool_call: bool = False
         self._unsigned_tools: Final[dict[int, tuple[int, str]]] = {}  # mutable-ok: thought-step -> unsigned tool slot
-        self._text: str = ""
+        self._text_pieces: Final[list[str]] = []  # mutable-ok: per-stream answer text, joined only for citations
+        self._text_length: int = 0
+        self._grounding_steps: Final[list[JsonMapping]] = []  # mutable-ok: per-stream search and URL steps
+        self._cited_spans: Final[list[JsonValue]] = []  # mutable-ok: per-stream citations in joined-answer bytes
         self._last_text_start: int = 0
         self._text_starts: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> offset of its first text
         self._thought_slots: Final[dict[int, int]] = {}  # mutable-ok: per-stream step-index -> thought-slot state
@@ -402,17 +407,53 @@ class InteractionsChatStreamingIterator:
                 return ()
 
     def _count_text(self, step_index: int, text: str) -> None:
-        self._last_text_start = self._text_starts.setdefault(step_index, len(self._text))
-        self._text += text
+        self._last_text_start = self._text_starts.setdefault(step_index, self._text_length)
+        self._text_pieces.append(text)
+        self._text_length += len(text)
+
+    def _text_split_at(self, position: int) -> tuple[str, str]:
+        text: Final = "".join(self._text_pieces)
+        return text[:position], text[position:]
+
+    def _remember_cited(self, raw_annotations: JsonValue, byte_offset: int) -> None:
+        if not isinstance(raw_annotations, list):
+            return
+        self._cited_spans.extend(
+            {**anno, "start_index": start + byte_offset, "end_index": end + byte_offset}
+            for anno in raw_annotations
+            if isinstance(anno, dict)
+            and isinstance(start := anno.get("start_index"), int)
+            and isinstance(end := anno.get("end_index"), int)
+        )
+
+    def _vertex_metadata(self) -> VertexMetadata:
+        answer: Final[JsonValue] = {
+            "type": "model_output",
+            "content": [{"type": "text", "text": "".join(self._text_pieces), "annotations": list(self._cited_spans)}],
+        }
+        return vertex_metadata_of((*(dict(step) for step in self._grounding_steps), answer))
 
     def _delta_annotations(self, step_index: int, raw_delta: JsonMapping) -> tuple[ChatCompletionAnnotation, ...]:
+        if raw_delta.get("annotations") is None:
+            return ()
         cited_from: Final = self._text_starts.get(step_index, self._last_text_start)
-        return annotations_for_block(raw_delta.get("annotations"), cited_from, self._text[cited_from:])
+        before, cited_text = self._text_split_at(cited_from)
+        self._remember_cited(raw_delta.get("annotations"), len(before.encode()))
+        return annotations_for_block(raw_delta.get("annotations"), cited_from, cited_text)
 
     def _step_start_annotations(self, step_index: int, raw_blocks: JsonValue) -> tuple[ChatCompletionAnnotation, ...]:
         if not isinstance(raw_blocks, list):
             return ()
         cited_from: Final = self._text_starts.get(step_index, self._last_text_start)
+        text_blocks: Final = tuple(
+            block for block in raw_blocks if isinstance(block, dict) and block.get("type") == "text"
+        )
+        if not any(block.get("annotations") for block in text_blocks):
+            return ()
+        lengths: Final = tuple(len(str(block.get("text") or "").encode()) for block in text_blocks)
+        step_offset: Final = len(self._text_split_at(cited_from)[0].encode())
+        for position, block in enumerate(text_blocks):
+            self._remember_cited(block.get("annotations"), step_offset + sum(lengths[:position]))
         return tuple(shifted(cited, cited_from) for cited in parse_output_content_blocks(raw_blocks).annotations)
 
     def _cited_chunks(self, cited: tuple[ChatCompletionAnnotation, ...]) -> tuple[ModelResponseStream, ...]:
@@ -438,6 +479,10 @@ class InteractionsChatStreamingIterator:
         step_index: Final = self._step_index_of(event)
         raw_delta: Final = event.get("delta")
         if not isinstance(raw_delta, dict):
+            return ()
+
+        if raw_delta.get("type") in GROUNDING_STEP_TYPES:
+            self._grounding_steps.append(raw_delta)
             return ()
 
         match raw_delta.get("type"):
@@ -587,7 +632,9 @@ class InteractionsChatStreamingIterator:
                 self._pending_hop_body = hop_body
                 self._pending_hop_token = str(hop_body["continuation_token"])
                 return ()
-        return (self._final_chunk(finish_reason, client_continuation_token(interaction_map)),)
+        final_chunk: Final = self._final_chunk(finish_reason, client_continuation_token(interaction_map))
+        attach_vertex_metadata(final_chunk, self._vertex_metadata(), keeps_empty=False)
+        return (final_chunk,)
 
     def _final_chunk(self, finish_reason: FinishReason, continuation_token: str | None) -> ModelResponseStream:
         raw_usage: Final = merge_hop_usage(self._hop_usages)

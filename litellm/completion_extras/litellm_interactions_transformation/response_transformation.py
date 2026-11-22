@@ -9,6 +9,7 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
     InteractionsUsageObjectTransformation,
 )
@@ -27,10 +28,13 @@ from litellm.types.utils import (
     Function,
     Message,
     ModelResponse,
+    ModelResponseStream,
+    PromptTokensDetailsWrapper,
     Usage,
 )
 
 from .continuation import client_continuation_token
+from .grounding import VertexMetadata, vertex_metadata_of
 
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
 FinishReason: TypeAlias = Literal["stop", "length", "tool_calls", "content_filter"]
@@ -311,11 +315,32 @@ def map_interactions_status_to_finish_reason(
             return "stop"
 
 
+def _grounding_count(raw_counts: JsonValue | None, tool_type: str) -> int:
+    if not isinstance(raw_counts, list):
+        return 0
+    counts: Final = tuple(
+        entry.get("count") for entry in raw_counts if isinstance(entry, dict) and entry.get("type") == tool_type
+    )
+    return sum(count for count in counts if isinstance(count, int) and not isinstance(count, bool))
+
+
+def _with_maps_grounding(usage: Usage, maps_requests: int) -> Usage:
+    if not maps_requests:
+        return usage
+    details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
+    details.google_maps_grounding_requests = maps_requests
+    usage.prompt_tokens_details = details
+    return usage
+
+
 def transform_interactions_usage(raw_usage: object) -> Usage:
     usage_map: Final = _to_json_mapping(raw_usage) if raw_usage is not None else _EMPTY_JSON_MAP
     plain_dict: Final = dict(usage_map)
     if plain_dict and InteractionsUsageObjectTransformation.is_interactions_usage_object(plain_dict):
-        return InteractionsUsageObjectTransformation.transform_interactions_usage_object(plain_dict)
+        return _with_maps_grounding(
+            InteractionsUsageObjectTransformation.transform_interactions_usage_object(plain_dict),
+            _grounding_count(plain_dict.get("grounding_tool_count"), "google_maps"),
+        )
     prompt_tokens: Final = plain_dict.get("prompt_tokens")
     completion_tokens: Final = plain_dict.get("completion_tokens")
     total_tokens: Final = plain_dict.get("total_tokens")
@@ -373,7 +398,7 @@ def transform_interactions_response_to_chat_response(
     if continuation_token is not None:
         msg.provider_specific_fields = {"continuation_token": continuation_token}
 
-    return model_response.model_copy(
+    chat_response: Final = model_response.model_copy(
         update={
             "id": effective_id,
             "model": model,
@@ -381,3 +406,20 @@ def transform_interactions_response_to_chat_response(
             "usage": transform_interactions_usage(payload.get("usage")),
         }
     )
+    attach_vertex_metadata(chat_response, vertex_metadata_of(steps_seq), keeps_empty=True)
+    return chat_response
+
+
+def attach_vertex_metadata(
+    response: ModelResponse | ModelResponseStream, metadata: VertexMetadata, *, keeps_empty: bool
+) -> None:
+    fields: Final = {
+        "vertex_ai_grounding_metadata": list(metadata.grounding),
+        "vertex_ai_url_context_metadata": list(metadata.url_context),
+        **({"vertex_ai_safety_results": [], "vertex_ai_citation_metadata": []} if keeps_empty else {}),
+    }
+    for name, value in fields.items():
+        if value or keeps_empty:
+            setattr(response, name, value)
+        if value:
+            set_hidden_param(response, name, value)

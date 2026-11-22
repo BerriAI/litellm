@@ -687,3 +687,144 @@ def test_unary_citations_given_as_byte_spans_select_the_cited_words_after_non_as
         message.content[cite["url_citation"]["start_index"] : cite["url_citation"]["end_index"]]
         for cite in message.annotations
     ] == ["Paris"]
+
+
+_GROUNDED_CALLS: Final = (
+    {"type": "google_search_call", "id": "s1", "arguments": {"queries": ["capital of France"]}},
+    {"type": "google_search_result", "call_id": "s1", "result": [{"search_suggestions": "<div>chips</div>"}]},
+    {
+        "type": "url_context_result",
+        "call_id": "u1",
+        "result": [
+            {"url": "https://a.example", "status": "success"},
+            {"url": "https://b.example", "status": "error"},
+        ],
+    },
+)
+_GROUNDED_CITES: Final = (
+    {"type": "url_citation", "start_index": 17, "end_index": 22, "url": "https://a.example", "title": "a"},
+    {"type": "url_citation", "start_index": 17, "end_index": 22, "url": "https://b.example", "title": "b"},
+)
+_GROUNDED_TEXT: Final = "Café capital is Paris."
+_GROUNDED_USAGE: Final = {
+    "total_input_tokens": 5,
+    "total_output_tokens": 4,
+    "total_tokens": 9,
+    "grounding_tool_count": [{"type": "google_search", "count": 2}, {"type": "google_maps", "count": 3}],
+}
+_EXPECTED_GROUNDING: Final = [
+    {
+        "searchEntryPoint": {"renderedContent": "<div>chips</div>"},
+        "groundingChunks": [
+            {"web": {"uri": "https://a.example", "title": "a"}},
+            {"web": {"uri": "https://b.example", "title": "b"}},
+        ],
+        "groundingSupports": [
+            {"segment": {"startIndex": 17, "endIndex": 22, "text": "Paris"}, "groundingChunkIndices": [0, 1]}
+        ],
+        "webSearchQueries": ["capital of France"],
+    }
+]
+_EXPECTED_URL_CONTEXT: Final = [
+    {
+        "urlMetadata": [
+            {"retrievedUrl": "https://a.example", "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_SUCCESS"},
+            {"retrievedUrl": "https://b.example", "urlRetrievalStatus": "URL_RETRIEVAL_STATUS_ERROR"},
+        ]
+    }
+]
+
+
+def _grounded_sse() -> httpx.Response:
+    events: Final = (
+        *(
+            {"event_type": "step.delta", "index": position, "delta": call}
+            for position, call in enumerate(_GROUNDED_CALLS)
+        ),
+        {"event_type": "step.start", "index": 3, "step": {"type": "model_output"}},
+        {"event_type": "step.delta", "index": 3, "delta": {"type": "text", "text": _GROUNDED_TEXT[:8]}},
+        {"event_type": "step.delta", "index": 3, "delta": {"type": "text", "text": _GROUNDED_TEXT[8:]}},
+        {
+            "event_type": "step.delta",
+            "index": 3,
+            "delta": {"type": "text_annotation_delta", "annotations": list(_GROUNDED_CITES)},
+        },
+        {
+            "event_type": "interaction.completed",
+            "interaction": {"id": "v1_grounded", "status": "completed", "usage": _GROUNDED_USAGE},
+        },
+    )
+    return httpx.Response(
+        200,
+        text="".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+    )
+
+
+def test_unary_grounded_answer_carries_the_search_and_url_context_fields_generate_content_callers_read() -> None:
+    grounded: Final = {
+        "id": "v1_grounded",
+        "status": "completed",
+        "steps": [
+            *_GROUNDED_CALLS,
+            {
+                "type": "model_output",
+                "content": [{"type": "text", "text": _GROUNDED_TEXT, "annotations": list(_GROUNDED_CITES)}],
+            },
+        ],
+        "usage": _GROUNDED_USAGE,
+    }
+    _, responder = _scripted((httpx.Response(200, json=grounded),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response.vertex_ai_grounding_metadata == _EXPECTED_GROUNDING
+    assert response.vertex_ai_url_context_metadata == _EXPECTED_URL_CONTEXT
+    assert response.vertex_ai_safety_results == []
+    assert response.vertex_ai_citation_metadata == []
+    details: Final = response.usage.prompt_tokens_details
+    assert (details.web_search_requests, details.google_maps_grounding_requests) == (2, 3)
+
+
+def test_streamed_grounded_answer_carries_the_search_and_url_context_fields_on_its_last_chunk() -> None:
+    _, responder = _scripted((_grounded_sse(),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        chunks: Final = list(
+            litellm.completion(
+                model=MODEL,
+                messages=list(MESSAGES),
+                stream=True,
+                stream_options={"include_usage": True},
+                api_key="k",
+                api_base=API_BASE,
+                client=HTTPHandler(client=raw_client),
+            )
+        )
+
+    grounded: Final = [chunk for chunk in chunks if getattr(chunk, "vertex_ai_grounding_metadata", None)]
+    assert [chunk.vertex_ai_grounding_metadata for chunk in grounded] == [_EXPECTED_GROUNDING]
+    assert grounded[0].vertex_ai_url_context_metadata == _EXPECTED_URL_CONTEXT
+    usages: Final = [chunk.usage for chunk in chunks if getattr(chunk, "usage", None) is not None]
+    assert usages[-1].prompt_tokens_details.google_maps_grounding_requests == 3
+
+
+def test_plain_answer_keeps_the_empty_grounding_lists_generate_content_returns() -> None:
+    _, responder = _scripted((httpx.Response(200, json=_interaction("Hello", "completed", None)),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert (response.vertex_ai_grounding_metadata, response.vertex_ai_url_context_metadata) == ([], [])
