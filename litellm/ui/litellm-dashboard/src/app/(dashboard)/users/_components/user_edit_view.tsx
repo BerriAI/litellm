@@ -66,6 +66,7 @@ const userEditShape = (t: TFunction) => ({
   user_role: z.string().nullish(),
   models: z.array(z.string()),
   budget_duration: z.string().nullish(),
+  rollover_max_budget: z.union([z.string(), z.number()]).nullish(),
   metadata: z.string().nullish(),
   tpm_limit: rateLimitField(t),
   rpm_limit: rateLimitField(t),
@@ -121,6 +122,7 @@ const toFormValues = (
     models: userData.user_info?.models || [],
     max_budget: isUnlimited ? "" : maxBudget,
     budget_duration: userData.user_info?.budget_duration,
+    rollover_max_budget: userData.user_info?.rollover_max_budget,
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
     ...(canEditPermissions ? buildPermissionFieldValues(objectPermission) : {}),
   };
@@ -198,7 +200,8 @@ export function UserEditView({
       return;
     }
 
-    const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, ...formValues } = values;
+    const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, rollover_max_budget, ...formValues } = values;
+    const rolloverCap = isBlank(rollover_max_budget) ? null : Number(rollover_max_budget);
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
     const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
@@ -208,6 +211,7 @@ export function UserEditView({
       ...(modelBudgets !== undefined && { model_max_budget: modelBudgets }),
       ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
       ...(rpmLimit !== undefined && { rpm_limit: rpmLimit }),
+      ...(form.getFieldState("rollover_max_budget").isDirty && { rollover_max_budget: rolloverCap }),
       max_budget:
         unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
     };
@@ -335,6 +339,26 @@ export function UserEditView({
 
           {!isBulkEdit && (
             <>
+              <FormField
+                control={form.control}
+                name="rollover_max_budget"
+                label={labelWithHint(
+                  t("users.editView.fields.rolloverCap"),
+                  t("users.editView.fields.rolloverCapHint"),
+                )}
+              >
+                {({ value, onChange, ...field }) => (
+                  <Input
+                    {...field}
+                    type="number"
+                    min={0.01}
+                    step="any"
+                    value={value ?? ""}
+                    onChange={(event) => onChange(event.target.value)}
+                  />
+                )}
+              </FormField>
+
               <FormField
                 control={form.control}
                 name="tpm_limit"

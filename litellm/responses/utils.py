@@ -160,8 +160,8 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
-_RequestInputT: Final = TypeVar("_RequestInputT")
-_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
+_RequestInputT = TypeVar("_RequestInputT")
+_StreamEventT = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(

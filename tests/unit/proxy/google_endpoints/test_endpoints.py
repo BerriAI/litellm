@@ -210,6 +210,13 @@ def test_google_count_tokens_keeps_counting_system_text_that_sits_beside_media()
     ) == _google_count_tokens_request("counted", {**_CONTENTS, **_SYSTEM})
 
 
+@pytest.mark.parametrize(("url_model", "counted_model"), (("", "body-model"), ("url-model", "url-model")))
+def test_google_count_tokens_counts_the_body_model_only_when_the_url_names_none(
+    url_model: str, counted_model: str
+) -> None:
+    assert _google_count_tokens_request(url_model, {**_CONTENTS, "model": "body-model"}).model == counted_model
+
+
 _INTERACTION_ID: Final = "abc123"
 _VERTEX_GROUP: Final = "vertex-argon"
 _VERTEX_DEEP_RESEARCH_GROUP: Final = "vertex-dr"

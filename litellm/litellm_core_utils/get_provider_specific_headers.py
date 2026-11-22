@@ -14,7 +14,7 @@ _PROVIDER_HEADERS: Final[TypeAdapter[ProviderSpecificHeader | Sequence[ProviderS
     ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None
 )
 
-_HeaderValue: Final = TypeVar("_HeaderValue")
+_HeaderValue = TypeVar("_HeaderValue")
 _CASE_INSENSITIVE_OVERRIDES: Final = frozenset({ANTHROPIC_USER_PROFILE_ID_HEADER})
 
 
@@ -126,6 +126,28 @@ class ProviderSpecificHeaderUtils:
     ) -> Mapping[str, str]:
         return ProviderSpecificHeaderUtils.get_provider_specific_headers(
             _PROVIDER_HEADERS.validate_python(provider_specific_header), custom_llm_provider
+        )
+
+    @staticmethod
+    def with_provider_specific_headers(
+        headers: Mapping[str, object],
+        provider_specific_header: ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None,
+        custom_llm_provider: str | None,
+        model: str | None,
+        base_model: object,
+        model_info: object,
+    ) -> dict[str, object]:  # mutable-ok: completion passes its request headers on as a dict
+        return override_headers(
+            headers,
+            ProviderSpecificHeaderUtils.get_provider_specific_headers(
+                provider_specific_header,
+                custom_llm_provider,
+                model=model,
+                configured_headers=headers,
+                base_model=deployment_base_model(
+                    {"base_model": base_model if isinstance(base_model, str) else None}, model_info
+                ),
+            ),
         )
 
     @staticmethod

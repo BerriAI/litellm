@@ -57,6 +57,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     anthropic_user_profile_id,
     forwarded_anthropic_oauth_token,
     pinned_anthropic_user_profile_id,
+    request_routing_metadata,
     should_auto_drop_params_for_agentic_cli,
 )
 from litellm.proxy.utils import ProxyLogging
@@ -340,6 +341,7 @@ def _count_tokens_body_options(data: Mapping[str, JsonValue], auto_drop_params: 
 
 
 _PROVIDER_COUNT_REPLY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_COUNT_REQUEST_FIELDS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 
 def _provider_context_management(response: TokenCountResponse) -> Mapping[str, object]:
@@ -432,6 +434,10 @@ async def _count_tokens(
             pinned_user_profile_id=pinned_anthropic_user_profile_id(user_api_key_dict),
             client_user_profile_id=anthropic_user_profile_id(
                 user_api_key_dict, request.headers, caller_credential=True
+            ),
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(
+                request, _COUNT_REQUEST_FIELDS.validate_python(data), user_api_key_dict
             ),
             **_count_tokens_body_options(data, auto_drop_params),
         )

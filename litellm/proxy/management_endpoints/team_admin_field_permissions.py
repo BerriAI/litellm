@@ -51,6 +51,7 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
         "metadata",
         "team_member_budget",
         "team_member_budget_duration",
+        "team_member_rollover_max_budget",
         "team_member_tpm_limit",
         "team_member_rpm_limit",
     }
@@ -124,12 +125,19 @@ _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 class TeamMemberDefaults:
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: float | None = None
     team_member_tpm_limit: int | None = None
     team_member_rpm_limit: int | None = None
 
 
 TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
+    {
+        "team_member_budget",
+        "team_member_budget_duration",
+        "team_member_rollover_max_budget",
+        "team_member_tpm_limit",
+        "team_member_rpm_limit",
+    }
 )
 
 
@@ -346,6 +354,7 @@ def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaul
     return TeamMemberDefaults(
         team_member_budget=budget.max_budget,
         team_member_budget_duration=budget.budget_duration,
+        team_member_rollover_max_budget=budget.rollover_max_budget,
         team_member_tpm_limit=budget.tpm_limit,
         team_member_rpm_limit=budget.rpm_limit,
     )
@@ -383,6 +392,7 @@ def _member_defaults_by_field(member_defaults: TeamMemberDefaults | None) -> Map
         {
             "team_member_budget": stored.team_member_budget,
             "team_member_budget_duration": stored.team_member_budget_duration,
+            "team_member_rollover_max_budget": stored.team_member_rollover_max_budget,
             "team_member_tpm_limit": stored.team_member_tpm_limit,
             "team_member_rpm_limit": stored.team_member_rpm_limit,
         }

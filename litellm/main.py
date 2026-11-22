@@ -109,10 +109,6 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
-    override_headers,
-)
-from litellm.litellm_core_utils.get_provider_specific_headers import (
-    deployment_base_model as profile_gate_base_model,
 )
 from litellm.litellm_core_utils.health_check_utils import (
     _filter_model_params,
@@ -1580,6 +1576,13 @@ def _dispatch_metadata(ctx: CompletionDispatchContext) -> Mapping[str, object] |
 
 def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
     return ctx.client
+
+
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
 
 
 def _dispatch_client_azure(
@@ -3493,6 +3496,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params: Final = ctx.optional_params
+    timeout: Final = ctx.timeout
 
     maritalk_key: Final = api_key or litellm.maritalk_key or get_secret("MARITALK_API_KEY") or litellm.api_key
 
@@ -3510,6 +3514,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
         encoding=_get_encoding(),
         api_key=maritalk_key,
         logging_obj=logging,
+        timeout=timeout,
         custom_llm_provider="maritalk",
         custom_prompt_dict=custom_prompt_dict,
     )
@@ -6173,19 +6178,9 @@ def completion(
             model=model,
         )
 
-        merged_headers: Final[dict[str, object]] = override_headers(  # mutable-ok: dispatch context takes a dict
-            headers,
-            ProviderSpecificHeaderUtils.get_provider_specific_headers(
-                provider_specific_header=provider_specific_header,
-                custom_llm_provider=custom_llm_provider,
-                model=model,
-                configured_headers=headers,
-                base_model=profile_gate_base_model(
-                    {"base_model": base_model if isinstance(base_model, str) else None}, deployment_model_info
-                ),
-            ),
+        headers = ProviderSpecificHeaderUtils.with_provider_specific_headers(  # rebind-ok: legacy request headers
+            headers, provider_specific_header, custom_llm_provider, model, base_model, deployment_model_info
         )
-        headers = merged_headers  # rebind-ok: headers is this function's legacy mutable request headers
 
         if model_response is not None and hasattr(model_response, HIDDEN_PARAMS_ATTR):
             model_response_hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
@@ -6362,7 +6357,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 

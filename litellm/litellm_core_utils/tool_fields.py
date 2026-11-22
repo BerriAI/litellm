@@ -25,11 +25,9 @@ from litellm.types.utils import (
     StreamingChoices,
 )
 
-# OpenAI has a 64-character limit for function/tool names
-# Anthropic does not have this limit, so we need to truncate long names
 OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
 TOOL_NAME_HASH_LENGTH: Final = 8
-TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
+TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1
 
 
 BRIDGED_TOOL_NAMES_KWARG: Final = "litellm_bridged_tool_names"
@@ -107,8 +105,8 @@ class SentToolNames:
     self_named_namespace_members: Container[str]
 
 
-_RenamableResponse: Final = TypeVar("_RenamableResponse", ModelResponse, ModelResponseStream)
-_RenamableToolCall: Final = TypeVar(
+_RenamableResponse = TypeVar("_RenamableResponse", ModelResponse, ModelResponseStream)
+_RenamableToolCall = TypeVar(
     "_RenamableToolCall",
     ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall,
     ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall,
@@ -200,7 +198,6 @@ def truncate_tool_name(name: str) -> str:
     if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
         return name
 
-    # Create deterministic hash from full name to avoid collisions
     name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
     return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
 
@@ -318,7 +315,7 @@ def resolve_deployment_tool_fields(
     return resolve_tool_fields(kwargs, lambda: (drop_policy(kwargs),))
 
 
-_ToolT: Final = TypeVar("_ToolT")
+_ToolT = TypeVar("_ToolT")
 
 HOSTED_MCP_DROP_WARNING: Final = (
     "Dropping the hosted MCP tool(s) %s for model=%s on %s (drop_params=True) because this route cannot run a "
@@ -433,7 +430,7 @@ def tools_without_mcp_servers(
 
 
 _TOOL_SELECTION_PARAMS: Final = frozenset({"tools", "tool_choice", "parallel_tool_calls"})
-_ParamsT: Final = TypeVar("_ParamsT", bound=dict[str, object])
+_ParamsT = TypeVar("_ParamsT", bound=dict[str, object])
 
 
 def tool_params_without_hosted_mcp(
