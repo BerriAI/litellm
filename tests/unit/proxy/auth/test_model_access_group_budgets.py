@@ -34,17 +34,23 @@ from litellm.proxy.common_utils.reset_budget_job import _model_access_group_coun
 from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     UserApiKeyCache,
-    model_access_group_registry_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import model_access_group_counter
+from tests.unit.proxy.rust_auth_stores import GroupBudget, RustAuthStores, install_rust_auth_stores
 
 TEAM_ID = "team-1"
 USER_ID = "user-1"
 ORG_ID = "org-1"
 BUDGETED_GROUPS = ("tier-a", "tier-b", "claude-tier")
 MODEL_ACCESS_GROUP_COUNTER_KEY = model_access_group_counter("tier-a")
+
+
+@pytest.fixture
+def rust_auth_stores(monkeypatch: pytest.MonkeyPatch) -> RustAuthStores:
+    return install_rust_auth_stores(monkeypatch)
+
 
 MODEL_LIST = [
     {
@@ -73,10 +79,10 @@ async def _cache(
     org_models: tuple[str, ...] = (),
 ) -> UserApiKeyCache:
     cache = UserApiKeyCache()
-    await cache.async_set_cache(key=model_access_group_registry_cache_key(), value=budgeted_groups)
+    await cache.async_set_cache(key=AuthObject.model_access_group_registry(), value=budgeted_groups)
     if member_allowed_models:
         await cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),
+            key=AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID),
             value=LiteLLM_TeamMembership(
                 user_id=USER_ID,
                 team_id=TEAM_ID,
@@ -87,12 +93,12 @@ async def _cache(
         )
     else:
         await cache.async_set_cache(
-            key=team_membership_reservation_cache_key(user_id=USER_ID, team_id=TEAM_ID),
+            key=AuthObject.team_membership_reservation(user_id=USER_ID, team_id=TEAM_ID),
             value=NO_TEAM_MEMBERSHIP_SENTINEL,
         )
     if org_models:
         await cache.async_set_cache(
-            key=f"org_id:{ORG_ID}",
+            key=AuthObject.org(ORG_ID),
             value=LiteLLM_OrganizationTable(
                 organization_id=ORG_ID,
                 budget_id="org-budget",
@@ -302,27 +308,9 @@ async def test_stamp_leaves_the_auth_object_untouched_when_nothing_matched():
     assert valid_token.matched_model_access_groups is None
 
 
-class _MagBudgetRow:
-    """One ``LiteLLM_ModelAccessGroupBudgetTable`` row as prisma hands it back."""
-
-    def __init__(self, access_group_name: str, spend: float = 0.0, max_budget: float | None = None) -> None:
-        self.access_group_name = access_group_name
-        self.spend = spend
-        self.litellm_budget_table = None if max_budget is None else SimpleNamespace(max_budget=max_budget, budget_limits=None)
-
-
-class _RecordingPrismaClient:
-    """Serves budget rows and records which groups actually reached the database."""
-
-    def __init__(self, *rows: _MagBudgetRow) -> None:
-        self.rows = {row.access_group_name: row for row in rows}
-        self.batches: list[list[str]] = []
-        self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._find_many))
-
-    async def _find_many(self, **kwargs):
-        requested = list(kwargs["where"]["access_group_name"]["in"])
-        self.batches.append(requested)
-        return [self.rows[group] for group in requested if group in self.rows]
+def _budget_row(name: str, spend: float = 0.0, max_budget: float | None = None) -> tuple[str, GroupBudget]:
+    """One ``LiteLLM_ModelAccessGroupBudgetTable`` row as the Rust model access group store hands it back."""
+    return name, GroupBudget(spend=spend, max_budget=max_budget)
 
 
 def _spend_reader(spend_by_counter_key: dict[str, float]):
@@ -337,12 +325,13 @@ def _spend_reader(spend_by_counter_key: dict[str, float]):
 
 
 async def _enforce(
+    stores: RustAuthStores,
     matched: tuple[str, ...],
-    *rows: _MagBudgetRow,
+    *rows: tuple[str, GroupBudget],
     spend_by_counter_key: dict[str, float] | None = None,
-    prisma_client: object | None = None,
     cache: UserApiKeyCache | None = None,
 ) -> list[str]:
+    stores.model_access_group.groups.update(rows)
     read, seen = _spend_reader(spend_by_counter_key or {})
     # The check takes its client and cache as arguments, injected just below. get_current_spend is the
     # one collaborator it reaches by a lazy `from litellm.proxy.proxy_server import`, with no parameter.
@@ -351,23 +340,24 @@ async def _enforce(
     ):
         await _model_access_group_max_budget_check(
             matched_model_access_groups=matched,
-            prisma_client=prisma_client if prisma_client is not None else _RecordingPrismaClient(*rows),
+            prisma_client=_ExplodingPrismaClient(),
             user_api_key_cache=cache if cache is not None else UserApiKeyCache(),
         )
     return seen
 
 
 @pytest.mark.asyncio
-async def test_group_under_its_max_budget_passes():
+async def test_group_under_its_max_budget_passes(rust_auth_stores: RustAuthStores):
     assert await _enforce(
+        rust_auth_stores,
         ("tier-a",),
-        _MagBudgetRow("tier-a", spend=4.0, max_budget=10.0),
+        _budget_row("tier-a", spend=4.0, max_budget=10.0),
         spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 4.0},
     ) == [MODEL_ACCESS_GROUP_COUNTER_KEY]
 
 
 @pytest.mark.asyncio
-async def test_group_exactly_at_its_max_budget_blocks_the_request():
+async def test_group_exactly_at_its_max_budget_blocks_the_request(rust_auth_stores: RustAuthStores):
     """A pool whose spend has reached the ceiling has nothing left, so the next request is refused.
 
     This is where the check departs from the tag one it otherwise mirrors, and it matches where
@@ -375,8 +365,9 @@ async def test_group_exactly_at_its_max_budget_blocks_the_request():
     """
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
         await _enforce(
+            rust_auth_stores,
             ("tier-a",),
-            _MagBudgetRow("tier-a", max_budget=10.0),
+            _budget_row("tier-a", max_budget=10.0),
             spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 10.0},
         )
 
@@ -385,18 +376,19 @@ async def test_group_exactly_at_its_max_budget_blocks_the_request():
 
 
 @pytest.mark.asyncio
-async def test_group_just_under_its_max_budget_passes():
+async def test_group_just_under_its_max_budget_passes(rust_auth_stores: RustAuthStores):
     """Asserting the counter was read is what keeps this honest: a group that got skipped entirely,
     because its row never arrived or carried no budget, would also not raise."""
     assert await _enforce(
+        rust_auth_stores,
         ("tier-a",),
-        _MagBudgetRow("tier-a", max_budget=10.0),
+        _budget_row("tier-a", max_budget=10.0),
         spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 9.99},
     ) == [MODEL_ACCESS_GROUP_COUNTER_KEY]
 
 
 @pytest.mark.asyncio
-async def test_a_non_positive_budget_means_no_budget():
+async def test_a_non_positive_budget_means_no_budget(rust_auth_stores: RustAuthStores):
     """The reservation path treats max_budget <= 0 as unbudgeted, so the read-time check must agree.
 
     Without this the exclusive ceiling would turn a zero into a total freeze on one path and a
@@ -404,8 +396,9 @@ async def test_a_non_positive_budget_means_no_budget():
     """
     assert (
         await _enforce(
+            rust_auth_stores,
             ("tier-a",),
-            _MagBudgetRow("tier-a", max_budget=0.0),
+            _budget_row("tier-a", max_budget=0.0),
             spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 5.0},
         )
         == []
@@ -413,11 +406,12 @@ async def test_a_non_positive_budget_means_no_budget():
 
 
 @pytest.mark.asyncio
-async def test_group_over_its_max_budget_blocks_the_request_and_names_the_group():
+async def test_group_over_its_max_budget_blocks_the_request_and_names_the_group(rust_auth_stores: RustAuthStores):
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
         await _enforce(
+            rust_auth_stores,
             ("tier-a",),
-            _MagBudgetRow("tier-a", max_budget=10.0),
+            _budget_row("tier-a", max_budget=10.0),
             spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 10.5},
         )
 
@@ -429,12 +423,13 @@ async def test_group_over_its_max_budget_blocks_the_request_and_names_the_group(
 
 
 @pytest.mark.asyncio
-async def test_group_with_a_row_but_no_budget_never_blocks():
+async def test_group_with_a_row_but_no_budget_never_blocks(rust_auth_stores: RustAuthStores):
     """An admin can register a group without a ceiling; that must not become an implicit zero budget."""
     assert (
         await _enforce(
+            rust_auth_stores,
             ("tier-a",),
-            _MagBudgetRow("tier-a", spend=9999.0),
+            _budget_row("tier-a", spend=9999.0),
             spend_by_counter_key={MODEL_ACCESS_GROUP_COUNTER_KEY: 9999.0},
         )
         == []
@@ -442,21 +437,22 @@ async def test_group_with_a_row_but_no_budget_never_blocks():
 
 
 @pytest.mark.asyncio
-async def test_a_cold_counter_falls_back_to_the_spend_recorded_on_the_row():
+async def test_a_cold_counter_falls_back_to_the_spend_recorded_on_the_row(rust_auth_stores: RustAuthStores):
     """After a counter expires the DB row is the only record of the spend, so it has to be read."""
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await _enforce(("tier-a",), _MagBudgetRow("tier-a", spend=12.0, max_budget=10.0))
+        await _enforce(rust_auth_stores, ("tier-a",), _budget_row("tier-a", spend=12.0, max_budget=10.0))
 
     assert exc_info.value.current_cost == 12.0
 
 
 @pytest.mark.asyncio
-async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fine():
+async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fine(rust_auth_stores: RustAuthStores):
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
         await _enforce(
+            rust_auth_stores,
             ("tier-a", "tier-b"),
-            _MagBudgetRow("tier-a", max_budget=10.0),
-            _MagBudgetRow("tier-b", max_budget=1.0),
+            _budget_row("tier-a", max_budget=10.0),
+            _budget_row("tier-b", max_budget=1.0),
             spend_by_counter_key={
                 MODEL_ACCESS_GROUP_COUNTER_KEY: 1.0,
                 model_access_group_counter("tier-b"): 5.0,
@@ -467,49 +463,45 @@ async def test_an_over_budget_group_blocks_even_when_another_matched_group_is_fi
 
 
 @pytest.mark.asyncio
-async def test_request_that_matched_no_group_touches_neither_database_nor_counters():
-    assert await _enforce((), prisma_client=_ExplodingPrismaClient()) == []
+async def test_request_that_matched_no_group_touches_neither_database_nor_counters(rust_auth_stores: RustAuthStores):
+    assert await _enforce(rust_auth_stores, ()) == []
+    assert rust_auth_stores.model_access_group.budget_lookups == []
 
 
 @pytest.mark.asyncio
-async def test_budget_check_reads_the_counter_key_the_reset_job_clears():
+async def test_budget_check_reads_the_counter_key_the_reset_job_clears(rust_auth_stores: RustAuthStores):
     """Reads and resets must agree, or a rollover clears a counter nobody reads."""
     reset_job_key = _model_access_group_counter_key(SimpleNamespace(access_group_name="tier-a"))
 
-    assert await _enforce(("tier-a",), _MagBudgetRow("tier-a", max_budget=10.0)) == [reset_job_key]
+    assert await _enforce(rust_auth_stores, ("tier-a",), _budget_row("tier-a", max_budget=10.0)) == [reset_job_key]
 
 
 @pytest.mark.asyncio
-async def test_a_second_request_serves_the_budget_row_from_cache():
+async def test_a_second_request_serves_the_budget_row_from_cache(rust_auth_stores: RustAuthStores):
     cache = UserApiKeyCache()
-    prisma_client = _RecordingPrismaClient(_MagBudgetRow("tier-a", max_budget=10.0))
 
-    await _enforce(("tier-a",), prisma_client=prisma_client, cache=cache)
-    await _enforce(("tier-a",), prisma_client=prisma_client, cache=cache)
+    await _enforce(rust_auth_stores, ("tier-a",), _budget_row("tier-a", max_budget=10.0), cache=cache)
+    await _enforce(rust_auth_stores, ("tier-a",), cache=cache)
 
-    assert prisma_client.batches == [["tier-a"]]
+    assert rust_auth_stores.model_access_group.budget_lookups == [("tier-a",)]
 
 
 @pytest.mark.asyncio
-async def test_a_database_error_does_not_block_the_request():
-    class _FailingPrismaClient:
-        def __init__(self) -> None:
-            self.db = SimpleNamespace(litellm_modelaccessgroupbudgettable=SimpleNamespace(find_many=self._boom))
+async def test_a_database_error_does_not_block_the_request(rust_auth_stores: RustAuthStores):
+    rust_auth_stores.model_access_group.error = RuntimeError("database unavailable")
 
-        async def _boom(self, **kwargs):
-            raise RuntimeError("database unavailable")
-
-    assert await _enforce(("tier-a",), prisma_client=_FailingPrismaClient()) == []
+    assert await _enforce(rust_auth_stores, ("tier-a",), _budget_row("tier-a", max_budget=1.0)) == []
+    assert rust_auth_stores.model_access_group.budget_lookups == [("tier-a",)]
 
 
-async def _common_checks_with_over_budget_group(*, skip_budget_checks: bool) -> bool:
+async def _common_checks_with_over_budget_group(stores: RustAuthStores, *, skip_budget_checks: bool) -> bool:
     cache = await _cache()
-    prisma_client = _RecordingPrismaClient(_MagBudgetRow("tier-a", max_budget=1.0))
+    stores.model_access_group.groups.update([_budget_row("tier-a", max_budget=1.0)])
     read, _ = _spend_reader({MODEL_ACCESS_GROUP_COUNTER_KEY: 99.0})
 
     with (
         patch(  # test-quality-ok: common_checks lazily imports prisma_client from proxy_server
-            "litellm.proxy.proxy_server.prisma_client", prisma_client
+            "litellm.proxy.proxy_server.prisma_client", _ExplodingPrismaClient()
         ),
         patch(  # test-quality-ok: common_checks lazily imports user_api_key_cache from proxy_server
             "litellm.proxy.proxy_server.user_api_key_cache", cache
@@ -537,14 +529,14 @@ async def _common_checks_with_over_budget_group(*, skip_budget_checks: bool) -> 
 
 
 @pytest.mark.asyncio
-async def test_common_checks_blocks_a_request_whose_group_is_over_budget():
+async def test_common_checks_blocks_a_request_whose_group_is_over_budget(rust_auth_stores: RustAuthStores):
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await _common_checks_with_over_budget_group(skip_budget_checks=False)
+        await _common_checks_with_over_budget_group(rust_auth_stores, skip_budget_checks=False)
 
     assert exc_info.value.entity_id == "tier-a"
 
 
 @pytest.mark.asyncio
-async def test_free_model_routes_skip_the_model_access_group_budget_check():
+async def test_free_model_routes_skip_the_model_access_group_budget_check(rust_auth_stores: RustAuthStores):
     """skip_budget_checks is how free models stay free; it has to cover this budget too."""
-    assert await _common_checks_with_over_budget_group(skip_budget_checks=True) is True
+    assert await _common_checks_with_over_budget_group(rust_auth_stores, skip_budget_checks=True) is True

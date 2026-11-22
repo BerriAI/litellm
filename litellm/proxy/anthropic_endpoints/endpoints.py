@@ -70,7 +70,7 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
     return anthropic_handler_error_json_response(exc, request)
 
 
-_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "system")
+_TOKEN_COUNT_FIELDS: Final = ("model", "messages", "tools", "tool_choice", "system")
 
 
 def _token_count_request(fields: Mapping[str, object]) -> TokenCountRequest | ProxyException:
@@ -302,7 +302,15 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (
+    "additional_drop_params",
+    "drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
 
 
 class _CountTokensBodyOptions(TypedDict):

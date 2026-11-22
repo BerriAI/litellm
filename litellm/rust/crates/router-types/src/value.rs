@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::Deserialize;
 
 /// A typed value, or the text a config spells in its place: an `os.environ/NAME` reference
@@ -7,4 +9,13 @@ use serde::Deserialize;
 pub enum Spelled<T> {
     Value(T),
     Text(String),
+}
+
+impl<T: fmt::Display> fmt::Display for Spelled<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Value(value) => value.fmt(formatter),
+            Self::Text(text) => formatter.write_str(text),
+        }
+    }
 }

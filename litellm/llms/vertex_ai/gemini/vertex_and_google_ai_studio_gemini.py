@@ -14,7 +14,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -28,13 +29,21 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_FLASH_LITE,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
+    PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    map_finish_reason,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+from litellm.litellm_core_utils.hidden_params import set_hidden_param
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
+from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
@@ -78,6 +87,7 @@ from litellm.types.llms.vertex_ai import (
     GenerateContentResponseBody,
     HttpxPartType,
     LogprobsResult,
+    PromptFeedback,
     RequestBody,
     ToolConfig,
     Tools,
@@ -98,6 +108,7 @@ from litellm.utils import (
     ModelResponse,
     is_base64_encoded,
     is_explicitly_disabled_factory,
+    supports_factory,
     supports_reasoning,
 )
 
@@ -106,6 +117,8 @@ from ..common_utils import (
     VertexAIError,
     build_json_schema,
     build_vertex_schema,
+    has_bare_root_union,
+    parameters_json_schema_for,
     supports_response_json_schema,
     with_integer_enums_that_fit,
 )
@@ -249,6 +262,93 @@ def _warn_gemini_sampling_params_deprecated(model: str) -> None:
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
     recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
     return recorded if isinstance(recorded, int) and recorded > 0 else 0
+
+
+def _prompt_block_fields(feedback: PromptFeedback) -> Mapping[str, str]:
+    return MappingProxyType({"block_reason": feedback["blockReason"]})
+
+
+def _names_its_finish(candidate: Candidates) -> bool:
+    return (candidate.get("finishReason") or "FINISH_REASON_UNSPECIFIED") != "FINISH_REASON_UNSPECIFIED"
+
+
+def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return content.get("parts", ()) if content is not None else ()
+
+
+def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
+    inline_data: Final = part.get("inlineData", {})
+    mime_type: Final = inline_data.get("mimeType", "")
+    if not mime_type.startswith("image/"):
+        return None
+    return ImageURLListItem(
+        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
+        index=0,
+        type="image_url",
+    )
+
+
+def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return tuple(image for image in map(_inline_image, parts) if image is not None)
+
+
+def _final_images(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is not True))
+
+
+def _last_thought_image(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
+    return _images_in(tuple(part for part in parts if part.get("thought") is True))[-1:]
+
+
+def _blocks_its_output(candidate: Candidates) -> bool:
+    reason: Final = candidate.get("finishReason")
+    return reason is not None and map_finish_reason(reason) == "content_filter"
+
+
+def _fallback_thought_image(candidate: Candidates) -> tuple[ImageURLListItem, ...]:
+    return () if _blocks_its_output(candidate) else _last_thought_image(_content_parts(candidate))
+
+
+def _with_delta_images(choice: "StreamingChoices", images: tuple[ImageURLListItem, ...]) -> "StreamingChoices":
+    return choice.model_copy(update={"delta": choice.delta.model_copy(update={"images": list(images)})})
+
+
+def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
+    reason: Final = candidate.get("finishReason")
+    return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
+
+
+_MALFORMED_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
+    {"MALFORMED_FUNCTION_CALL", "MALFORMED_RESPONSE"}
+)
+_OUTPUT_FIELDS: Final = ("content", "tool_calls", "function_call", "images", "audio")
+
+
+_CHOICE_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _native_finish_reason(choice: object) -> object:
+    fields: Final[object] = getattr(choice, "provider_specific_fields", None)
+    return _CHOICE_FIELDS.validate_python(fields).get("native_finish_reason") if isinstance(fields, dict) else None
+
+
+def _is_malformed_without_output(choice: object) -> bool:
+    return (
+        isinstance(choice, litellm.Choices)
+        and _native_finish_reason(choice) in _MALFORMED_FINISH_REASONS
+        and not any(getattr(choice.message, field, None) for field in _OUTPUT_FIELDS)
+    )
+
+
+def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+    if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
+        return None
+    return VertexAIError(
+        status_code=500,
+        message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output",
+        headers=headers,
+    )
 
 
 def _served_model_name(model_version: object) -> str | None:
@@ -553,6 +653,48 @@ def mapped_gemini_speech_config(
     }
 
 
+class _CallerFunction(TypedDict, total=False):
+    parameters: ReadOnly[Mapping[str, object]]
+
+
+class _CallerTool(_CallerFunction, total=False):
+    function: ReadOnly[_CallerFunction]
+
+
+class _ToolChoiceParam(TypedDict, total=False):
+    tool_choice: ReadOnly[object]
+
+
+_CALLER_TOOL: Final = TypeAdapter(_CallerTool)
+_CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
+_TOOL_CHOICE_PARAM: Final = TypeAdapter(_ToolChoiceParam)
+
+
+def _caller_parameters(tool: object) -> Mapping[str, object] | None:
+    try:
+        caller_tool: Final = _CALLER_TOOL.validate_python(tool)
+    except ValidationError:
+        return None
+    return caller_tool.get("function", caller_tool).get("parameters")
+
+
+def _parameters_json_schema(tool: object, forced_function_names: frozenset[str]) -> Mapping[str, JsonValue] | None:
+    parameters: Final = _caller_parameters(tool)
+    json_schema: Final = None if parameters is None else parameters_json_schema_for(parameters)
+    if json_schema is None or declared_function_name(tool) not in forced_function_names:
+        return json_schema
+    return None if has_bare_root_union(json_schema) else json_schema
+
+
+def _parameters_json_schemas(
+    tools: object, allow_parameters_json_schema: bool, forced_function_names: frozenset[str]
+) -> tuple[Mapping[str, JsonValue] | None, ...]:
+    return tuple(
+        _parameters_json_schema(tool, forced_function_names) if allow_parameters_json_schema else None
+        for tool in _CALLER_TOOLS.validate_python(tools)
+    )
+
+
 def _as_chat_tool(member: JsonValue) -> JsonValue:
     if not isinstance(member, dict) or "function" in member or "name" not in member:
         return member
@@ -685,6 +827,16 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
     return tuple(qualified) or (name,)
 
 
+def _function_names_forced_by(tool_choice: object, tools: JsonValue) -> frozenset[str]:
+    match tool_choice:
+        case "required":
+            return frozenset(chain.from_iterable(_names_each_tool_declares(_listed(tools))))
+        case {"function": {"name": str() as name}}:
+            return frozenset(_forced_function_names(name, tools))
+        case _:
+            return frozenset()
+
+
 class VertexAIBaseConfig:
     def get_mapped_special_auth_params(self) -> dict:
         """
@@ -764,6 +916,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     """
 
     _route: ClassVar[str] = "vertex_ai"
+    _removes_undeclared_thinking_levels: ClassVar[bool] = False
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1226,7 +1379,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict],
         optional_params: dict,
         send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
+        tool_choice: object = None,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1235,6 +1390,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             value: List of tool definitions
             optional_params: Request-scoped parameters to store retrieval config
             send_integer_enums: Whether to send integer enums with string values
+            allow_parameters_json_schema: Whether a tool whose parameters root Vertex cannot take as `parameters`
+                goes as `parametersJsonSchema`
 
         Returns:
             List of mapped tools in Vertex AI format
@@ -1254,18 +1411,25 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
         schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
+        parameters_json_schemas: Final = _parameters_json_schemas(
+            _with_namespace_members_inlined(schema_value, outside_declarations),
+            allow_parameters_json_schema,
+            _function_names_forced_by(tool_choice, [*_listed(schema_value), *_listed(outside_declarations)]),
+        )
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
         inlined_tools: Final = _with_namespace_members_inlined(schema_value, outside_declarations)
-        for tool in cast(list[dict], inlined_tools):  # cast-ok: a deep copy keeps the caller's tool shape
+        for index, parameters_json_schema in enumerate(parameters_json_schemas):
+            tool = cast(list[dict], inlined_tools)[index]  # cast-ok: a deep copy keeps the caller's tool shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
 
                 if (
-                    "parameters" in _openai_function_object
+                    parameters_json_schema is None
+                    and "parameters" in _openai_function_object
                     and _openai_function_object["parameters"] is not None
                     and isinstance(_openai_function_object["parameters"], dict)
                 ):  # OPENAI accepts JSON Schema, Google accepts OpenAPI schema.
@@ -1328,8 +1492,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     # Empty config - Gemini will use defaults
                     computerUse = {}
             elif openai_function_object is not None:
-                gtool_func_declaration = FunctionDeclaration(
-                    name=openai_function_object["name"],
+                gtool_func_declaration = (
+                    FunctionDeclaration(name=openai_function_object["name"])
+                    if parameters_json_schema is None
+                    else FunctionDeclaration(
+                        name=openai_function_object["name"], parametersJsonSchema=parameters_json_schema
+                    )
                 )
                 _description = openai_function_object.get("description", None)
                 _parameters = openai_function_object.get("parameters", None)
@@ -1339,7 +1507,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     }
                 if _description is not None:
                     gtool_func_declaration["description"] = _description
-                if _parameters is not None:
+                if _parameters is not None and parameters_json_schema is None:
                     gtool_func_declaration["parameters"] = _parameters
                 gtool_func_declarations.append(gtool_func_declaration)
             else:
@@ -1415,8 +1583,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         value: list[dict[str, object]],  # mutable-ok: mirrors override contract
         optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         send_integer_enums: bool = False,
+        allow_parameters_json_schema: bool = True,
     ) -> list[Tools]:  # mutable-ok: mirrors override contract
-        return self._map_function(value, optional_params, send_integer_enums)
+        return self._map_function(value, optional_params, send_integer_enums, allow_parameters_json_schema)
 
     def _map_response_schema(self, value: dict, send_integer_enums: bool = False) -> Mapping[str, object]:
         old_schema = deepcopy(value)
@@ -1560,10 +1729,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     @staticmethod
     def _supports_minimal_thinking_level(model: str) -> bool:
-        lowered: Final = model.lower()
-        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in lowered
-        return is_gemini3_or_newer_flash and not is_explicitly_disabled_factory(
-            model=model, custom_llm_provider=None, key="supports_minimal_reasoning_effort"
+        providers: Final = ("gemini", "vertex_ai")
+        key: Final = "supports_minimal_reasoning_effort"
+        declared_by_model_map: Final = any(
+            supports_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+        )
+        is_gemini3_or_newer_flash: Final = VertexGeminiConfig._is_gemini_3_or_newer(model) and "flash" in model.lower()
+        return (declared_by_model_map or is_gemini3_or_newer_flash) and not any(
+            is_explicitly_disabled_factory(model=model, custom_llm_provider=provider, key=key) for provider in providers
+        )
+
+    @staticmethod
+    def _supports_xhigh_thinking_level(model: str) -> bool:
+        return any(
+            supports_factory(model=model, custom_llm_provider=provider, key="supports_xhigh_reasoning_effort")
+            for provider in ("gemini", "vertex_ai")
         )
 
     @staticmethod
@@ -1594,6 +1774,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return {"thinkingLevel": "medium", "includeThoughts": sends_thoughts}
         elif reasoning_effort == "high":
             return {"thinkingLevel": "high", "includeThoughts": sends_thoughts}
+        elif reasoning_effort == "xhigh" and model and VertexGeminiConfig._supports_xhigh_thinking_level(model):
+            return {"thinkingLevel": "xhigh", "includeThoughts": sends_thoughts}
         elif reasoning_effort in ("disable", "none"):
             return {
                 "thinkingLevel": "minimal" if supports_minimal else "low",
@@ -1680,7 +1862,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         )
                     # Follow provider defaults unless explicitly opted into legacy behavior.
                     if litellm.enable_gemini_default_thinking_level_low is True:
-                        params["thinkingLevel"] = (
+                        params["thinkingLevel"] = (  # pyright: ignore[reportTypedDictNotRequiredAccess]  # built in place
                             "minimal" if VertexGeminiConfig._supports_minimal_thinking_level(model) else "low"
                         )
             else:
@@ -1829,6 +2011,37 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    def _drops_logprobs(self, model: str, drop_params: bool, allowed_openai_params: Sequence[str]) -> bool:
+        if not drops_unsupported_params(drop_params) or {"logprobs", "top_logprobs"} & set(allowed_openai_params):
+            return False
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        return rows.get(f"{self._route}/{model.split('/')[-1]}", {}).get("supports_logprobs") is False
+
+    def _without_undeclared_thinking_level(
+        self,
+        thinking_config: GeminiThinkingConfig,
+        *,
+        model: str,
+        drop_params: bool,
+        allowed_openai_params: Sequence[str],
+    ) -> GeminiThinkingConfig:
+        level: Final = thinking_config.get("thinkingLevel")
+        if not self._removes_undeclared_thinking_levels or level is None:
+            return thinking_config
+        if not drops_unsupported_params(drop_params) or "reasoning_effort" in allowed_openai_params:
+            return thinking_config
+        declared: Final = declared_reasoning_efforts_for_model(model.split("/")[-1], self._route)
+        if declared is None or level in declared:
+            return thinking_config
+        warn_dropped_reasoning(
+            "reasoning_effort",
+            level,
+            model,
+            "Google AI Studio does not accept this thinking level for it, so Google's default applies.",
+            drop_params_gated=True,
+        )
+        return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -1836,14 +2049,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
         allow_integer_enums: bool = True,
+        allow_parameters_json_schema: bool = True,
+        *,
+        allowed_openai_params: Sequence[str] = (),
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
         supports_sampling_params: Final = self.supports_sampling_params(model)
+        drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
+                continue
+            if param in ("logprobs", "top_logprobs") and drops_logprobs:
                 continue
             if param == "temperature":
                 if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1898,7 +2117,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         self._map_function,
                         value,
                         optional_params,
+                        allow_parameters_json_schema=allow_parameters_json_schema,
                         outside_declarations=request_params.get("functions" if param == "tools" else "tools"),
+                        tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
                     ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                 )
@@ -1938,8 +2159,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                         param_name="reasoning_effort",
                         param_description="thinking_budget",
                     )
-                    optional_params["thinkingConfig"] = VertexGeminiConfig._map_reasoning_effort(
-                        effort=effort_value, model=model, reasoning_effort=value
+                    optional_params["thinkingConfig"] = self._without_undeclared_thinking_level(
+                        VertexGeminiConfig._map_reasoning_effort(
+                            effort=effort_value, model=model, reasoning_effort=value
+                        ),
+                        model=model,
+                        drop_params=drop_params,
+                        allowed_openai_params=allowed_openai_params,
                     )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
@@ -2146,7 +2372,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         """
         thinking_blocks: Final[list[ChatCompletionThinkingBlock]] = []
         for part in parts:
-            if part.get("thought") is True:
+            if part.get("thought") is True and "inlineData" not in part:
                 thinking_text = part.get("text", "")
                 block: ChatCompletionThinkingBlock = {
                     "type": "thinking",
@@ -2236,26 +2462,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             invocations.append(resp_entry)
 
         return invocations if invocations else None
-
-    def _extract_image_response_from_parts(self, parts: list[HttpxPartType]) -> list[ImageURLListItem] | None:
-        """Extract image response from parts if present"""
-        images: Final[list[ImageURLListItem]] = []
-        for part in parts:
-            if "inlineData" in part:
-                inline_data = part.get("inlineData", {})
-                mime_type = inline_data.get("mimeType", "")
-                data = inline_data.get("data", "")
-                if mime_type.startswith("image/"):
-                    # Convert base64 data to data URI format
-                    data_uri = f"data:{mime_type};base64,{data}"
-                    images.append(
-                        ImageURLListItem(
-                            image_url=ImageURLObject(url=data_uri, detail="auto"),
-                            index=0,
-                            type="image_url",
-                        )
-                    )
-        return images
 
     def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
@@ -2376,14 +2582,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         return ChoiceLogprobs(content=logprobs_list)
 
-    def _handle_blocked_response(
+    def _content_filter_response(
         self,
         model_response: ModelResponse,
         completion_response: GenerateContentResponseBody,
+        provider_specific_fields: Mapping[str, str],
     ) -> ModelResponse:
-        # If set, the prompt was blocked and no candidates are returned. Rephrase your prompt
-        model_response.choices[0].finish_reason = "content_filter"
-
         chat_completion_message: Final[ChatCompletionResponseMessage] = {
             "role": "assistant",
             "content": None,
@@ -2395,50 +2599,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             message=chat_completion_message,
             logprobs=None,
             enhancements=None,
+            provider_specific_fields=dict(provider_specific_fields),
         )
 
         model_response.choices = [choice]
 
-        ## GET USAGE ##
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
-
-        setattr(model_response, "usage", usage)
-
-        return model_response
-
-    def _handle_content_policy_violation(
-        self,
-        model_response: ModelResponse,
-        completion_response: GenerateContentResponseBody,
-    ) -> ModelResponse:
-        ## CONTENT POLICY VIOLATION ERROR
-        model_response.choices[0].finish_reason = "content_filter"
-
-        _chat_completion_message: Final = {
-            "role": "assistant",
-            "content": None,
-        }
-
-        choice: Final = litellm.Choices(
-            finish_reason="content_filter",
-            index=0,
-            message=_chat_completion_message,
-            logprobs=None,
-            enhancements=None,
-        )
-
-        model_response.choices = [choice]
-
-        ## GET USAGE ##
-        usage: Final = Usage(
-            prompt_tokens=completion_response["usageMetadata"].get("promptTokenCount", 0),
-            completion_tokens=completion_response["usageMetadata"].get("candidatesTokenCount", 0),
-            total_tokens=completion_response["usageMetadata"].get("totalTokenCount", 0),
-        )
+        usage: Final = VertexGeminiConfig._calculate_usage(completion_response=completion_response)
 
         setattr(model_response, "usage", usage)
 
@@ -2730,7 +2896,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ModelResponseStream with content_filter finish_reason if blocked, None otherwise.
 
         Note:
-            This is consistent with non-streaming _handle_blocked_response() behavior.
+            This is consistent with non-streaming _content_filter_response() behavior.
             Candidate-level content filtering (SAFETY, RECITATION, etc.) is handled
             separately via _process_candidates() → _check_finish_reason().
         """
@@ -2745,13 +2911,14 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 prompt_feedback.get("blockReasonMessage"),
             )
 
-            # Create a content_filter response (consistent with non-streaming _handle_blocked_response)
+            # Create a content_filter response (consistent with non-streaming _content_filter_response)
             choice: Final = StreamingChoices(
                 finish_reason="content_filter",
                 index=0,
                 delta=Delta(content=None, role="assistant"),
                 logprobs=None,
                 enhancements=None,
+                provider_specific_fields=dict(_prompt_block_fields(prompt_feedback)),
             )
 
             model_response: Final = ModelResponseStream(choices=[choice], id=response_id, model=model)
@@ -2814,11 +2981,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         annotations: Final = chat_completion_message.get("annotations")
         provider_specific_fields: Final = chat_completion_message.get("provider_specific_fields")
-        # create a streaming choice object
+        finish_fields: Final = _candidate_finish_fields(candidate) if _names_its_finish(candidate) else None
+        native_finish_reason: Final = candidate.get("finishReason")
         choice: Final = StreamingChoices(
-            finish_reason=VertexGeminiConfig._check_finish_reason(
-                chat_completion_message, candidate.get("finishReason")
-            ),
+            finish_reason=VertexGeminiConfig._check_finish_reason(chat_completion_message, native_finish_reason)
+            if native_finish_reason
+            else None,
             index=candidate.get("index", idx),
             delta=Delta(
                 content=chat_completion_message.get("content"),
@@ -2832,6 +3000,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             ),
             logprobs=chat_completion_logprobs,
             enhancements=None,
+            **({"provider_specific_fields": dict(finish_fields)} if finish_fields is not None else {}),
         )
         return choice
 
@@ -3067,8 +3236,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
                     parts=candidate["content"]["parts"]
                 )
-                image_response = VertexGeminiConfig()._extract_image_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                image_response = list(
+                    _final_images(candidate["content"]["parts"])
+                    if isinstance(model_response, ModelResponseStream)
+                    else _final_images(candidate["content"]["parts"]) or _fallback_thought_image(candidate)
                 )
 
                 thinking_blocks = VertexGeminiConfig()._extract_thinking_blocks_from_parts(
@@ -3088,9 +3259,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 if audio_response is not None:
                     cast(dict[str, object], chat_completion_message)["audio"] = audio_response
                     chat_completion_message["content"] = None  # OpenAI spec
-                if image_response is not None:
-                    # Handle image response - combine with text content into structured format
-                    cast(dict[str, object], chat_completion_message)["images"] = image_response
+                cast(dict[str, object], chat_completion_message)["images"] = image_response
                 if content is not None:
                     chat_completion_message["content"] = content
 
@@ -3167,17 +3336,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 )
                 model_response.choices.append(choice)
             elif isinstance(model_response, ModelResponse):
-                native_finish_reason = candidate.get("finishReason")
                 choice = litellm.Choices(
                     finish_reason=VertexGeminiConfig._check_finish_reason(
-                        chat_completion_message, native_finish_reason
+                        chat_completion_message, candidate.get("finishReason")
                     ),
                     index=candidate.get("index", idx),
                     message=chat_completion_message,
                     logprobs=chat_completion_logprobs,
                     enhancements=None,
                     provider_specific_fields=(
-                        {"native_finish_reason": native_finish_reason} if native_finish_reason is not None else None
+                        dict(finish_fields)
+                        if (finish_fields := _candidate_finish_fields(candidate)) is not None
+                        else None
                     ),
                 )
                 model_response.choices.append(choice)
@@ -3263,18 +3433,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         ## CHECK IF RESPONSE FLAGGED
         if "promptFeedback" in completion_response and "blockReason" in completion_response["promptFeedback"]:
-            return self._handle_blocked_response(
+            return self._content_filter_response(
                 model_response=model_response,
                 completion_response=completion_response,
+                provider_specific_fields=_prompt_block_fields(completion_response["promptFeedback"]),
             )
 
         _candidates: Final = completion_response.get("candidates")
         if _candidates and len(_candidates) > 0:
             content_policy_violations: Final = VertexGeminiConfig().get_flagged_finish_reasons()
-            if "finishReason" in _candidates[0] and _candidates[0]["finishReason"] in content_policy_violations:
-                return self._handle_content_policy_violation(
+            flagged_fields: Final = _candidate_finish_fields(_candidates[0])
+            if flagged_fields is not None and flagged_fields["native_finish_reason"] in content_policy_violations:
+                return self._content_filter_response(
                     model_response=model_response,
                     completion_response=completion_response,
+                    provider_specific_fields=flagged_fields,
                 )
 
         model_response.choices = []
@@ -4123,10 +4296,36 @@ def _transform_long_decode_hops(
         raw_response=first_response,
     )
     merged_usage: Final = getattr(merged, "usage", None)
-    if not isinstance(merged_usage, Usage):
-        return merged
-    marked: Final = with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
-    return merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    marked: Final = (
+        with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
+        if isinstance(merged_usage, Usage)
+        else merged_usage
+    )
+    response: Final = merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
+    failure: Final = _malformed_without_output_error(response, first_response.headers)
+    if failure is None:
+        return response
+    failed_attempt: Final = logging_obj.served_round(response)
+    logging_obj.record_served_rounds_for_failure(() if failed_attempt is None else (failed_attempt,))
+    raise failure
+
+
+def _provider_finish_reasons(
+    candidates: Sequence[Candidates], choices: Sequence["StreamingChoices"], blocked_indices: frozenset[int]
+) -> tuple[tuple[int, str], ...]:
+    """A streamed choice also carries "stop" for Google's FINISH_REASON_UNSPECIFIED, so only a candidate that named how
+    it ended, or a blocked prompt, is evidence of it."""
+    finished: Final = frozenset(
+        candidate.get("index", position)
+        for position, candidate in enumerate(candidates)
+        if _names_its_finish(candidate)
+    )
+    finished_or_blocked: Final = finished | blocked_indices
+    return tuple(
+        (choice.index, choice.finish_reason)
+        for choice in choices
+        if choice.index in finished_or_blocked and choice.finish_reason
+    )
 
 
 class ModelResponseIterator:
@@ -4160,6 +4359,8 @@ class ModelResponseIterator:
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
+        self._token_after_unsent_images: str | None = None
+        self._stream_end_after_unsent_images: Exception | None = None
         self._first_response_id: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
@@ -4168,6 +4369,8 @@ class ModelResponseIterator:
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
+        self._held_thought_images: Mapping[int, tuple[ImageURLListItem, ...]] = MappingProxyType({})
+        self._image_settled_indexes: frozenset[int] = frozenset()
 
     @property
     def accumulated_json(self) -> str:
@@ -4337,7 +4540,8 @@ class ModelResponseIterator:
             processed_chunk: Final = self._with_answer_offset(
                 self._with_usage_offset(GenerateContentResponseBody(**chunk))
             )
-            response_id: Final = self._first_response_id or processed_chunk.get("responseId")
+            self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
+            response_id: Final = self._first_response_id
             served: Final = _served_model_name(processed_chunk.get("modelVersion"))
             model_response = ModelResponseStream(
                 choices=[],
@@ -4374,9 +4578,20 @@ class ModelResponseIterator:
 
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
+            self._hold_thought_images(_candidates or ())
+            released_response: Final = self._release_held_thought_images(_candidates or (), model_response)
 
-            model_response.hidden_params["is_finished"] = False
-            return model_response
+            provider_finish_reasons: Final = _provider_finish_reasons(
+                _candidates or (),
+                released_response.choices,
+                frozenset(choice.index for choice in blocked_response.choices)
+                if blocked_response is not None
+                else frozenset(),
+            )
+            if provider_finish_reasons:
+                set_hidden_param(released_response, PROVIDER_FINISH_REASONS_HIDDEN_PARAM, provider_finish_reasons)
+            released_response.hidden_params["is_finished"] = False
+            return released_response
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
@@ -4398,6 +4613,82 @@ class ModelResponseIterator:
             return chunk
         return {**chunk, "candidates": [with_spans_shifted(candidates[0], self._answer_offset), *candidates[1:]]}
 
+    def _hold_thought_images(self, candidates: Sequence[Candidates]) -> None:
+        indexed_parts: Final = tuple(
+            (candidate.get("index", position), _content_parts(candidate))
+            for position, candidate in enumerate(candidates)
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(
+            index for index, parts in indexed_parts if _final_images(parts)
+        )
+        self._held_thought_images = MappingProxyType(
+            {
+                **self._held_thought_images,
+                **{
+                    index: _last_thought_image(parts) or self._held_thought_images.get(index, ())
+                    for index, parts in indexed_parts
+                },
+            }
+        )
+
+    def _release_held_thought_images(
+        self, candidates: Sequence[Candidates], model_response: "ModelResponseStream"
+    ) -> "ModelResponseStream":
+        finishing: Final = MappingProxyType(
+            {
+                candidate.get("index", position): candidate
+                for position, candidate in enumerate(candidates)
+                if _names_its_finish(candidate)
+            }
+        )
+        settling: Final = frozenset(
+            choice.index
+            for choice in model_response.choices
+            if choice.index in finishing
+            and choice.finish_reason is not None
+            and choice.index not in self._image_settled_indexes
+        )
+        self._image_settled_indexes = self._image_settled_indexes | settling
+        released: Final = MappingProxyType(
+            {
+                index: held
+                for index in settling
+                if (held := self._held_thought_images.get(index)) and not _blocks_its_output(finishing[index])
+            }
+        )
+        if not released:
+            return model_response
+        return model_response.model_copy(
+            update={
+                "choices": [
+                    _with_delta_images(choice, released[choice.index]) if choice.index in released else choice
+                    for choice in model_response.choices
+                ]
+            }
+        )
+
+    def _take_unsent_thought_images(self) -> Mapping[int, tuple[ImageURLListItem, ...]]:
+        unsent: Final = MappingProxyType(
+            {
+                index: held
+                for index, held in self._held_thought_images.items()
+                if held and index not in self._image_settled_indexes
+            }
+        )
+        self._image_settled_indexes = self._image_settled_indexes | frozenset(unsent)
+        return unsent
+
+    def _unsent_thought_images_end(self) -> Optional["ModelResponseStream"]:
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        unsent: Final = self._take_unsent_thought_images()
+        if not unsent:
+            return None
+        return ModelResponseStream(
+            id=self._first_response_id,
+            choices=[StreamingChoices(index=index, delta=Delta(images=list(held))) for index, held in unsent.items()],
+        )
+
     def _plan_resume(self, processed_chunk: GenerateContentResponseBody, model_response: "ModelResponseStream") -> None:
         if self._output_cap is None:
             return
@@ -4410,10 +4701,11 @@ class ModelResponseIterator:
         if token is None:
             return
         self._pending_hop_token = token
-        self._first_response_id = self._first_response_id or processed_chunk.get("responseId")
         for choice in model_response.choices:
             delta_fields: Mapping[str, object] = choice.delta.provider_specific_fields or {}
             choice.finish_reason = None
+            if hasattr(choice, "provider_specific_fields"):
+                delattr(choice, "provider_specific_fields")
             choice.delta.provider_specific_fields = {
                 key: value for key, value in delta_fields.items() if key != "continuation_token"
             } or None
@@ -4434,6 +4726,9 @@ class ModelResponseIterator:
     def _truncated_stream_end(self, token: str) -> "ModelResponseStream":
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
+        if (images_end := self._unsent_thought_images_end()) is not None:
+            self._token_after_unsent_images = token
+            return images_end
         return ModelResponseStream(
             id=self._first_response_id,
             choices=[
@@ -4444,6 +4739,27 @@ class ModelResponseIterator:
                 )
             ],
         )
+
+    def _end_after_unsent_images(self) -> Optional["ModelResponseStream"]:
+        token: Final = self._token_after_unsent_images
+        if token is None:
+            return None
+        self._token_after_unsent_images = None
+        return self._truncated_stream_end(token)
+
+    def _unsent_thought_images_before(self, stream_end: Exception) -> "ModelResponseStream":
+        images_end: Final = self._unsent_thought_images_end()
+        if images_end is None:
+            raise stream_end
+        self._stream_end_after_unsent_images = stream_end
+        return images_end
+
+    def _raise_after_unsent_images(self) -> None:
+        stream_end: Final = self._stream_end_after_unsent_images
+        if stream_end is None:
+            return
+        self._stream_end_after_unsent_images = None
+        raise stream_end
 
     def _end_of_unanswered_hop(
         self, reason: Exception | str = "the continuation stream ended without a readable frame"
@@ -4552,13 +4868,18 @@ class ModelResponseIterator:
             raise
 
     def __next__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
+        self._raise_after_unsent_images()
         try:
             return self._next_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             self.close()
             return unanswered_end
+        except (StopIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     def _next_chunk(self) -> Optional["ModelResponseStream"]:
         while True:
@@ -4593,13 +4914,18 @@ class ModelResponseIterator:
         return self
 
     async def __anext__(self) -> Optional["ModelResponseStream"]:
+        if (end_after_images := self._end_after_unsent_images()) is not None:
+            return end_after_images
+        self._raise_after_unsent_images()
         try:
             return await self._anext_chunk()
         except HOP_FAILURES as e:
             if (unanswered_end := self._end_of_unanswered_hop(e)) is None:
-                raise
+                return self._unsent_thought_images_before(e)
             await self.aclose()
             return unanswered_end
+        except (StopAsyncIteration, RuntimeError) as e:
+            return self._unsent_thought_images_before(e)
 
     async def _anext_chunk(self) -> Optional["ModelResponseStream"]:
         while True:

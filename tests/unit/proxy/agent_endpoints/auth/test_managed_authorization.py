@@ -632,6 +632,7 @@ def test_registered_inference_routes_have_an_explicit_managed_access_decision(ro
             "/realtime/transcription_sessions",
             "/realtime/translations/client_secrets",
             "/realtime/translations/calls",
+            "/live/sessions/{",
         )
     ) or normalized in ("/models", "/cursor/models", "/cursor/v1/models", "/claude_code_gateway/v1/models")
     concrete: Final = route.split("?")[0].replace("{model}", "model").replace("{model_name:path}", "model")

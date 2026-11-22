@@ -5,6 +5,10 @@ import inspect
 import json
 import logging
 import os
+import runpy
+import sys
+import types
+import urllib.parse as urlparse
 from collections.abc import Iterator
 from contextlib import nullcontext
 from pathlib import Path
@@ -13,20 +17,14 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
-import fastapi
 import httpx
 import pytest
-
-
-import builtins
-import runpy
-import sys
-import types
-import urllib.parse as urlparse
-
 import uvicorn
 import yaml
 from gunicorn.config import Config as GunicornConfig
+from click.testing import CliRunner
+from fastapi.testclient import TestClient
+from pydantic import SecretStr, TypeAdapter
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -34,10 +32,15 @@ import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
 from litellm.proxy import proxy_cli
-from litellm.proxy.proxy_cli import ProxyInitializationHelpers, run_server
+from litellm.proxy.db.connection_budget import RUST_READER_CONNECTIONS_ENV_VAR, RUST_WRITER_CONNECTIONS_ENV_VAR
+from litellm.proxy.db.db_url_settings import PRISMA_APPLICATION_NAME
+from litellm.proxy.proxy_cli import CliDependencies, ProxyInitializationHelpers, run_server
 from litellm.proxy.rust_forward.server import Listener, Server
 from litellm.proxy.server_listener import AssignedPort, InheritedFd
 from litellm.proxy.shutdown.graceful_shutdown_manager import DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, GracefulShutdownManager
+from litellm.proxy.control_plane.main import serve as serve_control_plane
+from litellm.proxy.control_plane.settings import ControlPlaneSettings
+from tests.unit.proxy.control_plane.support import MASTER_KEY, Licensed
 
 
 @pytest.fixture(autouse=True)
@@ -370,10 +373,10 @@ class TestProxyInitializationHelpers:
         py_file = tmp_path / "module.py"
         py_file.write_text("x = 1\n")
 
-        applied = ProxyInitializationHelpers._patch_statreload_extra_paths([str(config_file)])
+        applied: Final = ProxyInitializationHelpers._patch_statreload_extra_paths([str(config_file)])
         assert applied is True
 
-        fake_self = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
+        fake_self: Final = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
         yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
 
         assert config_file.resolve() in yielded_paths
@@ -390,10 +393,10 @@ class TestProxyInitializationHelpers:
         env_file = tmp_path / ".env"
         env_file.write_text("FOO=bar\n")
 
-        applied = ProxyInitializationHelpers._patch_statreload_extra_paths([str(env_file)])
+        applied: Final = ProxyInitializationHelpers._patch_statreload_extra_paths([str(env_file)])
         assert applied is True
 
-        fake_self = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
+        fake_self: Final = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
         yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
 
         assert env_file.resolve() in yielded_paths
@@ -423,7 +426,7 @@ class TestProxyInitializationHelpers:
         for _ in range(3):
             ProxyInitializationHelpers._patch_statreload_extra_paths([str(config_file)])
 
-        fake_self = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
+        fake_self: Final = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
         yielded = list(StatReload.iter_py_files(fake_self))
         assert len(yielded) == len(set(map(str, yielded)))
         yielded_paths = {Path(p).resolve() for p in yielded}
@@ -458,7 +461,7 @@ class TestProxyInitializationHelpers:
         assert "override" in warning_text
         assert ".env" in warning_text
 
-        fake_self = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
+        fake_self: Final = types.SimpleNamespace(config=types.SimpleNamespace(reload_dirs=[tmp_path]))
         yielded_paths = {Path(p).resolve() for p in StatReload.iter_py_files(fake_self)}
         assert env_file.resolve() in yielded_paths
         assert config_file.resolve() in yielded_paths
@@ -657,12 +660,12 @@ class TestProxyInitializationHelpers:
             database_name_enc = urllib.parse.quote_plus(database_name)
 
             # Construct DATABASE_URL from the provided variables
-            database_url = (
+            database_url: Final = (
                 f"postgresql://{database_username_enc}:{database_password_enc}@{database_host}/{database_name_enc}"
             )
 
             # Assert the correct URL was constructed with properly escaped characters
-            expected_url = (
+            expected_url: Final = (
                 "postgresql://user%40with%2Bspecial:test-password-special-chars@localhost:5432/db_name%2Ftest"
             )
             assert database_url == expected_url
@@ -700,7 +703,7 @@ class TestProxyInitializationHelpers:
         )
         # Remove DATABASE_URL/DIRECT_URL so the CLI doesn't attempt
         # real prisma operations when these are set in CI.
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["PROMETHEUS_MULTIPROC_DIR"] = str(tmp_path)
         live_proxy_samples = tmp_path / "counter_123.db"
         live_proxy_samples.write_bytes(b"samples of a proxy that is still running")
@@ -800,7 +803,7 @@ class TestProxyInitializationHelpers:
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -996,12 +999,13 @@ class TestProxyInitializationHelpers:
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_connection_pool_limit": 5,
+                    "use_spend_logs_ledger": False,
                     **timeout_config,
                 }
             }
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -1034,7 +1038,8 @@ class TestProxyInitializationHelpers:
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_append_query_params.assert_called()
             appended_params = mock_append_query_params.call_args.args[1]
-            assert appended_params["connection_limit"] == 5
+            # The writer's limit of 5 is split, 2 of them going to the Rust pool beside Prisma
+            assert appended_params["connection_limit"] == 3
             assert appended_params["pool_timeout"] == expected_timeout
 
     def test_build_db_connection_url_params_defaults(self):
@@ -1121,7 +1126,7 @@ class TestProxyInitializationHelpers:
             }
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -1232,7 +1237,7 @@ class TestProxyInitializationHelpers:
             }
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -1444,7 +1449,7 @@ class TestProxyInitializationHelpers:
             KeyManagementSettings=MagicMock(),
             save_worker_config=MagicMock(),
         )
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -1488,7 +1493,7 @@ class TestProxyInitializationHelpers:
         # DB-setup block (un-timeout'd `subprocess.run(["prisma"])` +
         # migrate-deploy retry loop) — same isolation every other run_server
         # test in this file uses.
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -1554,7 +1559,7 @@ class TestProxyInitializationHelpers:
         # DB-setup block (un-timeout'd `subprocess.run(["prisma"])` +
         # migrate-deploy retry loop) — same isolation every other run_server
         # test in this file uses.
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
 
         with (
             patch.dict(os.environ, clean_env, clear=True),
@@ -1581,7 +1586,7 @@ class TestProxyInitializationHelpers:
                 "port": 8000,
             }
 
-            result = runner.invoke(run_server, ["--local", "--timeout_worker_healthcheck", "15"])
+            result: Final = runner.invoke(run_server, ["--local", "--timeout_worker_healthcheck", "15"])
 
             assert result.exit_code == 0
             mock_get_args.assert_called_once_with(
@@ -1609,7 +1614,7 @@ class TestProxyInitializationHelpers:
         mock_key_mgmt = MagicMock()
         mock_save_worker_config = MagicMock()
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(
                 os.environ,
@@ -1635,7 +1640,7 @@ class TestProxyInitializationHelpers:
                 "port": 8000,
             }
 
-            result = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
+            result: Final = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             mock_uvicorn_run.assert_called_once()
@@ -1658,7 +1663,7 @@ class TestProxyInitializationHelpers:
                 pass
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch("uvicorn.Config", _NewUvicornConfig),
@@ -1711,7 +1716,7 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -1798,7 +1803,7 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -1820,7 +1825,7 @@ class TestProxyInitializationHelpers:
                 "port": 8000,
             }
 
-            result = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
+            result: Final = runner.invoke(run_server, ["--local", "--max_requests_before_restart", "123"])
 
             assert result.exit_code == 0, f"exit_code={result.exit_code}, output={result.output}"
             assert "--max_requests_before_restart 123 with --num_workers 1" in result.output
@@ -1839,7 +1844,7 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -1881,7 +1886,7 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -1925,7 +1930,7 @@ class TestProxyInitializationHelpers:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         with (
             patch.dict(os.environ, clean_env, clear=True),
             patch.dict(
@@ -2280,7 +2285,6 @@ class TestProxyInitializationHelpers:
     @patch("builtins.print")
     def test_run_server_no_config_passed(self, mock_print, mock_uvicorn_run):
         """Test that run_server properly handles the case when no config is passed"""
-        import asyncio
 
         from click.testing import CliRunner
 
@@ -2373,7 +2377,9 @@ class TestQueryEngineReaperWiring:
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")}
+        clean_env: Final = {
+            k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL", "NUM_WORKERS")
+        }
         if env:
             clean_env.update(env)
         with (
@@ -2481,7 +2487,7 @@ class TestRunServerDbSetup:
             save_worker_config=MagicMock(),
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
 
         with (
@@ -2559,7 +2565,7 @@ class TestRunServerDbSetup:
             save_worker_config=MagicMock(),
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
         clean_env["PATH"] = str(empty_bin)
 
@@ -2719,7 +2725,7 @@ class TestRunServerDbSetup:
             save_worker_config=MagicMock(),
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
 
         with (
@@ -2774,7 +2780,7 @@ class TestRunServerDbSetup:
             save_worker_config=MagicMock(),
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["DATABASE_URL"] = "sqlite:///data/litellm.db"
 
         with (
@@ -2830,7 +2836,7 @@ class TestRunServerDbSetup:
             save_worker_config=MagicMock(),
         )
 
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env["DATABASE_URL"] = "postgresql://test:test@localhost:5432/test"
         clean_env["USE_V2_MIGRATION_RESOLVER"] = "true"
 
@@ -3198,7 +3204,7 @@ class TestWorkerStartupHooks:
             "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_dummy_hook",
         }
         # Remove DATABASE_URL to avoid real DB setup
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env.update(env_overrides)
 
         with patch.dict(os.environ, clean_env, clear=True):
@@ -3221,7 +3227,7 @@ class TestWorkerStartupHooks:
         env_overrides = {
             "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_dummy_async_hook",
         }
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env.update(env_overrides)
 
         with patch.dict(os.environ, clean_env, clear=True):
@@ -3241,7 +3247,7 @@ class TestWorkerStartupHooks:
         env_overrides = {
             "LITELLM_WORKER_STARTUP_HOOKS": "tests.unit.proxy.test_proxy_cli:_failing_hook",
         }
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env.update(env_overrides)
 
         with patch.dict(os.environ, clean_env, clear=True):
@@ -3270,11 +3276,11 @@ class TestWorkerStartupHooks:
 
         from litellm.proxy.proxy_server import proxy_startup_event
 
-        hooks = "tests.unit.proxy.test_proxy_cli:_dummy_hook,tests.unit.proxy.test_proxy_cli:_dummy_async_hook"
+        hooks: Final = "tests.unit.proxy.test_proxy_cli:_dummy_hook,tests.unit.proxy.test_proxy_cli:_dummy_async_hook"
         env_overrides = {
             "LITELLM_WORKER_STARTUP_HOOKS": hooks,
         }
-        clean_env = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
+        clean_env: Final = {k: v for k, v in os.environ.items() if k not in ("DATABASE_URL", "DIRECT_URL")}
         clean_env.update(env_overrides)
 
         with patch.dict(os.environ, clean_env, clear=True):
@@ -3422,7 +3428,7 @@ class TestPostgresStatementTimeoutOptions:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_statement_timeout": 60}}))
 
-        captured = _run_server_and_capture_urls(str(config_path), direct_url="postgresql://t:t@localhost:5432/t")
+        captured: Final = _run_server_and_capture_urls(str(config_path), direct_url="postgresql://t:t@localhost:5432/t")
 
         assert "options" in urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
         assert "options" not in urlparse.parse_qs(urlparse.urlparse(captured["DIRECT_URL"]).query)
@@ -3471,7 +3477,13 @@ class TestPostgresStatementTimeoutOptions:
         return _run_server_and_capture_urls(config_path, database_url=database_url)["DATABASE_URL"]
 
 
-_CAPTURED_DB_ENV_VARS = ("DATABASE_URL", "DIRECT_URL", "DATABASE_URL_READ_REPLICA")
+_CAPTURED_DB_ENV_VARS = (
+    "DATABASE_URL",
+    "DIRECT_URL",
+    "DATABASE_URL_READ_REPLICA",
+    RUST_WRITER_CONNECTIONS_ENV_VAR,
+    RUST_READER_CONNECTIONS_ENV_VAR,
+)
 
 
 def _run_server_and_capture_urls(
@@ -3518,6 +3530,160 @@ def _run_server_and_capture_urls(
         return {k: os.environ[k] for k in _CAPTURED_DB_ENV_VARS if k in os.environ}
 
 
+_CAPTURED_URLS: Final = TypeAdapter(dict[str, str])
+
+
+@pytest.mark.parametrize(
+    "general_settings, database_url, expected_limit, expected_name, configured_limit, expected_rust",
+    [
+        pytest.param(
+            {}, "postgresql://t:t@localhost:5432/t", "8", PRISMA_APPLICATION_NAME, "10", "2", id="default_limit"
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 30},
+            "postgresql://t:t@localhost:5432/t?application_name=ops",
+            "28",
+            "ops",
+            "30",
+            "2",
+            id="configured_limit_and_operator_name",
+        ),
+        pytest.param(
+            {"database_extra_connection_params": {"connection_limit": 5}},
+            "postgresql://t:t@localhost:5432/t",
+            "3",
+            PRISMA_APPLICATION_NAME,
+            "5",
+            "2",
+            id="extra_params_limit",
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 2},
+            "postgresql://t:t@localhost:5432/t",
+            "1",
+            PRISMA_APPLICATION_NAME,
+            "2",
+            "1",
+            id="two_connections_split_one_each",
+        ),
+    ],
+)
+def test_prisma_writer_gives_the_rust_pool_its_share_and_keeps_its_name(
+    tmp_path: Path,
+    general_settings: dict[str, object],
+    database_url: str,
+    expected_limit: str,
+    expected_name: str | None,
+    configured_limit: str,
+    expected_rust: str,
+) -> None:
+    """The writer limit loses the Rust pool's share, which the worker reads back, and gets Prisma's
+    application_name unless the operator named it. DIRECT_URL (migrations) keeps the whole configured limit."""
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.dump({"model_list": [], "general_settings": {**general_settings, "use_spend_logs_ledger": False}})
+    )
+
+    captured: Final = _CAPTURED_URLS.validate_python(
+        _run_server_and_capture_urls(
+            str(config_path), database_url=database_url, direct_url="postgresql://t:t@localhost:5432/t"
+        )
+    )
+
+    writer: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+    direct: Final = urlparse.parse_qs(urlparse.urlparse(captured["DIRECT_URL"]).query)
+    assert (writer["connection_limit"], writer.get("application_name")) == (
+        [expected_limit],
+        None if expected_name is None else [expected_name],
+    )
+    assert direct["connection_limit"] == [configured_limit]
+    assert captured[RUST_WRITER_CONNECTIONS_ENV_VAR] == expected_rust
+    assert RUST_READER_CONNECTIONS_ENV_VAR not in captured
+
+
+@pytest.mark.parametrize(
+    "general_settings",
+    [
+        pytest.param({"database_connection_pool_limit": 1}, id="single_connection"),
+        pytest.param({"database_connection_pool_limit": 0}, id="zero"),
+        pytest.param({"database_extra_connection_params": {"connection_limit": "abc"}}, id="not_a_number"),
+        pytest.param({"database_connection_pool_limit": 10.5}, id="fraction"),
+    ],
+)
+def test_a_writer_limit_with_no_room_for_the_rust_pool_refuses_to_start(
+    tmp_path: Path, general_settings: dict[str, object], capsys: pytest.CaptureFixture[str]
+) -> None:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    with pytest.raises(SystemExit) as exit_info:
+        _run_server_and_capture_urls(str(config_path))
+
+    assert exit_info.value.code == 1
+    assert "DATABASE_URL connection_limit" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "general_settings, expected_writer, expected_rust_writer, expected_line",
+    [
+        pytest.param(
+            {},
+            "6",
+            "4",
+            "1 worker(s) x (writer connection_limit 6 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_on_by_default",
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 30, "use_spend_logs_ledger": True},
+            "26",
+            "4",
+            "1 worker(s) x (writer connection_limit 26 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 80 connections",
+            id="ledger_on_with_a_configured_limit",
+        ),
+        pytest.param(
+            {"use_spend_logs_ledger": False},
+            "8",
+            "2",
+            "1 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_off",
+        ),
+    ],
+)
+def test_the_ledger_carves_two_more_rust_writer_connections_out_of_the_writer_limit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    general_settings: dict[str, object],
+    expected_writer: str,
+    expected_rust_writer: str,
+    expected_line: str,
+) -> None:
+    """The spend log writer writes only on the writer, so the reader keeps the base reserve."""
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    captured: Final = _CAPTURED_URLS.validate_python(
+        _run_server_and_capture_urls(
+            str(config_path),
+            direct_url="postgresql://t:t@localhost:5432/t",
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+    )
+
+    def limit(name: str) -> list[str]:
+        return urlparse.parse_qs(urlparse.urlparse(captured[name]).query)["connection_limit"]
+
+    assert (limit("DATABASE_URL"), captured[RUST_WRITER_CONNECTIONS_ENV_VAR]) == (
+        [expected_writer],
+        expected_rust_writer,
+    )
+    assert (limit("DATABASE_URL_READ_REPLICA"), captured[RUST_READER_CONNECTIONS_ENV_VAR]) == (["48"], "2")
+    assert limit("DIRECT_URL") == ["30" if "database_connection_pool_limit" in general_settings else "10"]
+    assert expected_line in capsys.readouterr().out
+
+
 class TestReadReplicaConnectionParams:
     """The reader is a second Prisma client with its own pool. Without the
     configured params on DATABASE_URL_READ_REPLICA it sizes itself from Prisma's
@@ -3540,6 +3706,7 @@ class TestReadReplicaConnectionParams:
                         "database_socket_timeout": 120,
                         "database_disable_prepared_statements": True,
                         "database_statement_timeout": 60,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3551,7 +3718,9 @@ class TestReadReplicaConnectionParams:
         )
 
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert query["connection_limit"] == ["3"]
+        # The configured 3 less the Rust reader pool's 2
+        assert query["connection_limit"] == ["1"]
+        assert query["application_name"] == [PRISMA_APPLICATION_NAME]
         assert query["pool_timeout"] == ["20"]
         assert query["connect_timeout"] == ["15"]
         assert query["socket_timeout"] == ["120"]
@@ -3572,6 +3741,7 @@ class TestReadReplicaConnectionParams:
                     "general_settings": {
                         "database_connection_pool_limit": 3,
                         "database_connection_pool_timeout": 20,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3583,8 +3753,47 @@ class TestReadReplicaConnectionParams:
         )
 
         query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert query["connection_limit"] == ["50"]
+        # The pinned 50 is the reader's whole budget, which the Rust reader pool's 2 come out of
+        assert query["connection_limit"] == ["48"]
         assert query["pool_timeout"] == ["20"]
+
+    @pytest.mark.parametrize("pinned_limit", ["1", "0", "abc"])
+    def test_a_replica_limit_with_no_room_for_the_rust_pool_refuses_to_start(
+        self, tmp_path: Path, pinned_limit: str, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {}}))
+
+        with pytest.raises(SystemExit) as exit_info:
+            _run_server_and_capture_urls(
+                str(config_path),
+                read_replica_url=f"postgresql://t:t@reader:5432/t?connection_limit={pinned_limit}",
+            )
+
+        assert exit_info.value.code == 1
+        assert f"DATABASE_URL_READ_REPLICA connection_limit '{pinned_limit}'" in capsys.readouterr().err
+
+    def test_writer_and_reader_each_give_their_own_rust_pool_its_share(self, tmp_path: Path) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 10, "use_spend_logs_ledger": False},
+                }
+            )
+        )
+
+        captured: Final = _CAPTURED_URLS.validate_python(
+            _run_server_and_capture_urls(
+                str(config_path), read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=2"
+            )
+        )
+
+        writer: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL"]).query)
+        reader: Final = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
+        assert (writer["connection_limit"], captured[RUST_WRITER_CONNECTIONS_ENV_VAR]) == (["8"], "2")
+        assert (reader["connection_limit"], captured[RUST_READER_CONNECTIONS_ENV_VAR]) == (["1"], "1")
 
     def test_connection_budget_line_counts_the_limits_the_final_urls_carry(
         self,
@@ -3594,7 +3803,14 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
@@ -3602,8 +3818,26 @@ class TestReadReplicaConnectionParams:
         )
 
         assert (
-            "1 worker(s) x (writer connection_limit 3 + reader connection_limit 50) = up to 53 connections"
-            in capsys.readouterr().out
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 2 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 53 connections" in capsys.readouterr().out
+        )
+
+    def test_connection_budget_line_counts_each_pool_its_own_rust_share(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        config_path: Final = tmp_path / "config.yaml"
+        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 2}}))
+
+        _run_server_and_capture_urls(
+            str(config_path),
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+
+        assert (
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 1 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 52 connections" in capsys.readouterr().out
         )
 
     def test_connection_budget_line_counts_one_worker_under_hypercorn(
@@ -3614,14 +3848,24 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
             extra_args=("--run_hypercorn", "--num_workers", "4"),
         )
 
-        assert "1 worker(s) x writer connection_limit 3 = up to 3 connections" in capsys.readouterr().out
+        assert (
+            "1 worker(s) x (writer connection_limit 1 + rust writer pool 2) = up to 3 connections"
+            in capsys.readouterr().out
+        )
 
     def test_extra_connection_params_never_carry_a_schema_override_to_the_reader(self, tmp_path):
         """database_extra_connection_params is an untyped passthrough, so it can carry a
@@ -3635,6 +3879,7 @@ class TestReadReplicaConnectionParams:
                     "model_list": [],
                     "general_settings": {
                         "database_connection_pool_limit": 3,
+                        "use_spend_logs_ledger": False,
                         "database_extra_connection_params": {
                             "options": "-c search_path=writer_schema",
                             "schema": "writer_schema",
@@ -3655,7 +3900,7 @@ class TestReadReplicaConnectionParams:
         assert writer_query["schema"] == ["writer_schema"]
 
         reader_query = urlparse.parse_qs(urlparse.urlparse(captured["DATABASE_URL_READ_REPLICA"]).query)
-        assert reader_query["connection_limit"] == ["3"]
+        assert reader_query["connection_limit"] == ["1"]
         assert reader_query["socket_timeout"] == ["90"]
         assert "options" not in reader_query
         assert "schema" not in reader_query
@@ -4400,7 +4645,23 @@ class TestRustForwardServer:
             run_hypercorn=params["run_hypercorn"] is True,
             run_granian=params["run_granian"] is True,
             tls=None not in (params["ssl_keyfile_path"], params["ssl_certfile_path"]),
+            config=params["config"],
         )
+
+    def test_the_supervisor_sees_the_config_file_python_would_load(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+        config: Final = tmp_path / "config.yaml"
+        config.write_text("model_list: []\n")
+        _, described = self._server(["--config", str(config)])
+        assert described.config_path == str(config)
+
+    def test_the_supervisor_sees_no_config_file_when_python_loads_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CONFIG_FILE_PATH", raising=False)
+        _, described = self._server([])
+        assert described.config_path is None
 
     @pytest.mark.parametrize(
         ("argv", "server", "listener"),
@@ -4535,3 +4796,251 @@ class TestRustForwardServer:
             server.graceful_timeout_seconds,
             server.trusted_proxies,
         ) == self._served_by_python(params)
+
+
+def test_control_plane_rejects_multiple_workers() -> None:
+    from litellm.proxy.proxy_cli import run_server
+
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--port", "8100", "--num_workers", "3"])
+    assert result.exit_code == 2
+    assert "scale the control plane with replicas." in result.output
+
+
+@patch("uvicorn.run")
+def test_migration_data_check_precedes_control_plane_startup(
+    mock_uvicorn_run: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+    from litellm.proxy.proxy_cli import run_server
+
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--check_migrations_against_existing_data"])
+    assert result.exit_code == 2
+    assert "requires DATABASE_URL" in result.output
+    mock_uvicorn_run.assert_not_called()
+
+
+def test_control_plane_cli_uses_decrypted_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("USE_AWS_KMS", "True")
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("KMS_TEST_SETTING", raising=False)
+
+    def decrypt_env() -> dict[str, str]:
+        return {"LITELLM_MASTER_KEY": MASTER_KEY, "KMS_TEST_SETTING": "decrypted"}
+
+    with patch("uvicorn.run") as uvicorn_run:
+        result: Final = CliRunner().invoke(
+            run_server,
+            ["--control-plane", "--host", "127.0.0.1", "--port", "8100"],
+            obj=CliDependencies(decrypt_env=decrypt_env, license_check=Licensed),
+        )
+
+    assert result.exit_code == 0, result.output
+    assert os.environ["KMS_TEST_SETTING"] == "decrypted"
+    assert os.environ["LITELLM_MASTER_KEY"] == MASTER_KEY
+    app: Final = uvicorn_run.call_args.kwargs["app"]
+    assert TestClient(app).get("/healthz").status_code == 200
+
+
+def test_control_plane_cli_serves_the_real_app_with_uvicorn_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    context: Final = run_server.make_context(
+        "litellm",
+        [
+            "--control-plane",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8100",
+            "--log_config",
+            "logging.yaml",
+            "--keepalive_timeout",
+            "30",
+            "--max_request_header_size",
+            "8192",
+            "--limit_concurrency",
+            "250",
+        ],
+    )
+    params: Final = TypeAdapter(dict[str, object]).validate_python(context.params)
+    host: Final = params["host"]
+    port: Final = params["port"]
+    limit_concurrency: Final = params["limit_concurrency"]
+    log_config: Final = params["log_config"]
+    keepalive_timeout: Final = params["keepalive_timeout"]
+    max_request_header_size: Final = params["max_request_header_size"]
+    assert params["control_plane"] is True
+    assert isinstance(host, str) and isinstance(port, int)
+    assert limit_concurrency == 250
+    assert log_config == "logging.yaml" and isinstance(log_config, str)
+    assert keepalive_timeout == 30 and isinstance(keepalive_timeout, int)
+    assert max_request_header_size == 8192 and isinstance(max_request_header_size, int)
+    settings: Final = ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY})
+    uvicorn_run: Final = MagicMock()
+    with patch("uvicorn.run", uvicorn_run):
+        serve_control_plane(
+            host=host,
+            port=port,
+            settings=lambda: settings,
+            license_check=Licensed,
+            limit_concurrency=limit_concurrency,
+            log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
+            max_request_header_size=max_request_header_size,
+        )
+
+    call: Final = uvicorn_run.call_args.kwargs
+    assert (call["host"], call["port"]) == (host, port)
+    assert (call["log_config"], call["timeout_keep_alive"], call["h11_max_incomplete_event_size"]) == (
+        "logging.yaml",
+        30,
+        8192,
+    )
+    assert call["limit_concurrency"] == 250
+    response: Final = TestClient(call["app"]).get("/healthz")
+    assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+def test_limit_concurrency_environment_reaches_control_plane_serve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIMIT_CONCURRENCY", "321")
+    context: Final = run_server.make_context("litellm", ["--control-plane"])
+    params: Final = TypeAdapter(dict[str, object]).validate_python(context.params)
+    host: Final = params["host"]
+    port: Final = params["port"]
+    limit_concurrency: Final = params["limit_concurrency"]
+    assert isinstance(host, str) and isinstance(port, int)
+    assert limit_concurrency == 321 and isinstance(limit_concurrency, int)
+    settings: Final = ControlPlaneSettings.model_validate({"LITELLM_MASTER_KEY": MASTER_KEY})
+    uvicorn_run: Final = MagicMock()
+    with patch("uvicorn.run", uvicorn_run):
+        serve_control_plane(
+            host=host,
+            port=port,
+            settings=lambda: settings,
+            license_check=Licensed,
+            limit_concurrency=limit_concurrency,
+        )
+    assert uvicorn_run.call_args.kwargs["limit_concurrency"] == 321
+    assert TestClient(uvicorn_run.call_args.kwargs["app"]).get("/healthz").status_code == 200
+
+
+@pytest.mark.parametrize("args", [("--control-plane", "--version"), ("--control-plane", "--health")])
+def test_utility_commands_do_not_decrypt_kms_environment(
+    args: tuple[str, ...], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("USE_AWS_KMS", "True")
+
+    def fail_if_called() -> dict[str, str]:
+        raise AssertionError("utility command called the decryptor")
+
+    with patch(
+        "httpx.get",
+        return_value=httpx.Response(
+            200,
+            json={"status": "ok"},
+            request=httpx.Request("GET", "http://localhost/health"),
+        ),
+    ):
+        result: Final = CliRunner().invoke(
+            run_server,
+            args,
+            obj=CliDependencies(decrypt_env=fail_if_called),
+        )
+
+    assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("control_plane", "skip_server_startup", "utility_command", "expected"),
+    [
+        (True, False, False, True),
+        (True, True, False, True),
+        (True, False, True, False),
+        (False, False, False, False),
+        (False, True, True, False),
+    ],
+)
+def test_migrations_and_utility_commands_win_over_an_inherited_control_plane_flag(
+    control_plane: bool, skip_server_startup: bool, utility_command: bool, expected: bool
+) -> None:
+    from litellm.proxy.proxy_cli import control_plane_requested
+
+    assert control_plane_requested(control_plane, skip_server_startup, utility_command) is expected
+
+
+@patch("uvicorn.run")
+def test_version_prints_the_version_even_with_the_control_plane_flag(mock_uvicorn_run: MagicMock) -> None:
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--version"])
+    assert result.exit_code == 0, result.output
+    assert "version" in result.output.lower() and mock_uvicorn_run.call_count == 0
+
+
+@pytest.mark.parametrize("flag", ["--run_hypercorn", "--run_gunicorn", "--run_granian", "--reload"])
+def test_other_servers_and_reload_are_a_usage_error_with_the_control_plane_flag(flag: str) -> None:
+    from litellm.proxy.proxy_cli import run_server
+
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", flag])
+    assert result.exit_code == 2 and "plain uvicorn" in result.output
+
+
+def test_control_plane_rejects_a_lone_tls_file() -> None:
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--ssl_keyfile_path", "/c/tls.key"])
+    assert result.exit_code == 2 and "both" in result.output
+
+
+def test_control_plane_migration_job_needs_only_its_own_database_and_never_starts_prisma_or_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://dedicated/control")
+    monkeypatch.setenv("DATABASE_URL", "invalid-proxy-database")
+    monkeypatch.delenv("CONTROL_PLANE_REDIS_URL", raising=False)
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+    migrated: Final[list[str]] = []  # mutable-ok: records the one-shot invocation
+
+    def upgrade(url: SecretStr) -> None:
+        migrated.append(url.get_secret_value())
+
+    result: Final = CliRunner().invoke(
+        run_server,
+        ["--control-plane", "--skip_server_startup"],
+        obj=CliDependencies(migrate_control_plane=lambda: migrate_from_environment(upgrade)),
+    )
+    assert result.exit_code == 0, result.output
+    assert migrated == ["postgresql://dedicated/control"]
+    assert "migrations are current" in result.output
+
+
+def test_control_plane_migration_job_rejects_missing_dedicated_database_instead_of_using_database_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CONTROL_PLANE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://proxy/should-not-be-used")
+    result: Final = CliRunner().invoke(run_server, ["--control-plane", "--skip_server_startup"])
+    assert result.exit_code != 0
+    assert "CONTROL_PLANE_DATABASE_URL is required" in result.output
+
+
+def test_control_plane_migration_failure_is_nonzero_and_does_not_disclose_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    monkeypatch.setenv("CONTROL_PLANE_DATABASE_URL", "postgresql://private-password@dedicated/control")
+    monkeypatch.delenv("USE_AWS_KMS", raising=False)
+
+    def upgrade(_url: SecretStr) -> None:
+        raise RuntimeError("private-password")
+
+    result: Final = CliRunner().invoke(
+        run_server,
+        ["--control-plane", "--skip_server_startup"],
+        obj=CliDependencies(migrate_control_plane=lambda: migrate_from_environment(upgrade)),
+    )
+    assert result.exit_code != 0
+    assert "Control-plane migration failed" in result.output
+    assert "private-password" not in result.output

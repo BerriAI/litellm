@@ -6,6 +6,7 @@
 
 use std::{future::Future, io};
 
+use litellm_python_compat::{repr::float_repr, unicode::isspace};
 use serde::Serialize;
 use serde_json::{
     Value,
@@ -141,7 +142,7 @@ pub fn prompt_from_context(context: &SemanticCacheContext) -> Option<String> {
     let input = context.input.as_ref()?;
     let mut parts = Vec::new();
     collect_input_text(input, &mut parts);
-    let prompt = python_strip(&parts.join("\n")).to_owned();
+    let prompt = parts.join("\n").trim_matches(isspace).to_owned();
     (!prompt.is_empty()).then_some(prompt)
 }
 
@@ -202,19 +203,12 @@ fn collect_input_text(value: &Value, parts: &mut Vec<String>) {
 
 /// Pushes `text` stripped as Python's `str.strip` does, reporting whether anything was left.
 fn push_trimmed(text: &str, parts: &mut Vec<String>) -> bool {
-    let trimmed = python_strip(text);
+    let trimmed = text.trim_matches(isspace);
     if trimmed.is_empty() {
         return false;
     }
     parts.push(trimmed.to_owned());
     true
-}
-
-/// `str.strip()`: Python's whitespace also covers the ASCII information separators.
-fn python_strip(text: &str) -> &str {
-    text.trim_matches(|character: char| {
-        character.is_whitespace() || ('\u{1c}'..='\u{1f}').contains(&character)
-    })
 }
 
 /// `json.dumps(value, separators=(",", ":"))`: compact, key insertion order, `ensure_ascii`.
@@ -251,7 +245,7 @@ impl Formatter for AsciiFormatter {
     where
         W: ?Sized + io::Write,
     {
-        writer.write_all(python_float_repr(value).as_bytes())
+        writer.write_all(float_repr(value).as_bytes())
     }
 
     fn write_char_escape<W>(&mut self, writer: &mut W, escape: CharEscape) -> io::Result<()>
@@ -263,37 +257,4 @@ impl Formatter for AsciiFormatter {
             escape => serde_json::ser::CompactFormatter.write_char_escape(writer, escape),
         }
     }
-}
-
-/// `repr(float)`: the shortest round-trip digits, positional between `1e-4` and `1e16`, and
-/// otherwise scientific with a signed exponent of at least two digits.
-fn python_float_repr(value: f64) -> String {
-    // `{:e}` yields the shortest round-trip digits, e.g. `1.5e-7`.
-    let scientific = format!("{value:e}");
-    let (mantissa, exponent) = scientific.split_once('e').unwrap_or((&scientific, "0"));
-    let exponent: i32 = exponent.parse().unwrap_or(0);
-    let (sign, mantissa) = mantissa
-        .strip_prefix('-')
-        .map_or(("", mantissa), |rest| ("-", rest));
-    let digits = mantissa.replace('.', "");
-    if !(-4..16).contains(&exponent) {
-        let fraction = &digits[1..];
-        let mantissa = if fraction.is_empty() {
-            digits[..1].to_owned()
-        } else {
-            format!("{}.{fraction}", &digits[..1])
-        };
-        let exponent_sign = if exponent < 0 { '-' } else { '+' };
-        return format!("{sign}{mantissa}e{exponent_sign}{:02}", exponent.abs());
-    }
-    let point = exponent + 1;
-    let positional = if point <= 0 {
-        format!("0.{}{digits}", "0".repeat(point.unsigned_abs() as usize))
-    } else if point as usize >= digits.len() {
-        format!("{digits}{}.0", "0".repeat(point as usize - digits.len()))
-    } else {
-        let (whole, fraction) = digits.split_at(point as usize);
-        format!("{whole}.{fraction}")
-    };
-    format!("{sign}{positional}")
 }

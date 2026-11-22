@@ -1,5 +1,9 @@
 "use client";
 
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle } from "@/components/shared/PageHeader";
+import { ShieldCheck } from "lucide-react";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import React, { useCallback, useMemo, useState } from "react";
@@ -143,10 +147,15 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
   };
 
   return (
-    <div className="w-full">
-      <h1 className="text-2xl font-semibold text-foreground mb-6">{t("toolPolicies.panel.title")}</h1>
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <ShieldCheck />
+          {t("toolPolicies.panel.title")}
+        </PageHeaderTitle>
+      </PageHeader>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
           label={t("toolPolicies.panel.metrics.newToday")}
           value={newToday}
@@ -171,7 +180,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
       </div>
 
       {needsReviewTools.length > 0 && (
-        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4 mb-6">
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
           <h2 className="text-sm font-semibold text-warning mb-1">{t("toolPolicies.panel.needsReview.title")}</h2>
           <p className="text-sm text-warning mb-3">
             {t("toolPolicies.panel.needsReview.description", { count: needsReviewTools.length })}
@@ -200,7 +209,7 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
 
       {query.isError && (
         <div
-          className="mb-4 p-3 bg-destructive/10 border border-destructive/20 rounded-sm text-sm text-destructive"
+          className="p-3 bg-destructive/10 border border-destructive/20 rounded-sm text-sm text-destructive"
           role="alert"
         >
           {toMessage(query.error, t("toolPolicies.panel.errors.loadFailed"))}
@@ -218,6 +227,6 @@ export const ToolPoliciesPanel: React.FC<ToolPoliciesPanelProps> = ({ accessToke
         onInputPolicyChange={handleInputPolicyChange}
         onOutputPolicyChange={handleOutputPolicyChange}
       />
-    </div>
+    </PageContent>
   );
 };

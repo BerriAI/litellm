@@ -161,7 +161,7 @@ def _enforce_bedrock_converse_models(
             info.get("litellm_provider") == "bedrock"
             and info.get("mode") == "chat"
             and model not in whitelist_models
-            and BedrockModelInfo.get_bedrock_route(model) != "claude_platform"
+            and BedrockModelInfo.get_bedrock_route(model) not in ("claude_platform", "mantle")
             and not (
                 (base_model := BedrockModelInfo.get_base_model(model)) != model
                 and model_cost.get(base_model, {}).get("litellm_provider") == "bedrock_converse"
@@ -292,7 +292,7 @@ def test_get_model_info_bedrock_models():
                 continue
             base_model_info = litellm.model_cost[base_model_key]
             for base_model_key, base_model_value in base_model_info.items():
-                if "invoke/" in k:
+                if "invoke/" in k or "mantle/" in k:
                     continue
                 if base_model_key.startswith("supports_"):
                     assert (

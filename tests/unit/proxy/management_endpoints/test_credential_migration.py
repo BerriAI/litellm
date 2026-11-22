@@ -588,7 +588,7 @@ async def test_migrate_covered_tables_reports_real_counts(salt_key, monkeypatch)
         row.litellm_params["api_key"] = v2
 
     monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.rotate_master_key",
+        "litellm.proxy.management_endpoints.key_management_endpoints.reencrypt_credentials_for_aes_migration",
         fake_rotate,
     )
 
