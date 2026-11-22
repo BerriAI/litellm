@@ -1462,7 +1462,15 @@ async def common_checks(
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
-        raise Exception(f"Team={team_object.team_id} is blocked. Update via `/team/unblock` if you're an admin.")
+        raise ProxyException(
+            message=(
+                f"Authentication Error, Team={team_object.team_id} is blocked. "
+                "Update via `/team/unblock` if you're an admin."
+            ),
+            type=ProxyErrorTypes.auth_error,
+            param=None,
+            code=status.HTTP_401_UNAUTHORIZED,
+        )
 
     # 2. If team can call model (or key's access_group_ids grant it)
     if _model and team_object:

@@ -7413,9 +7413,9 @@ class TestMCPDcrBridgeDelegateAdmission:
         assert exc_info.value.status_code == 403
 
     async def test_blocked_state_bare_exception_stays_401(self):
-        """A blocked team/project raises a bare Exception (no status) in common_checks, which the
+        """A blocked project raises a bare Exception (no status) in common_checks, which the
         standard pipeline renders as 401; the arm keeps failing those closed as 401, never a 500."""
-        mapped = await self._enforce_with_gate_error(Exception("Team=team-x is blocked."))
+        mapped = await self._enforce_with_gate_error(Exception("Project=project-x is blocked."))
         assert mapped.status_code == 401
 
     async def test_subcheck_httpexception_status_preserved(self):

@@ -1699,7 +1699,7 @@ class MCPRequestHandler:
         ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
         over-budget identity is a 422, a sub-check that raised its own ``HTTPException``/
         ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
-        only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
+        only a genuinely unresolvable failure (a blocked project raises a bare ``Exception``,
         same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every
         failure to 401 was misleading: it told an over-budget but validly-authenticated caller their
         credential was invalid, which on a DCR client reads as broken auth and can trigger a

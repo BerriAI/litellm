@@ -234,6 +234,53 @@ async def test_opaque_member_budget_lookup_fails_closed_when_budget_checks_are_s
     assert "member" in denied.value.detail
 
 
+@pytest.mark.asyncio
+async def test_a_blocked_team_is_refused_with_a_401_that_auth_logs_as_one_warning_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from litellm._logging import verbose_proxy_logger
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+    from litellm.responses.streaming_iterator import drain_logging_tasks
+
+    route: Final = "/chat/completions"
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    caller: Final = UserAPIKeyAuth(token="test-token", team_id="paused-team")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with pytest.raises(ProxyException) as refused:
+        await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="paused-team", blocked=True),
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            valid_token=caller,
+            request=request,
+            skip_budget_checks=True,
+        )
+    try:
+        with caplog.at_level("WARNING", logger="LiteLLM Proxy"), pytest.raises(ProxyException) as answered:
+            await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+                refused.value, request, {}, route, None, "sk-test", resolved_identity=caller
+            )
+    finally:
+        await drain_logging_tasks()
+
+    assert answered.value.code == str(status.HTTP_401_UNAUTHORIZED)
+    assert answered.value.message == (
+        "Authentication Error, Team=paused-team is blocked. Update via `/team/unblock` if you're an admin."
+    )
+    logged: Final = [
+        record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
+    ]
+    assert [(record.levelname, record.exc_info) for record in logged] == [("WARNING", None)]
+
+
 async def _run_team_trace_id_check(
     *,
     route: str,
