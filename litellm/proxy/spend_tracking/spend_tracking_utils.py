@@ -14,6 +14,10 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
+from litellm.litellm_core_utils.gateway_io_logging import (
+    attach_gateway_io_to_spend_log_payload,
+    build_gateway_io_metadata,
+)
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BILLED_RETRY_ATTEMPT_METADATA_KEY,
@@ -649,11 +653,23 @@ def get_logging_payload(
         kwargs = {}
 
     if uses_spend_logs_ledger():
-        return spendlogs_payload_rust(kwargs, response_obj, start_time, end_time, llm_router)  # pyright: ignore[reportUnknownArgumentType]  # the logging kwargs dict is untyped upstream
+        _rust_payload = spendlogs_payload_rust(kwargs, response_obj, start_time, end_time, llm_router)
+        if litellm.enable_gateway_io_logging:
+            try:
+                _rust_payload = attach_gateway_io_to_spend_log_payload(_rust_payload, kwargs=kwargs, response_obj=response_obj)
+            except Exception as _gio_err:
+                verbose_proxy_logger.debug("gateway_io_logging rust attach failed: %s", _gio_err)
+        return _rust_payload
 
     from litellm.proxy.spend_tracking import legacy_spend_log_rows
 
-    return legacy_spend_log_rows.logging_payload(kwargs, response_obj, start_time, end_time, llm_router)
+    _payload = legacy_spend_log_rows.logging_payload(kwargs, response_obj, start_time, end_time, llm_router)
+    if litellm.enable_gateway_io_logging:
+        try:
+            _payload = attach_gateway_io_to_spend_log_payload(_payload, kwargs=kwargs, response_obj=response_obj)
+        except Exception as _gio_err:
+            verbose_proxy_logger.debug("gateway_io_logging legacy attach failed: %s", _gio_err)
+    return _payload
 
 
 def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:
