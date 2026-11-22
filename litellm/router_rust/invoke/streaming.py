@@ -82,7 +82,7 @@ if TYPE_CHECKING:
     from litellm.router_python_host import PythonHost
     from litellm.router_rust.core import RustCore
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import ContinuationOutput, ContinuedPartial
-    from litellm.types.llms.openai import ResponseAPIUsage, ResponseIncompleteEvent
+    from litellm.types.llms.openai import ResponseAPIUsage, ResponseIncompleteEvent, ResponsesAPIResponse
 
 # A stream that never emits content or an error could grow a held-frame buffer without bound, so
 # hitting either cap commits the stream instead.
@@ -1704,6 +1704,61 @@ def _cost_breakdown_of(stream: object) -> CostBreakdown | None:
     return None if logging_obj is None else logging_obj.cost_breakdown
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _PricedPartial:
+    event: "ResponseIncompleteEvent"
+    breakdown: CostBreakdown | None
+    priced: bool
+
+    @property
+    def billed(self) -> "ResponsesAPIResponse":
+        from litellm.responses.mcp.round_billing import billed_nothing
+
+        return self.event.response if self.priced else billed_nothing(self.event.response)
+
+
+def _priced_partial(stream: object) -> _PricedPartial | None:
+    from litellm.responses.mcp.round_billing import has_billed_cost
+    from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+
+    event: Final = partial_responses_incomplete_event_on_disconnect(stream)
+    if event is None:
+        return None
+    priced: Final = has_billed_cost(event.response)
+    return _PricedPartial(event, _cost_breakdown_of(stream) if priced else None, priced)
+
+
+def _held_partial(stream: object) -> _PricedPartial | None:
+    logging_obj: Final = _stream_logging(stream)
+    if logging_obj is None:
+        return _priced_partial(stream)
+    with logging_obj.pricing_left_unrecorded():
+        return _priced_partial(stream)
+
+
+def _breakdown_of_both(primary: _PricedPartial, current: _PricedPartial) -> CostBreakdown | None:
+    from litellm.responses.mcp.round_billing import summed_cost_breakdown
+
+    if not primary.priced:
+        return current.breakdown
+    if not current.priced:
+        return primary.breakdown
+    return summed_cost_breakdown(primary.billed, primary.breakdown, current.billed, current.breakdown)
+
+
+def _billed_for_both_deployments(primary: _PricedPartial, current: _PricedPartial | None) -> _PricedPartial:
+    from litellm.responses.mcp.round_billing import billed_for_every_round
+
+    if current is None:
+        return _PricedPartial(
+            primary.event.model_copy(update={"response": primary.billed}), primary.breakdown, primary.priced
+        )
+    billed: Final = billed_for_every_round(primary.billed, primary.breakdown, current.billed, current.breakdown)
+    return _PricedPartial(
+        current.event.model_copy(update={"response": billed}), _breakdown_of_both(primary, current), True
+    )
+
+
 def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) -> Mapping[str, object]:
     """The request as the deployment received it, merged in the order the attempt applies."""
     return attempt.core.params_sent_to_deployment(attempt.request, deployment_id)
@@ -1724,6 +1779,7 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         self.attempt: Final = attempt
         self._source_iterator: Final = source_iterator
         self._billing_source: object = source_iterator
+        self._primary_partial: _PricedPartial | None = None
         self._last_sequence_number = -1
         self.response = getattr(source_iterator, "response", None)  # pyright: ignore[reportAttributeAccessIssue]  # copied from the source
         self.model = getattr(source_iterator, "model", None)  # pyright: ignore[reportAttributeAccessIssue]  # see above
@@ -1757,30 +1813,23 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
         self.fallback_headers_adopted = True
         return prepared
 
+    def hold_primary_partial(self) -> None:
+        self._primary_partial = _held_partial(self._source_iterator)
+
     def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
-        from litellm.responses.mcp.round_billing import billed_for_every_round, summed_cost_breakdown
         from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
 
-        current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
         if self._billing_source is self._source_iterator:
-            return current
-        current_breakdown: Final = _cost_breakdown_of(self._billing_source)
-        primary: Final = partial_responses_incomplete_event_on_disconnect(self._source_iterator)
-        if current is None or primary is None:
-            return current or primary
-        primary_breakdown: Final = _cost_breakdown_of(self._source_iterator)
+            return partial_responses_incomplete_event_on_disconnect(self._source_iterator)
+        current: Final = _priced_partial(self._billing_source)
+        primary: Final = self._primary_partial or _priced_partial(self._source_iterator)
+        if primary is None:
+            return None if current is None else current.event
+        billed: Final = _billed_for_both_deployments(primary, current)
         billing_logging: Final = _stream_logging(self)
         if billing_logging is not None:
-            billing_logging.cost_breakdown = summed_cost_breakdown(
-                primary.response, primary_breakdown, current.response, current_breakdown
-            )
-        return current.model_copy(
-            update={
-                "response": billed_for_every_round(
-                    primary.response, primary_breakdown, current.response, current_breakdown
-                )
-            }
-        )
+            billing_logging.cost_breakdown = billed.breakdown
+        return billed.event
 
     def __aiter__(self) -> "FallbackResponsesStreamWrapper":
         return self
@@ -1815,6 +1864,12 @@ class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
 
 
 _ResponsesWrapperRef: TypeAlias = "weakref.ref[FallbackResponsesStreamWrapper]"
+
+
+def _hold_primary_partial(wrapper_ref: _ResponsesWrapperRef) -> None:
+    wrapper: Final = wrapper_ref()
+    if wrapper is not None:
+        wrapper.hold_primary_partial()
 
 
 def _adopt_responses_fallback_headers(wrapper_ref: _ResponsesWrapperRef, fallback_response: object) -> _Prepared:
@@ -1888,6 +1943,7 @@ def wrap_responses_stream(  # noqa: C901  # one function per Python wrapper it p
                 _raise_released_stream_error(
                     attempt, _responses_stream_fallback_error(stream_error, source_iterator, wrapper_ref)
                 )
+            _hold_primary_partial(wrapper_ref)
             async with contextlib.aclosing(
                 _responses_recover_stream_error(
                     attempt,
