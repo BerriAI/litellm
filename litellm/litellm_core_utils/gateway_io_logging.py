@@ -3,7 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import re
-from collections.abc import Mapping
+import sys
+from collections.abc import Callable, Mapping
 from typing import Any, Final
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
@@ -205,12 +206,6 @@ _HEX_OR_B64_SECRET_PATTERN: Final[re.Pattern[str]] = re.compile(
 )
 
 _SAFE_MODEL_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._:/@-]{1,128}$")
-_IPV4_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?<![0-9.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?![0-9.])"
-)
-_IPV6_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"(?<![0-9A-Fa-f:])(?:(?:[0-9A-Fa-f]{1,4}:){2,7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{0,4}|:(?::[0-9A-Fa-f]{1,4}){1,7}|::)(?![0-9A-Fa-f:])"
-)
 
 
 def _sanitize_model_name(
@@ -312,13 +307,31 @@ def _collect_runtime_secrets(
     return tuple(secrets)
 
 
+def _get_active_ip_redactor(
+    ip_redactor: Callable[[str], str] | None = None,
+) -> Callable[[str], str] | None:
+    if ip_redactor is not None:
+        return ip_redactor
+    stu = sys.modules.get("litellm.proxy.spend_tracking.spend_tracking_utils")
+    if stu is not None:
+        is_disabled = getattr(stu, "requester_ip_address_logging_disabled", None)
+        mask_fn = getattr(stu, "_masked_ip_text", None)
+        if callable(is_disabled) and callable(mask_fn):
+            try:
+                if is_disabled():
+                    return mask_fn
+            except Exception:
+                return None
+    return None
+
+
 def _scrub_text(
     value: str,
     *,
     runtime_secrets: tuple[str, ...] = (),
     credential_name: str | None = None,
     scrub_high_entropy: bool = False,
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> tuple[str, bool]:
     changed = False
     out = value[:MAX_REGEX_SCAN_LEN] if len(value) > MAX_REGEX_SCAN_LEN else value
@@ -347,17 +360,11 @@ def _scrub_text(
         if new_out != out:
             out = new_out
             changed = True
-    if redact_ip_addresses and len(out) >= 7:
-        if "." in out:
-            new_out = _IPV4_PATTERN.sub(MASKED_VALUE, out)
-            if new_out != out:
-                out = new_out
-                changed = True
-        if ":" in out:
-            new_out = _IPV6_PATTERN.sub(MASKED_VALUE, out)
-            if new_out != out:
-                out = new_out
-                changed = True
+    if ip_redactor is not None and out:
+        redacted = ip_redactor(out)
+        if redacted != out:
+            out = redacted
+            changed = True
     return out, changed
 
 
@@ -408,7 +415,7 @@ def _sanitize_url(
     url: str,
     credential_name: str | None = None,
     runtime_secrets: tuple[str, ...] = (),
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> str:
     if not url:
         return ""
@@ -432,7 +439,7 @@ def _sanitize_url(
                     sanitized_q.append((k, MASKED_VALUE))
             query = urlencode(sanitized_q)
         rebuilt = urlunsplit((parts.scheme, netloc, parts.path, query, ""))
-        rebuilt, _ = _scrub_text(rebuilt, runtime_secrets=runtime_secrets, credential_name=credential_name, redact_ip_addresses=redact_ip_addresses)
+        rebuilt, _ = _scrub_text(rebuilt, runtime_secrets=runtime_secrets, credential_name=credential_name, ip_redactor=ip_redactor)
         return _truncate_str(rebuilt, MAX_HEADER_VALUE_LEN)
     except Exception:
         return MASKED_VALUE
@@ -456,12 +463,13 @@ def _sanitize_safe_nested(
     *,
     runtime_secrets: tuple[str, ...] = (),
     credential_name: str | None = None,
+    ip_redactor: Callable[[str], str] | None = None,
     depth: int = 0,
 ) -> Any:
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
-        scrubbed, _ = _scrub_text(value, runtime_secrets=runtime_secrets, credential_name=credential_name)
+        scrubbed, _ = _scrub_text(value, runtime_secrets=runtime_secrets, credential_name=credential_name, ip_redactor=ip_redactor)
         return _truncate_str(scrubbed, MAX_BODY_SCALAR_LEN)
     if depth >= MAX_NESTED_SANITIZE_DEPTH:
         return MASKED_VALUE
@@ -482,6 +490,7 @@ def _sanitize_safe_nested(
                 item,
                 runtime_secrets=runtime_secrets,
                 credential_name=credential_name,
+                ip_redactor=ip_redactor,
                 depth=depth + 1,
             )
             for item in value[:16]
@@ -496,7 +505,7 @@ def _sanitize_headers(
     replace_action: str = "replace:credential_name",
     strip_provider_prefix: bool = False,
     runtime_secrets: tuple[str, ...] = (),
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> tuple[dict[str, str], dict[str, str]]:
     if not isinstance(raw_headers, Mapping):
         return {}, {}
@@ -522,7 +531,7 @@ def _sanitize_headers(
                 val_str,
                 runtime_secrets=runtime_secrets,
                 credential_name=credential_label,
-                redact_ip_addresses=redact_ip_addresses,
+                ip_redactor=ip_redactor,
             )
             headers_out[key_str] = _truncate_str(scrubbed, MAX_HEADER_VALUE_LEN)
             if was_scrubbed:
@@ -608,12 +617,13 @@ def capture_external_egress(
     additional_args: Any,
     model_call_details: Mapping[str, Any],
     api_key: Any = None,
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     args = additional_args if isinstance(additional_args, Mapping) else {}
     litellm_params = model_call_details.get("litellm_params")
     lp = litellm_params if isinstance(litellm_params, Mapping) else {}
 
+    active_ip_redactor = _get_active_ip_redactor(ip_redactor)
     credential_name, credential_source = _resolve_credential_info(lp)
     raw_headers = args.get("headers") or {}
     runtime_secrets = _collect_runtime_secrets(api_key, lp, raw_headers=raw_headers)
@@ -622,7 +632,7 @@ def capture_external_egress(
         credential_label=credential_name,
         replace_action="replace:credential_name",
         runtime_secrets=runtime_secrets,
-        redact_ip_addresses=redact_ip_addresses,
+        ip_redactor=active_ip_redactor,
     )
     body_params, process_body, raw_body_keys = _summarize_body(
         args.get("complete_input_dict") or {},
@@ -634,6 +644,7 @@ def capture_external_egress(
             str(args.get("api_base") or ""),
             credential_name=credential_name,
             runtime_secrets=runtime_secrets,
+            ip_redactor=active_ip_redactor,
         ),
         "credential_name": credential_name,
         "credential_source": credential_source,
@@ -679,7 +690,7 @@ def build_gateway_io_metadata(
     sanitized_error_info: Mapping[str, Any] | None = None,
     sanitized_model: str | None = None,
     sanitized_model_group: str | None = None,
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     psr = litellm_params.get("proxy_server_request")
     psr_map = psr if isinstance(psr, Mapping) else {}
@@ -699,7 +710,7 @@ def build_gateway_io_metadata(
         credential_label=key_label,
         replace_action="replace:key_alias",
         runtime_secrets=in_secrets,
-        redact_ip_addresses=redact_ip_addresses,
+        ip_redactor=ip_redactor,
     )
     raw_route = str(psr_map.get("url") or metadata.get("user_api_key_request_route") or "")
     raw_in_model = str(psr_body_map.get("model") or metadata.get("model_group") or "")
@@ -708,7 +719,7 @@ def build_gateway_io_metadata(
             raw_route,
             credential_name=key_label,
             runtime_secrets=in_secrets,
-            redact_ip_addresses=redact_ip_addresses,
+            ip_redactor=ip_redactor,
         ),
         "model": _sanitize_model_name(
             raw_in_model,
@@ -785,13 +796,13 @@ def build_gateway_io_metadata(
             sanitized_model=sanitized_model,
             sanitized_model_group=sanitized_model_group,
         )
-    if redact_ip_addresses:
+    if ip_redactor is not None:
         if ext_api_base:
-            ext_api_base, _ = _scrub_text(ext_api_base, redact_ip_addresses=True)
+            ext_api_base = ip_redactor(ext_api_base)
         for hk, hv in list(ext_headers.items()):
-            scrubbed_hv, was_ip = _scrub_text(hv, redact_ip_addresses=True)
-            if was_ip:
-                ext_headers[hk] = scrubbed_hv
+            redacted_hv = ip_redactor(hv)
+            if redacted_hv != hv:
+                ext_headers[hk] = redacted_hv
                 ext_proc_header[hk] = "mask"
 
     in_body_keys = {str(k) for k in psr_body_map}
@@ -831,7 +842,7 @@ def build_gateway_io_metadata(
         credential_label=None,
         strip_provider_prefix=True,
         runtime_secrets=runtime_secrets,
-        redact_ip_addresses=redact_ip_addresses,
+        ip_redactor=ip_redactor,
     )
     external_ingress: dict[str, Any] = {
         "status": status_str,
@@ -851,7 +862,12 @@ def build_gateway_io_metadata(
         else getattr(response_obj, "access_programs", None)
     )
     if resp_ap is not None:
-        external_ingress["access_programs"] = resp_ap
+        external_ingress["access_programs"] = _sanitize_safe_nested(
+            resp_ap,
+            runtime_secrets=runtime_secrets,
+            credential_name=cred_name,
+            ip_redactor=ip_redactor,
+        )
     if is_failure:
         san_err = sanitized_error_info if isinstance(sanitized_error_info, Mapping) else {}
         err_cls = (
@@ -868,7 +884,7 @@ def build_gateway_io_metadata(
                 runtime_secrets=runtime_secrets,
                 credential_name=cred_name,
                 scrub_high_entropy=True,
-                redact_ip_addresses=redact_ip_addresses,
+                ip_redactor=ip_redactor,
             )
             external_ingress["error_message"] = _truncate_str(scrubbed_err, MAX_ERROR_MSG_LEN)
     if resp_proc_header:
@@ -891,7 +907,7 @@ def attach_gateway_io_to_spend_log_payload(
     *,
     kwargs: Mapping[str, Any] | None,
     response_obj: object,
-    redact_ip_addresses: bool = False,
+    ip_redactor: Callable[[str], str] | None = None,
 ) -> Any:
     if not isinstance(payload, dict):
         return payload
@@ -930,7 +946,7 @@ def attach_gateway_io_to_spend_log_payload(
         sanitized_error_info=sanitized_err if isinstance(sanitized_err, Mapping) else None,
         sanitized_model=str(payload["model"]) if isinstance(payload.get("model"), str) else None,
         sanitized_model_group=str(payload["model_group"]) if isinstance(payload.get("model_group"), str) else None,
-        redact_ip_addresses=redact_ip_addresses,
+        ip_redactor=ip_redactor,
     )
     if isinstance(parsed_meta, dict):
         parsed_meta.pop("_gateway_credential_name", None)

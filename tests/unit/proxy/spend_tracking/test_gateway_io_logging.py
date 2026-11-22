@@ -185,7 +185,6 @@ def test_gateway_io_logging_redacts_rejected_model_schema_desc_and_ip() -> None:
             },
         },
         model_call_details={"litellm_params": {}},
-        redact_ip_addresses=True,
     )
     res = build_gateway_io_metadata(
         kwargs={"_gateway_external_egress": cap, "exception": types.SimpleNamespace(status_code=400)},
@@ -205,7 +204,7 @@ def test_gateway_io_logging_redacts_rejected_model_schema_desc_and_ip() -> None:
         sanitized_error_info={"error_class": "BadRequestError", "error_message": "bad model"},
         sanitized_model="invalid-model",
         sanitized_model_group="invalid-model",
-        redact_ip_addresses=True,
+        ip_redactor=lambda text: text.replace("203.0.113.9", "***"),
     )
     out = json.dumps(res)
     for leaked in ("Patient has diabetes", "PRIVATE_SCHEMA_DESC", "203.0.113.9"):
@@ -215,3 +214,22 @@ def test_gateway_io_logging_redacts_rejected_model_schema_desc_and_ip() -> None:
     assert res["external"]["egress"]["body_params"]["response_format"]["type"] == "json_schema"
     assert res["external"]["egress"]["body_params"]["response_format"]["strict"] is True
     assert res["external"]["egress"]["headers"]["x-correlation-id"] == "client-***"
+
+
+
+def test_gateway_io_logging_redacts_secrets_in_response_access_programs() -> None:
+    raw_sec = "myProviderSecretKey9988"
+    res = build_gateway_io_metadata(
+        kwargs={"api_key": raw_sec},
+        metadata={"status": "success"},
+        litellm_params={"api_key": raw_sec, "litellm_metadata": {"_gateway_credential_name": "OpenAI-prod"}},
+        response_obj_dict={"model": "gpt-6.1-terra", "access_programs": {"cyber": "daybreak_blue", "echo": raw_sec}},
+        standard_logging_payload=None,
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com/v1/responses",
+        response_obj=None,
+    )
+    out = json.dumps(res)
+    assert raw_sec not in out
+    assert res["external"]["ingress"]["access_programs"]["cyber"] == "daybreak_blue"
+    assert res["external"]["ingress"]["access_programs"]["echo"] == "<credential:OpenAI-prod>"
