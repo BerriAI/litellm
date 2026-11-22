@@ -54,6 +54,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     tool_call_dict_from_output_item,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list, has_attributes
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -83,7 +84,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import (
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
-    decode_compaction_item,
+    output_compaction_summary,
     with_compaction_summary,
 )
 from litellm.responses.litellm_completion_transformation.custom_tools import without_malformed_tool_flags
@@ -179,13 +180,6 @@ _OutputItemPosition: TypeAlias = _AnswerPosition | _ReasoningPosition
 _ReasoningTextPosition: TypeAlias = _ReasoningPosition | _ProviderThinkingBlockPosition
 _OutputPosition: TypeAlias = _OutputItemPosition | _ProviderThinkingBlockPosition
 _REASONING_POSITION_TYPES: Final = (_ReasoningSummaryPosition, _ReasoningContentPosition, _ThinkingBlockPosition)
-
-
-def _output_compaction_summary(item: object) -> str | None:
-    if stream_item_field(item, "type") != "compaction":
-        return None
-    block: Final = decode_compaction_item(stream_item_field(item, "encrypted_content"))
-    return None if block is None else block.summary
 
 
 def _reasoning_output_texts(item: object, output_index: int) -> tuple[tuple[_ReasoningPosition, str], ...]:
@@ -580,7 +574,7 @@ def _rewritten_tool_search_call(item: object, payload: str | None) -> object:
     return item
 
 
-_RewriteKey: Final = TypeVar("_RewriteKey")
+_RewriteKey = TypeVar("_RewriteKey")
 
 
 def _delta_replacements(rewrites: Mapping[_RewriteKey, str]) -> Mapping[_RewriteKey, Iterator[str]]:
@@ -955,6 +949,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         for item in raw_input
     )
@@ -963,6 +958,7 @@ def _input_item_provenance(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=request_params,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -976,6 +972,7 @@ def _input_item_provenance(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=request_params,
                 replay_tool_search=True,
+                member_name=qualified_member_name,
             )
         )
         for start, end in units
@@ -1056,7 +1053,7 @@ def tool_output_texts(item: object) -> tuple[tuple[int | None, str], ...]:
     return ((None, tool_content),) if isinstance(tool_content, str) and tool_content else ()
 
 
-_Grouped: Final = TypeVar("_Grouped")
+_Grouped = TypeVar("_Grouped")
 
 
 def _pair_call_id(pair: tuple[str, object]) -> str:
@@ -1294,6 +1291,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             input=input_data,
             responses_api_request=data,
             replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
@@ -1339,7 +1337,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             () if is_server_tool_search_tool(tool) else form.chat_tools
             for tool, form in zip(
                 scanned_tools,
-                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools),
+                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools, qualified_member_name),
                 strict=True,
             )
         )
@@ -1374,7 +1372,12 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools"), scan_only=scan_only
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            scan_only=scan_only,
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         written_back: Final = self._written_back_request_fields(
             data,
@@ -1530,13 +1533,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
         *,
         scan_only: bool,
+        guardrail_name: str | None,
     ) -> None:
         if guardrailed_tools is None:
             return
         merge: Final = append_returned_tools if scan_only else merge_guardrailed_tools
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge(original_tools, flattened_tool_groups, guardrailed_tools)
-        )
+        merged: Final = merge(original_tools, flattened_tool_groups, guardrailed_tools)
+        if merged is None:
+            raise unappliable_request_rewrite(guardrail_name)
+        data["tools"] = list(merged)  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,
@@ -1907,7 +1912,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.output_item.done":
             finished_item: Final = stream_item_field(final_chunk, "item")
-            finished_summary: Final = _output_compaction_summary(finished_item)
+            finished_summary: Final = output_compaction_summary(finished_item)
             model_response_stream: Final = (
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
             )
@@ -2495,7 +2500,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         part_texts: Final = tuple(
             text for part in message_parts if isinstance(text := stream_item_field(part, "text"), str) and text
         )
-        summaries: Final = tuple(summary for item in output_items if (summary := _output_compaction_summary(item)))
+        summaries: Final = tuple(summary for item in output_items if (summary := output_compaction_summary(item)))
         reasoning_texts: Final = chain.from_iterable(
             _reasoning_output_texts(item, output_index) for output_index, item in enumerate(output_items)
         )
@@ -2600,7 +2605,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 tool_calls_to_check.append(_scanned_tool_call(tool_call_item, output_idx))
             return
 
-        summary: Final = _output_compaction_summary(output_item)
+        summary: Final = output_compaction_summary(output_item)
         if summary is not None:
             texts_to_check.append(summary)
             task_mappings.append(_CompactionSummaryPosition(output_idx))

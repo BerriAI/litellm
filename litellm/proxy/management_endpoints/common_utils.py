@@ -43,7 +43,7 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
 
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import DualCache
+from litellm.models.budget import active_rollover_credit
 from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
     KeyRequestBase,
@@ -60,6 +60,7 @@ from litellm.proxy._types import (  # re-exported
     user_api_key_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management.teams.authz import is_team_admin
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     _premium_user_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -76,6 +77,32 @@ _user_has_admin_view: Final = user_api_key_has_admin_view
 
 # TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
 _is_user_team_admin: Final = is_team_admin
+
+ROLLOVER_BUDGET_FIELDS: Final = frozenset({"max_budget", "budget_duration", "rollover_max_budget"})
+_ROLLOVER_AMOUNT: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
+_ROLLOVER_DURATION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def validate_rollover_budget_patch(
+    patch: Mapping[str, object],
+    stored: Mapping[str, object] = MappingProxyType({}),
+) -> None:
+    if not patch.keys() & ROLLOVER_BUDGET_FIELDS:
+        return
+    merged_cap: Final = _ROLLOVER_AMOUNT.validate_python(
+        patch.get("rollover_max_budget", stored.get("rollover_max_budget"))
+    )
+    if merged_cap is None:
+        return
+    merged_base: Final = _ROLLOVER_AMOUNT.validate_python(patch.get("max_budget", stored.get("max_budget")))
+    merged_duration: Final = _ROLLOVER_DURATION.validate_python(
+        patch.get("budget_duration", stored.get("budget_duration"))
+    )
+    if active_rollover_credit(merged_base, merged_cap, merged_duration, None) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Budget rollover requires a reset period and a positive base budget below the rollover cap.",
+        )
 
 
 def validate_team_model_max_budget(
@@ -318,7 +345,7 @@ _team_member_has_permission: Final = team_member_has_permission
 async def user_has_admin_privileges(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: Optional["ProxyLogging"] = None,
 ) -> bool:
     """
@@ -342,14 +369,13 @@ async def user_has_admin_privileges(
         return False
 
     # Get user object to check team and org admin status
-    from litellm.caching import DualCache as DualCacheImport
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
         user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache or DualCacheImport(),
+            user_api_key_cache=user_api_key_cache or UserApiKeyCache(),
             user_id_upsert=False,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -457,7 +483,7 @@ async def admin_can_invite_user(
     target_user_id: str,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional["PrismaClient"] = None,
-    user_api_key_cache: Optional["DualCache"] = None,
+    user_api_key_cache: UserApiKeyCache | None = None,
     proxy_logging_obj: Optional["ProxyLogging"] = None,
 ) -> bool:
     """
@@ -484,11 +510,10 @@ async def admin_can_invite_user(
     if prisma_client is None or user_api_key_dict.user_id is None:
         return False
 
-    from litellm.caching import DualCache as DualCacheImport
     from litellm.proxy.auth.auth_checks import get_user_object
 
     try:
-        cache: Final = user_api_key_cache or DualCacheImport()
+        cache: Final = user_api_key_cache or UserApiKeyCache()
         admin_user_obj: Final = await get_user_object(
             user_id=user_api_key_dict.user_id,
             prisma_client=prisma_client,
@@ -700,6 +725,7 @@ async def upsert_budget_and_membership(
             _BUDGET_COLUMNS.validate_python(existing_budget.model_dump()) if existing_budget is not None else {}
         )
         reject_budget_windows(merged)
+        validate_rollover_budget_patch(write_data, merged)
         merged.update(write_data)
         if not _has_meaningful_budget_limit(merged):
             await _disconnect()
@@ -719,6 +745,7 @@ async def upsert_budget_and_membership(
         else MappingProxyType({})
     )
     reject_budget_windows(source)
+    validate_rollover_budget_patch(write_data, source)
     if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
         return
 
@@ -729,7 +756,7 @@ async def upsert_budget_and_membership(
         **MappingProxyType(
             {
                 f: source[f]
-                for f in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS
+                for f in (*_TEAM_MEMBER_BUDGET_LIMIT_FIELDS, "rollover_max_budget")
                 if (
                     f != "model_max_budget"
                     or team_default_budget_id is None

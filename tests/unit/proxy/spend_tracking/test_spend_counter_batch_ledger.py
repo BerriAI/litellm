@@ -1,3 +1,4 @@
+from collections import Counter
 from typing import Final
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -55,7 +56,9 @@ async def test_post_call_increment_for_every_entity_costs_one_mget_and_one_pipel
         reported: Final = await calls.reported(2)
 
     commands: Final = _round_trip_commands(redis)
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert commands[0][0] == "MGET"
+    assert Counter[str](command[0] for command in commands)["MGET"] == 1
     assert set(commands[0][1:]) == _POST_CALL_KEYS
     assert {command[1] for command in commands if command[0] == "INCRBYFLOAT"} == _POST_CALL_KEYS
     assert {key: redis.values[key] for key in _POST_CALL_KEYS} == dict.fromkeys(_POST_CALL_KEYS, 1.5)
@@ -78,8 +81,11 @@ async def test_post_call_cold_counters_seed_from_the_mget_miss_without_a_second_
         await ps.increment_spend_counters(token="hashed", team_id="team", user_id=None, response_cost=0.5)
         reported: Final = await calls.reported(3)
 
-    seeds: Final = [command[:3] for command in _round_trip_commands(redis) if command[0] == "SET"]
-    assert reported == ("MGET", "SET", "pipeline")
+    commands: Final = _round_trip_commands(redis)
+    seeds: Final = [command[:3] for command in commands if command[0] == "SET"]
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "SET": 1, "pipeline": 1})
+    assert [command[0] for command in commands[:2]] == ["MGET", "SET"]
+    assert Counter[str](command[0] for command in commands)["MGET"] == 1
     assert seeds == [("SET", "spend:team:team", "4.0")]
     assert redis.values["spend:key:hashed"] == 1.5
     assert redis.values["spend:team:team"] == 4.5

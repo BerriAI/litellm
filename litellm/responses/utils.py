@@ -160,8 +160,8 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
-_RequestInputT: Final = TypeVar("_RequestInputT")
-_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
+_RequestInputT = TypeVar("_RequestInputT")
+_StreamEventT = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(
@@ -1449,6 +1449,7 @@ class ResponseAPILoggingUtils:
             reasoning_tokens: Final = _output_token_detail(output_tokens_details, "reasoning_tokens")
             image_tokens: Final = _output_token_detail(output_tokens_details, "image_tokens")
             audio_tokens: Final = _output_token_detail(output_tokens_details, "audio_tokens")
+            video_tokens: Final = _output_token_detail(output_tokens_details, "video_tokens")
             reported_text_tokens: Final = _output_token_detail(output_tokens_details, "text_tokens")
             completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=reasoning_tokens,
@@ -1459,9 +1460,10 @@ class ResponseAPILoggingUtils:
                     completion_tokens=completion_tokens,
                     text_tokens=reported_text_tokens,
                     reasoning_tokens=reasoning_tokens or 0,
-                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0),
+                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0) + (video_tokens or 0),
                 ),
                 audio_tokens=audio_tokens,
+                video_tokens=video_tokens,
             )
 
         extra_usage_fields: Final = _UsageExtraFields(

@@ -4,8 +4,8 @@
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what their callers consume,
 //! and any memory tier private to that object. Queries are private to their folder, so every read goes through a
-//! repository and its `Database::run`. The shared auth cache in front of them stays with the host. See README.md
-//! for the layout.
+//! repository and its `Database::run`. The shared auth cache in front of the auth objects is composed with them
+//! in `auth-store`, never here. See README.md for the layout.
 
 macro_rules_attribute::attribute_alias! {
     #[apply(db_row)] =
@@ -43,12 +43,12 @@ pub use database::{Database, Side};
 pub use end_user::{EndUserRecord, EndUserRepository};
 pub use inserted::Inserted;
 pub use jwt_key_mapping::{JwtKeyMappingRepository, MappedClaim, NewKeyMapping};
-pub use key::{FetchedKey, KeyRepository};
+pub use key::{FetchedKey, KeyRepository, KeyView};
 pub use model_access_group::{ModelAccessGroupBudget, ModelAccessGroupRepository};
 pub use object_permission::{ObjectPermission, ObjectPermissionRepository};
 pub use organization::{Organization, OrganizationRepository};
 pub use project::{Project, ProjectRepository};
-use raw_json::RawJson;
+pub use raw_json::RawJson;
 pub use spend_log::{
     JsonText, SpendLogDelivery, SpendLogOwner, SpendLogRecord, SpendLogRepository, SpendLogWrite,
 };

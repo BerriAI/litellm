@@ -17,13 +17,7 @@ from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, ProxyException, UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-    project_cache_key,
-    tag_cache_key,
-    team_membership_reservation_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 from litellm.proxy.spend_tracking import native_budgets
 from litellm.proxy.spend_tracking.budget_reservation import (
@@ -38,6 +32,7 @@ from litellm.proxy.spend_tracking.budget_reservation import (
     reserve_budget_for_request,
 )
 from litellm.proxy.utils import ProxyLogging, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth, CustomerScopeKey
@@ -362,7 +357,7 @@ class Kind:
     counter: str
     entity_type: str
     token: Mapping[str, object] = field(default_factory=dict)
-    cache: Mapping[str, object] = field(default_factory=dict)
+    cache: Mapping[AuthObject, object] = field(default_factory=dict)
     body: Mapping[str, object] = field(default_factory=dict)
     member: bool = False
 
@@ -392,20 +387,22 @@ KINDS: Final[Mapping[str, Kind]] = {
         ORG,
         "Organization",
         token={"org_id": "org-1"},
-        cache={"org_id:org-1:with_budget": {"litellm_budget_table": {"max_budget": KIND_BUDGET}, "spend": 0.0}},
+        cache={
+            AuthObject.org_with_budget("org-1"): {"litellm_budget_table": {"max_budget": KIND_BUDGET}, "spend": 0.0}
+        },
     ),
     "project": Kind(
         PROJECT,
         "Project",
         token={"project_id": "project-1"},
-        cache={project_cache_key("project-1"): {"litellm_budget_table": {"max_budget": KIND_BUDGET}, "spend": 0.0}},
+        cache={AuthObject.project("project-1"): {"litellm_budget_table": {"max_budget": KIND_BUDGET}, "spend": 0.0}},
     ),
     "model_access_group": Kind(
         MAG,
         "Model access group",
         token={"matched_model_access_groups": ["mag-1"]},
         cache={
-            model_access_group_cache_key("mag-1"): ModelAccessGroupBudget(
+            AuthObject.model_access_group("mag-1"): ModelAccessGroupBudget(
                 access_group_name="mag-1", max_budget=KIND_BUDGET
             )
         },
@@ -414,7 +411,7 @@ KINDS: Final[Mapping[str, Kind]] = {
         MEMBER,
         "TeamMember",
         cache={
-            team_membership_reservation_cache_key(user_id="user-1", team_id="team-1"): LiteLLM_TeamMembership(
+            AuthObject.team_membership_reservation(user_id="user-1", team_id="team-1"): LiteLLM_TeamMembership(
                 user_id="user-1", team_id="team-1", litellm_budget_table=_budget(KIND_BUDGET)
             )
         },
@@ -423,7 +420,7 @@ KINDS: Final[Mapping[str, Kind]] = {
     "tag": Kind(
         TAG,
         "Tag",
-        cache={tag_cache_key("tag-1"): LiteLLM_TagTable(tag_name="tag-1", litellm_budget_table=_budget(KIND_BUDGET))},
+        cache={AuthObject.tag("tag-1"): LiteLLM_TagTable(tag_name="tag-1", litellm_budget_table=_budget(KIND_BUDGET))},
         body={"metadata": {"tags": ["tag-1"]}},
     ),
     "key_window": Kind(

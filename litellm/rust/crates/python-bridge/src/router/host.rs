@@ -1242,7 +1242,7 @@ mod tests {
 
     use futures_util::FutureExt;
     use litellm_router_core::{
-        FailureKind, HostFacts, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
+        FailureKind, InMemoryRouterCache, Op, Router, RouterConfig, RouterDynamicConfig,
         RouterRequest, SeededRandomness,
     };
     use rstest::{fixture, rstest};
@@ -1253,7 +1253,7 @@ mod tests {
     fn router(config: Value, dynamic: Value) -> Router {
         let config: RouterConfig = serde_json::from_value(config).unwrap();
         let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
-        Router::builder(config, dynamic, HostFacts::everything())
+        Router::builder(config, dynamic)
             .randomness(Arc::new(SeededRandomness::new(7)))
             .build()
             .unwrap()

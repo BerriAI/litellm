@@ -884,7 +884,7 @@ _OIDC_TOKEN_FETCH_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litel
 _PASS_THROUGH_CALL_TYPES: Final = frozenset(
     {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}
 )
-_Resolved: Final = TypeVar("_Resolved")
+_Resolved = TypeVar("_Resolved")
 
 
 async def _resolved_off_the_event_loop(resolve: Callable[[OidcResolver], _Resolved], api_key: object) -> _Resolved:
@@ -1804,6 +1804,18 @@ def _sync_speech_end_logger(
     return log_speech_end
 
 
+def _schedule_sync_success_logging(
+    logging_obj: LiteLLMLoggingObject,
+    result: object,
+    start_time: datetime.datetime,
+    end_time: datetime.datetime,
+    executor: BoundedLoggingThreadPoolExecutor,
+) -> None:
+    if not logging_obj.claim_sync_success_log():
+        return
+    executor.submit(contextvars.copy_context().run, logging_obj.success_handler, result, start_time, end_time)
+
+
 def _schedule_async_success_logging(
     logging_obj: LiteLLMLoggingObject,
     result: object,
@@ -2573,16 +2585,7 @@ def client(original_function):
                     ),
                 )
             elif not is_internal_call.get() and not logged_by_fallback_attempt:
-                # Copy the current context to propagate it to the background thread
-                # This is essential for OpenTelemetry span context propagation
-                ctx: Final = contextvars.copy_context()
-                executor.submit(
-                    ctx.run,
-                    logging_obj.success_handler,
-                    checked_result,
-                    start_time,
-                    end_time,
-                )
+                _schedule_sync_success_logging(logging_obj, checked_result, start_time, end_time, executor)
             # RETURN RESULT
             return checked_result
         except Exception as e:
@@ -4310,23 +4313,15 @@ def _without_overridden_price_variants(
     )
 
 
-@with_config(ConfigDict(extra="allow"))
-class _PricingModelInfo(ModelInfo):
-    pass
-
-
-_PRICING_MODEL_INFO: Final = TypeAdapter(_PricingModelInfo)
-
-
-def model_info_with_pricing_overrides(model_info: ModelInfo, registration: Mapping[str, object]) -> ModelInfo:
+def pricing_with_overrides(
+    model_info: Mapping[str, object], registration: Mapping[str, object]
+) -> Mapping[str, object]:
     from litellm.types.utils import is_server_derived_pricing_key
 
     overrides: Final = {
         name: value for name, value in registration.items() if value is not None and is_server_derived_pricing_key(name)
     }
-    return _PRICING_MODEL_INFO.validate_python(
-        update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
-    )
+    return update_dictionary(dict(_without_overridden_price_variants(model_info, overrides)), overrides)
 
 
 @dataclass(frozen=True, slots=True)
@@ -4423,7 +4418,7 @@ def is_generalized_model_info(model_info: ModelInfoBase) -> bool:
 
 _REGISTRATION_ATTEMPTS: Final = 3
 
-_ModelInfoT: Final = TypeVar("_ModelInfoT", bound=ModelInfoBase)
+_ModelInfoT = TypeVar("_ModelInfoT", bound=ModelInfoBase)
 
 
 def _lookup_mapped_model_info(lookup: Callable[[], _ModelInfoT]) -> _ModelInfoT | ModelInfoLookupMiss:
@@ -10354,7 +10349,7 @@ class ProviderConfigManager:
             )
 
             return VertexAIGPTOSSTransformation()
-        elif model in litellm.vertex_mistral_models:
+        elif model in litellm.vertex_mistral_models or "mistral" in model:
             if "codestral" in model:
                 return litellm.CodestralTextCompletionConfig()
             return litellm.VertexAIMistralConfig()
@@ -11001,6 +10996,10 @@ class ProviderConfigManager:
             return None
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.VERTEX_AI == provider:
+            from litellm.llms.vertex_ai.responses.transformation import VertexAIMuseResponsesAPIConfig
+
+            return VertexAIMuseResponsesAPIConfig.for_model(model)
         elif litellm.LlmProviders.SAIL == provider:
             from litellm.llms.sail.responses.transformation import SailResponsesAPIConfig
 
@@ -11955,6 +11954,12 @@ class ProviderConfigManager:
             )
 
             return ElevenLabsTextToSpeechConfig()
+        elif litellm.LlmProviders.GRADIUM == provider:
+            from litellm.llms.gradium.text_to_speech.transformation import (
+                GradiumTextToSpeechConfig,
+            )
+
+            return GradiumTextToSpeechConfig()
         elif litellm.LlmProviders.RUNWAYML == provider:
             from litellm.llms.runwayml.text_to_speech.transformation import (
                 RunwayMLTextToSpeechConfig,
