@@ -395,7 +395,7 @@ class _AnthropicStreamUsage:
     def _read(self, payload: bytes) -> None:
         try:
             event: Final[object] = json.loads(payload)  # pyright: ignore[reportAny]  # plain JSON
-        except ValueError:
+        except (ValueError, RecursionError):
             return
         frame: Final = as_str_mapping(event) or {}
         kind: Final = frame.get("type")

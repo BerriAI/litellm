@@ -59,7 +59,9 @@ class JSONFragmentAccumulator:
         unconsumed tail, e.g. a second concatenated value, in place rather
         than copying it) and returns (True, value). If the buffer is empty
         or holds no complete value yet, it is left untouched and this
-        returns (False, None).
+        returns (False, None). A value json cannot finish (nested too deep,
+        or a number too long to convert) never decodes, so the buffer is
+        dropped and this returns (False, None).
         """
         self._materialize()
         length: Final = len(self._buffer)
@@ -74,13 +76,19 @@ class JSONFragmentAccumulator:
             raw_value: Final = decoder.raw_decode(self._buffer, start)
         except json.JSONDecodeError:
             return False, None
+        except (ValueError, RecursionError):
+            self._clear()
+            return False, None
         decoded, end_index = cast("tuple[object, int]", raw_value)  # cast-ok: raw_decode returns tuple[Any, int]
         self._offset = end_index
         if self._offset >= len(self._buffer):
-            self._buffer = ""
-            self._offset = 0
-            self._could_close = False
+            self._clear()
         return True, decoded
+
+    def _clear(self) -> None:
+        self._buffer = ""
+        self._offset = 0
+        self._could_close = False
 
     def snapshot(self) -> str:
         self._materialize()

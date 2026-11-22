@@ -1307,8 +1307,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         responses_yielded: Final[list[object]] = []
         withheld_items: Final[list[object]] = []  # mutable-ok: streaming window must be released incrementally
         pending_end_of_stream_items: Final[list[object]] = []
-        # A tool-call hold reads the stream in whole frames: a transport read that stops inside a frame would
-        # hide the start of a tool call, and the end of the stream, from a check that reads one item at a time.
+        # The stream is read in whole frames: a transport read that stops inside a frame would hide its text, the
+        # start of a tool call, and the end of the stream from a check that reads one item at a time.
         holds_tool_calls: Final = hold_tool_calls and not buffer_until_moderated
         frame_tail: object | None = None  # rebind-ok: the unterminated end of the newest transport read
         # Whether any real response chunk has been forwarded to the client.
@@ -1351,15 +1351,14 @@ class UnifiedLLMGuardrails(CustomLogger):
                         yield remaining_item
                     return
 
-                if holds_tool_calls:
-                    # Typed, so the type checker knows what the split returns.
-                    framing_translation: BaseTranslation = mappings[CallTypes(call_type)]()
-                    whole_frames, frame_tail = framing_translation.split_whole_stream_frames(frame_tail, item)
-                    responses_so_far.pop()
-                    if whole_frames is None:
-                        continue
-                    responses_so_far.append(whole_frames)
-                    item = whole_frames  # the rest of this round reads the item in whole frames
+                # Typed, so the type checker knows what the split returns.
+                framing_translation: BaseTranslation = mappings[CallTypes(call_type)]()
+                whole_frames, frame_tail = framing_translation.split_whole_stream_frames(frame_tail, item)
+                responses_so_far.pop()
+                if whole_frames is None:
+                    continue
+                responses_so_far.append(whole_frames)
+                item = whole_frames  # the rest of this round reads the item in whole frames
 
                 # If end_of_stream_only mode, yield chunks without processing.
                 # When buffering, withhold them instead -- they are released (or

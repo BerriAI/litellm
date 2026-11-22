@@ -135,8 +135,17 @@ def loads_json_object(payload: str | bytes | bytearray) -> Mapping[str, object] 
         return None
 
 
+_JSON_NESTING_ALWAYS_DECODABLE: Final = 100
+_DIGIT_RUN_PYTHON_MAY_REFUSE: Final = re.compile(r"[0-9]{640}")
+
+
 def is_undecodable_json_object(payload: str) -> bool:
     if not payload.lstrip().startswith("{"):
+        return False
+    if (
+        payload.count("{") + payload.count("[") < _JSON_NESTING_ALWAYS_DECODABLE
+        and _DIGIT_RUN_PYTHON_MAY_REFUSE.search(payload) is None
+    ):
         return False
     try:
         json.loads(payload)
