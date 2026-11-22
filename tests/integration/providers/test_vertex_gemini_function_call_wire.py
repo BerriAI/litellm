@@ -4,9 +4,10 @@ import itertools
 import json
 import re
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import Final, Literal, TypeAlias
 
+import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -483,23 +484,23 @@ def _rejected_signature(body: bytes) -> Reply | None:
     return None
 
 
+def _answer() -> bytes:
+    return json.dumps(
+        {
+            "candidates": [{"content": {"role": "model", "parts": [{"text": _ANSWER}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 8, "totalTokenCount": 38},
+            "modelVersion": _GEMINI_3_BACKEND,
+        }
+    ).encode()
+
+
 def _gemini(provider: Provider) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", _target(provider)), request.target
         rejection: Final = _rejected_signature(request.body)
         if rejection is not None:
             return rejection
-        return Reply(
-            body=json.dumps(
-                {
-                    "candidates": [
-                        {"content": {"role": "model", "parts": [{"text": _ANSWER}]}, "finishReason": "STOP"}
-                    ],
-                    "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 8, "totalTokenCount": 38},
-                    "modelVersion": _GEMINI_3_BACKEND,
-                }
-            ).encode()
-        )
+        return Reply(body=_answer())
 
     return respond
 
@@ -592,3 +593,221 @@ def test_gemini_3_tool_call_id_with_intact_signature_replays_it_byte_for_byte(
     received: Final = _replay_parallel_pair(gateway, provider, f"call_paris__thought__{_ISSUED_SIGNATURE}")
     assert len(received) == 1, received
     assert _replayed_call_signatures(received[0].body) == [_ISSUED_SIGNATURE, None]
+
+
+_FIRST_ID: Final = "call_paris"
+_STREAM_TARGET: Final = f"{_GEMINI_3_MODEL_PATH}:streamGenerateContent?alt=sse"
+_FUNCTION_RESPONSE_KEYS: Final = ("functionResponse", "function_response")
+_EXPECTED_CALLS: Final = (
+    (_FIRST_ID, "get_weather", {"city": "Paris"}),
+    (_SIBLING_ID, "get_weather", {"city": "Rome"}),
+)
+_EXPECTED_RESULTS: Final = (
+    (_FIRST_ID, "get_weather", {"content": "sunny"}),
+    (_SIBLING_ID, "get_weather", {"content": "rainy"}),
+)
+_CHAT_TOOLS: Final = [{"type": "function", "function": _FUNCTIONS[0]}]
+_RESPONSES_TOOLS: Final = [{"type": "function", **_FUNCTIONS[0]}]
+
+
+class _Delta(TypedDict):
+    content: NotRequired[ReadOnly[str | None]]
+
+
+class _StreamChoice(TypedDict):
+    delta: ReadOnly[_Delta]
+
+
+class _StreamChunk(TypedDict):
+    choices: NotRequired[ReadOnly[tuple[_StreamChoice, ...]]]
+
+
+_STREAM_CHUNK: Final = TypeAdapter(_StreamChunk)
+
+
+def _vertex_gemini_3(request: Request) -> Reply:
+    if request.target != _STREAM_TARGET:
+        return _gemini("vertex_ai")(request)
+    rejection: Final = _rejected_signature(request.body)
+    if rejection is not None:
+        return rejection
+    return Reply(content_type="text/event-stream", chunks=(b"data: " + _answer() + b"\n\n",))
+
+
+def _send(gateway: Gateway, path: str, body: Mapping[str, JsonValue]) -> tuple[httpx.Response, tuple[Request, ...]]:
+    with wire_server(_vertex_gemini_3) as wire, gateway.scenario() as scenario:
+        model: Final = _register(gateway, scenario, "vertex_ai", wire)
+        response: Final = gateway.request("POST", path, {"model": model, **body})
+        return response, wire.drain()
+
+
+def _has_any(part: dict[str, JsonValue], keys: tuple[str, ...]) -> bool:
+    return any(key in part for key in keys)
+
+
+def _row(part: dict[str, JsonValue], keys: tuple[str, ...], field: str) -> tuple[JsonValue, JsonValue, JsonValue]:
+    payload: Final = _JSON_OBJECT.validate_python(next(part[key] for key in keys if key in part))
+    return payload.get("id"), payload.get("name"), payload.get(field)
+
+
+def _merged_tool_turn_calls(request: Request) -> tuple[dict[str, JsonValue], ...]:
+    assert request.target in (_target("vertex_ai"), _STREAM_TARGET), request.target
+    contents: Final = _contents(request.body)
+    assert [content.get("role") for content in contents] == ["user", "model", "user"], contents
+    call_parts: Final = tuple(part for part in _parts(contents[1]) if _has_any(part, _FUNCTION_CALL_KEYS))
+    result_parts: Final = _parts(contents[2])
+    assert all(_has_any(part, _FUNCTION_RESPONSE_KEYS) for part in result_parts), result_parts
+    assert tuple(_row(part, _FUNCTION_CALL_KEYS, "args") for part in call_parts) == _EXPECTED_CALLS
+    assert tuple(_row(part, _FUNCTION_RESPONSE_KEYS, "response") for part in result_parts) == _EXPECTED_RESULTS
+    return call_parts
+
+
+def _split_tool_turn(first_id: str, reasoning: str | None) -> list[JsonValue]:
+    second_call: Final = {"role": "assistant", "content": None, "tool_calls": [_call(_SIBLING_ID, "Rome")]}
+    return [
+        {"role": "user", "content": "Weather in Paris and Rome?"},
+        {"role": "assistant", "content": None, "tool_calls": [_call(first_id, "Paris")]},
+        second_call if reasoning is None else {**second_call, "reasoning_content": reasoning},
+        {"role": "tool", "tool_call_id": first_id, "content": "sunny"},
+        {"role": "tool", "tool_call_id": _SIBLING_ID, "content": "rainy"},
+    ]
+
+
+def _streamed_text(body: str) -> str:
+    payloads: Final = tuple(line.removeprefix("data: ") for line in body.splitlines() if line.startswith("data: "))
+    assert payloads and payloads[-1] == "[DONE]", payloads[-3:]
+    choices: Final = itertools.chain.from_iterable(
+        _STREAM_CHUNK.validate_json(payload).get("choices", ()) for payload in payloads[:-1]
+    )
+    return "".join(choice["delta"].get("content") or "" for choice in choices)
+
+
+@pytest.mark.parametrize("reasoning", [None, "Now Rome."], ids=["plain", "with_reasoning"])
+def test_gemini_3_consecutive_assistant_tool_calls_reach_vertex_as_one_model_turn(
+    gateway: Gateway, reasoning: str | None
+) -> None:
+    response, received = _send(
+        gateway,
+        "/v1/chat/completions",
+        {"tools": _CHAT_TOOLS, "messages": _split_tool_turn(_FIRST_ID, reasoning)},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == _ANSWER
+    assert len(received) == 1, received
+    calls: Final = _merged_tool_turn_calls(received[0])
+    assert _signature_of(calls[0]) == _PLACEHOLDER_SIGNATURE
+
+
+def test_gemini_3_consecutive_assistant_tool_calls_reach_vertex_as_one_model_turn_streaming(gateway: Gateway) -> None:
+    response, received = _send(
+        gateway,
+        "/v1/chat/completions",
+        {"tools": _CHAT_TOOLS, "messages": _split_tool_turn(_FIRST_ID, "Now Rome."), "stream": True},
+    )
+    assert response.status_code == 200, response.text
+    assert _streamed_text(response.text) == _ANSWER
+    assert len(received) == 1, received
+    assert received[0].target == _STREAM_TARGET
+    calls: Final = _merged_tool_turn_calls(received[0])
+    assert _signature_of(calls[0]) == _PLACEHOLDER_SIGNATURE
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+def test_gemini_3_responses_reasoning_between_function_calls_reaches_vertex_as_one_model_turn(
+    gateway: Gateway, stream: bool
+) -> None:
+    response, received = _send(
+        gateway,
+        "/v1/responses",
+        {
+            "tools": _RESPONSES_TOOLS,
+            "stream": stream,
+            "input": [
+                {"role": "user", "content": "Weather in Paris and Rome?"},
+                {
+                    "type": "function_call",
+                    "call_id": _FIRST_ID,
+                    "name": "get_weather",
+                    "arguments": json.dumps({"city": "Paris"}),
+                },
+                {
+                    "type": "reasoning",
+                    "id": "rs_rome",
+                    "summary": [],
+                    "content": [{"type": "reasoning_text", "text": "Now Rome."}],
+                },
+                {
+                    "type": "function_call",
+                    "call_id": _SIBLING_ID,
+                    "name": "get_weather",
+                    "arguments": json.dumps({"city": "Rome"}),
+                },
+                {"type": "function_call_output", "call_id": _FIRST_ID, "output": "sunny"},
+                {"type": "function_call_output", "call_id": _SIBLING_ID, "output": "rainy"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert _ANSWER in response.text, response.text
+    assert len(received) == 1, received
+    assert received[0].target == (_STREAM_TARGET if stream else _target("vertex_ai"))
+    _merged_tool_turn_calls(received[0])
+
+
+def test_gemini_3_consecutive_assistant_tool_calls_keep_the_signature_on_its_own_call(gateway: Gateway) -> None:
+    signed_id: Final = f"{_FIRST_ID}__thought__{_ISSUED_SIGNATURE}"
+    response, received = _send(
+        gateway,
+        "/v1/chat/completions",
+        {"tools": _CHAT_TOOLS, "messages": _split_tool_turn(signed_id, None)},
+    )
+    assert response.status_code == 200, response.text
+    assert len(received) == 1, received
+    first, second = _merged_tool_turn_calls(received[0])
+    assert _signature_of(first) == _ISSUED_SIGNATURE
+    assert _signature_of(second) != _ISSUED_SIGNATURE
+
+
+def test_gemini_3_single_assistant_message_with_both_tool_calls_reaches_vertex_as_one_model_turn(
+    gateway: Gateway,
+) -> None:
+    response, received = _send(
+        gateway,
+        "/v1/chat/completions",
+        {
+            "tools": _CHAT_TOOLS,
+            "messages": [
+                {"role": "user", "content": "Weather in Paris and Rome?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_call(_FIRST_ID, "Paris"), _call(_SIBLING_ID, "Rome")],
+                },
+                {"role": "tool", "tool_call_id": _FIRST_ID, "content": "sunny"},
+                {"role": "tool", "tool_call_id": _SIBLING_ID, "content": "rainy"},
+            ],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["choices"][0]["message"]["content"] == _ANSWER
+    assert len(received) == 1, received
+    calls: Final = _merged_tool_turn_calls(received[0])
+    assert _signature_of(calls[0]) == _PLACEHOLDER_SIGNATURE
+
+
+def test_gemini_3_tool_result_for_a_call_no_assistant_made_is_rejected_before_vertex(gateway: Gateway) -> None:
+    response, received = _send(
+        gateway,
+        "/v1/chat/completions",
+        {
+            "tools": _CHAT_TOOLS,
+            "messages": [
+                {"role": "user", "content": "Weather in Paris?"},
+                {"role": "assistant", "content": None, "tool_calls": [_call(_FIRST_ID, "Paris")]},
+                {"role": "tool", "tool_call_id": _FIRST_ID, "content": "sunny"},
+                {"role": "tool", "tool_call_id": "call_never_issued", "content": "rainy"},
+            ],
+        },
+    )
+    assert response.status_code >= 400, response.text
+    assert received == ()

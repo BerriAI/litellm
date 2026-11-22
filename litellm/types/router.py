@@ -12,7 +12,6 @@ from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Annotated,
-    Any,
     ClassVar,
     Final,
     Generic,
@@ -32,6 +31,7 @@ from pydantic import (
     Field,
     JsonValue,
     StrictInt,
+    TypeAdapter,
     ValidationError,
     ValidationInfo,
     ValidatorFunctionWrapHandler,
@@ -50,6 +50,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.router_api import RoutingContext as RouterContext
 
 from .completion import CompletionRequest
@@ -83,6 +84,8 @@ from .utils import (
 )
 
 AllowedModelRegion: TypeAlias = Literal["eu", "us"]
+
+_OPAQUE_VALUE: Final = TypeAdapter(object)
 
 
 class SilentExperimentFlag(TypedDict, total=False):
@@ -398,7 +401,7 @@ class ModelInfo(MirroredPricingParams):
 
     def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
@@ -560,7 +563,7 @@ _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
 _STRICT_LITELLM_PARAMS: Final = MappingProxyType({"strict_litellm_params": True})
 
-_StrictlyValidatedParams: Final = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
+_StrictlyValidatedParams = TypeVar("_StrictlyValidatedParams", bound=BaseModel)
 
 
 def validate_litellm_params_strictly(
@@ -573,7 +576,7 @@ def _none_when_malformed_outside_strict_validation(
     value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
 ) -> object:
     try:
-        return handler(value)
+        return _OPAQUE_VALUE.validate_python(handler(value))
     except ValidationError:
         if info.context is _STRICT_LITELLM_PARAMS:
             raise
@@ -765,7 +768,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
@@ -794,7 +797,7 @@ class LiteLLM_Params(GenericLiteLLMParams):
 
     def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
@@ -964,9 +967,9 @@ class Deployment(LiteLLMBaseModel):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key) -> object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _OPAQUE_VALUE.validate_python(getattr(self, key))
 
     def __setitem__(self, key, value) -> None:
         # Allow dictionary-style assignment of attributes
@@ -1174,7 +1177,7 @@ class GuardrailTypedDict(TypedDict, total=False):
 
     guardrail_name: Required[str]
     litellm_params: Required[GuardrailLiteLLMParams]
-    callback: Any  # The CustomGuardrail instance
+    callback: "CustomGuardrail | None"
     id: str | None  # Unique identifier for the guardrail deployment
 
 
@@ -1425,7 +1428,7 @@ class PreRoutingHookResponse(LiteLLMBaseModel):
     """
 
     model: str
-    messages: list[dict[str, Any]] | None
+    messages: list[dict[str, object]] | None
     routing_decision: StandardLoggingRoutingDecision | None = None
     session_affinity_ttl_seconds: int | None = None
     session_affinity_conversation_id: str | None = None
@@ -1480,9 +1483,9 @@ class PreRoutingStrategy(Protocol):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict[str, Any],
-        messages: list[dict[str, Any]] | None = None,
-        input: "str | list[Any] | None" = None,
+        request_kwargs: dict[str, object],
+        messages: list[dict[str, object]] | None = None,
+        input: "str | list[object] | None" = None,
         specific_deployment: bool | None = False,
         call_type: str | None = None,
     ) -> "PreRoutingHookResponse | None": ...

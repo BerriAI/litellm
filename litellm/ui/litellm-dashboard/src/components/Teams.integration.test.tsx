@@ -75,7 +75,7 @@ describe("Teams creation integration", () => {
     const modelSelectors = screen.getAllByPlaceholderText("Select model");
     await user.click(modelSelectors[0]);
     await user.click(await screen.findByRole("option", { name: "gpt-4" }));
-    fireEvent.change(screen.getAllByPlaceholderText("Max spend ($)")[0], { target: { value: "4" } });
+    fireEvent.change(screen.getAllByPlaceholderText("Max Budget")[0], { target: { value: "4" } });
     await user.click(screen.getByText("Additional Settings"));
 
     fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Budget Team" } });

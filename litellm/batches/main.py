@@ -13,9 +13,9 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final, Literal, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
@@ -23,7 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -73,7 +73,7 @@ class _PopsKeys(Protocol):
 
 def _resolve_timeout(
     optional_params: GenericLiteLLMParams,
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     custom_llm_provider: str,
     default_timeout: float = 600.0,
 ) -> float:
@@ -107,7 +107,7 @@ def _resolve_timeout(
         return float(default_timeout)
 
     # Handle numeric values (int, float, string representations)
-    return float(timeout)
+    return float_of(timeout)
 
 
 @client

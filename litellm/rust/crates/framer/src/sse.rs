@@ -104,6 +104,61 @@ pub struct SseBlock {
     pub event: Option<SseEvent>,
 }
 
+impl SseBlock {
+    /// This block carrying `data` in place of its event's data, every other byte as it was read:
+    /// the other fields, the comments, and the terminator each line ends with. A block that
+    /// carries no event stays as it is.
+    ///
+    /// Encoding the changed [`SseEvent`] again would be shorter, and a relay must not do it. An
+    /// `SseEvent` holds only what the block dispatches, so the comments, the fields the spec does
+    /// not name, the BOM, the order of the lines and their `\r\n` or `\r` endings would be lost,
+    /// and the client would stop getting the provider's bytes.
+    ///
+    /// `data` is written where the event's last `data` line was, one line per `\n` of it, each
+    /// ending as that line did. Written at the first one, a block that mixes line endings could
+    /// lose the blank line that closes it: dropping the later `data` lines can leave a kept `\r`
+    /// right ahead of the blank line's `\n`, and the two read as one `\r\n`.
+    #[must_use]
+    pub fn with_data(self, data: &str) -> Self {
+        let Some(event) = self.event else {
+            return self;
+        };
+        let (bom, fields) = self.bytes.split_at(fields_start(&self.bytes, &event));
+        let lines: Vec<(&[u8], &[u8])> = terminated(fields).collect();
+        let last_data = lines.iter().rposition(|(line, _)| is_data(line));
+        let mut bytes = BytesMut::with_capacity(self.bytes.len() + data.len());
+        bytes.put_slice(bom);
+        for (index, (line, terminator)) in lines.into_iter().enumerate() {
+            if !is_data(line) {
+                bytes.put_slice(line);
+                bytes.put_slice(terminator);
+            } else if Some(index) == last_data {
+                for line in data.split('\n') {
+                    bytes.put_slice(b"data: ");
+                    bytes.put_slice(line.as_bytes());
+                    bytes.put_slice(terminator);
+                }
+            }
+        }
+        Self {
+            bytes: bytes.freeze(),
+            event: Some(SseEvent {
+                data: data.to_owned(),
+                ..event
+            }),
+        }
+    }
+}
+
+/// Where the fields of a block that dispatched `event` start: past the BOM, when the block
+/// opened its stream with one. A BOM anywhere else is part of the field name it precedes.
+fn fields_start(block: &[u8], event: &SseEvent) -> usize {
+    match block.strip_prefix(BOM) {
+        Some(fields) if event_in(fields).ok().flatten().as_ref() == Some(event) => BOM.len(),
+        _ => 0,
+    }
+}
+
 #[derive(Default)]
 struct Unread {
     bytes: BytesMut,
@@ -188,6 +243,15 @@ fn lines(bytes: &[u8]) -> impl Iterator<Item = (&[u8], usize)> {
     })
 }
 
+/// Each line of `bytes` and the terminator that ends it.
+fn terminated(bytes: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    lines(bytes).scan(0, move |start, (line, end)| {
+        let terminator = &bytes[*start + line.len()..end];
+        *start = end;
+        Some((line, terminator))
+    })
+}
+
 fn terminator_len(terminated: &[u8]) -> usize {
     match terminated {
         [b'\r', b'\n', ..] => 2,
@@ -235,6 +299,10 @@ impl Pending {
             retry: self.retry,
         })
     }
+}
+
+fn is_data(line: &[u8]) -> bool {
+    split_field(line).0 == b"data"
 }
 
 fn split_field(line: &[u8]) -> (&[u8], &[u8]) {
@@ -353,6 +421,66 @@ mod tests {
             .collect();
 
         assert_eq!(split(wire, size).await, expected);
+    }
+
+    #[rstest]
+    #[case::lines_that_are_not_data_stay(
+        b": note\nvendor: 1\nevent: delta\nid: 7\ndata: old\n\n",
+        vec![&b": note\nvendor: 1\nevent: delta\nid: 7\ndata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::every_data_line_gives_way_to_the_new_data_at_the_last(
+        b"data: a\nretry: 5\ndata: b\n\n",
+        vec![&b"retry: 5\ndata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::the_new_data_ends_its_lines_as_the_last_data_line_did(
+        b"data: a\rdata: b\n\n",
+        vec![&b"data: new\ndata: data\n\n"[..]]
+    )]
+    #[case::a_cr_kept_ahead_of_the_blank_line_does_not_join_its_lf(
+        b"data: a\nretry: 5\rdata: b\n\n",
+        vec![&b"retry: 5\rdata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::each_line_keeps_its_own_terminator(
+        b"event: delta\r\ndata: old\r\r\n",
+        vec![&b"event: delta\r\ndata: new\rdata: data\r\r\n"[..]]
+    )]
+    #[case::a_bom_that_opens_the_stream_stays_ahead_of_the_fields(
+        b"\xEF\xBB\xBFdata: old\n\n",
+        vec![&b"\xEF\xBB\xBFdata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::a_bom_past_the_start_is_part_of_its_field_name(
+        b"data: a\n\n\xEF\xBB\xBFdata: b\ndata: c\n\n",
+        vec![&b"data: new\ndata: data\n\n"[..], &b"\xEF\xBB\xBFdata: b\ndata: new\ndata: data\n\n"[..]]
+    )]
+    #[case::a_block_that_carries_no_event_stays(
+        b": keepalive\n\ndata: partial\n",
+        vec![&b": keepalive\n\n"[..], &b"data: partial\n"[..]]
+    )]
+    #[tokio::test]
+    async fn a_block_given_new_data_keeps_every_other_byte_and_carries_the_event_it_now_dispatches(
+        #[case] wire: &[u8],
+        #[case] expected: Vec<&[u8]>,
+        #[values(1, 4096)] size: usize,
+    ) {
+        let renewed: Vec<Result<SseBlock, &str>> =
+            read(pieces(wire, size).into_iter().map(Ok).collect())
+                .await
+                .into_iter()
+                .map(|block| block.map(|block| block.with_data("new\ndata")))
+                .collect();
+
+        let written: Vec<Bytes> = renewed
+            .iter()
+            .map(|block| block.clone().unwrap().bytes)
+            .collect();
+        let reread = read(vec![Ok(Bytes::from(written.concat()))]).await;
+        assert_eq!(
+            (written, reread),
+            (
+                expected.into_iter().map(Bytes::copy_from_slice).collect(),
+                renewed
+            )
+        );
     }
 
     #[tokio::test]

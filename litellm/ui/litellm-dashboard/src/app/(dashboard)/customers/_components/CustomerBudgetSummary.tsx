@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { CustomerUsageEntity } from "./customerUsageApi";
 import { CustomerBudgetWindow } from "./CustomerBudgetSpend";
 import { CUSTOMER_BUDGET_LABELS, customerBudgetPeriod, customerBudgetUsage } from "./customerBudgetUsage";
@@ -16,22 +16,51 @@ export default function CustomerBudgetSummary({
   settingsHref: string;
   scope: CustomerHierarchyScope;
 }) {
-  const { t } = useTranslation();
-  const budgets = customerBudgetUsage(entity);
   const organizationId = !scope.team && !scope.member ? scope.org : undefined;
   const [editing, setEditing] = useState(false);
+  const canEdit = Boolean(organizationId || scope.member);
+  return (
+    <CustomerBudgetSummaryContent
+      entity={entity}
+      settingsHref={settingsHref}
+      onEdit={canEdit ? () => setEditing(true) : undefined}
+    >
+      {editing && canEdit && (
+        <CustomerEntityBudgetDialog
+          key={scope.member}
+          memberId={scope.member ?? undefined}
+          organizationId={scope.org}
+          onClose={() => setEditing(false)}
+        />
+      )}
+    </CustomerBudgetSummaryContent>
+  );
+}
+
+export function CustomerBudgetSummaryContent({
+  entity,
+  settingsHref,
+  onEdit,
+  children,
+}: {
+  entity: CustomerUsageEntity;
+  settingsHref?: string;
+  onEdit?: () => void;
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const budgets = customerBudgetUsage(entity);
   const editLabel = t(
     budgets.length > 0 || entity.rateLimits
       ? "customerPortal.analytics.editBudget"
       : "customerPortal.analytics.setBudget",
   );
-  const showBudgetDialog = editing && Boolean(organizationId || scope.member);
   return (
     <section className="mt-2 min-w-0 space-y-2 text-sm" aria-label={t("customerPortal.analytics.budgetSummary")}>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs">
         <span className="text-muted-foreground">{t("customerPortal.analytics.budgetSummary")}</span>
-        {organizationId || scope.member ? (
-          <button type="button" onClick={() => setEditing(true)} className="font-medium text-primary hover:underline">
+        {onEdit ? (
+          <button type="button" onClick={onEdit} className="font-medium text-primary hover:underline">
             {editLabel}
           </button>
         ) : (
@@ -61,14 +90,7 @@ export default function CustomerBudgetSummary({
         </p>
       )}
       <CustomerRateLimitSummary limits={entity.rateLimits} />
-      {showBudgetDialog && (
-        <CustomerEntityBudgetDialog
-          key={scope.member}
-          memberId={scope.member ?? undefined}
-          organizationId={scope.org}
-          onClose={() => setEditing(false)}
-        />
-      )}
+      {children}
     </section>
   );
 }
