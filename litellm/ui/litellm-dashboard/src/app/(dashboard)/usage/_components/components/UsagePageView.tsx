@@ -8,6 +8,7 @@
 
 import { BarChart3, Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
+import { benchmarksWindow } from "@/app/(dashboard)/cost-optimization/_components/useAutoRouterBenchmarks";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
@@ -260,6 +261,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
             startTime,
             endTime,
             entityIds: effectiveUserId ? [effectiveUserId] : null,
+            includeCurrentUtcDay: true,
           }
         : null,
     [accessToken, startTime, endTime, effectiveUserId],
@@ -310,7 +312,14 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   // Gateway request counts (SGR). Admin-only: the source table is
   // deployment-wide, so a non-admin must not see it.
   const gatewayRequest = useMemo(
-    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
+    () =>
+      accessToken && startTime && endTime
+        ? {
+            accessToken,
+            startTime,
+            endTime: new Date(`${benchmarksWindow({ from: startTime, to: endTime }, new Date()).end_date}T12:00:00`),
+          }
+        : null,
     [accessToken, startTime, endTime],
   );
   const gatewayFetchIdRef = useRef(0);

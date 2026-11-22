@@ -74,7 +74,8 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
-  formatDate: (date: Date) => date.toISOString().slice(0, 10),
+  formatDate: (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
   subscriptionUsageCall: vi.fn(),
   subscriptionAccountCreateCall: vi.fn(),
   subscriptionAccountUpdateCall: vi.fn(),
@@ -604,6 +605,45 @@ describe("UsagePage", () => {
       isLoading: false,
       error: null,
     } as any);
+  });
+
+  it("includes the current UTC bucket in today's overview west of UTC", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-22T02:30:00Z"));
+    try {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2026-11-21&to=2026-11-21" });
+      await waitFor(() => {
+        expect(mockDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "user",
+          expect.objectContaining({ includeCurrentUtcDay: true }),
+        );
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("includes today's UTC gateway requests west of UTC", async () => {
+    vi.stubEnv("TZ", "America/Los_Angeles");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-22T02:30:00Z"));
+    mockGatewayDailyActivityCall.mockImplementation(async (_token, _start, end) => ({
+      total_successful_requests: end.getDate() === 22 ? 3 : 0,
+      total_failed_requests: 0,
+      by_date: [],
+      by_route: [],
+    }));
+    try {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?from=2026-11-21&to=2026-11-21" });
+      await waitFor(() => {
+        expect(totalRequestsCell()).toHaveTextContent("3 ok");
+      });
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
   });
 
   it("hands the subscription usage to the fixed cost card for an admin and never fetches it otherwise", async () => {

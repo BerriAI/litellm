@@ -64,6 +64,8 @@ beforeAll(() => {
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
+  formatDate: (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`,
   dailyActivityAggregatedCall: vi.fn(),
   dailyActivityKeyPageCall: vi.fn(),
   dailyActivityKeySearchCall: vi.fn(),
@@ -1358,6 +1360,37 @@ describe("EntityUsage", () => {
     expect(screen.getByText("top-models:gpt-4o=70.25")).toBeInTheDocument();
     expect(screen.getByText(/^top-models:Code Review Agent=/)).toBeInTheDocument();
   });
+
+  it.each(["team", "tag", "organization", "customer", "agent", "user"] as const)(
+    "includes the current UTC bucket in today's %s usage west of UTC",
+    async (entityType) => {
+      vi.stubEnv("TZ", "America/Los_Angeles");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-22T02:30:00Z"));
+      try {
+        render(
+          <StatefulEntityUsage
+            {...defaultProps}
+            entityType={entityType}
+            dateValue={{
+              from: new Date("2026-11-21T00:00:00"),
+              to: new Date("2026-11-21T23:59:59"),
+            }}
+          />,
+        );
+        await waitFor(() => {
+          expect(mockDailyActivityAggregatedCall).toHaveBeenCalledWith(
+            entityType,
+            expect.objectContaining({ endTime: new Date("2026-11-22T12:00:00") }),
+          );
+        });
+      } finally {
+        cleanup();
+        vi.useRealTimers();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 
   it("uses the aggregated team endpoint and makes a single bounded request", async () => {
     render(<StatefulEntityUsage {...defaultProps} entityType="team" />);
