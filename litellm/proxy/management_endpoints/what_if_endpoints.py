@@ -860,7 +860,8 @@ async def pr_receipts(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)
     _require_admin(user)
     runs: Final = (await _ghost_trace(hours)).runs
     shares: Final = sorted(
-        ((url, run, 1 / len(run.pr_urls)) for run in runs for url in run.pr_urls), key=lambda share: share[0]
+        chain.from_iterable(((url, run, 1 / len(run.pr_urls)) for url in run.pr_urls) for run in runs),
+        key=lambda share: share[0],
     )
     receipts: Final = tuple(
         PrReceipt(
@@ -873,7 +874,7 @@ async def pr_receipts(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)
             tool_calls=sum(run.tool_calls for _, run, _ in group),
             agent_minutes=sum(run.duration_seconds for _, run, _ in group) / 60,
             key_aliases=tuple(sorted({run.key_alias for _, run, _ in group})),
-            models=tuple(sorted({model for _, run, _ in group for model in run.models})),
+            models=tuple(sorted(set(chain.from_iterable(run.models for _, run, _ in group)))),
             runs=tuple(run.run_id for _, run, _ in group),
         )
         for url, group in ((url, tuple(group)) for url, group in groupby(shares, key=lambda share: share[0]))
