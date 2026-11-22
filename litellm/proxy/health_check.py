@@ -21,8 +21,8 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 logger: Final = logging.getLogger(__name__)
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=Mapping[str, object])
-_ResultT: Final = TypeVar("_ResultT")
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
+_ResultT = TypeVar("_ResultT")
 from litellm.constants import (
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS,
     BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING,

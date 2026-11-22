@@ -28,8 +28,8 @@ from litellm.types.responses.main import OutputToolSearchCall, OutputToolSearchO
 from .custom_tools import openai_shaped_tool_call_item_id, serialize_tool_call_arguments
 from .tool_search import ANTHROPIC_TOOL_SEARCH_TOOL_NAME
 
-_ItemT: Final = TypeVar("_ItemT")
-_MessageT: Final = TypeVar("_MessageT")
+_ItemT = TypeVar("_ItemT")
+_MessageT = TypeVar("_MessageT")
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})

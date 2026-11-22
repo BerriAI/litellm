@@ -33,7 +33,7 @@ _ANY_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _ANY_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
 
 Label: TypeAlias = tuple[str, str]
-_HeaderValue: Final = TypeVar("_HeaderValue")
+_HeaderValue = TypeVar("_HeaderValue")
 
 
 def vertex_request_label_fields() -> tuple[str, ...]:
