@@ -2,7 +2,7 @@ import importlib.util
 import os
 import re
 import sys
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Callable, Collection, Iterator, Mapping
 from functools import lru_cache
 from itertools import accumulate, chain, repeat
 from logging import Logger
@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import Any, Final, Protocol
 
 from fastapi import HTTPException, Request, status
-from pydantic import PositiveInt, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, PositiveInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm import Router, constants, provider_list
@@ -41,7 +41,11 @@ from litellm.router_utils.clientside_credential_handler import (
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
 )
-from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS, Deployment, server_owned_wif_fields_present
+from litellm.types.router import (
+    CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS,
+    Deployment,
+    server_owned_wif_fields_present,
+)
 from litellm.types.router import reject_server_owned_wif_params as _reject_server_owned_wif_params
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 from litellm.types.videos.main import DecodedVideoId
@@ -523,9 +527,23 @@ def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
         )
 
 
+_BANNED_EXTRA_BODY_PARAMS: Final[tuple[str, ...]] = (*_BANNED_REQUEST_BODY_PARAMS, "fallbacks")
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
     param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
 )
+
+
+class ClientSideStorageAllowlist(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    allowed_client_side_s3_buckets: tuple[str, ...] | None = None
+
+    def admits_s3_bucket(self, bucket: str) -> bool:
+        return bucket in (self.allowed_client_side_s3_buckets or ())
+
+
+def client_side_s3_bucket_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    return ClientSideStorageAllowlist.model_validate(general_settings).admits_s3_bucket
 
 
 def _check_banned_params(
@@ -622,6 +640,10 @@ def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[
             else:
                 for target_list in values:
                     yield from _iter_fallback_targets(target_list, depth + 1)
+
+
+def _fallbacks_only(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key == "fallbacks"})
 
 
 def _reject_client_chosen_federation(litellm_params: Mapping[str, object], *, manages_deployments: bool) -> None:
@@ -770,7 +792,14 @@ def is_request_body_safe(
     for nested_key in _NESTED_CONFIG_KEYS:
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
-            _check_banned_params(nested, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                nested,
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                banned_params=_BANNED_EXTRA_BODY_PARAMS if nested_key == "extra_body" else _BANNED_REQUEST_BODY_PARAMS,
+            )
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
@@ -796,6 +825,14 @@ def is_request_body_safe(
     for target in iter_request_fallback_targets(request_body):
         if isinstance(target, dict):
             _check_banned_params(target, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                _fallbacks_only(_coerce_metadata_to_dict(target.get("extra_body")) or {}),
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+                banned_params=("fallbacks",),
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)

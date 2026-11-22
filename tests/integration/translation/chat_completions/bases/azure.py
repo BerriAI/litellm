@@ -534,7 +534,11 @@ GPT_6_LUNA_TEST_CASE: Final = TranslationTestCase(
     litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure/gpt-6-luna"},
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
-    expected_provider_request={**AZURE_RESPONSES_BRIDGE_REQUEST, "model": "gpt-6-luna", "stream": False},
+    expected_provider_request={
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
+        "model": "gpt-6-luna",
+        "stream": False,
+    },
     mock_provider_response={
         **AZURE_RESPONSES_RESPONSE,
         "id": "resp_0257792c0e8dcbb3006ad023b8112081958c7c4379959d4c6b",
@@ -697,7 +701,11 @@ GPT_6_1_SOL_TEST_CASE: Final = TranslationTestCase(
     litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure/gpt-6.1-sol"},
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
-    expected_provider_request={**AZURE_RESPONSES_BRIDGE_REQUEST, "model": "gpt-6.1-sol", "stream": False},
+    expected_provider_request={
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
+        "model": "gpt-6.1-sol",
+        "stream": False,
+    },
     mock_provider_response={**AZURE_RESPONSES_RESPONSE},
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
@@ -809,7 +817,11 @@ GPT_6_ASTRA_TEST_CASE: Final = TranslationTestCase(
     litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure/gpt-6-astra"},
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
-    expected_provider_request={**AZURE_RESPONSES_BRIDGE_REQUEST, "model": "gpt-6-astra", "stream": False},
+    expected_provider_request={
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
+        "model": "gpt-6-astra",
+        "stream": False,
+    },
     mock_provider_response={
         **AZURE_RESPONSES_RESPONSE,
         "id": "resp_03d9860d694cf03b006ad023bfd5f881979bc737bdacd3fdec",
@@ -1136,7 +1148,11 @@ GPT_5_6_TERRA_TEST_CASE: Final = TranslationTestCase(
     litellm_request={**CHAT_COMPLETIONS_REQUEST, "model": "azure/gpt-5.6-terra"},
     expected_provider_endpoint="/openai/responses?api-version=2025-04-01-preview",
     expected_provider_headers={"content-type": "application/json", "api-key": "synthetic-azure-key"},
-    expected_provider_request={**AZURE_RESPONSES_BRIDGE_REQUEST, "model": "gpt-5.6-terra", "stream": False},
+    expected_provider_request={
+        **AZURE_RESPONSES_BRIDGE_REQUEST,
+        "model": "gpt-5.6-terra",
+        "stream": False,
+    },
     mock_provider_response={
         **AZURE_RESPONSES_RESPONSE,
         "id": "resp_0146fd70db485046006ad023cbf5b48197a496e74bfbe99f66",

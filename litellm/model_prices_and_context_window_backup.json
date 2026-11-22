@@ -12492,8 +12492,12 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-05,
         "reasoning_effort_levels": [
+            "none",
+            "minimal",
             "low",
+            "medium",
             "high",
+            "xhigh",
             "max"
         ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
@@ -13078,6 +13082,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 3.48e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -13094,6 +13103,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 5.1e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'",
         "supports_function_calling": true,
         "supports_reasoning": true,
@@ -13111,6 +13125,11 @@
         "max_tokens": 384000,
         "mode": "chat",
         "output_cost_per_token": 1.32e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "high",
+            "max"
+        ],
         "source": "https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure",
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -17103,6 +17122,7 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "c4ai-aya-expanse-32b": {
@@ -17127,7 +17147,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
+        "supports_tool_choice": false,
         "supports_vision": true
     },
     "command-nightly": {
@@ -17148,7 +17168,8 @@
         "mode": "chat",
         "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_response_schema": true,
+        "supports_tool_choice": false
     },
     "command-r-plus-08-2024": {
         "input_cost_per_token": 2.5e-06,
@@ -17159,7 +17180,8 @@
         "mode": "chat",
         "output_cost_per_token": 1e-05,
         "supports_function_calling": true,
-        "supports_tool_choice": true
+        "supports_response_schema": true,
+        "supports_tool_choice": false
     },
     "command-r7b-12-2024": {
         "input_cost_per_token": 3.75e-08,
@@ -17170,6 +17192,112 @@
         "mode": "chat",
         "output_cost_per_token": 1.5e-07,
         "source": "https://docs.cohere.com/v2/docs/command-r7b",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "c4ai-aya-vision-32b": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 16384,
+        "max_output_tokens": 4000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/aya-vision",
+        "supports_vision": true
+    },
+    "command-a-reasoning-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 288768,
+        "max_output_tokens": 32000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-reasoning",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": false
+    },
+    "command-a-translate-08-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8992,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-translate",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "command-a-vision-07-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/command-a-vision",
+        "supports_response_schema": true,
+        "supports_tool_choice": false,
+        "supports_vision": true
+    },
+    "command-r7b-arabic-02-2025": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 128000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/models",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "north-mini-code-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 436000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-mini-code-1.0",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": false
+    },
+    "north-small-translate-1.0": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16000,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.cohere.com/docs/north-small-translate-1.0"
+    },
+    "tiny-aya-earth": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-fire": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-global": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "tiny-aya-water": {
+        "litellm_provider": "cohere_chat",
+        "max_input_tokens": 8192,
+        "max_output_tokens": 8000,
+        "mode": "chat",
+        "source": "https://docs.cohere.com/docs/tiny-aya",
         "supports_function_calling": true,
         "supports_tool_choice": true
     },
@@ -39394,6 +39522,48 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 100000
     },
+    "gradium/default": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-202602": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "gradium/gradium-tts-beta": {
+        "input_cost_per_character": 7e-05,
+        "litellm_provider": "gradium",
+        "metadata": {
+            "calculation": "1 credit per character synthesized; $7 per 100k add-on credits (XS plan) = $0.00007/char. Larger plans are cheaper (down to $3.8/100k on L), and Pro Voice Clone voices bill 1.2 credits per character.",
+            "notes": "Gradium TTS bills per character of input text, not per second of audio."
+        },
+        "mode": "audio_speech",
+        "output_cost_per_character": 0.0,
+        "source": "https://gradium.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
     "lemonade/Qwen3-Coder-30B-A3B-Instruct-GGUF": {
         "input_cost_per_token": 0,
         "litellm_provider": "lemonade",
@@ -47537,6 +47707,85 @@
         "supports_reasoning": true,
         "supports_system_messages": true
     },
+    "resetdata/deepseek/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 1.351e-08,
+        "input_cost_per_token": 7.432e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.486e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/google/gemma-4-26b-a4b-it": {
+        "input_cost_per_token": 6.054e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 8192,
+        "mode": "chat",
+        "output_cost_per_token": 3.328e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/openai/whisper-large-v3-turbo": {
+        "input_cost_per_second": 3.378e-06,
+        "litellm_provider": "resetdata",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://docs.resetdata.ai/guides/audio/",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "resetdata/qwen/qwen3-coder-30b-a3b-instruct": {
+        "input_cost_per_token": 7.061e-08,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 2.723e-07,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "resetdata/qwen/qwen3.8-27b": {
+        "input_cost_per_token": 2.905e-07,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 2.453e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "resetdata/zai/glm-5.3": {
+        "cache_read_input_token_cost": 1.757e-07,
+        "input_cost_per_token": 1.189e-06,
+        "litellm_provider": "resetdata",
+        "max_input_tokens": 524288,
+        "max_output_tokens": 32768,
+        "mode": "chat",
+        "output_cost_per_token": 3.736e-06,
+        "source": "https://docs.resetdata.ai/models/overview",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
     "rerank-english-v3.0": {
         "input_cost_per_query": 0.002,
         "input_cost_per_token": 0.0,
@@ -51129,6 +51378,19 @@
         "supports_tool_choice": true,
         "supports_response_schema": true
     },
+    "vercel_ai_gateway/openai/gpt-6-luna-decisions": {
+        "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-08,
+        "input_cost_per_token": 1e-07,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 1050000,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models"
+    },
     "vercel_ai_gateway/openai/o1": {
         "cache_creation_input_token_cost": 0.0,
         "cache_read_input_token_cost": 7.5e-06,
@@ -51250,6 +51512,56 @@
         "max_tokens": 8000,
         "mode": "chat",
         "output_cost_per_token": 8e-06
+    },
+    "vercel_ai_gateway/typesafe-ai/jev": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. A direct /v1/decisions probe with a 768x768 input_image answered 200 on 2026-11-10, while a 96x96 one answered 400 invalid request body."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_box_questions": true,
+        "supports_vision": true
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.13.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.13.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. Direct /v1/decisions probes on 2026-11-10 asking whether a 768x768 picture is a smooth gradient answered 0.99 for a gradient and 0.12 for solid gray."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_vision": true
+    },
+    "vercel_ai_gateway/typesafe-ai/jev-1.14.0": {
+        "input_cost_per_token": 4.2e-08,
+        "litellm_provider": "vercel_ai_gateway",
+        "max_input_tokens": 32000,
+        "metadata": {
+            "notes": "Vercel AI Gateway model list entry typesafe-ai/jev-1.14.0, read 2026-11-09: input 0.000000042 per token, output 0, context window 32000. Direct /v1/decisions probes on 2026-11-10 asking whether a 768x768 picture is a smooth gradient answered 0.84 for a gradient and 0.13 for solid gray."
+        },
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://ai-gateway.vercel.sh/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supports_box_questions": true,
+        "supports_vision": true
     },
     "vercel_ai_gateway/vercel/v0-1.0-md": {
         "input_cost_per_token": 3e-06,
@@ -78092,5 +78404,137 @@
         "prompt_cache_min_tokens": 512,
         "source": "https://platform.claude.com/docs/en/about-claude/pricing#claude-platform-on-aws-pricing",
         "supports_web_search": true
+    },
+    "gemini/gemini-4-hydrogen": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
+        "cache_read_input_token_cost_flex": 3.75e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_flex": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
+        "litellm_provider": "gemini",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 7.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_flex": 3.75e-06,
+        "output_cost_per_token_priority": 1.35e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "rpm": 2000.0,
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014,
+            "search_context_size_high": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
+        "source": "https://aistudio.google.com/docs/pricing#gemini-4-hydrogen",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "tpm": 800000.0,
+        "web_search_billing_unit": "per_query"
+    },
+    "vertex_ai/gemini-4-hydrogen": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_batches": 3.75e-08,
+        "cache_read_input_token_cost_priority": 1.35e-07,
+        "google_maps_grounding_cost_per_query": 0.014,
+        "input_cost_per_audio_token": 1.5e-06,
+        "input_cost_per_audio_token_batches": 7.5e-07,
+        "input_cost_per_audio_token_priority": 2.7e-06,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_batches": 7.5e-07,
+        "input_cost_per_token_priority": 2.7e-06,
+        "litellm_provider": "vertex_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_reasoning_token": 7.5e-06,
+        "output_cost_per_token": 7.5e-06,
+        "output_cost_per_token_batches": 3.75e-06,
+        "output_cost_per_token_priority": 1.35e-05,
+        "prompt_cache_min_tokens": 4096.0,
+        "regional_endpoint_uplift_multiplier": 1.1,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.014,
+            "search_context_size_low": 0.014,
+            "search_context_size_medium": 0.014
+        },
+        "search_free_requests": {
+            "count": 5000,
+            "period": "month",
+            "shared_group": "gemini-3"
+        },
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/batch"
+        ],
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_url_context": true,
+        "supports_video_input": true,
+        "supports_vision": true,
+        "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true,
+        "web_search_billing_unit": "per_query"
     }
 }
