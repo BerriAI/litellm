@@ -7807,3 +7807,51 @@ def test_bounded_call_id_fields_leaves_a_request_to_an_unclassifiable_url_alone(
     request_body: Final = {"input": [{"type": "function_call", "call_id": "call_" + "a" * 80, "name": "f"}]}
 
     assert bounded_call_id_fields(request_body, url) == {}
+
+
+def _function_pair(call_id: str) -> tuple[dict[str, object], dict[str, object]]:
+    return (
+        {"type": "function_call", "call_id": call_id, "name": "f", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": call_id, "output": call_id[-8:]},
+    )
+
+
+def _sent_call_ids(request_body: Mapping[str, object]) -> list[object]:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import bounded_call_id_fields
+
+    sent: Final = bounded_call_id_fields(request_body, _OPENAI_RESPONSES_URL)["input"]
+    assert isinstance(sent, list), sent
+    return [item["call_id"] for item in sent]
+
+
+def test_bounded_call_id_fields_keeps_thousands_of_overlong_ids_distinct_paired_and_clear_of_short_ids() -> None:
+    import hashlib
+
+    long_ids: Final = tuple(f"call_{index:06d}_" + "x" * 70 for index in range(2000))
+    colliding_short_ids: Final = tuple(hashlib.sha256(call_id.encode()).hexdigest() for call_id in long_ids[::50])
+    pairs: Final = tuple(_function_pair(call_id) for call_id in (*long_ids, *colliding_short_ids))
+    calls: Final = [call for call, _ in pairs]
+    reversed_outputs: Final = [output for _, output in reversed(pairs)]
+
+    sent_ids: Final = _sent_call_ids({"input": [*calls, *reversed_outputs]})
+
+    sent_call_ids: Final = sent_ids[: len(calls)]
+    sent_output_ids: Final = sent_ids[len(calls) :]
+    assert sent_output_ids == sent_call_ids[::-1], "every output keeps the id of its own call"
+    assert sent_call_ids[len(long_ids) :] == list(colliding_short_ids), "short ids are sent unchanged"
+    assert len(set(sent_call_ids)) == len(pairs), "no two calls share an id"
+    assert all(isinstance(call_id, str) and len(call_id) <= 64 for call_id in sent_call_ids)
+
+
+@pytest.mark.parametrize("item_type", ["tool_search_call", "tool_search_output", "computer_call", "mcp_call"])
+def test_bounded_call_id_fields_never_reuses_a_short_id_held_by_another_item_type(item_type: str) -> None:
+    import hashlib
+
+    long_id: Final = "call_" + "r" * 80
+    held_id: Final = hashlib.sha256(long_id.encode()).hexdigest()
+    other_item: Final = {"type": item_type, "call_id": held_id}
+
+    sent_ids: Final = _sent_call_ids({"input": [*_function_pair(long_id), other_item]})
+
+    assert sent_ids[2] == held_id, sent_ids
+    assert sent_ids[0] == sent_ids[1] != held_id, sent_ids

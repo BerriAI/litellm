@@ -5,7 +5,6 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from functools import partial, reduce
 from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
@@ -905,7 +904,6 @@ _CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
 )
 _MAX_CALL_ID_LENGTH: Final = 64
 _CALL_ID_LIMITED_AZURE_HOST_SUFFIXES: Final = (".openai.azure.com", ".services.ai.azure.com")
-_NO_CALL_ID_REPLACEMENTS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _url_hostname(url: str) -> str:
@@ -952,10 +950,17 @@ def _call_id_candidates(call_id: str) -> Iterator[str]:
     )
 
 
-def _with_replacement(replacements: Mapping[str, str], call_id: str, reserved: frozenset[str]) -> Mapping[str, str]:
-    taken: Final = reserved | frozenset(replacements.values())
-    replacement: Final = next(candidate for candidate in _call_id_candidates(call_id) if candidate not in taken)
-    return MappingProxyType({**replacements, call_id: replacement})
+def _call_id_replacements(items: Sequence[object], overlong: Sequence[str]) -> Mapping[str, str]:
+    taken: Final = {  # mutable-ok: one request-local set keeps each claim O(1) instead of copying every taken id
+        call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
+    }
+
+    def claim(call_id: str) -> str:
+        replacement: Final = next(candidate for candidate in _call_id_candidates(call_id) if candidate not in taken)
+        taken.add(replacement)
+        return replacement
+
+    return MappingProxyType({call_id: claim(call_id) for call_id in overlong})
 
 
 def _with_replaced_call_id(item: object, replacements: Mapping[str, str]) -> object:
@@ -973,10 +978,7 @@ def bounded_call_id_fields(request: Mapping[str, object], url: str) -> Mapping[s
     overlong: Final = tuple(sorted({call_id for call_id in map(_overlong_tool_call_id, items) if call_id is not None}))
     if not overlong or not _limits_call_id_length(url):
         return MappingProxyType({})
-    reserved: Final = frozenset(
-        call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
-    )
-    replacements: Final = reduce(partial(_with_replacement, reserved=reserved), overlong, _NO_CALL_ID_REPLACEMENTS)
+    replacements: Final = _call_id_replacements(items, overlong)
     return MappingProxyType({"input": [_with_replaced_call_id(item, replacements) for item in items]})
 
 
