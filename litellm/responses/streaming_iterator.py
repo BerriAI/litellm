@@ -1869,9 +1869,16 @@ def _answered_approval_ids(items: Iterable[Mapping[str, object]]) -> frozenset[s
 
 def _is_replayed_call_item(item: Mapping[str, object], answered_approval_ids: frozenset[str]) -> bool:
     item_type: Final = item.get("type")
-    if item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES or isinstance(item.get("call_id"), str):
+    if (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+        item.get("call_id"), str
+    ):
         return True
-    return item_type == "mcp_call" and item.get("approval_request_id") in answered_approval_ids
+    approval_request_id: Final = item.get("approval_request_id")
+    return (
+        item_type == "mcp_call"
+        and isinstance(approval_request_id, str)
+        and approval_request_id in answered_approval_ids
+    )
 
 
 _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(

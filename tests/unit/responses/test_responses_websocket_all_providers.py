@@ -640,6 +640,45 @@ class TestManagedWebSocketHandlerIntegration:
         second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
         assert [item.get("type") for item in second_turn_input] == ["message", "message"]
 
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            {"type": ["function_call"], "id": "fc_1"},
+            {"type": "mcp_call", "id": "mcp_1", "approval_request_id": ["mcpr_1"]},
+        ],
+        ids=["list_type", "list_approval_request_id"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_reaches_the_provider_after_a_malformed_output_item(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        malformed: dict[str, object],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((malformed,)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == ["message", "message"]
+
     @pytest.mark.asyncio
     async def test_turn_after_an_approved_mcp_call_sends_the_call_that_used_the_approval(
         self,
