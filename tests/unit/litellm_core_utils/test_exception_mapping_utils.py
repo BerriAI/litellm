@@ -28,6 +28,7 @@ from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.github_copilot.authenticator import DEFAULT_GITHUB_CLIENT_ID
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+from litellm.llms.groq.chat.transformation import GroqChatCompletionStreamingHandler
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.proxy.common_utils.openai_error_payload import openai_error_type
@@ -3911,7 +3912,7 @@ def test_mapped_anthropic_error_exposes_the_provider_reply(status_code: int, map
     assert caught.value.response.json() == _PROVIDER_WIRE_BODY
 
 
-def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet_exception_mapping):
+def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet_exception_mapping: None) -> None:
     wire_body: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
     original: Final = AnthropicError(status_code=529, message=json.dumps(wire_body))
     original.response = httpx.Response(529, json=wire_body, request=original.request)
@@ -3928,6 +3929,25 @@ def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet
     assert (caught.value.status_code, caught.value.response.status_code) == (500, 500)
     assert caught.value.provider_status_code == 529
     assert caught.value.response.json() == wire_body
+
+
+def test_a_streamed_groq_error_with_a_text_code_still_maps_to_an_api_error(quiet_exception_mapping: None) -> None:
+    with pytest.raises(OpenAIError) as streamed_failure:
+        GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True).chunk_parser(
+            {"error": {"code": "tool_use_failed", "message": "Failed to call a function"}}
+        )
+
+    with pytest.raises(litellm.APIError) as caught:
+        exception_type(
+            model="llama-3.3-70b-versatile",
+            original_exception=streamed_failure.value,
+            custom_llm_provider="groq",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(caught.value) is litellm.APIError
+    assert "Failed to call a function" in str(caught.value)
 
 
 def test_litellm_proxy_error_keeps_the_reply_body_beside_the_forwarded_headers():

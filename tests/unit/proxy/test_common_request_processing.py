@@ -15211,15 +15211,11 @@ async def test_proxy_forwards_the_same_headers_and_retry_after_when_the_error_ex
     mapped: Final = await _rejected_through_the_shared_handler(
         route, httpx.MockTransport(lambda _request: httpx.Response(429, content=wire_body, headers=upstream_headers))
     )
-    proxy_logging_obj: Final = MagicMock()
-    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
-    proxy_logging_obj.post_call_response_headers_hook = AsyncMock(return_value={})
-
     with pytest.raises(ProxyException) as forwarded:
         await ProxyBaseLLMRequestProcessing(data={}).handle_llm_api_exception(
             e=mapped,
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
-            proxy_logging_obj=proxy_logging_obj,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
 
     decoded_reply_headers: Final = {

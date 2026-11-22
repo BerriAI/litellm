@@ -167,13 +167,14 @@ def error_response_without_credentials(status_code: int, upstream: object, fallb
 
 _PROVIDER_REPLY_FALLBACK_URL: Final = "https://docs.litellm.ai/docs"
 _RESPONSE_ATTRIBUTE: Final = "response"
+_HTTP_ERROR_STATUSES: Final = frozenset(range(400, 600))
 
 
 def with_provider_reply(failure: BaseException, provider_reply: object) -> BaseException:
     current: Final[object] = getattr(failure, _RESPONSE_ATTRIBUTE, None)
     if current is not None and (not isinstance(current, httpx.Response) or _upstream_body(current)):
         return failure
-    if not isinstance(provider_reply, httpx.Response) or not provider_reply.is_error:
+    if not isinstance(provider_reply, httpx.Response) or provider_reply.status_code not in _HTTP_ERROR_STATUSES:
         return failure
     if not _upstream_body(provider_reply):
         return failure

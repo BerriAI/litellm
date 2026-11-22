@@ -6537,15 +6537,15 @@ async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | A
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("status_code", (404, 503))
 async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_async: bool, status_code: int) -> None:
-    sync_client, async_client = _clients_answering_with(
-        httpx.Response(status_code, json={"error": {"message": "No such object"}})
-    )
+    wire_body: Final = {"error": {"message": "No such object"}}
+    sync_client, async_client = _clients_answering_with(httpx.Response(status_code, json=wire_body))
 
     with pytest.raises(BaseLLMException) as error:
         await _run_lookup_handler(name, is_async, async_client if is_async else sync_client)
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
+    assert error.value.response.json() == wire_body
 
 
 @pytest.mark.asyncio
