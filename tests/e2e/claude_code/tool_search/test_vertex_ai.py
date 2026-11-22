@@ -56,7 +56,7 @@ from claude_code.http_probe import (
 
 VERTEX_AI_MODELS = [
     "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-5-vertex",
+    "claude-sonnet-4-6-vertex",
     "claude-opus-4-7-vertex",
 ]
 
