@@ -146,6 +146,14 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
     _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
     _dashboard_session_model: str | None = PrivateAttr(default=None)
+    _mcp_catalog_authority_refreshed: bool = PrivateAttr(default=False)
+
+    @property
+    def mcp_catalog_authority_refreshed(self) -> bool:
+        return self._mcp_catalog_authority_refreshed
+
+    def mark_mcp_catalog_authority_refreshed(self) -> None:
+        self._mcp_catalog_authority_refreshed = True
 
     @property
     def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
@@ -299,6 +307,8 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("requires_fresh_policy", None)
+        values.pop("mcp_catalog_authority_refreshed", None)
+        values.pop("_mcp_catalog_authority_refreshed", None)
         values.pop("customer_hierarchy_started_at", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)

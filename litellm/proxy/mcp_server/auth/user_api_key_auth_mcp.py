@@ -1562,6 +1562,7 @@ class MCPRequestHandler:
             return None
         requires_fresh_policy: Final = MCPRequestHandler._catalog_requires_fresh_policy() or auth.requires_fresh_policy
         refreshed: Final = auth.model_copy(update={"requires_fresh_policy": requires_fresh_policy})
+        refreshed.mark_mcp_catalog_authority_refreshed()
         if (auth.mcp_admitted_user_subject or auth.is_session_token) and auth.user_id:
             # A session credential (``lite login`` or a redeemed ID-JAG) has no key row, its authority is
             # sealed in the token: refresh the live user policy and keep the token's team, routes and models.
@@ -2975,7 +2976,30 @@ class MCPRequestHandler:
         if not team_obj:
             return None
 
-        return team_obj.object_permission
+        return await MCPRequestHandler._catalog_team_object_permission(team_obj, user_api_key_auth)
+
+    @staticmethod
+    async def _catalog_team_object_permission(
+        team_obj: LiteLLM_TeamTable,
+        user_api_key_auth: UserAPIKeyAuth | None,
+    ) -> LiteLLM_ObjectPermissionTable | None:
+        if user_api_key_auth is None or not user_api_key_auth.mcp_catalog_authority_refreshed:
+            return team_obj.object_permission
+        if team_obj.object_permission_id is None or team_obj.object_permission is not None:
+            return team_obj.object_permission
+
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise UnloadableEntitlementError(
+                f"MCP team names object_permission_id {team_obj.object_permission_id!r} which could not be loaded"
+            )
+        return await MCPRequestHandler._load_named_object_permission(
+            principal="MCP team",
+            object_permission_id=team_obj.object_permission_id,
+            prisma_client=prisma_client,
+            user_api_key_auth=user_api_key_auth,
+        )
 
     @staticmethod
     async def _toolset_tool_permissions(
@@ -3749,6 +3773,7 @@ class MCPRequestHandler:
         team_obj: LiteLLM_TeamTable,
         team_access_group_servers: list[str],
         *,
+        user_api_key_auth: UserAPIKeyAuth | None = None,
         requires_fresh_policy: bool = False,
         require_readable_policy: bool = False,
     ) -> AbstractSet[str]:
@@ -3760,7 +3785,7 @@ class MCPRequestHandler:
             global_mcp_server_manager,
         )
 
-        object_permissions: Final = team_obj.object_permission
+        object_permissions: Final = await MCPRequestHandler._catalog_team_object_permission(team_obj, user_api_key_auth)
         if object_permissions is None:
             return set(team_access_group_servers)
         if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
@@ -3842,6 +3867,7 @@ class MCPRequestHandler:
             servers: Final = await MCPRequestHandler._team_granted_servers(
                 team_obj,
                 team_access_group_servers,
+                user_api_key_auth=user_api_key_auth,
                 requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
                 require_readable_policy=require_readable_policy,
             )

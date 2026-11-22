@@ -10534,8 +10534,6 @@ class TestGetUserObjectPermission:
         return prisma_client
 
     async def test_resolves_through_the_shared_permission_cache(self, rust_auth_stores: RustAuthStores):
-        from litellm.caching.dual_cache import DualCache
-
         user_row = MagicMock()
         user_row.object_permission_id = "perm-1"
         prisma_client = self._prisma_with_user(rust_auth_stores, user_row, "human-shared")
@@ -10606,8 +10604,6 @@ class TestGetUserObjectPermission:
             assert await MCPRequestHandler._get_user_object_permission(auth) is None
 
     async def test_unreadable_user_row_places_no_ceiling(self, rust_auth_stores: RustAuthStores):
-        from litellm.caching.dual_cache import DualCache
-
         prisma_client = MagicMock()
         rust_auth_stores.user.error = Exception("db down")
         auth = UserAPIKeyAuth(api_key="sk-test", user_id="human-db-down")
@@ -10965,7 +10961,6 @@ class TestScopedSessionAdmission:
 async def test_fresh_mcp_user_permission_link_ignores_cached_and_replica_grants(
     monkeypatch, rust_auth_stores: RustAuthStores, failure
 ):
-    from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_UserTable
 
@@ -13184,6 +13179,177 @@ async def test_catalog_refresh_keeps_team_inheritance_when_key_has_no_named_perm
 
     assert refreshed.object_permission_id is None
     assert await MCPRequestHandler.get_allowed_mcp_servers(refreshed) == ["team-server"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("permission_state", ["missing", "read-error"])
+async def test_catalog_refresh_denies_unloadable_named_team_permission(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+    permission_state: str,
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    key_hash = "catalog-key-hash"
+    team_id = "catalog-team"
+    key_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-policy",
+        mcp_servers=["key-only-server", "shared-server"],
+    )
+    team_policy_id = "team-policy"
+    rust_auth_stores.team.rows = {team_id: LiteLLM_TeamTable(team_id=team_id, object_permission_id=team_policy_id)}
+    if permission_state == "read-error":
+        rust_auth_stores.object_permission.seed(team_policy_id, RuntimeError("policy database unavailable"))
+    cache = UserApiKeyCache()
+    cache.set_cache(
+        key=AuthObject.virtual_key(key_hash),
+        value=UserAPIKeyAuth(
+            token=key_hash,
+            team_id=team_id,
+            object_permission_id=key_permission.object_permission_id,
+            object_permission=key_permission,
+        ),
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_permission_cache_enabled": True})
+    partial_team = await get_team_object(
+        team_id=team_id,
+        prisma_client=proxy_server.prisma_client,
+        user_api_key_cache=cache,
+        check_db_only=False,
+    )
+    assert partial_team is not None
+    assert (partial_team.object_permission_id, partial_team.object_permission) == (team_policy_id, None)
+    caller = UserAPIKeyAuth(api_key=key_hash)
+    caller.via_virtual_key = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+
+    assert await MCPRequestHandler.get_allowed_mcp_servers(refreshed) == []
+
+
+@pytest.mark.asyncio
+async def test_catalog_server_and_tool_ceilings_use_hydrated_team_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+):
+    from litellm.proxy import proxy_server
+
+    key_hash = "catalog-key-hash"
+    team_id = "catalog-team"
+    key_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-policy",
+        mcp_servers=["key-only-server", "shared-server"],
+        mcp_tool_permissions={"shared-server": ["read", "delete"]},
+    )
+    team_policy_id = "team-policy"
+    team_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id=team_policy_id,
+        mcp_servers=["shared-server"],
+        mcp_tool_permissions={"shared-server": ["read"]},
+    )
+    cache = UserApiKeyCache()
+    cache.set_cache(
+        key=AuthObject.virtual_key(key_hash),
+        value=UserAPIKeyAuth(
+            token=key_hash,
+            team_id=team_id,
+            object_permission_id=key_permission.object_permission_id,
+            object_permission=key_permission,
+        ),
+    )
+    cache.set_cache(
+        key=AuthObject.team(team_id),
+        value=LiteLLM_TeamTable(team_id=team_id, object_permission_id=team_policy_id),
+    )
+    cache.set_cache(key=AuthObject.object_permission(team_policy_id), value=team_permission)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_permission_cache_enabled": True})
+    caller = UserAPIKeyAuth(api_key=key_hash)
+    caller.via_virtual_key = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+
+    servers = await MCPRequestHandler.get_allowed_mcp_servers(refreshed)
+    tools = await MCPRequestHandler.get_allowed_tools_for_server("shared-server", refreshed)
+
+    assert set(servers) == {"shared-server"}
+    assert set(tools or []) == {"read"}
+    assert rust_auth_stores.object_permission.lookups == []
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_keeps_key_grants_when_team_has_no_named_policy(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import proxy_server
+
+    key_hash = "catalog-key-hash"
+    team_id = "catalog-team"
+    key_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id="key-policy",
+        mcp_servers=["key-server"],
+    )
+    cache = UserApiKeyCache()
+    cache.set_cache(
+        key=AuthObject.virtual_key(key_hash),
+        value=UserAPIKeyAuth(
+            token=key_hash,
+            team_id=team_id,
+            object_permission_id=key_permission.object_permission_id,
+            object_permission=key_permission,
+        ),
+    )
+    cache.set_cache(key=AuthObject.team(team_id), value=LiteLLM_TeamTable(team_id=team_id))
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_permission_cache_enabled": True})
+    caller = UserAPIKeyAuth.model_validate({"api_key": key_hash, "mcp_catalog_authority_refreshed": True})
+    assert caller.mcp_catalog_authority_refreshed is False
+    caller.via_virtual_key = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+
+    assert await MCPRequestHandler.get_allowed_mcp_servers(refreshed) == ["key-server"]
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_uses_fresh_named_team_policy_when_caller_requires_freshness(
+    monkeypatch: pytest.MonkeyPatch,
+    rust_auth_stores: RustAuthStores,
+):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    key_hash = "catalog-key-hash"
+    team_id = "catalog-team"
+    team_policy_id = "team-policy"
+    cached_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id=team_policy_id,
+        mcp_servers=["stale-server"],
+    )
+    database_permission = LiteLLM_ObjectPermissionTable(
+        object_permission_id=team_policy_id,
+        mcp_servers=["fresh-server"],
+    )
+    partial_team = LiteLLM_TeamTable(team_id=team_id, object_permission_id=team_policy_id)
+    rust_auth_stores.key.writer = {key_hash: {"token": key_hash, "team_id": team_id}}
+    rust_auth_stores.team.writer = {team_id: partial_team}
+    rust_auth_stores.object_permission.seed(team_policy_id, cached_permission)
+    rust_auth_stores.object_permission.writer[team_policy_id] = database_permission
+    cache = UserApiKeyCache()
+    cache.set_cache(key=AuthObject.team(team_id), value=partial_team)
+    cache.set_cache(key=AuthObject.object_permission(team_policy_id), value=cached_permission)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "general_settings", {"mcp_catalog_permission_cache_enabled": True})
+    caller = UserAPIKeyAuth(api_key=key_hash)
+    caller.via_virtual_key = True
+    caller.requires_fresh_policy = True
+    refreshed = await MCPRequestHandler.refresh_catalog_authority(caller)
+
+    assert await MCPRequestHandler.get_allowed_mcp_servers(refreshed) == ["fresh-server"]
+    assert (team_policy_id, True) in rust_auth_stores.object_permission.lookups
 
 
 @pytest.mark.asyncio
