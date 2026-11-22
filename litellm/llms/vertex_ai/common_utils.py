@@ -7,6 +7,7 @@ from functools import lru_cache
 from itertools import accumulate, chain, starmap
 from types import MappingProxyType
 from typing import Any, Final, Literal, TypeVar, cast, get_type_hints
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import JsonValue, TypeAdapter, ValidationError
@@ -41,6 +42,25 @@ GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
 
 
 GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+_YOUTUBE_VIDEO_URL: Final = re.compile(
+    r"(?i:https?://(?:(?:www|m)\.)?youtube\.com(?::443)?/)(?:watch\?(?:[^#]*&)?v=|shorts/|embed/)[\w-]"
+    r"|(?i:https?://youtu\.be(?::443)?/)[\w-]"
+)
+
+
+def gemini_fetches_url_itself(url: str) -> bool:
+    return url.startswith(GEMINI_FILES_API_URI_PREFIX) or _YOUTUBE_VIDEO_URL.match(url) is not None
+
+
+def youtube_video_mime_type(url: str) -> str | None:
+    return "video/mp4" if _YOUTUBE_VIDEO_URL.match(url) else None
+
+
+def normalize_youtube_url(url: str) -> str:
+    if _YOUTUBE_VIDEO_URL.match(url) is None:
+        return url
+    parts: Final = urlsplit(url)
+    return urlunsplit(parts._replace(scheme=parts.scheme.lower(), netloc=parts.hostname or parts.netloc))
 
 
 def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
