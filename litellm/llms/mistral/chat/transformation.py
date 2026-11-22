@@ -778,10 +778,9 @@ class MistralConfig(OpenAIGPTConfig):
                 return message
 
     @staticmethod
-    def _with_text_parts(message: AllMessageValues, texts: Sequence[str]) -> AllMessageValues:
-        text_parts: Final = [ChatCompletionTextObject(type="text", text=text) for text in texts]
-        return cast(  # cast-ok: every message role takes a list of text parts
-            AllMessageValues, {**message, "content": text_parts}
+    def _with_content_parts(message: AllMessageValues, parts: Sequence[object]) -> AllMessageValues:
+        return cast(  # cast-ok: every message role takes a list of content parts
+            AllMessageValues, {**message, "content": list(parts)}
         )
 
     @classmethod

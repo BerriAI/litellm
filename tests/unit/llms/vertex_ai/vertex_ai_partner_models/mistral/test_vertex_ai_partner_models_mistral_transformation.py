@@ -335,6 +335,41 @@ def test_mistral_chat_sends_several_text_parts_as_separate_parts(
     ]
 
 
+def test_mistral_chat_sends_text_parts_without_extra_keys_next_to_an_image(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    cached_text: Final = {"type": "text", "text": "Describe it.", "cache_control": {"type": "ephemeral"}}
+    image_part: Final = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+    messages: Final = [
+        {"role": "user", "content": [cached_text, image_part]},
+        {"role": "assistant", "content": None, "tool_calls": [_tool_call("call_abc123", "look")]},
+        {"role": "tool", "tool_call_id": "call_abc123", "content": [cached_text]},
+        {"role": "assistant", "content": [cached_text]},
+        {"role": "user", "content": "Again."},
+    ]
+
+    def send(transport: httpx.MockTransport, _: pytest.MonkeyPatch) -> None:
+        litellm.completion(
+            model="vertex_ai/mistral-medium-3",
+            messages=messages,
+            vertex_location="us-central1",
+            client=HTTPHandler(client=httpx.Client(transport=transport)),
+        )
+
+    sent_messages: Final = SENT_MAPPINGS.validate_python(
+        SENT_BODY.validate_json(_sent_mistral_request(send, monkeypatch).content)["messages"]
+    )
+
+    bare_text: Final = {"type": "text", "text": "Describe it."}
+    assert [message.get("content") for message in sent_messages] == [
+        [bare_text, image_part],
+        None,
+        [bare_text],
+        [bare_text],
+        "Again.",
+    ]
+
+
 def test_mistral_chat_sends_a_list_with_a_non_text_part_the_way_the_mistral_api_gets_it(local_model_cost_map):
     messages: Final = [
         {
