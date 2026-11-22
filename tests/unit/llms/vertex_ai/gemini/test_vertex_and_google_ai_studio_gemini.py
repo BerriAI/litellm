@@ -10036,6 +10036,34 @@ def test_vertex_sends_a_tool_parameter_const_as_its_type_and_the_one_enum_value_
     assert request_params["tools"][0]["function_declarations"][0]["parameters"]["properties"]["kind"] == expected_kind
 
 
+def test_vertex_leaves_the_callers_tools_unchanged_so_a_reused_tool_keeps_its_const() -> None:
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {
+                "name": "pay",
+                "strict": True,
+                "parameters": {
+                    "type": "object",
+                    "properties": {"kind": {"const": 7}, "source": {"type": "string", "const": "ledger-7"}},
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    sent_before: Final = json.dumps(tools)
+
+    for _ in range(2):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={"tools": tools},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert json.dumps(tools) == sent_before
+
+
 def test_vertex_pins_a_const_in_a_tool_whose_parameters_root_is_a_ref() -> None:
     card: Final = {
         "type": "object",

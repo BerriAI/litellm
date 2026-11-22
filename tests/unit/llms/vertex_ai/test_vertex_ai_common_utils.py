@@ -66,7 +66,9 @@ async def test_vertex_gemini_rejects_non_text_system_blocks_before_request(
         "google/gemma-4-26b-a4b-it-maas",
     ),
 )
-async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(model: str) -> None:
+async def test_vertex_partner_model_without_an_inference_matching_count_answers_400_naming_the_model(
+    model: str,
+) -> None:
     result: Final = await VertexAITokenCounter().count_tokens(
         model_to_use=model,
         messages=[{"role": "user", "content": "Count this"}],
@@ -418,7 +420,6 @@ def test_anyof_conversion_forwards_a_non_object_branch_for_the_provider_to_judge
     assert schema == {"type": "object", "properties": {"example": {"anyOf": expected}}}
 
 
-
 @pytest.mark.parametrize(
     ("field", "expected"),
     [
@@ -463,6 +464,7 @@ def test_vertex_schema_folds_every_null_branch_into_nullable(field: JsonValue, e
     schema: Final = build_vertex_schema({"type": "object", "properties": {"value": field}})
 
     assert schema["properties"]["value"] == expected
+
 
 def test_anyof_with_excessive_nesting():
     """Test conversion with excessive nesting > max levels +1 deep."""
@@ -2300,11 +2302,20 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
     [
         (
             {"type": "object", "properties": {"kinds": {"type": "array", "items": {"const": "card"}}}},
-            {"type": "object", "properties": {"kinds": {"type": "array", "items": {"type": "string", "enum": ["card"]}}}},
+            {
+                "type": "object",
+                "properties": {"kinds": {"type": "array", "items": {"type": "string", "enum": ["card"]}}},
+            },
         ),
         (
-            {"type": "object", "properties": {"kind": {"anyOf": [{"const": "card", "type": "string"}, {"type": "null"}]}}},
-            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"], "nullable": True}]}}},
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"const": "card", "type": "string"}, {"type": "null"}]}},
+            },
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"], "nullable": True}]}},
+            },
         ),
         (
             {
@@ -2327,8 +2338,39 @@ async def test_vertex_ai_token_counter_routes_like_generate_content(
             {"type": "object", "properties": {"code": {"type": "string", "const": 7}}},
             {"type": "object", "properties": {"code": {"type": "string"}}},
         ),
+        (
+            {"type": "object", "properties": {"kind": {"type": ["string", "null"], "const": "card"}}},
+            {"type": "object", "properties": {"kind": {"type": "string", "enum": ["card"]}}},
+        ),
+        (
+            {"type": "object", "properties": {"note": {"type": "string", "const": ""}}},
+            {"type": "object", "properties": {"note": {"type": "string"}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "card"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"kind": {"anyOf": [{"type": "string"}, {"type": "integer"}], "const": "card"}},
+            },
+            {"type": "object", "properties": {"kind": {"anyOf": [{"type": "string", "enum": ["card"]}]}}},
+        ),
     ],
-    ids=["items", "any-of-branch", "ref-to-defs", "const-the-type-cannot-hold"],
+    ids=[
+        "items",
+        "any-of-branch",
+        "ref-to-defs",
+        "const-the-type-cannot-hold",
+        "nullable-type-list",
+        "empty-string",
+        "const-beside-any-of",
+        "const-beside-mixed-type-any-of",
+    ],
 )
 def test_build_vertex_schema_pins_a_nested_const_as_a_one_value_enum(
     parameters: dict[str, JsonValue], expected: dict[str, JsonValue]
@@ -2387,7 +2429,23 @@ def test_build_json_schema_pins_a_const_in_every_subschema_keyword(
         ({"const": None}, {"const": None}),
         ({"const": {"kind": "bank"}}, {"const": {"kind": "bank"}}),
         ({"const": ["bank"]}, {"const": ["bank"]}),
-        ({"const": "bank", "type": ["string", "null"]}, {"type": ["string", "null"], "enum": ["bank"]}),
+        ({"const": "bank", "type": ["string", "null"]}, {"type": "string", "enum": ["bank"]}),
+        ({"const": 7.0, "type": "integer"}, {"type": "integer", "enum": [7]}),
+        ({"const": 7.0, "type": "number"}, {"type": "number", "enum": [7.0]}),
+        ({"const": ""}, {"const": ""}),
+        (
+            {"anyOf": [{"type": "string"}, {"type": "null"}], "const": "bank"},
+            {"anyOf": [{"type": "string", "enum": ["bank"]}]},
+        ),
+        (
+            {"anyOf": [{"type": "string"}, {"type": "integer"}], "const": "bank"},
+            {"anyOf": [{"type": "string", "enum": ["bank"]}]},
+        ),
+        (
+            {"anyOf": [{"type": "integer"}, {"type": "null"}], "const": "bank"},
+            {"anyOf": [{"type": "integer"}, {"type": "null"}], "const": "bank"},
+        ),
+        ({"oneOf": [{"type": "string"}], "const": "bank"}, {"oneOf": [{"type": "string", "enum": ["bank"]}]}),
         ({"const": 7, "type": "number"}, {"type": "number", "enum": [7]}),
         ({"const": "bank", "type": "STRING"}, {"type": "STRING", "enum": ["bank"]}),
         ({"const": 7, "type": "string"}, {"const": 7, "type": "string"}),
@@ -2401,13 +2459,20 @@ def test_build_json_schema_pins_a_const_in_every_subschema_keyword(
         "object-const",
         "array-const",
         "typed-const",
+        "whole-float-const-under-integer",
+        "whole-float-const-under-number",
+        "empty-string-const",
+        "const-beside-any-of",
+        "const-beside-mixed-type-any-of",
+        "const-no-branch-holds",
+        "const-beside-one-of",
         "integer-const-under-number",
         "upper-case-type",
         "const-the-type-cannot-hold",
         "const-no-listed-type-holds",
     ],
 )
-def test_build_json_schema_pins_only_scalar_consts_in_subschemas_and_keeps_the_caller_type(
+def test_build_json_schema_pins_only_scalar_consts_their_declared_type_can_hold(
     other: JsonValue, expected_other: JsonValue
 ) -> None:
     sent: Final = {"anyOf": [{"type": "object", "properties": {"kind": {"const": "card"}, "other": other}}]}

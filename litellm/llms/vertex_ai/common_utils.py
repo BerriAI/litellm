@@ -152,7 +152,7 @@ def redact_vertex_ai_metadata_from_logged_object(obj: object) -> None:
             hidden_params.pop(field, None)
 
 
-def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: Mapping[str, object]) -> None:
     """
     success_handler() merges response._hidden_params into
     litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
@@ -794,13 +794,59 @@ def _subschemas(keyword: str, value: JsonValue) -> Iterable[JsonValue]:
             return ()
 
 
+def _const_as_declared(value: JsonValue, declared_type: JsonValue) -> JsonValue:
+    match value:
+        case float() if value.is_integer() and not _declared_type_holds(declared_type, "number"):
+            return int(value)
+        case _:
+            return value
+
+
+def _branch_holds(branch: JsonValue, const: JsonValue) -> bool:
+    if not isinstance(branch, dict):
+        return True
+    declared_type: Final = branch.get("type")
+    json_type: Final = _json_schema_type_of(_const_as_declared(const, declared_type))
+    return json_type is not None and _declared_type_holds(declared_type, json_type)
+
+
+def _union_keyword(schema: Mapping[str, JsonValue]) -> Literal["anyOf", "oneOf"]:
+    return "anyOf" if "anyOf" in schema else "oneOf"
+
+
+def _is_union(schema: Mapping[str, JsonValue]) -> bool:
+    return "anyOf" in schema or "oneOf" in schema
+
+
+def _push_const_into_branches(schema: JsonValue) -> None:
+    if not isinstance(schema, dict) or _json_schema_type_of(schema.get("const")) is None:
+        return
+    keyword: Final = _union_keyword(schema)
+    branches: Final = schema.get(keyword)
+    if not isinstance(branches, list):
+        return
+    const: Final = schema["const"]
+    holding: Final = tuple(branch for branch in branches if _branch_holds(branch, const))
+    if not holding:
+        return
+    del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+    schema[keyword] = list(holding)  # rebind-ok: the schema builders edit their own copy in place
+    for branch in holding:
+        if isinstance(branch, dict):
+            branch.setdefault("const", const)
+
+
 def _pin_scalar_consts(schema: JsonValue, depth: int = 0) -> None:
     if depth > DEFAULT_MAX_RECURSE_DEPTH or not isinstance(schema, dict):
         return
-    json_type: Final = _json_schema_type_of(schema.get("const"))
-    if json_type is not None and _declared_type_holds(schema.get("type"), json_type):
-        schema["enum"] = [schema.pop("const")]  # rebind-ok: the schema builders edit their own copy in place
-        schema.setdefault("type", json_type)
+    _push_const_into_branches(schema)
+    declared_type: Final = schema.get("type")
+    const: Final = _const_as_declared(schema.get("const"), declared_type)
+    json_type: Final = None if const == "" or _is_union(schema) else _json_schema_type_of(const)
+    if json_type is not None and _declared_type_holds(declared_type, json_type):
+        del schema["const"]  # rebind-ok: the schema builders edit their own copy in place
+        schema["enum"] = [const]  # rebind-ok: the schema builders edit their own copy in place
+        schema["type"] = declared_type if isinstance(declared_type, str) else json_type  # rebind-ok: same copy
     for subschema in chain.from_iterable(starmap(_subschemas, schema.items())):
         _pin_scalar_consts(subschema, depth + 1)
 

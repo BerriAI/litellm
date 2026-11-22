@@ -720,12 +720,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         google_maps_retrieval_config: dict | None = None
         computerUse: dict | None = None
         # remove 'additionalProperties' from tools
-        schema_value: Final[JsonValue] = cast(JsonValue, value)  # cast-ok: tool schemas come from JSON request data
+        schema_value: Final[JsonValue] = deepcopy(cast(JsonValue, value))  # cast-ok: tools are JSON request data
         remove_additional_properties(schema_value)
         # remove 'strict' from tools
         remove_strict_from_schema(schema_value)
 
-        for tool in value:
+        for tool in cast(list[dict], schema_value):  # cast-ok: the copy keeps the tools' shape
             openai_function_object: ChatCompletionToolParamFunctionChunk | None = None
             if "function" in tool:  # tools list
                 _openai_function_object = ChatCompletionToolParamFunctionChunk(**tool["function"])
