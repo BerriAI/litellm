@@ -289,10 +289,16 @@ def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the
         )
         seen: Final = [next(stream), next(stream)]
         with pytest.raises(litellm.exceptions.MidStreamFallbackError, match=raised):
-            _ = list(stream)
+            _ = next(stream)
 
     assert "".join(chunk.choices[0].delta.content or "" for chunk in seen) == "Once upon "
     assert [chunk.choices[0].finish_reason for chunk in seen] == [None, None]
+    first_hop_usage: Final = _interaction("Once ", "requires_continuation", "tok-1")["usage"]
+    billed: Final = stream.partial_response().usage
+    assert (billed.prompt_tokens, billed.completion_tokens) == (
+        first_hop_usage["total_input_tokens"],
+        first_hop_usage["total_output_tokens"],
+    )
 
 
 @pytest.mark.parametrize(

@@ -243,6 +243,7 @@ class InteractionsChatStreamingIterator:
         self._hop_usages: tuple[JsonValue, ...] = ()
         self._hop_open: bool = False
         self._hop_delivered: bool = False
+        self._deferred_failure: Exception | None = None
         self._images_sent: int = 0
         self._step_index_offset: int = 0
         self._highest_step_index: int = -1
@@ -677,9 +678,20 @@ class InteractionsChatStreamingIterator:
         self._buffer.extend(chunks)
 
     def _fail_stream(self, error: Exception) -> None:
-        if not self._hop_open or self._hop_delivered:
+        if self._hop_open and not self._hop_delivered:
+            self._end_after_failed_hop(error)
+            return
+        raw_usage: Final = merge_hop_usage(self._hop_usages)
+        if raw_usage is None or self._deferred_failure is not None:
             raise error
-        self._end_after_failed_hop(error)
+        self._deferred_failure = error
+        self._buffer.append(
+            self._build_chunk(Delta(), finish_reason=None, usage=transform_interactions_usage(raw_usage))
+        )
+
+    def _raise_deferred_failure(self) -> None:
+        if self._deferred_failure is not None and not self._buffer:
+            raise self._deferred_failure
 
     def _start_sync_hop(self, hop_body: HopBody) -> None:
         if self._open_sync_hop is None:
@@ -762,6 +774,7 @@ class InteractionsChatStreamingIterator:
 
     def __next__(self) -> ModelResponseStream:
         while not self._buffer:
+            self._raise_deferred_failure()
             if (hop_body := self._take_pending_hop()) is not None:
                 self._start_sync_hop(hop_body)
                 continue
@@ -787,6 +800,7 @@ class InteractionsChatStreamingIterator:
 
     async def __anext__(self) -> ModelResponseStream:
         while not self._buffer:
+            self._raise_deferred_failure()
             if (hop_body := self._take_pending_hop()) is not None:
                 await self._start_async_hop(hop_body)
                 continue

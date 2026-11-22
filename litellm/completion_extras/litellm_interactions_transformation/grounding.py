@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import accumulate, chain, groupby
 from typing import Final, TypeAlias, TypeVar
 
 from pydantic import JsonValue, TypeAdapter
@@ -75,28 +75,30 @@ def _citations(steps: Sequence[JsonMapping]) -> tuple[_Citation, ...]:
     content: Final = _flat(_dicts(step.get("content")) for step in _typed(steps, "model_output"))
     blocks: Final = _typed(content, "text")
     lengths: Final = tuple(len(str(block.get("text") or "").encode()) for block in blocks)
-    offsets: Final = tuple(sum(lengths[:position]) for position in range(len(blocks)))
+    offsets: Final = tuple(accumulate(lengths, initial=0))
     return _flat(_block_citations(block, offset) for block, offset in zip(blocks, offsets))
 
 
 def _support(
-    span: tuple[int, int, str], citations: Sequence[_Citation], sources: Sequence[tuple[str, str]]
+    span: tuple[int, int, str], cited: Sequence[_Citation], source_positions: Mapping[tuple[str, str], int]
 ) -> Mapping[str, object]:
     start, end, text = span
     return {
         "segment": {"startIndex": start, "endIndex": end, "text": text},
-        "groundingChunkIndices": tuple(
-            sources.index((cited.uri, cited.title))
-            for cited in citations
-            if (cited.start, cited.end, cited.text) == span
-        ),
+        "groundingChunkIndices": tuple(source_positions[(citation.uri, citation.title)] for citation in cited),
     }
+
+
+def _span_of(citation: _Citation) -> tuple[int, int, str]:
+    return (citation.start, citation.end, citation.text)
 
 
 def _grounding(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
     citations: Final = _citations(steps)
     sources: Final = tuple(dict.fromkeys((cited.uri, cited.title) for cited in citations))
-    spans: Final = tuple(dict.fromkeys((cited.start, cited.end, cited.text) for cited in citations))
+    source_positions: Final = {source: position for position, source in enumerate(sources)}
+    by_span: Final = groupby(sorted(citations, key=_span_of), key=_span_of)
+    supports: Final = tuple(_support(span, tuple(cited), source_positions) for span, cited in by_span)
     queries: Final = _flat(_queries(step.get("arguments")) for step in _typed(steps, _SEARCH_CALL))
     found: Final = _flat(_dicts(step.get("result")) for step in _typed(steps, _SEARCH_RESULT))
     suggestions: Final = tuple(
@@ -109,7 +111,7 @@ def _grounding(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
             if sources
             else {}
         ),
-        **({"groundingSupports": tuple(_support(span, citations, sources) for span in spans)} if spans else {}),
+        **({"groundingSupports": supports} if supports else {}),
         **({"webSearchQueries": queries} if queries else {}),
     }
 
