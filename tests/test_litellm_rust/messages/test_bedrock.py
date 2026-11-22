@@ -975,6 +975,45 @@ async def test_bedrock_mantle_sends_no_proxy_user_profile_id_to_a_claude_named_m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment", "sent"),
+    (
+        pytest.param(
+            {"model_info": {"base_model": "bedrock_mantle/anthropic.claude-sonnet-5-5"}},
+            ("uprof_pinned", None),
+            id="model-info-base-model-flagged",
+        ),
+        pytest.param(
+            {"base_model": "bedrock_mantle/anthropic.claude-sonnet-5-5"},
+            ("uprof_pinned", None),
+            id="litellm-params-base-model-flagged",
+        ),
+        pytest.param({}, (None, None), id="no-base-model"),
+    ),
+)
+async def test_bedrock_mantle_sends_the_proxy_user_profile_id_to_an_unlisted_model_whose_base_model_is_flagged(
+    server: RecordingServer, deployment: Mapping[str, object], sent: tuple[object, object]
+) -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
+    proxy_request: Final[dict[str, object]] = {}  # mutable-ok: the proxy helper fills the request it is handed
+    add_provider_specific_headers_to_request(data=proxy_request, headers={}, user_profile_id="uprof_pinned")
+
+    await _mantle(
+        _RUST_ENTRY,
+        server,
+        model="bedrock_mantle/anthropic.claude-unlisted-deployment",
+        **deployment,
+        **proxy_request,
+    )
+
+    assert_served_natively(server)
+    [rust_sent] = server.requests
+    assert _sent_user_profile(rust_sent) == sent
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("model", _MANTLE_ROUTES)
 @pytest.mark.parametrize(
     ("extra_headers", "profile_id"),

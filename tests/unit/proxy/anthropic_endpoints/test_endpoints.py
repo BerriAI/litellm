@@ -1092,6 +1092,7 @@ def _count_on_claude(
     extra_body: Mapping[str, object] = MappingProxyType({}),
     caller: UserAPIKeyAuth | None = None,
     claude: Mapping[str, str] = _ANTHROPIC_CLAUDE,
+    model_info: Mapping[str, str] = MappingProxyType({}),
 ) -> httpx.Response:
     from fastapi import FastAPI
 
@@ -1111,12 +1112,12 @@ def _count_on_claude(
                 {
                     "model_name": "count-log-claude",
                     "litellm_params": {**claude, "order": 2},
-                    "model_info": {"id": "count-log-fallback-deployment"},
+                    "model_info": {**model_info, "id": "count-log-fallback-deployment"},
                 },
                 {
                     "model_name": "count-log-claude",
                     "litellm_params": {**claude, "order": 1},
-                    "model_info": {"id": "count-log-routed-deployment"},
+                    "model_info": {**model_info, "id": "count-log-routed-deployment"},
                 },
             ]
         ),
@@ -1375,6 +1376,33 @@ def test_count_tokens_sends_no_user_profile_id_to_a_claude_named_model_the_cost_
         client_headers,
         caller=UserAPIKeyAuth(metadata=dict(key_metadata)),
         claude={**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-unlisted-deployment"},
+    )
+
+    assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text
+
+
+@pytest.mark.parametrize(
+    "litellm_params,model_info,sent_profile_id",
+    [
+        ({}, {"base_model": "anthropic/claude-sonnet-5-5"}, "uprof_pinned"),
+        ({"base_model": "anthropic/claude-sonnet-5-5"}, {}, "uprof_pinned"),
+        ({}, {}, None),
+    ],
+    ids=["model_info_base_model_flagged", "litellm_params_base_model_flagged", "no_base_model"],
+)
+def test_count_tokens_pins_an_unlisted_claude_whose_base_model_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    litellm_params: Mapping[str, str],
+    model_info: Mapping[str, str],
+    sent_profile_id: str | None,
+) -> None:
+    response: Final = _count_on_claude(
+        monkeypatch,
+        _count_api_expecting(sent_profile_id),
+        {},
+        caller=UserAPIKeyAuth(metadata={"anthropic_user_profile_id": "uprof_pinned"}),
+        claude={**_ANTHROPIC_CLAUDE, "model": "anthropic/claude-unlisted-deployment", **litellm_params},
+        model_info=model_info,
     )
 
     assert response.json() == {"input_tokens": 77, "litellm_count_source": "provider"}, response.text

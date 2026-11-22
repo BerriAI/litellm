@@ -6174,6 +6174,7 @@ def completion(
                 custom_llm_provider=custom_llm_provider,
                 model=model,
                 configured_headers=headers,
+                base_model=base_model if isinstance(base_model, str) else None,
             ),
         )
         headers = merged_headers  # rebind-ok: headers is this function's legacy mutable request headers

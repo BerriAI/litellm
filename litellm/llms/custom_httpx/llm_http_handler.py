@@ -2837,6 +2837,7 @@ class BaseLLMHTTPHandler:
     ) -> AnthropicMessagesResponse | AsyncIterator:
         from litellm.litellm_core_utils.get_provider_specific_headers import (
             ProviderSpecificHeaderUtils,
+            deployment_base_model,
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
@@ -2862,6 +2863,7 @@ class BaseLLMHTTPHandler:
             configured_headers=_merge_messages_header_sources(
                 _header_items(forwarded_headers), _header_items(extra_headers_from_kwargs)
             ),
+            base_model=deployment_base_model(kwargs, kwargs.get("model_info")),
         )
         merged_headers: Final = _merge_messages_header_sources(
             _header_items(forwarded_headers), _header_items(extra_headers_from_kwargs), provider_specific_headers

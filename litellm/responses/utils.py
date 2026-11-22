@@ -287,12 +287,14 @@ class ResponsesAPIRequestUtils:
         provider_specific_header: object,
         custom_llm_provider: str | None,
         model: str | None = None,
+        base_model: str | None = None,
     ) -> dict[str, object] | None:  # mutable-ok: legacy Responses request fields require a dict
         scoped_headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
             provider_specific_header=_PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(provider_specific_header),
             custom_llm_provider=custom_llm_provider,
             model=model,
             configured_headers=extra_headers,
+            base_model=base_model,
         )
         if extra_headers is None and not scoped_headers:
             return None

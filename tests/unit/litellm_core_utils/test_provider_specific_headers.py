@@ -197,6 +197,33 @@ def test_a_non_profile_id_entry_skips_models_the_cost_map_flags(model: str | Non
 
 
 @pytest.mark.parametrize(
+    "base_model,expected",
+    [
+        ("azure_ai/claude-sonnet-5-5", {"anthropic-user-profile-id": "uprof_client"}),
+        (None, {"authorization": "Bearer caller"}),
+    ],
+    ids=["base_model_flagged", "no_base_model"],
+)
+def test_an_unlisted_deployment_takes_the_profile_id_when_its_base_model_is_flagged(
+    base_model: str | None, expected: dict[str, str]
+) -> None:
+    caller_credential: Final[ProviderSpecificHeader] = {
+        "custom_llm_provider": "azure_ai",
+        "extra_headers": {"authorization": "Bearer caller"},
+        "non_user_profile_id_models_only": True,
+    }
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            [_PROFILE_ON_AZURE_AI, caller_credential],
+            "azure_ai",
+            model="claude-unlisted-deployment",
+            base_model=base_model,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
     "yields_to_configured,configured_headers,expected",
     [
         (True, {"Anthropic-User-Profile-Id": "uprof_deployment"}, {}),

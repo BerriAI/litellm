@@ -1729,9 +1729,64 @@ async def test_the_router_isolates_the_deployment_on_a_callers_conditional_autho
         configured_headers=updated["extra_headers"],
     )
     isolated_on: Final = forwarded_caller_authorization(
-        updated, {"custom_llm_provider": "anthropic", "model": "claude-sonnet-5-5"}
+        updated, {"litellm_params": {"custom_llm_provider": "anthropic", "model": "claude-sonnet-5-5"}}
     )
     assert sent.get("Authorization") == isolated_on == "Bearer caller-token"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info,sent",
+    [({"base_model": "claude-sonnet-5-5"}, (None, "uprof_key")), ({}, ("Bearer caller-token", None))],
+    ids=["base_model_flagged", "no_base_model"],
+)
+async def test_a_routed_unlisted_claude_takes_the_pin_over_a_callers_authorization_when_its_base_model_is_flagged(
+    model_info: dict[str, str], sent: tuple[str | None, str | None]
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    updated: Final = await _request_data_added_by_the_proxy(
+        {
+            "provider_specific_header": {
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"Authorization": "Bearer caller-token"},
+            }
+        },
+        {},
+        {},
+        _PINNED_KEY,
+    )
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Anthropic endpoint records what the proxy sent
+
+    def anthropic_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-unlisted",
+                "litellm_params": {"model": "anthropic/claude-unlisted-deployment", "api_key": "sk-ant-deployment"},
+                "model_info": model_info,
+            }
+        ]
+    )
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(anthropic_answers))
+    try:
+        await router.acompletion(
+            model="claude-unlisted",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            client=upstream,
+            provider_specific_header=updated["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
+    assert (received[0].headers.get("authorization"), received[0].headers.get(USER_PROFILE_ID_HEADER)) == sent
 
 
 def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> None:
@@ -10141,6 +10196,94 @@ async def test_foundry_messages_keeps_the_pin_when_a_configured_api_key_authenti
     assert len(received) == 1
     assert received[0].headers.get_list("x-api-key") == [sent_key]
     assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
+
+
+_UNLISTED_FOUNDRY_CLAUDE: Final = "azure_ai/claude-unlisted-deployment"
+_BASE_MODEL_CASES: Final = pytest.mark.parametrize(
+    "model_info,sent_profile",
+    [({"base_model": "azure_ai/claude-sonnet-5-5"}, ["uprof_key"]), ({}, [])],
+    ids=["base_model_flagged", "no_base_model"],
+)
+
+
+@pytest.mark.asyncio
+@_BASE_MODEL_CASES
+async def test_a_routed_completion_pins_an_unlisted_foundry_claude_whose_base_model_the_cost_map_flags(
+    model_info: dict[str, str], sent_profile: list[str]
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    updated: Final = await _request_data_added_by_the_proxy({}, {}, {}, _PINNED_KEY)
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-on-foundry",
+                "litellm_params": {
+                    "model": _UNLISTED_FOUNDRY_CLAUDE,
+                    "api_base": f"{_FOUNDRY_BASE}/anthropic",
+                    "api_key": "foundry-key",
+                },
+                "model_info": model_info,
+            }
+        ]
+    )
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await router.acompletion(
+            model="claude-on-foundry",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            client=upstream,
+            provider_specific_header=updated["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
+    assert received[0].headers.get_list("anthropic-user-profile-id") == sent_profile
+
+
+@pytest.mark.asyncio
+@_BASE_MODEL_CASES
+async def test_foundry_messages_pins_an_unlisted_claude_whose_base_model_the_cost_map_flags(
+    model_info: dict[str, str], sent_profile: list[str]
+) -> None:
+    import httpx
+
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+    updated: Final = await _request_data_added_by_the_proxy({}, {}, {}, _PINNED_KEY)
+    received: Final[list[httpx.Request]] = []  # mutable-ok: the fake Foundry endpoint records what the proxy sent
+
+    def foundry_answers(request: httpx.Request) -> httpx.Response:
+        received.append(request)
+        return httpx.Response(status_code=200, json=dict(_ANTHROPIC_MESSAGE_REPLY), request=request)
+
+    upstream: Final = AsyncHTTPHandler(transport=httpx.MockTransport(foundry_answers))
+    try:
+        await litellm.anthropic.messages.acreate(
+            model=_UNLISTED_FOUNDRY_CLAUDE,
+            api_base=f"{_FOUNDRY_BASE}/anthropic",
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=8,
+            api_key="foundry-key",
+            model_info=model_info,
+            client=upstream,
+            provider_specific_header=updated["provider_specific_header"],
+        )
+    finally:
+        await upstream.close()
+
+    assert len(received) == 1
+    assert received[0].headers.get_list("anthropic-user-profile-id") == sent_profile
 
 
 def test_client_anthropic_api_headers_stay_off_openai_compatible_providers():

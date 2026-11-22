@@ -109,6 +109,10 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.litellm_core_utils.get_provider_specific_headers import (
+    deployment_base_model,
+    takes_anthropic_user_profile_id,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
     initialize_sentry,
@@ -235,7 +239,6 @@ from litellm.utils import (
     acredential_updates,
     cost_map_omits_token_price,
     native_structured_output_support,
-    supports_anthropic_user_profile_id,
     with_named_credential,
 )
 
@@ -15279,11 +15282,11 @@ from litellm.responses.litellm_completion_transformation.count_request import (
 _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
 
 
-def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object]) -> bool:
+def _counts_with_user_profile_id(deployment_litellm_params: Mapping[str, object], base_model: str | None) -> bool:
     model: Final = deployment_litellm_params.get("model")
     provider: Final = deployment_litellm_params.get("custom_llm_provider")
-    return isinstance(model, str) and supports_anthropic_user_profile_id(
-        model, provider if isinstance(provider, str) else None
+    return takes_anthropic_user_profile_id(
+        model if isinstance(model, str) else None, provider if isinstance(provider, str) else None, base_model
     )
 
 
@@ -15291,8 +15294,9 @@ def _count_user_profile_id(
     pinned_user_profile_id: str | None,
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
 ) -> str | None:
-    if not _counts_with_user_profile_id(deployment_litellm_params):
+    if not _counts_with_user_profile_id(deployment_litellm_params, base_model):
         return None
     return (
         pinned_user_profile_id
@@ -15307,12 +15311,13 @@ def _with_client_identity(
     pinned_user_profile_id: str | None,
     client_user_profile_id: str | None,
     deployment_litellm_params: Mapping[str, object],
+    base_model: str | None,
 ) -> BaseTokenCounter | None:
     counted_client_user_profile_id: Final = (
-        client_user_profile_id if _counts_with_user_profile_id(deployment_litellm_params) else None
+        client_user_profile_id if _counts_with_user_profile_id(deployment_litellm_params, base_model) else None
     )
     user_profile_id: Final = _count_user_profile_id(
-        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params
+        pinned_user_profile_id, client_user_profile_id, deployment_litellm_params, base_model
     )
     match counter:
         case AnthropicTokenCounter() if client_oauth_token is not None:
@@ -16411,12 +16416,14 @@ async def _count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
+        counted_litellm_params: Final = _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {}))
         provider_counter = _with_client_identity(
             routed_counter,
             client_oauth_token,
             pinned_user_profile_id,
             client_user_profile_id,
-            _LITELLM_PARAMS_COPY.validate_python(deployment.get("litellm_params", {})),
+            counted_litellm_params,
+            deployment_base_model(counted_litellm_params, model_info),
         )
         if _model is not None:
             model_to_use = _model
@@ -16564,7 +16571,14 @@ async def _count_request_tokens(
             local_estimate_allowed=litellm.disable_token_counter is not True and contents_estimable,
             forwards_request_fields=(context_edits is not None and edited_request is None)
             or bool(forwarded_count_options)
-            or bool(_count_user_profile_id(pinned_user_profile_id, client_user_profile_id, count_litellm_params)),
+            or bool(
+                _count_user_profile_id(
+                    pinned_user_profile_id,
+                    client_user_profile_id,
+                    count_litellm_params,
+                    deployment_base_model(count_litellm_params, model_info),
+                )
+            ),
         )
     )
     if isinstance(ladder, TokenCountResponse):

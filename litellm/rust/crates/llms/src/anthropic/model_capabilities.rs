@@ -180,6 +180,24 @@ pub fn messages_route_capabilities(
     )
 }
 
+pub fn with_base_model_user_profile_id(
+    capabilities: MessagesModelCapabilities,
+    catalog: &Catalog,
+    base_model: Option<&str>,
+    custom_llm_provider: Option<&str>,
+    declared: &dyn Fn(&str) -> Option<bool>,
+) -> MessagesModelCapabilities {
+    let supports_anthropic_user_profile_id = capabilities.supports_anthropic_user_profile_id
+        || base_model.is_some_and(|base_model| {
+            messages_route_capabilities(catalog, base_model, custom_llm_provider, None, declared)
+                .supports_anthropic_user_profile_id
+        });
+    MessagesModelCapabilities {
+        supports_anthropic_user_profile_id,
+        ..capabilities
+    }
+}
+
 pub fn bedrock_model_capabilities(
     catalog: &Catalog,
     model: &str,

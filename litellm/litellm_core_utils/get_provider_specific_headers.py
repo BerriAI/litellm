@@ -6,6 +6,7 @@ from typing import Final, TypeVar
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.llms.anthropic import ANTHROPIC_USER_PROFILE_ID_HEADER
 from litellm.types.utils import LlmProviders, ProviderSpecificHeader
 from litellm.utils import supports_anthropic_user_profile_id
@@ -42,8 +43,19 @@ def _gates_on_user_profile_id_support(scoped_header: ProviderSpecificHeader) -> 
     )
 
 
-def _takes_user_profile_id(model: str | None, custom_llm_provider: str) -> bool:
-    return model is not None and supports_anthropic_user_profile_id(model, custom_llm_provider)
+def deployment_base_model(litellm_params: Mapping[str, object], model_info: object) -> str | None:
+    base_model: Final = litellm_params.get("base_model") or (as_str_mapping(model_info) or {}).get("base_model")
+    return base_model if isinstance(base_model, str) else None
+
+
+def takes_anthropic_user_profile_id(
+    model: str | None, custom_llm_provider: str | None, base_model: str | None = None
+) -> bool:
+    return any(
+        supports_anthropic_user_profile_id(candidate, custom_llm_provider)
+        for candidate in (base_model, model)
+        if candidate
+    )
 
 
 def _applies_to_call(
@@ -103,10 +115,13 @@ class ProviderSpecificHeaderUtils:
 
     @staticmethod
     def forwarded_authorization(
-        provider_specific_header: object, custom_llm_provider: str | None, model: str | None
+        provider_specific_header: object, custom_llm_provider: str | None, model: str | None, base_model: str | None
     ) -> str | None:
         headers: Final = ProviderSpecificHeaderUtils.get_provider_specific_headers(
-            _PROVIDER_HEADERS.validate_python(provider_specific_header), custom_llm_provider, model=model
+            _PROVIDER_HEADERS.validate_python(provider_specific_header),
+            custom_llm_provider,
+            model=model,
+            base_model=base_model,
         )
         return next((value for key, value in headers.items() if key.lower() == "authorization"), None)
 
@@ -117,6 +132,7 @@ class ProviderSpecificHeaderUtils:
         native_anthropic_messages: bool = False,
         model: str | None = None,
         configured_headers: Mapping[str, object] | None = None,
+        base_model: str | None = None,
     ) -> Mapping[str, str]:
         """
         Get the provider specific headers for the given custom llm provider.
@@ -127,9 +143,10 @@ class ProviderSpecificHeaderUtils:
         without sharing a scope. Entries whose provider list does not contain
         `custom_llm_provider` contribute nothing, and entries marked
         `native_anthropic_messages_only` contribute only to a provider's native Messages route.
-        Entries marked `user_profile_id_models_only` contribute only when the model cost map says `model` takes the
-        Anthropic user profile id, entries marked `non_user_profile_id_models_only` only when it does not, and
-        entries marked `yields_to_configured` never replace a header already in `configured_headers`, and
+        Entries marked `user_profile_id_models_only` contribute only when the model cost map says `model` or the
+        deployment's `base_model` takes the Anthropic user profile id, entries marked
+        `non_user_profile_id_models_only` only when neither does, and entries marked `yields_to_configured` never
+        replace a header already in `configured_headers`, and
         entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
         whose value starts with `configured_credential_prefix` when the entry sets one, under a name no other
         applicable entry replaces.
@@ -147,7 +164,7 @@ class ProviderSpecificHeaderUtils:
         configured: Final[Mapping[str, object]] = configured_headers or {}
         configured_names: Final = frozenset(name.lower() for name in configured)
         takes_user_profile_id: Final = any(map(_gates_on_user_profile_id_support, scoped_headers)) and (
-            _takes_user_profile_id(model, custom_llm_provider)
+            takes_anthropic_user_profile_id(model, custom_llm_provider, base_model)
         )
         applicable: Final = tuple(
             scoped_header
