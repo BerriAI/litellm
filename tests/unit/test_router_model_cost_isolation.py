@@ -1116,6 +1116,48 @@ def test_bedrock_model_id_deployment_takes_the_price_its_profile_row_declares(
     assert litellm.model_cost["priced-profile-deployment"][field] == profile_row[field]
 
 
+def test_bedrock_model_id_deployment_bills_tokens_at_base_rates_its_profile_row_leaves_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.cost_calculator import completion_cost
+    from litellm.types.utils import ModelResponse, Usage
+
+    model: Final = "anthropic.cache-only-profile-row-test"
+    profile: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/cache-only-row-test"
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.model_cost,
+            model: {
+                "litellm_provider": "bedrock",
+                "mode": "chat",
+                "input_cost_per_token": 0.03,
+                "output_cost_per_token": 0.04,
+            },
+            f"bedrock/{profile}": {"litellm_provider": "bedrock", "mode": "chat", "cache_read_input_token_cost": 0.005},
+        },
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "by-model-id",
+                "litellm_params": {"model": f"bedrock/converse/{model}", "model_id": profile},
+                "model_info": {"id": "cache-only-profile-deployment"},
+            }
+        ]
+    )
+    assert completion_cost(
+        model=model,
+        completion_response=ModelResponse(
+            model=model, usage=Usage(prompt_tokens=100, completion_tokens=3, total_tokens=103)
+        ),
+        custom_llm_provider="bedrock",
+        custom_pricing=True,
+        router_model_id="cache-only-profile-deployment",
+    ) == pytest.approx(100 * 0.03 + 3 * 0.04)
+
+
 def test_bedrock_deployment_with_its_profile_as_base_model_prices_the_same_beside_an_arn_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

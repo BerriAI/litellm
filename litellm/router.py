@@ -368,7 +368,6 @@ from litellm.types.utils import (
     StandardLoggingRoutingDecision,
     Usage,
     all_litellm_params,
-    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.types.utils import ModelInfo as ModelMapInfo
@@ -9609,7 +9608,7 @@ class Router:
 
     @staticmethod
     def _cost_map_backend_model(deployment: Deployment) -> str:
-        from litellm.cost_calculator import cost_map_key_has_any_price
+        from litellm.cost_calculator import cost_map_key_declared_prices
 
         model_info_base_model: Final = deployment.model_info.base_model
         if isinstance(model_info_base_model, str) and model_info_base_model:
@@ -9629,7 +9628,7 @@ class Router:
         ):
             profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
             profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_has_any_price(profile_info["key"]):
+            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
                 return profile_model
         return deployment.litellm_params.model
 
@@ -10846,7 +10845,7 @@ class Router:
         both are folded back in here. That keeps this reproducible from a
         deployment alone, which is what lets a refresh rebuild the same entries.
         """
-        from litellm.cost_calculator import cost_map_key_has_any_price
+        from litellm.cost_calculator import cost_map_key_declared_prices
 
         model_info: Final = dict(
             _MODEL_INFO_ADAPTER.validate_python(deployment.model_info.model_dump(exclude_none=True))
@@ -10866,11 +10865,12 @@ class Router:
             )
         ):
             profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
-            if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_has_any_price(profile_info["key"]):
-                explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(model_info)
-                priced_info: Final = pricing_with_overrides(profile_info, explicit_info)
+            if not isinstance(profile_info, ModelInfoLookupMiss):
                 model_info.update(
-                    {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+                    pricing_with_overrides(
+                        cost_map_key_declared_prices(profile_info["key"]),
+                        _MODEL_INFO_ADAPTER.validate_python(model_info),
+                    )
                 )
         Router._inherit_builtin_base_rates_for_off_peak(
             model_info=model_info,
