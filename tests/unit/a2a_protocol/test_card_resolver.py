@@ -14,8 +14,10 @@ import pytest
 from litellm.a2a_protocol.card_resolver import (
     LiteLLMA2ACardResolver,
     fix_agent_card_url,
+    get_agent_card_url,
     is_localhost_or_internal_url,
     normalize_agent_card_interfaces,
+    resolve_a2a_protocol_version,
     set_agent_card_url,
 )
 from litellm.a2a_protocol.exceptions import A2AAgentCardDiscoveryError
@@ -116,6 +118,37 @@ def test_fix_agent_card_url_updates_interface_when_top_level_is_localhost():
     assert result.supported_interfaces[0].url == "https://my-public-agent.example.com/"
 
 
+@pytest.mark.parametrize(
+    ("card", "expected"),
+    [
+        (SimpleNamespace(url="https://agent.example.com/"), "https://agent.example.com/"),
+        (
+            SimpleNamespace(url="", supported_interfaces=[SimpleNamespace(url="https://interface.example.com/")]),
+            "https://interface.example.com/",
+        ),
+        (
+            SimpleNamespace(supported_interfaces=[SimpleNamespace(url="https://interface.example.com/")]),
+            "https://interface.example.com/",
+        ),
+        (SimpleNamespace(url=""), None),
+        (SimpleNamespace(url=None, supported_interfaces=[]), None),
+        (SimpleNamespace(), None),
+    ],
+    ids=[
+        "top_level_url",
+        "empty_url_falls_to_interface",
+        "interfaces_only",
+        "empty_url_without_interfaces",
+        "no_interfaces",
+        "bare",
+    ],
+)
+def test_get_agent_card_url_prefers_the_top_level_url_then_the_first_interface(
+    card: SimpleNamespace, expected: str | None
+):
+    assert get_agent_card_url(card) == expected
+
+
 def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0_3_dialect():
     pb2 = pytest.importorskip("a2a.types.a2a_pb2")
 
@@ -137,6 +170,77 @@ def test_normalize_agent_card_interfaces_downgrades_miscased_interfaces_to_the_0
     ]
     assert card.supported_interfaces[0].protocol_binding == "jsonrpc"
     assert card.supported_interfaces[0].protocol_version == "1.0"
+
+
+def test_normalize_agent_card_interfaces_applies_override_to_canonical_bindings_without_mutating_input():
+    pb2 = pytest.importorskip("a2a.types.a2a_pb2")
+    card = pb2.AgentCard(
+        name="langgraph",
+        supported_interfaces=[
+            pb2.AgentInterface(url="http://a/", protocol_binding="jsonrpc", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://b/", protocol_binding="JSONRPC", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://c/", protocol_binding="HTTP+JSON", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://d/", protocol_binding="GRPC", protocol_version="1.0"),
+            pb2.AgentInterface(url="http://e/", protocol_binding="websocket", protocol_version="1.0"),
+        ],
+    )
+
+    normalized = normalize_agent_card_interfaces(card, protocol_version="0.3")
+
+    assert [(item.protocol_binding, item.protocol_version) for item in normalized.supported_interfaces] == [
+        ("JSONRPC", "0.3"),
+        ("JSONRPC", "0.3"),
+        ("HTTP+JSON", "0.3"),
+        ("GRPC", "0.3"),
+        ("websocket", "1.0"),
+    ]
+    assert card.supported_interfaces[0].protocol_binding == "jsonrpc"
+    assert [(item.protocol_binding, item.protocol_version) for item in card.supported_interfaces] == [
+        ("jsonrpc", "1.0"),
+        ("JSONRPC", "1.0"),
+        ("HTTP+JSON", "1.0"),
+        ("GRPC", "1.0"),
+        ("websocket", "1.0"),
+    ]
+
+
+def test_normalize_agent_card_interfaces_override_opts_out_of_mis_cased_downgrade():
+    pb2 = pytest.importorskip("a2a.types.a2a_pb2")
+    card = pb2.AgentCard(
+        name="langgraph",
+        supported_interfaces=[
+            pb2.AgentInterface(url="http://a/", protocol_binding="jsonrpc", protocol_version="1.0"),
+        ],
+    )
+
+    normalized = normalize_agent_card_interfaces(card, protocol_version="1.0")
+
+    assert normalized.supported_interfaces[0].protocol_binding == "JSONRPC"
+    assert normalized.supported_interfaces[0].protocol_version == "1.0"
+    assert card.supported_interfaces[0].protocol_binding == "jsonrpc"
+    assert card.supported_interfaces[0].protocol_version == "1.0"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("0.3", "0.3"),
+        (" 0.3 ", "0.3"),
+        ("0.3.0", "0.3"),
+        (0.3, "0.3"),
+        (1.0, "1.0"),
+        ("1.0.0", "1.0"),
+        (None, None),
+        (True, None),
+        (1, None),
+        ("2.0", None),
+        ("abc", None),
+        ("", None),
+        (["0.3"], None),
+    ],
+)
+def test_resolve_a2a_protocol_version(value, expected):
+    assert resolve_a2a_protocol_version(value) == expected
 
 
 _FOUNDRY_BASE_URL: Final = "https://foundry.example.com/a2a"

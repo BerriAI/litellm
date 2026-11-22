@@ -109,7 +109,11 @@ async function pickAuthMethod(
   dialog: Locator,
   label: string,
 ): Promise<void> {
-  await pickOption(page, dialog.locator("#anthropic_auth_method"), label);
+  await pickOption(
+    page,
+    dialog.getByRole("combobox", { name: "Authentication:", exact: true }),
+    label,
+  );
 }
 
 async function pickIdentitySource(
@@ -142,9 +146,7 @@ async function openAddCredentialDialog(
     .click();
   const dialog = page.getByRole("dialog", { name: "Add New Credential" });
   await expect(dialog).toBeVisible();
-  await dialog
-    .getByPlaceholder("Enter a friendly name for these credentials")
-    .fill(name);
+  await dialog.getByLabel("Credential Name:", { exact: true }).fill(name);
   await pickProvider(page, dialog, ANTHROPIC_LABEL);
   await pickAuthMethod(page, dialog, FEDERATION_BADGE);
   return dialog;
@@ -153,14 +155,21 @@ async function openAddCredentialDialog(
 async function openEditDialog(
   page: PlaywrightPage,
   name: string,
+  afterMenuOpen?: () => Promise<void>,
 ): Promise<Locator> {
   await expect(page.getByText(UPDATED_TOAST)).toHaveCount(0);
   const row = page.locator("tr", { hasText: name });
   await expect(row).toBeVisible({ timeout: 15_000 });
   await row.getByTestId(`credential-actions-${name}`).click();
+  await afterMenuOpen?.();
   await page.getByTestId("credential-action-edit").click();
   const dialog = page.getByRole("dialog", { name: "Edit Credential" });
   await expect(dialog).toBeVisible();
+  const credentialNameField = dialog.getByLabel("Credential Name:", {
+    exact: true,
+  });
+  await expect(credentialNameField).toHaveValue(name);
+  await expect(credentialNameField).toBeDisabled();
   return dialog;
 }
 
@@ -471,6 +480,15 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
   };
   const ruleId = `fdrl_${suffix}`;
   const tokenFile = `/var/run/secrets/anthropic/${suffix}/token`;
+  let releaseModels!: () => void;
+  const modelsReleased = new Promise<void>((resolve) => {
+    releaseModels = resolve;
+  });
+  await page.route("**/v2/model/info?*", async (route) => {
+    const response = await route.fetch();
+    await modelsReleased;
+    await route.fulfill({ response });
+  });
   try {
     await createCredential(request, names.fromApiKey, {
       api_key: `sk-ant-${suffix}`,
@@ -493,7 +511,11 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
     await logInAsAdmin(page);
     await openModelsTab(page, "LLM Credentials");
 
-    const keyDialog = await openEditDialog(page, names.fromApiKey);
+    const keyDialog = await openEditDialog(page, names.fromApiKey, async () => {
+      const response = page.waitForResponse((response) => response.url().includes("/v2/model/info?"));
+      releaseModels();
+      await (await response).finished();
+    });
     await pickAuthMethod(page, keyDialog, FEDERATION_BADGE);
     await fillFields(keyDialog, {
       anthropic_federation_rule_id: ruleId,
@@ -605,6 +627,7 @@ test("the Edit Credential dialog sends only the changed values and deletes the k
       page.locator("tr", { hasText: names.switchProvider }),
     ).not.toContainText(FEDERATION_BADGE);
   } finally {
+    releaseModels();
     await deleteCredentials(request, Object.values(names));
   }
 });
@@ -637,11 +660,14 @@ test("a proxy admin saves a federation credential from the Add Model tab and the
     const provider = dialog.getByPlaceholder("Select a provider");
     await expect(provider).toHaveValue(ANTHROPIC_LABEL);
     await expect(provider).toBeDisabled();
-    await expect(dialog.locator("#anthropic_auth_method")).toContainText(
-      FEDERATION_BADGE,
-    );
+    await expect(
+      dialog.getByRole("combobox", {
+        name: "Authentication:",
+        exact: true,
+      }),
+    ).toContainText(FEDERATION_BADGE);
     await dialog
-      .getByPlaceholder("Enter a friendly name for these credentials")
+      .getByLabel("Credential Name:", { exact: true })
       .fill(credentialName);
     await fillFields(dialog, {
       ...ids,

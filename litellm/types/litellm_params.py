@@ -3,6 +3,7 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
+from enum import Enum
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
@@ -14,13 +15,15 @@ if TYPE_CHECKING:
     import httpx
     from aiohttp import ClientSession
     from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+    from opentelemetry.trace import Span
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.router_api import AttemptedFallbackTargets
     from litellm.router_strategy.complexity_router.context_compaction import CompactionState
-    from litellm.router_utils.fallback_event_handlers import AttemptedFallbackTargets
     from litellm.types.caching import DynamicCacheControl
     from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+    from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
     from litellm.types.proxy.litellm_pre_call_utils import SecretFields
     from litellm.types.router import ConfigurableClientsideParamsCustomAuth, DeploymentTypedDict, RetryPolicy
     from litellm.types.router_weights import RouterWeights
@@ -54,6 +57,41 @@ RoutingStrategyName: TypeAlias = Literal[
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
 ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
+ADDRESSED_COMPARISON_RESPONSE_ID_FIELD: Final = "_litellm_addressed_comparison_response_id"
+STREAM_USAGE_INJECTED_FIELD: Final = "_litellm_stream_usage_injected"
+PROMPT_MANAGEMENT_APPLIED_FIELD: Final = "_litellm_prompt_management_applied"
+
+
+class PromptManagement(Enum):
+    APPLIED = "applied"
+    TEMPLATE_APPLIED = "template_applied"
+
+
+PROMPT_MANAGEMENT_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.APPLIED}
+)
+PROMPT_TEMPLATE_APPLIED: Final[Mapping[str, PromptManagement]] = MappingProxyType(
+    {PROMPT_MANAGEMENT_APPLIED_FIELD: PromptManagement.TEMPLATE_APPLIED}
+)
+
+
+def prompt_management_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.APPLIED
+
+
+def prompt_template_applied(request_kwargs: Mapping[str, object]) -> bool:
+    return request_kwargs.get(PROMPT_MANAGEMENT_APPLIED_FIELD) is PromptManagement.TEMPLATE_APPLIED
+
+
+def params_the_prompt_hook_changed(
+    params_the_hook_saw: Mapping[str, object], params_it_returned: Mapping[str, object]
+) -> Mapping[str, object]:
+    return {
+        key: value
+        for key, value in params_it_returned.items()
+        if key not in params_the_hook_saw or params_the_hook_saw[key] is not value
+    }
+
 
 WIRE_NAME: Final = "wire_name"
 
@@ -67,6 +105,7 @@ class ProviderConnection:
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
+    responses_api_version: str | None = None
     region_name: str | None = None
     headers: Mapping[str, str] | None = None
     provider_specific_header: "ProviderSpecificHeader | Sequence[ProviderSpecificHeader] | None" = None
@@ -76,6 +115,8 @@ class ProviderConnection:
     request_timeout: float | None = None
     force_timeout: float | None = None
     stream_timeout: float | str | None = None
+    timeout_by_service_tier: Mapping[str, float] | None = None
+    stream_timeout_by_service_tier: Mapping[str, float] | None = None
     max_retries: int | None = None
     tenant_id: str | None = None
     client_id: str | None = None
@@ -87,12 +128,26 @@ class ProviderConnection:
     litellm_credential_name: str | None = None
     configurable_clientside_auth_params: "Sequence[str | ConfigurableClientsideParamsCustomAuth] | None" = None
     use_xai_oauth: bool | None = None
+    chatgpt_auth_file: str | None = None
+    github_copilot_auth_type: str | None = None
+    github_copilot_host: str | None = None
+    github_copilot_app_id: str | int | None = None
+    github_copilot_app_installation_id: str | int | None = None
+    github_copilot_app_private_key_ref: str | None = None
+    github_copilot_app_private_key: str | None = None
+    github_copilot_user_session: object | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
+    fireworks_forward_user_id: bool | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class BedrockBatchConnection:
     # Bedrock rejects these names in request bodies, so register them as LiteLLM-owned
     aws_batch_role_arn: str | None = None
+    aws_bedrock_control_plane_endpoint: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
     s3_endpoint_url: str | None = None
@@ -175,6 +230,10 @@ class DeploymentOptions:
     tpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
+    rpd: int | None = None
+    tpd: int | None = None
+    daily_reset_time: str | None = None
+    kubernetes_pod_discovery: bool | None = None
     default_api_key_rpm_limit: int | None = None
     default_api_key_tpm_limit: int | None = None
     max_parallel_requests: int | None = None
@@ -187,6 +246,7 @@ class DeploymentOptions:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class SpecializedRouterOptions:
+    switchyard_router_config: Mapping[str, object] | None = None
     auto_router_config_path: str | None = None
     auto_router_config: str | None = None
     auto_router_default_model: str | None = None
@@ -253,6 +313,7 @@ class PromptOptions:
     prompt_label: str | None = None
     litellm_system_prompt: str | None = None
     custom_prompt_dict: Mapping[str, object] | None = None
+    initial_prompt_value: str | None = None
     roles: Mapping[str, object] | None = None
     final_prompt_value: str | None = None
     bos_token: str | None = None
@@ -268,6 +329,7 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    thought_signature_in_tool_call_id: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     keepalive_seconds: float | None = None
@@ -283,6 +345,10 @@ def _int_from_decimal_string(value: object) -> object:
     return value
 
 
+def _bool_from_true_false_string(value: object) -> object:
+    return value == "true" if value in ("true", "false") else value
+
+
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
 class ControlOptions:
     stream_chunk_size: (
@@ -293,6 +359,7 @@ class ControlOptions:
         ]
         | None
     ) = None
+    fake_stream: Annotated[bool, BeforeValidator(_bool_from_true_false_string), Field(strict=True)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -328,16 +395,29 @@ class CallState:
     preset_cache_key: str | None = None
     cache_key: str | None = None
     stream_response: "Mapping[str, ModelResponse] | None" = None
+    parent_otel_span: "Span | None" = None
     context_compaction_state: "CompactionState | None" = field(default=None, metadata=wire("_context_compaction_state"))
+    prompt_management_applied: PromptManagement | None = field(
+        default=None, metadata=wire(PROMPT_MANAGEMENT_APPLIED_FIELD)
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class McpHandlerState:
+    recursion_guard: bool | None = field(default=None, metadata=wire("_skip_mcp_handler"))
+    skip_mcp_handler: bool | None = None
+    mcp_handler_context: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AgenticLoopState:
+    headroom_context: "HeadroomRequestContext | None" = field(default=None, metadata=wire("_headroom_request_context"))
     depth: int | None = field(default=None, metadata=wire("_agentic_loop_depth"))
     fingerprints: Sequence[str] | None = field(default=None, metadata=wire("_agentic_loop_fingerprints"))
     api_surface: Literal["chat_completions", "responses"] | None = field(
         default=None, metadata=wire("_agentic_loop_api_surface")
     )
+    tool_choice: Mapping[str, object] | None = field(default=None, metadata=wire("_agentic_loop_tool_choice"))
     code_interpreter_active: bool | None = field(default=None, metadata=wire("_code_interpreter_interception_active"))
     code_interpreter_sandbox_key: str | None = field(
         default=None, metadata=wire("_code_interpreter_interception_sandbox_key")
@@ -348,20 +428,32 @@ class AgenticLoopState:
     code_interpreter_converted_stream: bool | None = field(
         default=None, metadata=wire("_code_interpreter_interception_converted_stream")
     )
+    code_interpreter_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_code_interpreter_interception_stream_options")
+    )
     websearch_emit_native_blocks: bool | None = field(
         default=None, metadata=wire("_websearch_interception_emit_native_blocks")
     )
     websearch_converted_stream: bool | None = field(
         default=None, metadata=wire("_websearch_interception_converted_stream")
     )
+    websearch_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_websearch_interception_stream_options")
+    )
     headroom_converted_stream: bool | None = field(
         default=None, metadata=wire("_headroom_interception_converted_stream")
+    )
+    headroom_stream_options: Mapping[str, object] | None = field(
+        default=None, metadata=wire("_headroom_interception_stream_options")
     )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class RouterState:
     weights: "RouterWeights | None" = field(default=None, metadata=wire("_router_weights"))
+    encrypted_content_affinity_pinned: bool | None = field(
+        default=None, metadata=wire("_encrypted_content_affinity_pinned")
+    )
     fallback_depth: int | None = None
     max_fallbacks: int | None = None
     attempted_targets: "AttemptedFallbackTargets | None" = None
@@ -373,7 +465,11 @@ class ProxyRequestState:
     secret_fields: "SecretFields | None" = None
     trusted_callback_vars: Mapping[str, str] | None = field(default=None, metadata=wire(TRUSTED_CALLBACK_VARS_FIELD))
     addressed_response_id: str | None = field(default=None, metadata=wire(ADDRESSED_RESPONSE_ID_FIELD))
+    addressed_comparison_response_id: str | None = field(
+        default=None, metadata=wire(ADDRESSED_COMPARISON_RESPONSE_ID_FIELD)
+    )
     strip_stream_usage: bool | None = field(default=None, metadata=wire("_litellm_strip_stream_usage"))
+    stream_usage_injected: bool | None = field(default=None, metadata=wire(STREAM_USAGE_INJECTED_FIELD))
     client_side_timeout: bool | None = None
     model_file_id_mapping: Mapping[str, Mapping[str, str]] | None = None
 
@@ -393,6 +489,7 @@ class EntrypointState:
 class InternalState:
     call: CallState
     agentic_loop: AgenticLoopState
+    mcp_handler: McpHandlerState
     router: RouterState
     proxy: ProxyRequestState
     entrypoint: EntrypointState
@@ -420,3 +517,4 @@ def owned_wire_names(root: type) -> tuple[str, ...]:
 OWNED_KWARG_NAMES: Final = tuple(chain.from_iterable(owned_wire_names(root) for root in LITELLM_OWNED_ROOTS))
 AGENTIC_LOOP_KWARG_NAMES: Final = (*wire_names(AgenticLoopState), *wire_names(AgenticLoopOptions))
 BEDROCK_BATCH_KWARG_NAMES: Final = wire_names(BedrockBatchConnection)
+MCP_HANDLER_KWARG_NAMES: Final = frozenset(wire_names(McpHandlerState))

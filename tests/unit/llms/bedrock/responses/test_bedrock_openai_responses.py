@@ -7,19 +7,28 @@ falls back to the Chat Completions bridge and rides Converse.
 import json
 import logging
 from importlib.resources import files
+from typing import Final
 from unittest.mock import patch
 
 import pytest
 
 import litellm
 from litellm.llms.bedrock.common_utils import bedrock_supports_openai_responses
-from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
+from litellm.llms.bedrock.responses.transformation import (
+    BedrockOpenAIResponsesConfig,
+    _without_disabled_reasoning_effort,
+)
 from litellm.responses.file_search.emulated_handler import should_use_emulated_file_search
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 MODEL = "global.openai.gpt-5.6-sol"
+API_BASES_BEHIND_A_RUNTIME_ENDPOINT: Final = (
+    None,
+    "https://signing-host.example.com",
+    "https://signing-host.example.com/openai/v1/chat/completions",
+)
 
 
 def _cfg():
@@ -27,6 +36,10 @@ def _cfg():
 
 
 class TestCompleteURL:
+    @pytest.fixture(autouse=True)
+    def no_env_runtime_endpoint(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+
     def test_default_host_and_path(self):
         url = _cfg().get_complete_url(None, {"aws_region_name": "us-east-1"})
         assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/responses"
@@ -45,17 +58,40 @@ class TestCompleteURL:
             "https://proxy.example.com/v1",
             "https://proxy.example.com/v1/responses",
             "https://proxy.example.com/responses",
+            "https://proxy.example.com/openai/v1/chat/completions",
+            "https://proxy.example.com/v1/chat/completions",
+            "https://proxy.example.com/chat/completions/",
         ],
     )
     def test_custom_host_is_preserved_and_path_never_doubles(self, api_base):
         url = _cfg().get_complete_url(api_base, {"aws_region_name": "us-east-1"})
         assert url == "https://proxy.example.com/openai/v1/responses"
 
-    def test_runtime_endpoint_param_is_honoured(self):
-        url = _cfg().get_complete_url(
-            None, {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://vpce.example.com"}
+    @pytest.mark.parametrize("api_base", API_BASES_BEHIND_A_RUNTIME_ENDPOINT)
+    def test_runtime_endpoint_param_wins_over_api_base_like_converse(self, api_base: str | None) -> None:
+        url: Final = _cfg().get_complete_url(
+            api_base, {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": "https://vpce.example.com"}
         )
         assert url == "https://vpce.example.com/openai/v1/responses"
+
+    def test_env_runtime_endpoint_is_used_without_api_base(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
+        url: Final = _cfg().get_complete_url(None, {"aws_region_name": "us-east-1"})
+        assert url == "https://env-egress.example.com/openai/v1/responses"
+
+    @pytest.mark.parametrize(
+        "api_base", ["https://signing-host.example.com", "https://signing-host.example.com/openai/v1/chat/completions"]
+    )
+    def test_api_base_wins_over_env_runtime_endpoint(self, monkeypatch: pytest.MonkeyPatch, api_base: str) -> None:
+        monkeypatch.setenv("AWS_BEDROCK_RUNTIME_ENDPOINT", "https://env-egress.example.com/")
+        url: Final = _cfg().get_complete_url(api_base, {"aws_region_name": "us-east-1"})
+        assert url == "https://signing-host.example.com/openai/v1/responses"
+
+    def test_empty_runtime_endpoint_counts_as_unset(self) -> None:
+        url: Final = _cfg().get_complete_url(
+            "https://signing-host.example.com", {"aws_region_name": "us-east-1", "aws_bedrock_runtime_endpoint": ""}
+        )
+        assert url == "https://signing-host.example.com/openai/v1/responses"
 
 
 class TestAuth:
@@ -292,6 +328,28 @@ class TestCodexHistoryNormalization:
             "user",
         ]
 
+    def test_agent_message_with_encrypted_content_reaches_the_endpoint_intact(self):
+        """Only the endpoint can decrypt the block for the recipient model; as assistant text it is gibberish."""
+        agent_message = {
+            "type": "agent_message",
+            "author": "/root/reviewer",
+            "recipient": "/root",
+            "content": [
+                {"type": "input_text", "text": "Worker message:\n"},
+                {"type": "encrypted_content", "encrypted_content": "gAAAAABpZ3ciphertext=="},
+            ],
+        }
+        cfg = BedrockOpenAIResponsesConfig.for_model(MODEL)
+        assert cfg is not None
+        body = cfg.transform_responses_api_request(
+            model=MODEL,
+            input=[json.loads(json.dumps(agent_message)), {"role": "user", "content": "carry on"}],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["input"] == [agent_message, {"role": "user", "content": "carry on"}]
+
     def test_a_first_turn_request_is_untouched(self):
         """The rejected types are history items, so turn one exercises none of this."""
         original = [{"role": "user", "content": "first turn"}]
@@ -337,13 +395,37 @@ class TestDisabledReasoningEffort:
             )
 
     @pytest.mark.parametrize("model", ["us.openai.gpt-5.6-luna", MODEL])
-    def test_effort_level_disabled_in_model_map_is_dropped_with_drop_params(self, model, local_model_cost_map):
-        params = _cfg().map_openai_params(
-            response_api_optional_params={"reasoning": {"effort": "minimal", "summary": "auto"}, "max_output_tokens": 64},
-            model=model,
-            drop_params=True,
-        )
+    def test_effort_level_disabled_in_model_map_is_dropped_with_a_warning(
+        self, model: str, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = _cfg().map_openai_params(
+                response_api_optional_params={
+                    "reasoning": {"effort": "minimal", "summary": "auto"},
+                    "max_output_tokens": 64,
+                },
+                model=model,
+                drop_params=True,
+            )
         assert params == {"reasoning": {"summary": "auto"}, "max_output_tokens": 64}
+        dropped: Final = [
+            r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
+        ]
+        assert len(dropped) == 1 and model in dropped[0]
+        assert "model_info" not in dropped[0]
+
+    def test_bedrock_disabled_effort_drop_warns_on_its_own(
+        self, local_model_cost_map: None, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            params: Final = _without_disabled_reasoning_effort(
+                {"reasoning": {"effort": "minimal"}, "max_output_tokens": 64}, MODEL, True
+            )
+        assert params == {"max_output_tokens": 64}
+        dropped: Final = [
+            r.getMessage() for r in caplog.records if "Dropping reasoning.effort='minimal'" in r.getMessage()
+        ]
+        assert len(dropped) == 1 and MODEL in dropped[0]
 
     def test_effort_only_reasoning_is_removed_when_dropped(self, local_model_cost_map):
         params = _cfg().map_openai_params(

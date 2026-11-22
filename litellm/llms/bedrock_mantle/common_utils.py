@@ -14,21 +14,23 @@ global state.
 
 import re
 from collections.abc import Mapping
+from functools import partial
 from typing import Final, Literal
 
-from botocore.exceptions import (
-    CredentialRetrievalError,
-    NoCredentialsError,
-    PartialCredentialsError,
-    ProfileNotFound,
-)
-
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
+
+MANTLE_AUTH_FAILED: Final = (
+    "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
+    "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "
+    "or pass api_key for Bearer auth, or provide AWS credentials "
+    "(IAM role / access key / profile / web identity) for SigV4."
+)
 
 # Standard Mantle host: https://bedrock-mantle.<region>.api.aws (group 1 = region).
 MANTLE_HOST_RE: Final = re.compile(r"^https?://bedrock-mantle\.([^/.]+)\.api\.aws(?=/|$)", re.IGNORECASE)
@@ -72,7 +74,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         return resolve_mantle_bearer_token(api_key)
 
     @staticmethod
-    def _resolve_region(params: dict) -> str:
+    def _resolve_region(params: Mapping[str, object]) -> str:
         return resolve_mantle_region(params)
 
     def sign_request(
@@ -87,44 +89,46 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         fake_stream: bool | None = None,
     ) -> tuple[dict, bytes | None]:
         bearer: Final = self._resolve_bearer_token(api_key)
-        if not bearer:
-            # Pin the credential-scope region to the region of the actual signing URL
-            # so the SigV4 scope and URL host can never disagree, even when a stale
-            # api_base and aws_region_name point at different regions.
-            host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
-            optional_params = {
-                **optional_params,
-                "aws_region_name": (
-                    host_match.group(1)
-                    if host_match
-                    else self._resolve_region({**optional_params, "api_base": api_base})
-                ),
-            }
-            headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+        sign: Final[partial[tuple[dict[str, str | bytes], bytes | None]]] = partial(
+            self._aws_signer._sign_request,
+            service_name="bedrock",
+            request_data=request_data,
+            api_base=api_base,
+            api_key=bearer,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        if bearer:
+            return sign(headers=headers, optional_params=optional_params)
+        ensure_optional_import("botocore")
+        from botocore.exceptions import (
+            CredentialRetrievalError,
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+        )
+
+        # Pin the credential-scope region to the region of the actual signing URL
+        # so the SigV4 scope and URL host can never disagree, even when a stale
+        # api_base and aws_region_name point at different regions.
+        host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
+        optional_params = {
+            **optional_params,
+            "aws_region_name": (
+                host_match.group(1) if host_match else self._resolve_region({**optional_params, "api_base": api_base})
+            ),
+        }
+        headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
-            return self._aws_signer._sign_request(
-                service_name="bedrock",
-                headers=headers,
-                optional_params=optional_params,
-                request_data=request_data,
-                api_base=api_base,
-                api_key=bearer,
-                model=model,
-                stream=stream,
-                fake_stream=fake_stream,
-            )
+            return sign(headers=headers, optional_params=optional_params)
         except (
             NoCredentialsError,
             PartialCredentialsError,
             ProfileNotFound,
             CredentialRetrievalError,
         ) as e:
-            raise ValueError(
-                "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
-                "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "
-                "or pass api_key for Bearer auth, or provide AWS credentials "
-                "(IAM role / access key / profile / web identity) for SigV4."
-            ) from e
+            raise ValueError(MANTLE_AUTH_FAILED) from e
 
 
 def is_mantle_claude_model(model: str) -> bool:

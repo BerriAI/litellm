@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.core_helpers import subscript
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, CreateBatchRequest
@@ -22,6 +24,8 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AnthropicBatchRequestCounts(TypedDict, total=False):
@@ -106,10 +110,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         data: CreateBatchRequest,
     ) -> str:
         """Get the complete URL for batch creation request."""
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
-        if not api_base.endswith("/v1/messages/batches"):
-            api_base = f"{api_base.rstrip('/')}/v1/messages/batches"
-        return api_base
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
+        return ensure_api_route(api_base, "v1/messages/batches")
 
     def transform_create_batch_request(
         self,
@@ -158,9 +160,9 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         Returns:
             Complete URL for Anthropic batch retrieval: {api_base}/v1/messages/batches/{batch_id}
         """
-        api_base = api_base or self.anthropic_model_info.get_api_base(api_base)
+        api_base = self.anthropic_model_info.resolve_anthropic_api_base(api_base)
         encoded_batch_id: Final = encode_url_path_segment(batch_id, field_name="batch_id")
-        return f"{api_base.rstrip('/')}/v1/messages/batches/{encoded_batch_id}"
+        return join_api_base(api_base, f"v1/messages/batches/{encoded_batch_id}")
 
     def transform_retrieve_batch_request(
         self,
@@ -304,6 +306,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
+        from ..chat.transformation import response_body
+
         response_text: Final = raw_response.text.strip()
         all_usage: Final[list[Usage]] = []
 
@@ -315,11 +319,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 if not line:
                     continue
                 try:
-                    response_json: Mapping[str, Mapping[str, dict[str, object]]] = json.loads(line)
+                    response_json = _DECODED_JSON.validate_python(json.loads(line))
                     # Update model_response with the parsed JSON
-                    completion_response = response_json["result"]["message"]
+                    completion_response = subscript(subscript(response_json, "result"), "message")
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(
-                        completion_response=completion_response,
+                        completion_response=response_body(completion_response),
                         raw_response=raw_response,
                         model_response=model_response,
                     )

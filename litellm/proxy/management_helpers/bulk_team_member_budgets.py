@@ -25,18 +25,19 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.common_utils import (
-    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     member_budget_patch,
+    upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.management_helpers.bulk_user_deletion import (
     _duplicate_member_indexes,  # pyright: ignore[reportPrivateUsage]  # same duplicate rule as members/bulk_delete
     _eq_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
-    _forbidden,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
     _in_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
-    _team_not_found,  # pyright: ignore[reportPrivateUsage]  # same problem shape as members/bulk_delete
     _team_users_filter,  # pyright: ignore[reportPrivateUsage]  # same prisma filter shape as members/bulk_delete
+    forbidden,
+    team_not_found,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.team_repository import TeamRepository
@@ -178,10 +179,10 @@ async def bulk_update_team_member_budgets(
     """Apply one merge patch of per-member limits per requested member, in one transaction."""
     team: Final = await TeamRepository(WriterPinnedClient(prisma_client.db)).find_by_id(team_id)
     if team is None:
-        raise _team_not_found(team_id)
+        raise team_not_found(team_id)
 
     if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
-        raise _forbidden(
+        raise forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_update'"
         )
@@ -213,7 +214,7 @@ async def bulk_update_team_member_budgets(
             tx, frozenset(budget_id for budget_id in budget_id_of.values() if budget_id is not None)
         )
         for index, user_id in applied:
-            await _upsert_budget_and_membership(
+            await upsert_budget_and_membership(
                 tx=tx,
                 team_id=team_id,
                 user_id=user_id,

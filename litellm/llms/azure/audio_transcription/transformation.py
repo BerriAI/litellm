@@ -13,6 +13,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -110,7 +111,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             "language": optional_params.get("language", self.DEFAULT_LANGUAGE),
             "format": self._get_azure_response_format(optional_params.get("response_format")),
         }
-        return f"{base_url}{self.STT_ENDPOINT_PATH}?{urlencode(query_params)}"
+        return f"{join_api_base(base_url, self.STT_ENDPOINT_PATH)}?{urlencode(query_params)}"
 
     def transform_audio_transcription_request(
         self,
@@ -130,8 +131,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         raw_response: httpx.Response,
     ) -> TranscriptionResponse:
-        response_json: Final = raw_response.json()
-        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        payload: Final = _JSON_OBJECT.validate_python(raw_response.json())
         recognition_status: Final = payload.get("RecognitionStatus")
         if recognition_status is not None and recognition_status != "Success":
             raise AzureSpeechAudioTranscriptionException(
@@ -142,7 +142,7 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         text: Final = self._extract_text(payload)
         response: Final = TranscriptionResponse(text=text)
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload)
         return response
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
@@ -153,7 +153,6 @@ class AzureSpeechAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         )
 
     def _resolve_stt_base_url(self, api_base: str) -> str:
-        api_base = api_base.rstrip("/")
         parsed_url: Final = urlparse(api_base)
         hostname: Final = parsed_url.hostname or ""
 

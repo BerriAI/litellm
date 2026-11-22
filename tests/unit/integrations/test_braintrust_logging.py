@@ -1,9 +1,15 @@
+import json
 import os
 import unittest
 from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
+import httpx
 import litellm
+import pytest
+import respx
+from litellm.litellm_core_utils import litellm_logging
 from litellm.integrations.braintrust_logging import BraintrustLogger
 
 
@@ -315,3 +321,91 @@ class TestBraintrustLogger(unittest.TestCase):
         event_metadata = json_data["events"][0]["metadata"]
         self.assertEqual(event_metadata["user_id"], "user123")
         self.assertEqual(event_metadata["session_id"], "session456")
+
+
+async def _assert_completion_is_logged_by_braintrust(
+    project_id: str, metadata: dict[str, object]
+) -> None:
+    logger: Final = BraintrustLogger(
+        api_key="test-key",
+        api_base="https://api.braintrustdata.com/v1",
+    )
+    logger.default_project_id = project_id
+    messages: Final = [{"role": "user", "content": "Summarize this request"}]
+    response: Final = litellm.ModelResponse(
+        id="chatcmpl-test",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "The request is summarized."},
+                "finish_reason": "stop",
+            }
+        ],
+        usage=litellm.Usage(prompt_tokens=2, completion_tokens=5, total_tokens=7),
+    )
+    kwargs: Final = {
+        "model": "gpt-4o-mini",
+        "messages": messages,
+        "litellm_params": {"metadata": metadata},
+        "litellm_call_id": "call-test",
+        "standard_logging_object": {
+            "model": "gpt-4o-mini",
+            "messages": messages,
+            "response": response.model_dump(),
+            "metadata": metadata,
+        },
+    }
+
+    with respx.mock(assert_all_called=True) as router:
+        insert: Final = router.post(
+            f"https://api.braintrustdata.com/v1/project_logs/{project_id}/insert"
+        ).mock(return_value=httpx.Response(200, json={"ok": True}))
+        fixed_time: Final = datetime(2024, 1, 1)
+        logger.log_success_event(kwargs, response, fixed_time, fixed_time)
+
+    assert insert.call_count == 1
+    event: Final = json.loads(insert.calls[0].request.content)["events"][0]
+    assert event["input"] == messages
+    assert event["output"][0]["message"]["content"] == "The request is summarized."
+    assert event["metadata"]["model"] == "gpt-4o-mini"
+    assert event["metadata"]["messages"] == messages
+    assert event["metadata"]["response"]["choices"][0]["message"]["content"] == "The request is summarized."
+    assert event["metrics"]["prompt_tokens"] == response.usage.prompt_tokens
+    assert event["metrics"]["completion_tokens"] == response.usage.completion_tokens
+    assert event["metrics"]["total_tokens"] == response.usage.total_tokens
+    assert event["span_attributes"]["name"] == "Chat Completion"
+
+
+@pytest.mark.asyncio
+async def test_braintrust_logging() -> None:
+    await _assert_completion_is_logged_by_braintrust(
+        "default-project",
+        {},
+    )
+
+
+@pytest.mark.asyncio
+async def test_braintrust_logging_specific_project_id() -> None:
+    await _assert_completion_is_logged_by_braintrust(
+        "123",
+        {"project_id": "123", "requester_metadata": {"request_id": "request-123"}},
+    )
+
+
+def test_braintrust_logger_initialization_reuses_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BRAINTRUST_API_KEY", "test-api-key")
+    monkeypatch.setenv("BRAINTRUST_API_BASE", "https://api.braintrustdata.com/v1")
+    first: Final = litellm_logging._init_custom_logger_compatible_class(
+        "braintrust",
+        internal_usage_cache=None,
+        llm_router=None,
+    )
+    second: Final = litellm_logging._init_custom_logger_compatible_class(
+        "braintrust",
+        internal_usage_cache=None,
+        llm_router=None,
+    )
+
+    assert isinstance(first, BraintrustLogger)
+    assert second is first

@@ -27,6 +27,17 @@ from litellm.proxy.utils import hash_token
 from litellm.proxy.db.log_db_metrics import record_db_io
 
 
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __call__(self) -> float:
+        return self.now
+
+
 def _digest_row(digest: str, key_alias: str | None, team_id: str | None, user_id: str | None) -> dict[str, str | None]:
     return {"digest": digest, "key_alias": key_alias, "team_id": team_id, "user_id": user_id}
 
@@ -422,34 +433,44 @@ async def test_recover_key_metadata_from_spend_logs_rescans_when_the_window_chan
 
 
 @pytest.mark.asyncio
-async def test_recover_key_metadata_from_spend_logs_retries_a_failed_query_only_after_the_miss_ttl():
-    digest = hash_token("cli-session-retry")
-    window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
-    cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
-    mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("statement timeout")))
-    started = time.time()
-    assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
-    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(digest, "back-online", None, None)]))
+async def test_recover_key_metadata_from_spend_logs_retries_a_failed_query_only_after_the_miss_ttl() -> None:
+    digest: Final = hash_token("cli-session-retry")
+    window: Final = (datetime(2026, 9, 7), datetime(2026, 9, 10))
+    clock: Final = _FakeClock()
+    cache: Final = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL, clock=clock)
+    mock_prisma: Final = MagicMock()
+    query_raw: Final = _spend_log_transaction(
+        mock_prisma,
+        AsyncMock(
+            side_effect=[
+                PrismaError("statement timeout"),
+                [_spend_log_row(digest, "back-online", None, None)],
+            ]
+        ),
+    )
 
     assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
-    query_raw.assert_not_awaited()
-    miss_key = next(key for key in cache.ttl_dict if digest in key and not key.endswith(":missed-before"))
-    assert cache.ttl_dict[miss_key] - started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
-    cache.ttl_dict[miss_key] = time.time() - 1
+    miss_key: Final = next(key for key in cache.ttl_dict if digest in key and not key.endswith(":missed-before"))
+    assert cache.ttl_dict[miss_key] == clock.now + SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
 
-    result = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
+    assert await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache) == {}
+    assert query_raw.await_count == 1
+    clock.advance(SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1)
+
+    result: Final = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
 
     assert result[digest]["key_alias"] == "back-online"
+    assert query_raw.await_count == 2
 
 
 @pytest.mark.asyncio
-async def test_recover_key_metadata_from_spend_logs_never_caches_repeated_query_failures_as_long_as_a_hit():
+async def test_recover_key_metadata_from_spend_logs_never_caches_repeated_query_failures_as_long_as_a_hit() -> None:
     digest: Final = hash_token("cli-session-repeated-failure")
     window: Final = (datetime(2026, 9, 7), datetime(2026, 9, 10))
-    cache: Final = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
+    clock: Final = _FakeClock()
+    cache: Final = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL, clock=clock)
     mock_prisma: Final = MagicMock()
-    _spend_log_transaction(
+    query_raw: Final = _spend_log_transaction(
         mock_prisma,
         AsyncMock(
             side_effect=[
@@ -461,17 +482,19 @@ async def test_recover_key_metadata_from_spend_logs_never_caches_repeated_query_
     )
     await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
     miss_key: Final = next(key for key in cache.ttl_dict if digest in key and not key.endswith(":missed-before"))
-    cache.ttl_dict[miss_key] = time.time() - 1
-    second_query_started: Final = time.time()
+    assert cache.ttl_dict[miss_key] == clock.now + SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
+    clock.advance(SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1)
 
     await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
 
-    assert cache.ttl_dict[miss_key] - second_query_started <= SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1
-    cache.ttl_dict[miss_key] = time.time() - 1
+    assert query_raw.await_count == 2
+    assert cache.ttl_dict[miss_key] == clock.now + SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL
+    clock.advance(SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL + 1)
 
     result: Final = await recover_key_metadata_from_spend_logs(mock_prisma, {digest}, window, cache=cache)
 
     assert result[digest]["key_alias"] == "back-online"
+    assert query_raw.await_count == 3
 
 
 @pytest.mark.asyncio

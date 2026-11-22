@@ -6,9 +6,19 @@ per-integration checks here.
 """
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
+
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.types.utils import (
+    BAGGAGE_METADATA_KEYS_VAR,
+    EXCLUDED_SERVICES_VAR,
+    OTEL_DESTINATION_VARS,
+)
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
@@ -36,6 +46,23 @@ def callback_config_error(
     )
     if langfuse_error is not None:
         return langfuse_error
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import OTEL_DESTINATION_VALIDATORS
+
+    destination_setting_error: Final = next(
+        (
+            error
+            for variable_name, validator in OTEL_DESTINATION_VALIDATORS.items()
+            if (
+                error := _destination_setting_error(
+                    variable_name, callback_name, callback_vars, callback_type, validator
+                )
+            )
+            is not None
+        ),
+        None,
+    )
+    if destination_setting_error is not None:
+        return destination_setting_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -77,6 +104,33 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
         validate_langfuse_span_scope_value(value)
     except ValueError as e:
         return str(e)
+    return None
+
+
+def _destination_setting_error(
+    variable_name: str,
+    callback_name: str | None,
+    callback_vars: Mapping[str, str],
+    callback_type: str | None,
+    validator: Callable[[str], None],
+) -> str | None:
+    value: Final = callback_vars.get(variable_name)
+    if value is None:
+        return None
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.integrations.otel.presets.destinations import destination_capable_backends
+
+    supported: Final = sorted(destination_capable_backends())
+    if callback_name not in supported:
+        return f"{variable_name} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
+    if not is_otel_v2_enabled():
+        return f"Per-destination {variable_name} requires the proxy to run with LITELLM_OTEL_V2=true."
+    try:
+        validator(value)
+    except ValueError as e:
+        return str(e)
+    if callback_type == "failure":
+        return f"{variable_name} needs callback_type 'success' or 'success_and_failure'"
     return None
 
 
@@ -190,22 +244,100 @@ def conflicting_span_scope_error(
     )
 
 
+def conflicting_callback_var_error(
+    callback_name: str,
+    variable_name: str,
+    callback_vars: Mapping[str, str] | None,
+    stored_entries: Sequence[tuple[str | None, Mapping[str, str]]],
+) -> str | None:
+    incoming: Final = None if callback_vars is None else callback_vars.get(variable_name)
+    if incoming is None:
+        return None
+    return next(
+        (
+            f"{variable_name} is already set to {stored!r} by another {callback_name} entry. "
+            f"Every {callback_name} entry shares one value: remove that entry or send the same value."
+            for name, entry_vars in stored_entries
+            if name == callback_name
+            and (stored := entry_vars.get(variable_name)) is not None
+            and not _same_callback_var_value(variable_name, stored, incoming)
+        ),
+        None,
+    )
+
+
+def _same_callback_var_value(variable_name: str, first: str, second: str) -> bool:
+    if variable_name == EXCLUDED_SERVICES_VAR:
+        from litellm.integrations.otel.model.config import parse_excluded_services
+
+        return parse_excluded_services(first) == parse_excluded_services(second)
+    if variable_name == BAGGAGE_METADATA_KEYS_VAR:
+        from litellm.integrations.otel.model.baggage import parse_destination_metadata_keys
+
+        first_keys: Final = parse_destination_metadata_keys(first)
+        second_keys: Final = parse_destination_metadata_keys(second)
+        return first_keys is not None and second_keys is not None and frozenset(first_keys) == frozenset(second_keys)
+    return first == second
+
+
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
     if not metadata:
         return None
-    entries: Final = metadata.get("logging")
-    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+    entries: Final = object_sequence(metadata.get("logging"))
+    if entries is None:
         return None
+    entry_error: Final = next(
+        (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
+        None,
+    )
+    if entry_error is not None:
+        return entry_error
     entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
+    named_vars: Final = tuple(zip((_entry_callback_name(entry) for entry in entries), entry_vars))
     return next(
         (
             error
             for error in (
-                *(_logging_entry_error(entry) for entry in entries),
                 *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
+                *(_conflicting_entry_setting_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
             if error is not None
+        ),
+        None,
+    )
+
+
+def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
+    """The callback name and vars of every stored ``logging`` entry."""
+    entries: Final = object_sequence(logging_entries) or ()
+    return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
+
+
+def object_sequence(value: object) -> Sequence[object] | None:
+    return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
+
+
+def _entry_callback_name(entry: object) -> str | None:
+    match entry:
+        case {"callback_name": str() as callback_name}:
+            return callback_name
+        case _:
+            return None
+
+
+def _conflicting_entry_setting_error(
+    entry: tuple[str | None, Mapping[str, str]], earlier: Sequence[tuple[str | None, Mapping[str, str]]]
+) -> str | None:
+    callback_name, callback_vars = entry
+    if callback_name is None:
+        return None
+    return next(
+        (
+            error
+            for variable_name in OTEL_DESTINATION_VARS
+            if (error := conflicting_callback_var_error(callback_name, variable_name, callback_vars, earlier))
+            is not None
         ),
         None,
     )
@@ -221,12 +353,33 @@ def _entry_callback_vars(entry: object) -> Mapping[str, str]:
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
-    callback_name: Final = entry.get("callback_name")
-    if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
+    typed_entry: Final[Mapping[object, object]] = (
+        cast(  # cast-ok: entry is Mapping-checked but may have non-string keys
+            Mapping[object, object], entry
+        )
+    )
+    callback_name: Final = typed_entry.get("callback_name")
+    callback_vars_raw: Final = typed_entry.get("callback_vars")
+    if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
         return None
-    callback_type_raw: Final = entry.get("callback_type")
+    callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
+        Mapping[object, object], callback_vars_raw
+    )
+    destination_var_error: Final = next(
+        (
+            f"{variable_name} must be a string, got {type(callback_vars[variable_name]).__name__}"
+            for variable_name in OTEL_DESTINATION_VARS
+            if variable_name in callback_vars and not isinstance(callback_vars[variable_name], str)
+        ),
+        None,
+    )
+    if destination_var_error is not None:
+        return destination_var_error
+    callback_type_raw: Final = typed_entry.get("callback_type")
     return callback_config_error(
-        callback_name, _entry_callback_vars(entry), callback_type_raw if isinstance(callback_type_raw, str) else None
+        callback_name,
+        _entry_callback_vars(typed_entry),
+        callback_type_raw if isinstance(callback_type_raw, str) else None,
     )
 
 
@@ -299,4 +452,73 @@ def _newrelic_config_error(callback_vars: Mapping[str, str]) -> str | None:
     api_key: Final = callback_vars.get("newrelic_api_key")
     if region is not None and (not api_key or api_key == "None"):
         return "newrelic_region requires newrelic_api_key; the region rides the team's own key."
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialReferenceRejection:
+    status_code: Literal[400, 403]
+    message: str
+
+
+def credential_is_defined(credential_name: str) -> bool:
+    return CredentialAccessor.find_credential(credential_name) is not None
+
+
+_STRING_KEYED: Final = TypeAdapter(Mapping[str, object])
+
+
+def string_keyed(value: object) -> Mapping[str, object]:
+    try:
+        return _STRING_KEYED.validate_python(value)
+    except ValidationError:
+        return MappingProxyType({})
+
+
+def _logging_entries(metadata: object) -> object:
+    return string_keyed(metadata).get("logging")
+
+
+def _entry_credential_name(entry: object) -> str | None:
+    match entry:
+        case {"litellm_credential_name": str() as credential_name}:
+            return credential_name
+        case _:
+            return None
+
+
+def logging_credential_names(logging_entries: object) -> tuple[str, ...]:
+    return tuple(
+        name for entry in object_sequence(logging_entries) or () if (name := _entry_credential_name(entry)) is not None
+    )
+
+
+def credential_reference_rejection(
+    requested_metadata: object,
+    stored_logging: object,
+    *,
+    is_proxy_admin: bool,
+    is_defined: Callable[[str], bool] = credential_is_defined,
+) -> CredentialReferenceRejection | None:
+    """Gate a key metadata write whose logging entries reference a proxy credential.
+
+    ``requested_metadata`` is None when the write leaves the key's metadata untouched. The admin check runs before
+    the existence check so a non-admin cannot probe which credential names are defined.
+    """
+    if requested_metadata is None:
+        return None
+    requested_logging: Final = _logging_entries(requested_metadata)
+    requested_names: Final = logging_credential_names(requested_logging)
+    stored_names: Final = logging_credential_names(stored_logging)
+    references_involved: Final = bool(requested_names or stored_names)
+    if references_involved and not is_proxy_admin and requested_logging != stored_logging:
+        return CredentialReferenceRejection(
+            403,
+            "Only proxy admins can change the logging entries of a key that uses litellm_credential_name",
+        )
+    undefined: Final = sorted({name for name in set(requested_names) - set(stored_names) if not is_defined(name)})
+    if undefined:
+        return CredentialReferenceRejection(
+            400, f"metadata.logging references undefined credential(s): {', '.join(undefined)}"
+        )
     return None

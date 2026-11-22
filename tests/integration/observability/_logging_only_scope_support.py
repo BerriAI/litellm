@@ -22,7 +22,7 @@ import yaml
 from anthropic import Anthropic, AsyncAnthropic
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from integration._support.client import Gateway, Scenario, eventually, object_value
+from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows, write_rows
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire
@@ -75,6 +75,8 @@ _AUDIT_RESPONSE_IDS: Final[ContextVar[tuple[str, ...]]] = ContextVar("audit_resp
 _AUDIT_POLICY_REQUEST_COUNT: Final[ContextVar[int]] = ContextVar("audit_policy_request_count", default=0)
 
 _AUDIT_UPSTREAM_REQUEST_COUNT: Final[ContextVar[int]] = ContextVar("audit_upstream_request_count", default=0)
+
+_AUDIT_UPSTREAM_WINDOW_COUNT: Final[ContextVar[int]] = ContextVar("audit_upstream_window_count", default=0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +222,11 @@ def _record_policy_request_count(count: int) -> None:
 
 
 def _record_upstream_request_count(count: int) -> None:
-    _AUDIT_UPSTREAM_REQUEST_COUNT.set(_AUDIT_UPSTREAM_REQUEST_COUNT.get() + count)
+    _AUDIT_UPSTREAM_WINDOW_COUNT.set(count)
+
+
+def _upstream_request_count() -> int:
+    return _AUDIT_UPSTREAM_REQUEST_COUNT.get() + _AUDIT_UPSTREAM_WINDOW_COUNT.get()
 
 
 @contextmanager
@@ -240,7 +246,7 @@ def wire_server(respond: Callable[[Request], Reply], port: int = 0, *, policy_ed
 
 
 def _directions_for_scope(base_default: tuple[Direction, ...], scope: str | None) -> tuple[Direction, ...]:
-    if scope is None or scope == "both":
+    if scope is None:
         return base_default
     selected_direction: Final = "request" if scope == "input" else "response"
     return tuple(direction for direction in base_default if direction == selected_direction)
@@ -629,6 +635,7 @@ def _configuration(
     scope: str | None,
     *,
     include_scope: bool = True,
+    continue_on_input_failure: bool | None = None,
     default_on: bool = True,
     mode: str | list[str] = "logging_only",
     cache: bool = False,
@@ -648,6 +655,11 @@ def _configuration(
         "api_key": "synthetic-guardrail-key",
         "extra_headers": ["x-litellm-call-id"],
         **({"logging_only_scope": scope} if include_scope else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     config["guardrails"] = [{"guardrail_name": identity, "litellm_params": params}]
     scope_name: Final = scope if scope is not None else "unset"
@@ -760,6 +772,7 @@ def _insert_database_guardrail(
     *,
     mode: str = "pre_call",
     default_on: bool = True,
+    continue_on_input_failure: bool | None = None,
 ) -> None:
     params: Final = {
         "guardrail": "generic_guardrail_api",
@@ -769,6 +782,11 @@ def _insert_database_guardrail(
         "api_key": "synthetic-guardrail-key",
         "extra_headers": ["x-litellm-call-id"],
         **({"logging_only_scope": scope} if scope is not None else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     write_rows(
         'INSERT INTO "LiteLLM_GuardrailsTable" '
@@ -780,6 +798,7 @@ def _insert_database_guardrail(
 
 @contextmanager
 def _database_guardrail(
+    gateway: Gateway,
     identity: str,
     policy_url: str,
     scope: str | None,
@@ -791,11 +810,15 @@ def _database_guardrail(
     try:
         yield
     finally:
-        _delete_database_guardrail(identity)
+        _delete_database_guardrail(gateway, identity)
 
 
-def _delete_database_guardrail(identity: str) -> None:
-    write_rows('DELETE FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (identity,))
+def _delete_database_guardrail(gateway: Gateway, identity: str) -> None:
+    rows: Final = read_rows('SELECT guardrail_id FROM "LiteLLM_GuardrailsTable" WHERE guardrail_name=%s', (identity,))
+    responses: Final = tuple(
+        gateway.request("DELETE", f"/guardrails/{string_value(row['guardrail_id'])}") for row in rows
+    )
+    assert all(response.status_code == 200 for response in responses), [response.text for response in responses]
 
 
 def _post_guardrail_body(
@@ -805,6 +828,7 @@ def _post_guardrail_body(
     api_base: str,
     scope: JsonValue,
     include_scope: bool = True,
+    continue_on_input_failure: bool | None = None,
 ) -> dict[str, JsonValue]:
     params: Final = {
         "guardrail": provider,
@@ -821,6 +845,11 @@ def _post_guardrail_body(
         ),
         **({"extra_headers": ["x-litellm-call-id"]} if provider == "generic_guardrail_api" else {}),
         **({"logging_only_scope": scope} if include_scope else {}),
+        **(
+            {"logging_only_continue_on_input_failure": continue_on_input_failure}
+            if continue_on_input_failure is not None
+            else {}
+        ),
     }
     return {
         "guardrail": {
@@ -888,7 +917,13 @@ def _decryption_only_changes_encrypted_values(stored: JsonValue, decrypted: Json
     return stored == decrypted
 
 
-def _drain_upstream(upstream_url: str) -> tuple[dict[str, JsonValue], ...]:
+def _reset_upstream(upstream_url: str) -> None:
+    httpx.delete(f"{upstream_url.rstrip('/')}/__observations", trust_env=False, timeout=15).raise_for_status()
+    _AUDIT_UPSTREAM_REQUEST_COUNT.set(_upstream_request_count())
+    _AUDIT_UPSTREAM_WINDOW_COUNT.set(0)
+
+
+def _upstream_requests(upstream_url: str) -> tuple[dict[str, JsonValue], ...]:
     response: Final = httpx.get(f"{upstream_url.rstrip('/')}/__observations", trust_env=False, timeout=15)
     response.raise_for_status()
     requests: Final = object_value(JSON_OBJECT.validate_python(response.json())).get("requests")
@@ -918,9 +953,9 @@ def _record_audit_properties(
     response_ids_token: Final = _AUDIT_RESPONSE_IDS.set(())
     policy_count_token: Final = _AUDIT_POLICY_REQUEST_COUNT.set(0)
     upstream_count_token: Final = _AUDIT_UPSTREAM_REQUEST_COUNT.set(0)
+    upstream_window_token: Final = _AUDIT_UPSTREAM_WINDOW_COUNT.set(0)
     try:
-        response: Final = httpx.get(f"{gateway.upstream_url.rstrip('/')}/__observations", trust_env=False, timeout=15)
-        response.raise_for_status()
+        _reset_upstream(gateway.upstream_url)
         yield
     finally:
         node_id: Final = request.node.nodeid
@@ -929,10 +964,11 @@ def _record_audit_properties(
         record_property("inventory_id", inventory_ids[0] if inventory_ids else "support")
         record_property("response_ids", ",".join(_AUDIT_RESPONSE_IDS.get()))
         record_property("policy_edge_request_count", str(_AUDIT_POLICY_REQUEST_COUNT.get()))
-        record_property("upstream_request_count", str(_AUDIT_UPSTREAM_REQUEST_COUNT.get()))
+        record_property("upstream_request_count", str(_upstream_request_count()))
         _AUDIT_RESPONSE_IDS.reset(response_ids_token)
         _AUDIT_POLICY_REQUEST_COUNT.reset(policy_count_token)
         _AUDIT_UPSTREAM_REQUEST_COUNT.reset(upstream_count_token)
+        _AUDIT_UPSTREAM_WINDOW_COUNT.reset(upstream_window_token)
 
 
 def _policy_call_id_matches(payload: Mapping[str, JsonValue], call_id: str) -> bool:

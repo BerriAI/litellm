@@ -12,6 +12,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
     BaseAudioTranscriptionConfig,
@@ -27,6 +28,7 @@ from litellm.types.utils import FileTypes, TranscriptionResponse
 from ..utils import OVHCloudException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -63,9 +65,8 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
-        api_base = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base.rstrip("/")
-        complete_url: Final = f"{api_base}/audio/transcriptions"
-        return complete_url
+        base_url: Final = "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1" if api_base is None else api_base
+        return join_api_base(base_url, "audio/transcriptions")
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return OVHCloudException(
@@ -141,10 +142,10 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Transform OVHCloud audio transcription response to OpenAI-compatible TranscriptionResponse.
         """
         try:
-            response_json: Final = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise OVHCloudException(
-                message=raw_response.text,
+                message="Received non-JSON response from OVHCloud audio transcription",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -160,8 +161,5 @@ class OVHCloudAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         duration: Final = (
             payload["seconds"] if "seconds" in payload and payload["seconds"] is not None else payload.get("duration")
         )
-        if duration is not None:
-            response_json["duration"] = duration
-
-        response.hidden_params = response_json
+        response.hidden_params = dict(payload) if duration is None else {**payload, "duration": duration}
         return response

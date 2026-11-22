@@ -11,14 +11,16 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, overload
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel, Field
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import BaseModel, Field, TypeAdapter
+from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, float_of, iter_items, require_get
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.usage_tracking import guardrail_status_to_action
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     DailyGuardrailUsageUnitsRepository,
@@ -26,7 +28,6 @@ from litellm.repositories.table_repositories import (
     GuardrailsRepository,
     PolicyRepository,
     SpendLogGuardrailIndexRepository,
-    SpendLogsRepository,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -213,16 +214,6 @@ def _first_match(lookup_keys: Sequence[str], mapping: Mapping[str, _T], default:
 
 
 # --- Response models ---
-
-
-class _GuardrailRunInfo(TypedDict, total=False):
-    guardrail_id: ReadOnly[str | None]
-    guardrail_name: ReadOnly[str | None]
-    guardrail_status: ReadOnly[str | None]
-    duration: ReadOnly[float | None]
-    confidence_score: ReadOnly[float | None]
-    risk_score: ReadOnly[float | None]
-    guardrail_response: ReadOnly[str | Mapping[str, object] | Sequence[Mapping[str, object]] | None]
 
 
 class UsageChartPoint(TypedDict):
@@ -767,20 +758,25 @@ def _build_usage_logs_where(
     return where
 
 
+def _decoded_metadata(metadata: object) -> object:
+    if not isinstance(metadata, str):
+        return metadata
+    try:
+        return _DECODED_JSON.validate_python(json.loads(metadata))
+    except Exception:
+        return {}
+
+
 def _usage_log_entry_from_row(
     r: "prisma_models.LiteLLM_SpendLogGuardrailIndex",
     sl: "prisma_models.LiteLLM_SpendLogs",
     action_filter: str | None,
 ) -> UsageLogEntry | None:
-    meta = sl.metadata
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except Exception:
-            meta = {}
-    guardrail_info_list: Final[Sequence[_GuardrailRunInfo]] = (meta or {}).get("guardrail_information") or []
-    entry_for_guardrail: Final[_GuardrailRunInfo | None] = max(
-        (gi for gi in guardrail_info_list if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),
+    meta: Final = _decoded_metadata(sl.metadata)
+    guardrail_info_list: Final = require_get(meta or {}).get("guardrail_information") or []
+    run_infos: Final = (require_get(gi) for gi in iter_items(guardrail_info_list))
+    entry_for_guardrail: Final = max(
+        (gi for gi in run_infos if (gi.get("guardrail_id") or gi.get("guardrail_name")) == r.guardrail_id),
         key=lambda gi: _ACTION_SEVERITY[guardrail_status_to_action(gi.get("guardrail_status"))],
         default=None,
     )
@@ -792,10 +788,9 @@ def _usage_log_entry_from_row(
         action_val = guardrail_status_to_action(entry_for_guardrail.get("guardrail_status"))
         duration: Final = entry_for_guardrail.get("duration")
         if duration is not None:
-            latency_val = round(float(duration) * 1000, 0)
-        score_val = entry_for_guardrail.get("confidence_score") or entry_for_guardrail.get("risk_score")
-        if score_val is not None:
-            score_val = round(float(score_val), 2)
+            latency_val = round(float_of(duration) * 1000, 0)
+        raw_score: Final = entry_for_guardrail.get("confidence_score") or entry_for_guardrail.get("risk_score")
+        score_val = None if raw_score is None else round(float_of(raw_score), 2)
         resp: Final = entry_for_guardrail.get("guardrail_response")
         if isinstance(resp, str):
             reason_val = resp[:500]
@@ -838,28 +833,41 @@ def _snippet(text: object, max_len: int = 200) -> str | None:
     return result
 
 
-def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
-    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
-    out = _snippet(sl.messages)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _request_dict(value: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(value)
+    return mapping if isinstance(mapping, dict) else None
+
+
+def _proxy_request_snippet(psr: object) -> str | None:
+    request: Final = _request_dict(psr)
+    if request is None:
+        return _snippet(psr)
+    msgs: Final = request.get("messages")
+    body: Final = _request_dict(request.get("body")) if msgs is None else None
+    out: Final = _snippet(body.get("messages") if body is not None else msgs)
     if out:
         return out
-    psr = getattr(sl, "proxy_server_request", None)
+    return _snippet(psr)
+
+
+def _input_snippet_for_log(sl: "prisma_models.LiteLLM_SpendLogs") -> str | None:
+    """Snippet for request input: prefer messages, fall back to proxy_server_request (same as drawer)."""
+    out: Final = _snippet(sl.messages)
+    if out:
+        return out
+    psr: Final[object] = getattr(sl, "proxy_server_request", None)
     if not psr:
         return None
-    if isinstance(psr, str):
-        try:
-            psr = json.loads(psr)
-        except Exception:
-            return _snippet(psr)
-    if isinstance(psr, dict):
-        msgs = psr.get("messages")
-        if msgs is None and isinstance(psr.get("body"), dict):
-            msgs = psr["body"].get("messages")
-        out = _snippet(msgs)
-        if out:
-            return out
+    if not isinstance(psr, str):
+        return _proxy_request_snippet(psr)
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(psr))
+    except Exception:
         return _snippet(psr)
-    return _snippet(psr)
+    return _proxy_request_snippet(decoded)
 
 
 @router.get(

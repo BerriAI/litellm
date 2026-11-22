@@ -1,11 +1,15 @@
 import json
+from typing import Final
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.azure.text_to_speech.transformation import AzureAVATextToSpeechConfig
+from litellm.types.llms.openai import HttpxBinaryResponseContent
+from tests.unit.proxy.conftest import httpx_transport
 
 
 @pytest.fixture
@@ -718,3 +722,34 @@ def test_litellm_speech_with_ssml_passthrough(mock_post):
     assert "fast" in call_kwargs["data"]
     assert "high" in call_kwargs["data"]
     assert "Custom SSML content!" in call_kwargs["data"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@pytest.mark.asyncio
+async def test_azure_ava_tts_async(respx_mock: respx.MockRouter) -> None:
+    audio_payload: Final = b"ID3\x04\x00\x00\x00mock-audio"
+    tts_route: Final = respx_mock.post(
+        "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1"
+    ).respond(
+        status_code=200,
+        content=audio_payload,
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    response: Final = await litellm.aspeech(
+        model="azure/speech/tts",
+        voice="alloy",
+        input="Hello, this is a test of Azure text to speech",
+        api_base="https://eastus.tts.speech.microsoft.com",
+        api_key="test-key",
+        custom_llm_provider="azure",
+        response_format="mp3",
+        speed=1.0,
+    )
+
+    assert isinstance(response, HttpxBinaryResponseContent)
+    assert response.content == audio_payload
+    assert tts_route.calls.last.request.headers["Ocp-Apim-Subscription-Key"] == "test-key"
+    assert tts_route.calls.last.request.headers["X-Microsoft-OutputFormat"] == (
+        "audio-24khz-48kbitrate-mono-mp3"
+    )

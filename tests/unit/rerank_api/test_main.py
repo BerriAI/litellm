@@ -1,5 +1,8 @@
+import asyncio
 import json
 import logging
+from datetime import datetime
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -8,10 +11,51 @@ import respx
 
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.caching.caching import Cache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.rerank import RerankResponse
 
 MARKER_QUERY = "MARKER_QUERY_do_not_log_at_info"
 MARKER_DOC = "MARKER_DOC_sensitive_customer_text"
+COHERE_RERANK_RESPONSE: Final = {
+    "id": "rerank-1",
+    "results": [
+        {"index": 0, "relevance_score": 0.95, "document": {"text": "hello"}},
+        {"index": 1, "relevance_score": 0.1, "document": {"text": "world"}},
+    ],
+    "meta": {"api_version": {"version": "2"}, "billed_units": {"search_units": 1}},
+}
+
+
+class RespxAsyncTransport(httpx.AsyncBaseTransport):
+    def __init__(self, router: respx.MockRouter) -> None:
+        self.router = router
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self.router.async_handler(request)
+
+
+async def _cohere_rerank(sync_mode: bool, router: respx.MockRouter, top_n: int | None) -> RerankResponse:
+    if sync_mode:
+        return litellm.rerank(
+            model="cohere/rerank-v4.0-pro",
+            query="hello",
+            documents=["hello", "world"],
+            top_n=top_n,
+            api_key="test-api-key",
+        )
+    client: Final = AsyncHTTPHandler(transport=RespxAsyncTransport(router))
+    response: Final = await litellm.arerank(
+        model="cohere/rerank-v4.0-pro",
+        query="hello",
+        documents=["hello", "world"],
+        top_n=top_n,
+        api_key="test-api-key",
+        client=client,
+    )
+    await client.client.aclose()
+    return response
 
 
 def _mock_cohere_response() -> MagicMock:
@@ -390,3 +434,153 @@ def test_rerank_infer_region_from_model_arn(monkeypatch):
         print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
         assert "us-west-2" in mock_post.call_args.kwargs["url"]
         assert "us-east-1" not in mock_post.call_args.kwargs["url"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_rerank_parses_results_from_provider_response(
+    sync_mode: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    response: Final = await _cohere_rerank(sync_mode, respx_mock, top_n=2)
+
+    assert response.model_dump() == COHERE_RERANK_RESPONSE
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("second_top_n", "provider_calls", "second_is_cache_hit"),
+    [(2, 1, True), (None, 2, False)],
+)
+async def test_cohere_rerank_cache_hit_requires_identical_top_n(
+    second_top_n: int | None,
+    provider_calls: int,
+    second_is_cache_hit: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    route: Final = respx_mock.post("https://api.cohere.com/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    first_response: Final = await _cohere_rerank(True, respx_mock, top_n=2)
+    second_response: Final = await _cohere_rerank(True, respx_mock, top_n=second_top_n)
+
+    assert len(route.calls) == provider_calls
+    assert ("cache_key" in second_response._hidden_params) is second_is_cache_hit
+    assert second_response.results == first_response.results
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_rerank_completes_global_root_api_base_to_v2_route(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "api_base", "http://localhost:4000")
+    route: Final = respx_mock.post("http://localhost:4000/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    litellm.rerank(
+        model="cohere/rerank-v4.0-pro",
+        query="hello",
+        documents=["hello", "world"],
+        custom_llm_provider="cohere",
+        api_key="test-api-key",
+    )
+
+    assert route.calls[0].request.url == "http://localhost:4000/v2/rerank"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_rerank_sends_return_documents_and_preserves_text(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.cohere.com/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    response: Final = litellm.rerank(
+        model="cohere/rerank-v4.0-pro",
+        query="hello",
+        documents=["hello", "world"],
+        return_documents=True,
+        top_n=2,
+        api_key="test-api-key",
+    )
+
+    request_body: Final = json.loads(route.calls[0].request.content)
+    assert request_body == {
+        "model": "rerank-v4.0-pro",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "top_n": 2,
+        "return_documents": True,
+    }
+    assert [result["document"]["text"] for result in response.results] == ["hello", "world"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("api_base", "endpoint"),
+    [
+        ("https://cohere.example/v1/rerank", "https://cohere.example/v1/rerank"),
+        ("https://cohere.example", "https://cohere.example/v2/rerank"),
+    ],
+)
+def test_cohere_rerank_custom_api_base_selects_versioned_route(
+    api_base: str, endpoint: str, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(endpoint)
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    litellm.rerank(
+        model="cohere/rerank-v4.0-pro",
+        query="hello",
+        documents=["hello", "world"],
+        top_n=2,
+        api_base=api_base,
+        api_key="test-api-key",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "rerank-v4.0-pro",
+        "query": "hello",
+        "documents": ["hello", "world"],
+        "top_n": 2,
+        "return_documents": True,
+    }
+
+
+class _SuccessCostRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged = asyncio.Event()
+        self.response_cost: object = None
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.response_cost = kwargs["response_cost"]
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_rerank_success_callback_receives_search_unit_cost(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorder: Final = _SuccessCostRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    route: Final = respx_mock.post("https://api.cohere.com/v2/rerank")
+    route.return_value = httpx.Response(200, json=COHERE_RERANK_RESPONSE)
+
+    response: Final = await _cohere_rerank(False, respx_mock, top_n=2)
+    await asyncio.wait_for(recorder.logged.wait(), timeout=10)
+
+    search_units: Final = COHERE_RERANK_RESPONSE["meta"]["billed_units"]["search_units"]
+    expected_cost: Final = litellm.model_cost["rerank-v4.0-pro"]["input_cost_per_query"] * search_units
+    assert expected_cost > 0
+    assert recorder.response_cost == expected_cost
+    assert response._hidden_params["response_cost"] == expected_cost

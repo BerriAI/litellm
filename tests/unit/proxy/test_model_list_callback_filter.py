@@ -107,7 +107,7 @@ def team_admin_privileges(monkeypatch) -> None:
     async def _is_team_admin(**kwargs) -> bool:
         return True
 
-    monkeypatch.setattr(common_utils, "_user_has_admin_privileges", _is_team_admin)
+    monkeypatch.setattr(common_utils, "user_has_admin_privileges", _is_team_admin)
 
 
 def _non_admin(**kwargs) -> UserAPIKeyAuth:

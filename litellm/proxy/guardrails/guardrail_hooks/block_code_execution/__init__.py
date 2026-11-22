@@ -2,6 +2,7 @@
 
 from typing import TYPE_CHECKING, Final, Literal, cast
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 
 from .block_code_execution import BlockCodeExecutionGuardrail
@@ -26,7 +27,7 @@ def _get_param(
     value: Final = getattr(litellm_params, key, default)
     if value is not None:
         return value
-    raw: Final = guardrail.get("litellm_params")
+    raw: Final = as_str_mapping(guardrail.get("litellm_params"))
     if isinstance(raw, dict) and key in raw:
         return raw[key]
     return default

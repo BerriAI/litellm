@@ -1,19 +1,23 @@
+import asyncio
+import json
 import os
 import threading
 import time
 import uuid
-from typing import List, cast
+from typing import Final, List, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
-from httpx import Request, Response
 import requests
-
+import responses
+import respx
+from fastapi import HTTPException
+from httpx import HTTPStatusError, Request, Response
 
 import litellm
 from litellm import ModelResponse
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy.guardrails.guardrail_hooks.hiddenlayer.hiddenlayer import (
     HiddenlayerGuardrail,
     HiddenlayerGuardrailV2,
@@ -1153,3 +1157,171 @@ def test_get_jwt_gives_up_at_the_timeout_instead_of_blocking_the_event_loop(hang
         guardrail.refresh_jwt_func()
 
     assert [call.kwargs["timeout"] for call in get_jwt.call_args_list] == [2, 2]
+
+
+@pytest.fixture(params=("v1", "v2"))
+def hiddenlayer_jwt_guardrail(
+    request: pytest.FixtureRequest, httpx_transport: None
+) -> HiddenlayerGuardrail | HiddenlayerGuardrailV2:
+    guardrail_cls: Final = HiddenlayerGuardrail if request.param == "v1" else HiddenlayerGuardrailV2
+    with responses.RequestsMock() as auth:
+        auth.post(
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials", json={"access_token": "expired"}
+        )
+        return guardrail_cls(
+            guardrail_name="hiddenlayer",
+            api_id="id",
+            api_key="secret",
+            api_base="https://api.hiddenlayer.ai",
+            auth_url="https://auth.example.test",
+            timeout=2,
+        )
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_jwt_refresh_allows_other_coroutines_to_run_before_it_finishes(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+    respx_mock: respx.MockRouter,
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    loop: Final = asyncio.get_running_loop()
+    refresh_started: Final = asyncio.Event()
+    release_refresh: Final = threading.Event()
+    successful_body: Final = (
+        {"evaluation": {"action": "Allow"}}
+        if isinstance(guardrail, HiddenlayerGuardrail)
+        else {"messages": [{"role": "user", "content": "hi"}]}
+        if input_type == "request"
+        else {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
+    )
+
+    def refresh_token(request: requests.PreparedRequest) -> tuple[int, dict[str, str], str]:
+        assert request.headers["Authorization"] == "Basic aWQ6c2VjcmV0"
+        loop.call_soon_threadsafe(refresh_started.set)
+        assert release_refresh.wait(timeout=5), "event loop could not run while JWT refresh was pending"
+        return 200, {}, '{"access_token": "fresh"}'
+
+    def evaluate(request: Request) -> Response:
+        return Response(
+            401 if request.headers["Authorization"] == "Bearer expired" else 200,
+            json=successful_body,
+        )
+
+    async def other_request() -> None:
+        await refresh_started.wait()
+        release_refresh.set()
+
+    route: Final = respx_mock.route(method="POST", host="api.hiddenlayer.ai").mock(side_effect=evaluate)
+    peer: Final = asyncio.create_task(other_request())
+    with responses.RequestsMock() as auth:
+        auth.add_callback(
+            responses.POST,
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials",
+            callback=refresh_token,
+            content_type="application/json",
+        )
+        try:
+            result, _ = await asyncio.wait_for(
+                asyncio.gather(
+                    guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type),
+                    peer,
+                ),
+                timeout=10,
+            )
+        finally:
+            release_refresh.set()
+            peer.cancel()
+            await asyncio.gather(peer, return_exceptions=True)
+        assert len(auth.calls) == 1
+
+    assert result["texts"] == ["hi"]
+    assert guardrail.jwt_token == "fresh"
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["Authorization"] == "Bearer expired"
+    assert route.calls[1].request.headers["Authorization"] == "Bearer fresh"
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_jwt_refresh_exception_propagates_without_replacing_the_token(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+    respx_mock: respx.MockRouter,
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    refresh_error: Final = requests.exceptions.Timeout("token endpoint timed out")
+    route: Final = respx_mock.route(method="POST", host="api.hiddenlayer.ai").respond(401)
+    with responses.RequestsMock() as auth:
+        auth.post("https://auth.example.test/oauth2/token?grant_type=client_credentials", body=refresh_error)
+        with pytest.raises(requests.exceptions.Timeout, match="token endpoint timed out") as caught:
+            await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type)
+
+    assert caught.value is refresh_error
+    assert guardrail.jwt_token == "expired"
+    assert route.call_count == 1
+    assert route.calls[0].request.headers["Authorization"] == "Bearer expired"
+
+
+@pytest.mark.parametrize("input_type", ("request", "response"))
+async def test_second_detection_401_propagates_without_another_jwt_refresh(
+    hiddenlayer_jwt_guardrail: HiddenlayerGuardrail | HiddenlayerGuardrailV2,
+    input_type: Literal["request", "response"],
+    respx_mock: respx.MockRouter,
+) -> None:
+    guardrail: Final = hiddenlayer_jwt_guardrail
+    route: Final = respx_mock.route(method="POST", host="api.hiddenlayer.ai").respond(401)
+    with responses.RequestsMock() as auth:
+        auth.post(
+            "https://auth.example.test/oauth2/token?grant_type=client_credentials", json={"access_token": "fresh"}
+        )
+        with pytest.raises(HTTPStatusError) as caught:
+            await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type=input_type)
+        assert len(auth.calls) == 1
+
+    assert caught.value.response.status_code == 401
+    assert caught.value.request.headers["Authorization"] == "Bearer fresh"
+    assert guardrail.jwt_token == "fresh"
+    assert route.call_count == 2
+    assert route.calls[0].request.headers["Authorization"] == "Bearer expired"
+    assert route.calls[1].request.headers["Authorization"] == "Bearer fresh"
+
+
+def _reply_with_reasoning(*thoughts: str) -> dict[str, object]:
+    return {
+        "output": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": thought} for thought in thoughts]},
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Here is a summary"}]},
+        ]
+    }
+
+
+async def test_v1_blocks_a_flagged_responses_reasoning_text_before_the_last_one(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    def evaluate(request: Request) -> Response:
+        action: Final = "Block" if b"exfiltrate the keys" in request.content else "Allow"
+        return Response(200, json={"evaluation": {"action": action}})
+
+    respx_mock.post("https://my.hiddenlayer/detection/v1/interactions").mock(side_effect=evaluate)
+    guardrail: Final = HiddenlayerGuardrail(api_base="https://my.hiddenlayer", guardrail_name="hiddenlayer")
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(
+            _reply_with_reasoning("I could exfiltrate the keys", "I will answer briefly"), guardrail, request_data={}
+        )
+
+
+async def test_v2_blocks_a_flagged_responses_reasoning_text_after_the_first_one(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    def evaluate(request: Request) -> Response:
+        action: Final = "block" if b"exfiltrate the keys" in request.content else "allow"
+        return Response(200, json=json.loads(request.content), headers={"hl-runtime-action": action})
+
+    respx_mock.post("https://my.hiddenlayer/detection/v2/response-evaluations").mock(side_effect=evaluate)
+    guardrail: Final = HiddenlayerGuardrailV2(api_base="https://my.hiddenlayer", guardrail_name="hiddenlayer")
+
+    with pytest.raises(HTTPException):
+        await OpenAIResponsesHandler().process_output_response(
+            _reply_with_reasoning("I will answer briefly", "I could exfiltrate the keys"), guardrail, request_data={}
+        )

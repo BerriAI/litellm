@@ -9,6 +9,7 @@ import httpx
 import pytest
 from aiohttp import ClientSession
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from opentelemetry.trace import Span
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
@@ -33,6 +34,7 @@ from litellm.types.litellm_params import (
     wire_names,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantMessage, ChatCompletionUserMessage
+from litellm.types.proxy.guardrails.guardrail_hooks.headroom import HeadroomRequestContext
 from litellm.types.proxy.litellm_pre_call_utils import SecretFields
 from litellm.types.router import (
     ConfigurableClientsideParamsCustomAuth,
@@ -65,6 +67,7 @@ CONNECTION_NAMES: Final = (
     "api_key",
     "api_base",
     "api_version",
+    "responses_api_version",
     "region_name",
     "headers",
     "provider_specific_header",
@@ -74,18 +77,33 @@ CONNECTION_NAMES: Final = (
     "request_timeout",
     "force_timeout",
     "stream_timeout",
+    "timeout_by_service_tier",
+    "stream_timeout_by_service_tier",
     "max_retries",
     "tenant_id",
     "client_id",
     "client_secret",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+    "token_exchange_audience",
     "azure_username",
     "azure_password",
     "azure_scope",
     "azure_ad_token_provider",
     "litellm_credential_name",
+    "github_copilot_auth_type",
+    "github_copilot_host",
+    "github_copilot_app_id",
+    "github_copilot_app_installation_id",
+    "github_copilot_app_private_key_ref",
+    "github_copilot_app_private_key",
     "configurable_clientside_auth_params",
     "use_xai_oauth",
+    "chatgpt_auth_file",
+    "fireworks_forward_user_id",
     "aws_batch_role_arn",
+    "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",
     "s3_region_name",
     "s3_endpoint_url",
@@ -124,6 +142,7 @@ OPTION_NAMES: Final = (
     "use_litellm_proxy",
     "use_chat_completions_api",
     "use_in_pass_through",
+    "kubernetes_pod_discovery",
     "allowed_openai_params",
     "fallbacks",
     "context_window_fallback_dict",
@@ -141,6 +160,9 @@ OPTION_NAMES: Final = (
     "model_info",
     "rpm",
     "tpm",
+    "rpd",
+    "tpd",
+    "daily_reset_time",
     "itpm",
     "otpm",
     "default_api_key_rpm_limit",
@@ -151,6 +173,7 @@ OPTION_NAMES: Final = (
     "tag_regex",
     "max_file_size_mb",
     "silent_model",
+    "switchyard_router_config",
     "auto_router_config_path",
     "auto_router_config",
     "auto_router_default_model",
@@ -193,6 +216,7 @@ OPTION_NAMES: Final = (
     "prompt_label",
     "litellm_system_prompt",
     "custom_prompt_dict",
+    "initial_prompt_value",
     "roles",
     "final_prompt_value",
     "bos_token",
@@ -204,9 +228,11 @@ OPTION_NAMES: Final = (
     "assistant_continue_message",
     "disable_add_transform_inline_image_block",
     "merge_reasoning_content_in_choices",
+    "thought_signature_in_tool_call_id",
     "enable_json_schema_validation",
     "complete_response",
     "stream_chunk_size",
+    "fake_stream",
     "keepalive_seconds",
     "allow_client_keepalive_override",
     "mock_response",
@@ -214,16 +240,21 @@ OPTION_NAMES: Final = (
 )
 
 AGENTIC_LOOP_STATE_NAMES: Final = (
+    "_headroom_request_context",
     "_agentic_loop_depth",
     "_agentic_loop_fingerprints",
     "_agentic_loop_api_surface",
+    "_agentic_loop_tool_choice",
     "_code_interpreter_interception_active",
     "_code_interpreter_interception_sandbox_key",
     "_code_interpreter_interception_session_scoped",
     "_code_interpreter_interception_converted_stream",
+    "_code_interpreter_interception_stream_options",
     "_websearch_interception_emit_native_blocks",
     "_websearch_interception_converted_stream",
+    "_websearch_interception_stream_options",
     "_headroom_interception_converted_stream",
+    "_headroom_interception_stream_options",
 )
 
 INTERNAL_STATE_NAMES: Final = (
@@ -235,17 +266,26 @@ INTERNAL_STATE_NAMES: Final = (
     "preset_cache_key",
     "cache_key",
     "stream_response",
+    "parent_otel_span",
     "_context_compaction_state",
+    "_litellm_prompt_management_applied",
     *AGENTIC_LOOP_STATE_NAMES,
+    "_skip_mcp_handler",
+    "skip_mcp_handler",
+    "mcp_handler_context",
     "_router_weights",
+    "_encrypted_content_affinity_pinned",
     "fallback_depth",
     "max_fallbacks",
     "attempted_targets",
     "proxy_server_request",
     "secret_fields",
+    "github_copilot_user_session",
     "litellm_trusted_callback_vars",
     "_litellm_addressed_response_id",
+    "_litellm_addressed_comparison_response_id",
     "_litellm_strip_stream_usage",
+    "_litellm_stream_usage_injected",
     "client_side_timeout",
     "model_file_id_mapping",
     "acompletion",
@@ -259,6 +299,7 @@ INTERNAL_STATE_NAMES: Final = (
 
 BEDROCK_BATCH_NAMES: Final = (
     "aws_batch_role_arn",
+    "aws_bedrock_control_plane_endpoint",
     "s3_bucket_name",
     "s3_region_name",
     "s3_endpoint_url",
@@ -505,8 +546,10 @@ TYPE_HINT_NAMESPACE: Final[Mapping[str, object]] = {
     "Logging": Logging,
     "SecretFields": SecretFields,
     "CompactionState": CompactionState,
+    "HeadroomRequestContext": HeadroomRequestContext,
     "RouterWeights": RouterWeights,
     "AttemptedFallbackTargets": AttemptedFallbackTargets,
+    "Span": Span,
 }
 
 LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
@@ -534,7 +577,7 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.GuardrailOptions: {"guardrails": ("default",)},
     litellm_params.PromptOptions: {"prompt_id": "prompt", "prompt_variables": {"name": "value"}},
     litellm_params.ResponseOptions: {"keepalive_seconds": 1.5},
-    litellm_params.ControlOptions: {"stream_chunk_size": 64},
+    litellm_params.ControlOptions: {"stream_chunk_size": 64, "fake_stream": True},
     litellm_params.MockOptions: {"mock_timeout": True},
     litellm_params.CallState: {
         "completion_call_id": "call",
@@ -542,6 +585,7 @@ LEAF_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
         "data_residency": "us",
     },
     litellm_params.AgenticLoopState: {"api_surface": "chat_completions", "depth": 1},
+    litellm_params.McpHandlerState: {"recursion_guard": True, "mcp_handler_context": {"server": "docs"}},
     litellm_params.RouterState: {"fallback_depth": 1},
     litellm_params.ProxyRequestState: {
         "proxy_server_request": {"path": "/chat/completions"},
@@ -570,6 +614,7 @@ LEAF_BAD_SAMPLES: Final[Mapping[type, Mapping[str, object]]] = {
     litellm_params.MockOptions: {"mock_timeout": "true"},
     litellm_params.CallState: {"completion_call_id": 1},
     litellm_params.AgenticLoopState: {"depth": "1"},
+    litellm_params.McpHandlerState: {"recursion_guard": "true"},
     litellm_params.RouterState: {"fallback_depth": "1"},
     litellm_params.ProxyRequestState: {"proxy_server_request": "request"},
     litellm_params.EntrypointState: {"acompletion": "true"},
@@ -649,6 +694,10 @@ def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str)
 NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "credentials": (
+            "github_copilot_app_id",
+            "github_copilot_app_installation_id",
+            "github_copilot_app_private_key_ref",
+            "github_copilot_app_private_key",
             "anthropic_disable_workload_identity_federation",
             "anthropic_federation_rule_id",
             "anthropic_federation_workspace_id",
@@ -671,12 +720,17 @@ NAMES_SHARED_WITH_TYPED_MODELS: Final[Mapping[str, tuple[str, ...]]] = MappingPr
             "api_key",
             "api_version",
             "aws_batch_role_arn",
+            "aws_bedrock_control_plane_endpoint",
             "azure_password",
             "azure_scope",
             "azure_username",
             "bedrock_tags",
             "client_id",
             "client_secret",
+            "token_exchange_audience",
+            "token_exchange_endpoint",
+            "token_exchange_profile",
+            "token_exchange_scope",
             "openai_identity_provider_id",
             "openai_identity_token_file",
             "openai_service_account_id",

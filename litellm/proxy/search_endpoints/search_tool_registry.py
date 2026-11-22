@@ -5,18 +5,20 @@ Search Tool Registry for managing search tool configurations.
 import os
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    _get_salt_key,
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (  # noqa: F401  # legacy module exports
+    _get_salt_key,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     decrypt_if_encrypted_with,
     encrypt_value_helper,
+    get_salt_key,
 )
+from litellm.proxy.common_utils.fips import fips_mode_active
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SearchToolsRepository
@@ -75,7 +77,9 @@ def _encrypted_search_tool_value(value: object) -> object:
         return value
     try:
         return encrypt_value_helper(value=value)
-    except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+    except Exception:  # no salt key or master key configured: store the value as written
+        if fips_mode_active():
+            raise
         return value
 
 
@@ -85,7 +89,7 @@ def encrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> 
 
 
 def _search_tool_plaintext(value: str) -> str | None:
-    signing_key: Final = _get_salt_key()
+    signing_key: Final = get_salt_key()
     return None if signing_key is None else decrypt_if_encrypted_with(value, signing_key)
 
 
@@ -171,9 +175,13 @@ def _did_not_decrypt(search_tool: Mapping[str, object]) -> bool:
     )
 
 
+_DbSearchToolT = TypeVar("_DbSearchToolT", bound=Mapping[str, object])
+_LoadedSearchToolT = TypeVar("_LoadedSearchToolT", bound=Mapping[str, object])
+
+
 def keep_loaded_search_tools_that_do_not_decrypt(
-    db_search_tools: Sequence[Mapping[str, object]], loaded_search_tools: Sequence[Mapping[str, object]]
-) -> Sequence[Mapping[str, object]]:
+    db_search_tools: Sequence[_DbSearchToolT], loaded_search_tools: Sequence[_LoadedSearchToolT]
+) -> Sequence[_DbSearchToolT | _LoadedSearchToolT]:
     """Replace each DB search tool whose params do not decrypt with the current key by its loaded version."""
     loaded_by_id: Final = {tool.get("search_tool_id"): tool for tool in loaded_search_tools}
     kept: Final = tuple(

@@ -1,17 +1,17 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from pydantic import ConfigDict, Field, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.proxy._types import (
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
+from litellm.types.proxy.management_endpoints.user_requests import (
     LiteLLM_UserTableWithKeyCount,
     NewUserRequest,
     UpdateUserRequest,
     UpdateUserRequestNoUserIDorEmail,
 )
-from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 MAX_BULK_DELETE_USERS: Final = 500
 
@@ -24,9 +24,9 @@ class InsensitiveContains(TypedDict):
 
 
 class UserSearchWhere(TypedDict):
-    """Prisma filter behind `/user/list?search=`: user_id or user_email contains the term, case-insensitive."""
+    """Case-insensitive partial-match predicates for user search."""
 
-    OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
+    OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email", "user_alias"], InsensitiveContains], ...]]
 
 
 class UserListResponse(LiteLLMBaseModel):
@@ -80,7 +80,7 @@ class UserUpdateResult(LiteLLMBaseModel):
     user_email: str | None = None
     success: bool
     error: str | None = None
-    updated_user: dict[str, Any] | None = None
+    updated_user: dict[str, object] | None = None
 
 
 class BulkUpdateUserResponse(LiteLLMBaseModel):
@@ -120,6 +120,7 @@ class BulkNewUserItem(NewUserRequest):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    user_id: str | None = None
     auto_create_key: bool = False
 
     @field_validator("send_invite_email")

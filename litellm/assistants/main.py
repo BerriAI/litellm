@@ -5,14 +5,16 @@ import contextvars
 import os
 from collections.abc import Coroutine, Iterable, Mapping, Sequence
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, Protocol
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant import Assistant
 from openai.types.beta.assistant_deleted import AssistantDeleted
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import (
     exception_type,
@@ -31,6 +33,21 @@ from .utils import get_optional_params_add_message
 ####### ENVIRONMENT VARIABLES ###################
 openai_assistants_api: Final = OpenAIAssistantsAPI()
 azure_assistants_api: Final = AzureAssistantsAPI()
+_EXTRA_BODY: Final = TypeAdapter(object)
+
+
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
+
+
+def _pop_azure_ad_token(extra_body: object) -> object:
+    return require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
+
+
+def _popped_azure_ad_token(extra_body: object) -> str | None:
+    token: Final = _pop_azure_ad_token(extra_body)
+    return token if isinstance(token, str) else None
+
 
 ### ASSISTANTS ###
 
@@ -77,7 +94,7 @@ def get_assistants(
     api_base: str | None = None,
     api_version: str | None = None,
     **kwargs,
-) -> SyncCursorPage[Assistant]:
+) -> SyncCursorPage[Assistant] | Coroutine[None, None, AsyncCursorPage[Assistant]]:
     aget_assistants: Final[bool | None] = kwargs.pop("aget_assistants", None)
     if aget_assistants is not None and not isinstance(aget_assistants, bool):
         raise Exception("Invalid value passed in for aget_assistants. Only bool or None allowed")
@@ -100,7 +117,7 @@ def get_assistants(
     elif timeout is None:
         timeout = 600.0
 
-    response: SyncCursorPage[Assistant] | None = None
+    response: SyncCursorPage[Assistant] | Coroutine[None, None, AsyncCursorPage[Assistant]] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -129,6 +146,7 @@ def get_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_assistants=aget_assistants,
         )
@@ -145,10 +163,10 @@ def get_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -312,6 +330,7 @@ def create_assistants(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             create_assistant_data=create_assistant_data,
             client=client,
             async_create_assistants=async_create_assistants,
@@ -329,10 +348,10 @@ def create_assistants(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -461,6 +480,7 @@ def delete_assistant(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             assistant_id=assistant_id,
             client=client,
             async_delete_assistants=async_delete_assistants,
@@ -478,10 +498,10 @@ def delete_assistant(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -561,7 +581,7 @@ def create_thread(
     tool_resources: OpenAICreateThreadParamsToolResources | None = None,
     client: OpenAI | None = None,
     **kwargs,
-) -> Thread:
+) -> Thread | Coroutine[None, None, Thread]:
     """
     - get the llm provider
     - if openai - route it there
@@ -607,7 +627,7 @@ def create_thread(
     api_base: str | None = None
     api_key: str | None = None
 
-    response: Thread | None = None
+    response: Thread | Coroutine[None, None, Thread] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -637,6 +657,7 @@ def create_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             acreate_thread=acreate_thread,
         )
@@ -653,10 +674,10 @@ def create_thread(
 
         api_version: str | None = optional_params.api_version or litellm.api_version or get_secret("AZURE_API_VERSION")
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -731,7 +752,7 @@ def get_thread(
     thread_id: str,
     client=None,
     **kwargs,
-) -> Thread:
+) -> Thread | Coroutine[None, None, Thread]:
     """Get the thread object, given a thread_id"""
     aget_thread: Final = kwargs.pop("aget_thread", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -753,7 +774,7 @@ def get_thread(
         timeout = 600.0
     api_base: str | None = None
     api_key: str | None = None
-    response: Thread | None = None
+    response: Thread | Coroutine[None, None, Thread] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -783,6 +804,7 @@ def get_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_thread=aget_thread,
         )
@@ -799,10 +821,10 @@ def get_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -898,7 +920,7 @@ def add_message(
     metadata: dict | None = None,
     client=None,
     **kwargs,
-) -> OpenAIMessage:
+) -> OpenAIMessage | Coroutine[None, None, OpenAIMessage]:
     ### COMMON OBJECTS ###
     a_add_message: Final = kwargs.pop("a_add_message", None)
     _message_data: Final = MessageData(role=role, content=content, attachments=attachments, metadata=metadata)
@@ -930,7 +952,7 @@ def add_message(
         timeout = 600.0
     api_key: str | None = None
     api_base: str | None = None
-    response: OpenAIMessage | None = None
+    response: OpenAIMessage | Coroutine[None, None, OpenAIMessage] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -960,6 +982,7 @@ def add_message(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             a_add_message=a_add_message,
         )
@@ -976,10 +999,10 @@ def add_message(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1059,7 +1082,7 @@ def get_messages(
     thread_id: str,
     client: Any | None = None,
     **kwargs,
-) -> SyncCursorPage[OpenAIMessage]:
+) -> SyncCursorPage[OpenAIMessage] | Coroutine[None, None, AsyncCursorPage[OpenAIMessage]]:
     aget_messages: Final = kwargs.pop("aget_messages", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
     litellm_params_dict: Final = get_litellm_params(**kwargs)
@@ -1080,7 +1103,7 @@ def get_messages(
     elif timeout is None:
         timeout = 600.0
 
-    response: SyncCursorPage[OpenAIMessage] | None = None
+    response: SyncCursorPage[OpenAIMessage] | Coroutine[None, None, AsyncCursorPage[OpenAIMessage]] | None = None
     api_key: str | None = None
     api_base: str | None = None
     if custom_llm_provider == "openai":
@@ -1111,6 +1134,7 @@ def get_messages(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             aget_messages=aget_messages,
         )
@@ -1127,10 +1151,10 @@ def get_messages(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token: str | None = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _popped_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 
@@ -1249,7 +1273,7 @@ def run_thread(
     client: object | None = None,
     event_handler: AssistantEventHandler | None = None,  # for stream=True calls
     **kwargs,
-) -> Run:
+) -> Run | Coroutine[None, None, Run]:
     """Run a given thread + assistant."""
     arun_thread: Final = kwargs.pop("arun_thread", None)
     optional_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1271,7 +1295,7 @@ def run_thread(
     elif timeout is None:
         timeout = 600.0
 
-    response: Run | None = None
+    response: Run | Coroutine[None, None, Run] | None = None
     if custom_llm_provider == "openai":
         api_base = (
             optional_params.api_base  # for deepinfra/perplexity/anyscale/groq we check in get_llm_provider and pass in the api base from there
@@ -1308,6 +1332,7 @@ def run_thread(
             timeout=timeout,
             max_retries=optional_params.max_retries,
             organization=organization,
+            litellm_params=litellm_params_dict,
             client=client,
             arun_thread=arun_thread,
             event_handler=event_handler,
@@ -1325,10 +1350,10 @@ def run_thread(
             or get_secret("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         azure_ad_token = None
         if extra_body is not None:
-            azure_ad_token = extra_body.pop("azure_ad_token", None)
+            azure_ad_token = _pop_azure_ad_token(extra_body)
         else:
             azure_ad_token = get_secret("AZURE_AD_TOKEN")
 

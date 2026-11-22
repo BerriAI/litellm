@@ -437,3 +437,41 @@ class CustomOpenAPISpec:
 
         # Add responses API request schema
         return CustomOpenAPISpec.add_responses_api_request_schema(with_embeddings)
+
+
+_MAX_INLINE_DEPTH: Final = 32
+
+
+def _inlined(node: JsonValue, defs: Mapping[str, JsonValue], depth: int = 0) -> JsonValue:
+    if depth >= _MAX_INLINE_DEPTH or not isinstance(node, (list, dict)):
+        return node
+    if isinstance(node, list):
+        return [_inlined(item, defs, depth + 1) for item in node]
+    ref: Final = node.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        target: Final = _inlined(defs[ref.removeprefix("#/$defs/")], defs, depth + 1)
+        siblings: Final = {key: _inlined(value, defs, depth + 1) for key, value in node.items() if key != "$ref"}
+        return {**target, **siblings} if isinstance(target, dict) else siblings
+    if "propertyName" in node and "mapping" in node:
+        return {"propertyName": node["propertyName"]}
+    return {key: _inlined(value, defs, depth + 1) for key, value in node.items() if key != "$defs"}
+
+
+def inline_request_body(model_class: type, example: Mapping[str, object]) -> JsonObject:
+    """
+    Build an ``openapi_extra["requestBody"]`` for a route that reads its body with ``request.body()``.
+
+    Swagger UI resolves ``$ref`` against the whole document, so a schema placed inline in an operation
+    cannot keep Pydantic's ``#/$defs/...`` references. Every reference is expanded in place instead,
+    which also keeps the operation self-contained inside the lazy OpenAPI snapshot.
+    """
+    schema: Final = CustomOpenAPISpec.get_pydantic_schema(model_class)
+    media: Final[JsonObject] = {"example": cast(JsonValue, dict(example))}  # cast-ok: JSON example literal
+    if schema is None:
+        return {"required": True, "content": {"application/json": media}}
+    raw_defs: Final = schema.get("$defs")
+    defs: Final[Mapping[str, JsonValue]] = raw_defs if isinstance(raw_defs, dict) else MappingProxyType({})
+    return {
+        "required": True,
+        "content": {"application/json": {"schema": _inlined(schema, defs), **media}},
+    }

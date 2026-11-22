@@ -171,7 +171,17 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
                 "INSERT INTO {} (token, key_alias, team_id, user_id, metadata, models) VALUES (%s, %s, %s, %s, %s, %s)"
             ).format(verification_token_table),
             (
-                ("key-a", "alias-a", "team-1", "user-1", '{"tags": ["blue", "gold"]}', []),
+                (
+                    "key-a",
+                    "alias-a",
+                    "team-1",
+                    "user-1",
+                    '{"tags": ["blue", "gold"], "cost_center": "cc-1", "webhook_token": "whsec_1", '
+                    '"scim_roles": ["r"], "langfuse": {"apiKey": "lf", "logging": [{"callback_name": "langfuse"}]}, '
+                    '"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "sk"}}], '
+                    '"callback_settings": {"otel": {"headers": "x"}}, "secret_manager_settings": {"vault": "v"}}',
+                    [],
+                ),
                 ("key-b", "alias-b", "team-1", "user-1", '{"tags": []}', []),
                 ("key-c", "alias-c", "team-1", "user-1", '{"tags": []}', []),
                 ("key-cache", "alias-cache", "team-1", "user-1", '{"tags": []}', []),
@@ -198,8 +208,17 @@ def seed_daily_activity_fixture(connection: psycopg.Connection, *, schema: str, 
             ),
         )
         cursor.execute(
-            sql.SQL("INSERT INTO {} (user_id, user_email, models) VALUES (%s, %s, %s)").format(user_table),
-            ("user-1", "user@example.com", []),
+            sql.SQL("INSERT INTO {} (user_id, user_email, models, metadata) VALUES (%s, %s, %s, %s)").format(
+                user_table
+            ),
+            (
+                "user-1",
+                "user@example.com",
+                [],
+                '{"department": "research", "ldap_password": "pw", "logging": [{"callback_name": "langfuse"}], '
+                '"scim_enterprise": {"employeeNumber": "E-1"}, '
+                '"scim_entitlements": ["ent"], "scim_roles": ["role"]}',
+            ),
         )
         cursor.execute(
             sql.SQL("INSERT INTO {} (team_id, team_alias, admins, members, models) VALUES (%s, %s, %s, %s, %s)").format(
@@ -336,6 +355,57 @@ def seed_daily_team_exclusion_fixture(connection: psycopg.Connection, *, schema:
             VALUES (%s, %s, '2026-06-04', %s, 'model-a', '', 'provider-a', NULL, '/v1/chat/completions',
                     1, %s, 1, '2026-06-04 12:00:00')
             """).format(team_table),
+            rows,
+        )
+    connection.commit()
+
+
+_USER_PAGE_SPENDS: Final = (
+    ("user-zeta", 30.0),
+    ("user-alpha", 20.0),
+    ("user-beta", 20.0),
+    ("", 40.0),
+    (None, 5.0),
+    ("user-other", 10.0),
+)
+
+
+def seed_daily_user_page_fixture(connection: psycopg.Connection, *, schema: str) -> None:
+    daily_user_table: Final = sql.Identifier(schema, "LiteLLM_DailyUserSpend")
+    rows: Final = tuple(
+        (
+            f"user-page-{index}",
+            user_id,
+            "2026-06-01",
+            f"user-page-key-{index}",
+            "model-a",
+            "",
+            "provider-a",
+            None,
+            "/v1/chat/completions",
+            10,
+            5,
+            0,
+            0,
+            spend,
+            2,
+            2,
+            0,
+            "2026-06-01 12:00:00",
+        )
+        for index, (user_id, spend) in enumerate(_USER_PAGE_SPENDS)
+    )
+    with connection.cursor() as cursor:
+        cursor.execute(sql.SQL("DELETE FROM {}").format(daily_user_table))
+        cursor.executemany(
+            sql.SQL("""
+            INSERT INTO {}
+                (id, user_id, date, api_key, model, model_group, custom_llm_provider,
+                 mcp_namespaced_tool_name, endpoint, prompt_tokens, completion_tokens,
+                 cache_read_input_tokens, cache_creation_input_tokens, spend, api_requests,
+                 successful_requests, failed_requests, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """).format(daily_user_table),
             rows,
         )
     connection.commit()

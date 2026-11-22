@@ -3,15 +3,19 @@ Tests for gateway repository layer.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any, Dict, Final, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 from pydantic import ValidationError
+from litellm.repositories import rust_database
+from litellm.repositories.spend_logs_repository import SpendLogOwner, SpendLogsRepository
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
@@ -23,12 +27,22 @@ from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.models.deployment_warning import AdminIgnore
+from litellm.repositories.deployment_warning_ignore_repository import (
+    DeploymentWarningIgnoreRepository,
+    parse_ignores,
+)
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.subscription_account_repository import (
+    SetLabel,
+    SubscriptionAccountFeeChanges,
+    SubscriptionAccountRepository,
+)
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
@@ -139,6 +153,7 @@ class MockPrismaClient:
         self.db.litellm_projecttable = MockTable(pk_field="project_id")
         self.db.litellm_objectpermissiontable = MockTable(pk_field="object_permission_id")
         self.db.litellm_credentialstable = MockTable()
+        self.db.litellm_subscriptionaccounttable = MockTable(pk_field="subscription_account_id")
 
 
 class TestBaseRepository:
@@ -417,11 +432,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
@@ -435,11 +450,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -459,11 +474,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -485,7 +500,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_all(self, mock_decrypt, repo):
@@ -508,7 +523,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_unblocked(self, mock_decrypt, repo):
@@ -525,7 +540,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_by_name(self, mock_decrypt, repo):
@@ -541,11 +556,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model(self, mock_decrypt, mock_encrypt, repo):
@@ -564,7 +579,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_model(self, mock_decrypt, repo):
@@ -578,11 +593,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_block_unblock_model(self, mock_decrypt, mock_encrypt, repo):
@@ -1487,11 +1502,13 @@ class TestCredentialsRepository:
         repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
+            "display_name": "My Key",
             "credential_values": {"api_key": "encrypted_secret"},
             "credential_info": {"provider": "openai"},
         }
         cred = await repo.find_by_name("my-key")
         assert isinstance(cred, CredentialItem)
+        assert cred.display_name == "My Key"
         assert cred.credential_values == {"api_key": "encrypted_secret"}
         assert cred.credential_info == {"provider": "openai"}
 
@@ -1595,6 +1612,40 @@ class TestConfigRepository:
         }
         params = await repo.get_all_params()
         assert len(params) == 2
+
+
+class TestDeploymentWarningIgnoreRepository:
+    @pytest.mark.asyncio
+    async def test_round_trips_on_the_writer_without_touching_other_ui_settings_rows(self):
+        client = MockPrismaClient()
+        writer_table = MockTable()
+        client.writer_db = SimpleNamespace(litellm_uisettings=writer_table)
+        other_rows = {
+            "ui_settings": {"id": "ui_settings", "ui_settings": '{"disable_model_add_for_internal_users": true}'},
+            "user_banner": {"id": "user_banner", "ui_settings": '{"enabled": false}'},
+        }
+        writer_table._records.update({row_id: dict(row) for row_id, row in other_rows.items()})
+        repo = DeploymentWarningIgnoreRepository(client, use_writer=True)
+        ignored_at = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
+        snoozed = AdminIgnore(ignored_by="admin", ignored_at=ignored_at, ignored_until=ignored_at + timedelta(hours=1))
+
+        assert await repo.get_ignores() == {}
+        await repo.save_ignores({"no_redis": AdminIgnore(ignored_by="admin", ignored_at=ignored_at)})
+        await repo.save_ignores({"detailed_debug": snoozed})
+
+        assert await repo.get_ignores() == {"detailed_debug": snoozed}
+        assert {row_id: writer_table._records[row_id] for row_id in other_rows} == other_rows
+        assert len(writer_table._records) == len(other_rows) + 1
+
+    @pytest.mark.parametrize(
+        "stored",
+        [
+            "{not json",
+            {"detailed_debug": {"ignored_by": "a", "ignored_at": "2026-10-14T12:00:00", "ignored_until": None}},
+        ],
+    )
+    def test_unreadable_rows_read_as_no_ignores(self, stored):
+        assert parse_ignores(stored) == {}
 
 
 class TestVerificationTokenRepositoryExtended:
@@ -2010,7 +2061,7 @@ class TestModelRepositoryExtended:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.decrypt_value_helper",
         side_effect=lambda value, **kw: value,
     )
     async def test_find_by_team_id(self, mock_decrypt, repo):
@@ -2215,11 +2266,42 @@ class TestPrismaTableRepository:
         assert agents.table._actions is not policy.table._actions
 
     def test_table_access_raises_without_db(self):
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
+
+    @pytest.mark.asyncio
+    async def test_managed_file_repository_updates_existing_file_object_only(self):
+        from litellm.repositories.managed_file_repository import ManagedFileRepository
+        from litellm.types.llms.openai import OpenAIFileObject
+
+        class UpdateManyMockTable(MockTable):
+            async def update_many(self, where: Dict[str, Any], data: Dict[str, Any]) -> int:
+                return int(await self.update(where, data) is not None)
+
+        file_table = UpdateManyMockTable(pk_field="unified_file_id")
+        await file_table.create({"unified_file_id": "existing-file", "file_object": "{}"})
+        prisma_client = SimpleNamespace(db=SimpleNamespace(litellm_managedfiletable=file_table))
+        repository = ManagedFileRepository(prisma_client)
+        file_object = OpenAIFileObject(
+            id="existing-file",
+            object="file",
+            bytes=836,
+            created_at=456,
+            filename="output.jsonl",
+            purpose="batch_output",
+            status="processed",
+        )
+
+        assert await repository.update_file_object("existing-file", file_object) is True
+        stored_row = await file_table.find_unique(where={"unified_file_id": "existing-file"})
+        assert stored_row is not None
+        assert stored_row.file_object == file_object.model_dump_json()
+
+        assert await repository.update_file_object("missing-file", file_object) is False
+        assert await file_table.find_unique(where={"unified_file_id": "missing-file"}) is None
 
     CONFIG_SYNCED_TABLE_NAMES = frozenset(
         {
@@ -2405,3 +2487,77 @@ class TestAutoRouterSessionRepository:
         assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = AutoRouterSessionRepository(None).table
+
+
+class TestSubscriptionAccountRepository:
+    @pytest.mark.asyncio
+    async def test_update_fee_writes_only_the_named_columns(self):
+        client = MockPrismaClient()
+        stored_at = datetime(2026, 10, 1)
+        await client.db.litellm_subscriptionaccounttable.create(
+            data={
+                "subscription_account_id": "sub-1",
+                "custom_llm_provider": "chatgpt",
+                "account_id": "acct_123",
+                "label": "Team plan (test value)",
+                "monthly_fee": 25.0,
+                "currency": "USD",
+                "billing_period_start": "2026-10-01",
+                "created_at": stored_at,
+                "created_by": "admin-a",
+                "updated_at": stored_at,
+                "updated_by": "admin-a",
+            }
+        )
+        repo = SubscriptionAccountRepository(client)
+
+        fee_only = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(monthly_fee=30.0), "admin-b")
+        label_cleared = await repo.update_fee("sub-1", SubscriptionAccountFeeChanges(label=SetLabel(None)), "admin-c")
+        missing = await repo.update_fee("sub-2", SubscriptionAccountFeeChanges(monthly_fee=1.0), "admin-b")
+
+        assert fee_only is not None and label_cleared is not None
+        assert (fee_only.monthly_fee, fee_only.currency, fee_only.label, fee_only.updated_by) == (
+            30.0,
+            "USD",
+            "Team plan (test value)",
+            "admin-b",
+        )
+        assert (label_cleared.monthly_fee, label_cleared.label, label_cleared.updated_by) == (30.0, None, "admin-c")
+        assert missing is None
+
+
+class TestSpendLogsWindowSpend:
+    """``SpendLogsRepository.window_spend`` hands the Rust repository the bound the Prisma ``group_by`` used."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("owner", list(SpendLogOwner))
+    @pytest.mark.parametrize(
+        "since",
+        [
+            datetime(2026, 8, 1, 0, 0, 0, 123000),
+            datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc),
+            datetime(2026, 7, 31, 20, 0, 0, 123999, tzinfo=ZoneInfo("America/New_York")),
+            datetime(2026, 8, 1, 2, 0, 0, 123456, tzinfo=timezone(timedelta(hours=2))),
+        ],
+        ids=["naive_is_utc", "utc", "named_zone", "fixed_offset_microseconds"],
+    )
+    async def test_reads_the_rust_repository_from_the_utc_millisecond(self, monkeypatch, owner, since):
+        stores = install_rust_auth_stores(monkeypatch)
+        stores.spend_log.totals[(owner.value, "owner-1")] = 2.5
+
+        spend = await SpendLogsRepository(MagicMock()).window_spend(owner, "owner-1", since)
+
+        assert spend == 2.5
+        assert stores.spend_log.lookups == [
+            (owner.value, "owner-1", datetime(2026, 8, 1, 0, 0, 0, 123000, tzinfo=timezone.utc))
+        ]
+        assert stores.spend_log.lookups[0][2].tzinfo is timezone.utc
+
+    @pytest.mark.asyncio
+    async def test_without_a_rust_database_is_no_db_connected(self, monkeypatch):
+        monkeypatch.setattr(rust_database, "repository", lambda kind: None)
+
+        with pytest.raises(rust_database.NoDatabaseConnected):
+            await SpendLogsRepository(MagicMock()).window_spend(
+                SpendLogOwner.KEY, "owner-1", datetime(2026, 8, 1, tzinfo=timezone.utc)
+            )

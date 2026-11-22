@@ -15,6 +15,8 @@ from typing import Any, AsyncGenerator, List, Literal, Optional
 
 import pytest
 
+import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
@@ -25,6 +27,8 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
     UnifiedLLMGuardrails,
     _is_redundant_scan,
 )
+from litellm.proxy.utils import _pipelines_stream_live
+from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Delta,
@@ -547,6 +551,57 @@ async def test_windowed_responses_incomplete_stream_scans_tool_call_before_relea
     assert BLOCK_MESSAGE in raw
 
 
+def _undecodable_text_event(text: str) -> bytes:
+    return (
+        b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, "delta": '
+        + json.dumps({"type": "text_delta", "text": text}).encode()
+        + b', "padding": '
+        + b"9" * 5000
+        + b"}\n\n"
+    )
+
+
+async def _anthropic_stream_hiding_the_marker_in_an_undecodable_event(after_message_stop: bool):
+    original = [chunk async for chunk in _anthropic_stream()]
+    hidden = _undecodable_text_event(ORIGINAL_MARKER)
+    chunks = (*original[:4], *original[-3:], hidden) if after_message_stop else (*original[:4], hidden, *original[-3:])
+    for chunk in chunks:
+        yield chunk
+
+
+async def _drain_into(collected: List[Any], stream: AsyncGenerator[Any, None]) -> None:
+    async for chunk in stream:
+        collected.append(chunk)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("sampling_rate", "after_message_stop"), [(2, False), (1, True)], ids=["mid-stream", "after-message-stop"]
+)
+async def test_windowed_buffer_refuses_an_undecodable_text_event_after_a_clean_scan(sampling_rate: int, after_message_stop: bool):
+    guardrail = _CountingPassingGuardrail(guardrail_name="windowed-undecodable", event_hook="post_call")
+    guardrail.streaming_buffer_until_moderated = True
+    guardrail.streaming_buffer_release_on_scan = True
+    guardrail.streaming_sampling_rate = sampling_rate
+    collected: List[Any] = []
+    hooked_stream = UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/v1/messages"),
+        response=_anthropic_stream_hiding_the_marker_in_an_undecodable_event(after_message_stop),
+        request_data={
+            "messages": [{"role": "user", "content": "hi"}],
+            "guardrail_to_apply": guardrail,
+            "metadata": {"guardrails": [guardrail.guardrail_name]},
+        },
+    )
+
+    with pytest.raises(GuardrailRaisedException):
+        await _drain_into(collected, hooked_stream)
+
+    raw = _decode(collected)
+    assert '"text": "the "' in raw
+    assert ORIGINAL_MARKER not in raw, f"unchecked text event leaked: {raw!r}"
+
+
 @pytest.mark.asyncio
 async def test_windowed_buffer_with_explicit_end_of_stream_only_stays_fully_buffered():
     guardrail = _CountingPassingGuardrail(guardrail_name="windowed-eos", event_hook="post_call")
@@ -571,3 +626,34 @@ async def test_buffered_mode_disabled_for_content_rewriting_guardrail():
     assert guardrail.streaming_buffer_until_moderated is True  # request asked for buffering
     assert ORIGINAL_MARKER in raw
     assert BLOCK_MESSAGE not in raw
+
+
+def _detect_only_pipeline(guardrail: CustomGuardrail) -> tuple[tuple[str, GuardrailPipeline], ...]:
+    step = PipelineStep(guardrail=guardrail.guardrail_name, on_pass="allow", on_fail="next")
+    return (("live-policy", GuardrailPipeline(mode="post_call", steps=[step])),)
+
+
+@pytest.mark.parametrize(
+    ("attribute", "guardrail_config", "streams_live"),
+    (
+        pytest.param(False, None, True, id="attribute-false-streams-live"),
+        pytest.param(None, None, False, id="unset-keeps-buffering"),
+        pytest.param(True, None, False, id="attribute-true-keeps-buffering"),
+        pytest.param(False, {"streaming_buffer_until_moderated": True}, False, id="config-true-wins"),
+        pytest.param(True, {"streaming_buffer_until_moderated": False}, True, id="config-false-wins"),
+    ),
+)
+def test_pipeline_live_streaming_resolves_the_flag_like_the_flat_streaming_path(
+    monkeypatch: pytest.MonkeyPatch,
+    attribute: bool | None,
+    guardrail_config: dict | None,
+    streams_live: bool,
+) -> None:
+    guardrail = _PassingGuardrail(guardrail_name="pipeline-scanner", event_hook="post_call")
+    if attribute is not None:
+        guardrail.streaming_buffer_until_moderated = attribute
+    if guardrail_config is not None:
+        guardrail.guardrail_config = guardrail_config
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+
+    assert _pipelines_stream_live(_detect_only_pipeline(guardrail)) is streams_live

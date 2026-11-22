@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from types import MappingProxyType
 from typing import Final, TypeVar
 
 import litellm
@@ -71,7 +72,7 @@ def batch_completion(
     Returns:
         list: A list of completion results.
     """
-    args: Final = locals()
+    args: Final = MappingProxyType[str, object](locals())
 
     batch_messages: Final = messages
     completions: Final = []
@@ -115,13 +116,11 @@ def batch_completion(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for sub_batch in chunks(batch_messages, 100):
                 for message_list in sub_batch:
-                    kwargs_modified = args.copy()
+                    kwargs_modified = dict(args)
                     kwargs_modified.pop("max_workers")
                     kwargs_modified["messages"] = message_list
-                    original_kwargs = {}
-                    if "kwargs" in kwargs_modified:
-                        original_kwargs = kwargs_modified.pop("kwargs")
-                    future = executor.submit(litellm.completion, **kwargs_modified, **original_kwargs)
+                    del kwargs_modified["kwargs"]
+                    future = executor.submit(litellm.completion, **kwargs_modified, **kwargs)
                     completions.append(future)
 
         # Retrieve the results from the futures

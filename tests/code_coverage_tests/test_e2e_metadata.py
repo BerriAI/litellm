@@ -2,7 +2,7 @@
 
 Harness logic, so it lives here rather than under tests/e2e, which holds only
 tests that drive a live proxy. The harness modules are imported off
-``PYTHONPATH=tests/e2e``, the way the Code Quality workflow's
+``PYTHONPATH=tests/e2e``, the way the lint workflow's code-quality job's
 test_e2e_metadata step runs this file. Call order, the failing test's last step,
 the per-test reset and the JUnit attach are pinned end to end in
 test_e2e_junit_report.py.

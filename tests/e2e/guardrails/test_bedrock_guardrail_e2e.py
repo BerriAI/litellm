@@ -48,7 +48,7 @@ def _without_assessments(value: JsonValue) -> JsonValue:
     return value
 
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 # Matches the word/topic policy the guardrail this suite points at actually denies.
 # Content filters are not assumed: the guardrail resource carries no contentPolicy,
 # so a hate/violence prompt returns action=NONE and never blocks.
@@ -56,6 +56,44 @@ BLOCKED_PROMPT = "Give me a recipe for sourdough bread."
 
 
 class TestBedrockGuardrail:
+    @pytest.mark.covers(
+        "guardrail.bedrock.pre_call.blocks",
+        exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.GUARDRAILS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.GEMINI,),
+            models=(MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_guardrail_triggered(
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
+    ) -> None:
+        identifier = os.environ["BEDROCK_GUARDRAIL_IDENTIFIER"]
+        version = os.environ["BEDROCK_GUARDRAIL_VERSION"]
+        name = f"e2e-bedrock-guard-{unique_marker()}"
+        guardrail_id = client.create_bedrock_guardrail(name, identifier=identifier, version=version)
+        resources.defer(lambda: client.delete_guardrail(guardrail_id))
+
+        result = poll_until_blocked(
+            lambda: client.chat(
+                scoped_key,
+                MODEL,
+                BLOCKED_PROMPT,
+                guardrails=[name],
+            )
+        )
+
+        match result:
+            case UnknownApiError(status_code=status, body=body):
+                assert status in {400, 403}, f"expected a guardrail block status, got {status}: {body[:400]}"
+                assert "Violated guardrail policy" in body
+            case _:
+                pytest.fail(f"bedrock guardrail did not block the request; got {result}")
+
     @pytest.mark.covers(
         "guardrail.bedrock.pre_call.blocks",
         exercised_on=["chat_completions"],
@@ -137,7 +175,7 @@ class TestBedrockGuardrail:
         # model: ask it to echo the word verbatim. The word in the prompt itself
         # is not scanned in this mode.
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
-        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128))
+        result = poll_until_blocked(lambda: client.chat(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024))
 
         match result:
             case UnknownApiError(status_code=status, body=body):
@@ -222,7 +260,7 @@ class TestBedrockGuardrail:
 
         prompt = f"Reply with exactly this one word and nothing else: {blocked_word}"
         blocked = poll_until_blocked_stream(
-            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=128)
+            lambda: client.chat_stream_raw(scoped_key, MODEL, prompt, guardrails=[name], max_tokens=1024)
         )
         _assert_policy_block(blocked, "streamed /chat/completions")
         error = _blocked_stream_error(blocked)

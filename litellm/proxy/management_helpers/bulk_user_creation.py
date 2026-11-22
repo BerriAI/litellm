@@ -29,8 +29,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
-from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+from litellm.proxy.auth.auth_utils import (
+    enforce_batch_limits_are_admin_only,
+    enforce_vector_store_index_grants_are_admin_only,
+)
 from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.common_utils.callback_config_validation import credential_reference_rejection
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -42,15 +46,17 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
 )
-from litellm.proxy.management_endpoints.key_management_endpoints import (
-    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
+from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
+    _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage]  # same permission check /user/new uses
     generate_key_helper_fn,  # pyright: ignore[reportUnknownVariableType]  # legacy untyped helper; result validated by _KEY_RESPONSE
     metadata_json_with_limits,
 )
 from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 from litellm.proxy.management_helpers.access_group_team_sync import TEAM_ADVISORY_LOCK_SQL
-from litellm.proxy.management_helpers.object_permission_utils import (
-    _set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
+from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
+    _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    set_object_permission,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared with /user/new; result validated below
 )
 from litellm.proxy.management_helpers.utils import (
     _resolve_member_budget_id,  # pyright: ignore[reportPrivateUsage]  # shared with /team/member_add
@@ -78,7 +84,7 @@ BULK_NEW_USER_CONCURRENCY: Final = 10
 
 TeamRole: TypeAlias = Literal["user", "admin"]
 KeyGenerator: TypeAlias = Callable[..., Awaitable[object]]
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,12 +220,20 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
         )
     try:
         validate_budget_duration(item.budget_duration)
-        _check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
+        check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         if item.auto_create_key:
             enforce_batch_limits_are_admin_only(item, None, user_api_key_dict, "key")
+            enforce_vector_store_index_grants_are_admin_only(item, None, None, user_api_key_dict, "key")
     except Exception as exc:  # noqa: BLE001  # any validation failure is reported on this row only
         return _error_message(exc)
-    return None
+    rejection: Final = (
+        credential_reference_rejection(
+            item.metadata, None, is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        )
+        if item.auto_create_key
+        else None
+    )
+    return None if rejection is None else rejection.message
 
 
 def _normalized_email(email: str | None) -> str | None:
@@ -338,13 +352,15 @@ def _db_failure(
     return None
 
 
-async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _PreparedUser | _RowFailure:
+async def _prepare_user(
+    user: _PendingUser, prisma_client: PrismaClient, can_grant_apps: bool
+) -> _PreparedUser | _RowFailure:
     try:
         dumped: Final = user.request.model_dump(exclude={"user_id"})
         data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
-            await _set_object_permission(data_json=data_json, prisma_client=prisma_client)
+            await set_object_permission(data_json=data_json, prisma_client=prisma_client, can_grant_apps=can_grant_apps)
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only
@@ -800,7 +816,12 @@ async def bulk_create_users(
             )
         )
 
-    prepared_outcomes: Final = tuple([await _prepare_user(user, prisma_client) for user in creatable])
+    prepared_outcomes: Final = tuple(
+        [
+            await _prepare_user(user, prisma_client, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
+            for user in creatable
+        ]
+    )
     prepare_failures: Final = tuple(o for o in prepared_outcomes if isinstance(o, _RowFailure))
     created, insert_failures = await _insert_users(
         prisma_client, tuple(o for o in prepared_outcomes if isinstance(o, _PreparedUser))

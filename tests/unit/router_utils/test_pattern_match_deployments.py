@@ -1,4 +1,4 @@
-"""Behavior pins for ``litellm/router_utils/pattern_match_deployments.py``."""
+"""Behavior pins for ``litellm/litellm_core_utils/pattern_match_deployments.py``."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import litellm
 from litellm import Router
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.router import Deployment, LiteLLM_Params
-from litellm.router_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
 from litellm.types.router import ModelInfo
 import json
 from unittest.mock import MagicMock
@@ -210,6 +210,30 @@ def test_route_with_none():
     assert router.route(None) is None
 
 
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        pytest.param("openai/gpt-4o", None, id="most-specific-pattern-wins"),
+        pytest.param("o3", "openai", id="provider-qualified-retry"),
+        pytest.param("openai/o3", None, id="every-deployment-on-the-pattern"),
+        pytest.param("mistral/large", "mistral", id="no-pattern-matches"),
+    ],
+)
+def test_get_models_by_pattern_names_the_models_get_deployments_by_pattern_routes_to(
+    model: str, custom_llm_provider: str | None
+):
+    router: Final = PatternMatchRouter()
+    router.add_pattern("openai/*", _wildcard_deployment("openai/*"))
+    router.add_pattern("openai/*", {"model_name": "openai/*", "litellm_params": {"model": "azure/*"}})
+    router.add_pattern("openai/gpt-*", {"model_name": "openai/gpt-*", "litellm_params": {"model": "azure/gpt-*-prod"}})
+
+    routed: Final = router.get_deployments_by_pattern(model, custom_llm_provider=custom_llm_provider)
+
+    assert router.get_models_by_pattern(model, custom_llm_provider=custom_llm_provider) == frozenset(
+        _matched_models(routed)
+    )
+
+
 def test_route_with_multiple_matching_patterns():
     """
     Tests that the router returns the first matching pattern when there are multiple matching patterns
@@ -301,6 +325,22 @@ async def test_route_with_no_matching_pattern():
         )
 
 
+def _anthropic_message_response() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "my-custom-model",
+            "content": [{"type": "text", "text": "Hi"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+    )
+
+
 def test_router_pattern_match_e2e():
     """
     Tests the end to end flow of the router
@@ -317,7 +357,7 @@ def test_router_pattern_match_e2e():
         ]
     )
 
-    with patch.object(client, "post", new=MagicMock()) as mock_post:
+    with patch.object(client, "post", new=MagicMock(return_value=_anthropic_message_response())) as mock_post:
 
         router.completion(
             model="llmengine/my-custom-model",
@@ -359,11 +399,30 @@ def test_pattern_matching_router_with_default_wildcard_and_model_wildcard():
     assert deployments[0]["model_name"] == "llmengine/*"
 
 
+def test_pattern_matching_router_uses_default_wildcard_for_unmatched_model() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "*",
+                "litellm_params": {"model": "*"},
+            },
+            {
+                "model_name": "anthropic-*",
+                "litellm_params": {"model": "anthropic/claude"},
+            },
+        ]
+    )
+
+    deployments: Final = router.pattern_router.route("gpt-4o-mini")
+
+    assert tuple(deployment["model_name"] for deployment in deployments) == ("*",)
+
+
 def test_sorted_patterns():
     """
     Tests that the pattern specificity is calculated correctly
     """
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     sorted_patterns = PatternUtils.sorted_patterns(
         {
@@ -375,7 +434,7 @@ def test_sorted_patterns():
 
 
 def test_calculate_pattern_specificity():
-    from litellm.router_utils.pattern_match_deployments import PatternUtils
+    from litellm.litellm_core_utils.pattern_match_deployments import PatternUtils
 
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)
@@ -460,3 +519,19 @@ def test_wildcard_priority_over_deployment_names():
     assert (
         deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai"
     ), f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "custom_llm_provider", "expected"),
+    [
+        ({"model": "openai/*"}, "openai", True),
+        ({"model": "openai/*"}, "dashscope", False),
+        ({"model": "*", "custom_llm_provider": "dashscope"}, "dashscope", True),
+    ],
+)
+def test_routes_to_provider_matches_the_provider_the_wildcard_deployment_sends_to(
+    litellm_params, custom_llm_provider, expected
+):
+    router = PatternMatchRouter()
+    router.add_pattern("*", {"model_name": "*", "litellm_params": litellm_params})
+    assert router.routes_to_provider("wan3.0-video", custom_llm_provider) is expected
