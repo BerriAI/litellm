@@ -1271,6 +1271,13 @@ def tool_call_id_prefix(tool_call_id: object) -> str | None:
     return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0] if isinstance(tool_call_id, str) else None
 
 
+def is_same_tool_call(call_id: object, other_call_id: object) -> bool:
+    prefix: Final = tool_call_id_prefix(call_id)
+    if not prefix or prefix != tool_call_id_prefix(other_call_id):
+        return False
+    return call_id == other_call_id or prefix in (call_id, other_call_id)
+
+
 def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     """Extract thought signature from tool call's provider_specific_fields.
 

@@ -83,6 +83,10 @@ def test_a_whole_value_is_no_truncation_of_itself():
     assert not is_truncation_of(_LONG, _LONG)
 
 
+def test_a_value_that_quotes_a_cut_one_is_no_truncation():
+    assert not is_truncation_of(f"-{_QUOTED_CUT}", f"-{_LONG}")
+
+
 @pytest.mark.parametrize("value", ["", "Count.", _LONG])
 def test_a_value_within_the_limit_is_stored_as_it_is_and_reads_as_whole(value: str):
     assert truncated_for_db(value, len(_LONG)) == value

@@ -52,7 +52,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_params,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.prompt_templates.factory import tool_call_id_prefix
+from litellm.litellm_core_utils.prompt_templates.factory import is_same_tool_call
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -615,12 +615,7 @@ class ChatCompletionSession(TypedDict, total=False):
 def _answered_call_id(tool_call_id: str, call_ids: Sequence[str]) -> str | None:
     if tool_call_id in call_ids:
         return tool_call_id
-    prefix: Final = tool_call_id_prefix(tool_call_id)
-    same_call: Final = frozenset(
-        call_id
-        for call_id in call_ids
-        if prefix and tool_call_id_prefix(call_id) == prefix and prefix in (call_id, tool_call_id)
-    )
+    same_call: Final = frozenset(call_id for call_id in call_ids if is_same_tool_call(call_id, tool_call_id))
     return next(iter(same_call)) if len(same_call) == 1 else None
 
 

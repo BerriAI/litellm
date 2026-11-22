@@ -33,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     function_call_prompt,
     get_thought_signature_from_tool,
     get_tool_calls_from_response,
+    is_same_tool_call,
     make_valid_bedrock_tool_name,
     ollama_pt,
     parse_mime_type,
@@ -181,6 +182,29 @@ def test_function_call_prompt_lets_the_model_answer_after_a_function_result() ->
 )
 def test_encode_tool_call_id_with_signature(thought_signature, expected):
     assert encode_tool_call_id_with_signature("call_123", thought_signature) == expected
+
+
+@pytest.mark.parametrize(
+    ("call_id", "other_call_id", "expected"),
+    [
+        ("call_123", "call_123", True),
+        ("call_123__thought__AAA", "call_123__thought__AAA", True),
+        ("call_123", "call_123__thought__AAA", True),
+        ("call_123__thought__AAA", "call_123", True),
+        ("call_123__thought__AAA", "call_123__thought__BBB", False),
+        ("call_123", "call_456", False),
+        ("call_123", "call_456__thought__AAA", False),
+        ("call_123__thought__AAA", "call_456__thought__AAA", False),
+        ("", "", False),
+        ("", "__thought__AAA", False),
+        ("__thought__AAA", "__thought__AAA", False),
+        (None, None, False),
+        (None, "call_123", False),
+        ("call_123", None, False),
+    ],
+)
+def test_is_same_tool_call(call_id: str | None, other_call_id: str | None, expected: bool):
+    assert is_same_tool_call(call_id, other_call_id) is expected
 
 
 @pytest.mark.parametrize(
