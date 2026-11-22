@@ -150,7 +150,7 @@ _ADAPTER_DEFAULT_GENERATION_CONFIG: Final[Mapping[str, JsonValue]] = MappingProx
 )
 _CONFIG_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _JSON_OBJECT_SCHEMA: Final = TypeAdapter(dict[str, JsonValue])
-_Validated: Final = TypeVar("_Validated")
+_Validated = TypeVar("_Validated")
 _GENAI_CONTENT_PARTS: Final = TypeAdapter(Sequence[object])
 _GENAI_INLINE_DATA: Final = TypeAdapter(_GenAIInlineData)
 _GENAI_FILE_DATA: Final = TypeAdapter(_GenAIFileData)

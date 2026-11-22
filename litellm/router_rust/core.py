@@ -2594,6 +2594,7 @@ class RustCore(
         health_check_probe: bool = False,
         batch_upload: bool = False,
         batch_api: bool = False,
+        override_pre_call_check: bool = True,
         **_: object,  # kwargs-ok: the RouterCore select options this core ignores
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]:
         """Pick a deployment for ``model`` without calling it (``pick``), list the deployments a
@@ -2614,6 +2615,7 @@ class RustCore(
             probe=kind == "healthy" and health_check_probe,
             batch_upload=batch_upload,
             batch_api=batch_api,
+            override_pre_call_check=override_pre_call_check,
         )
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
@@ -3610,6 +3612,7 @@ class RustCore(
         input: object,
         *,
         pass_through: bool = False,
+        override_pre_call_check: bool = True,
     ) -> object:
         if step.get("stage") == "pre_call":
             return await self._pre_call_facts(step, request, messages, input).answer_async()
@@ -3628,7 +3631,7 @@ class RustCore(
         if step.get("stage") == "embedding_batch":
             return self._embedding_batch(step, request, input, tags=True)
         if step.get("stage") == "override_check":
-            selector = self._override_selector(step, request)
+            selector = self._override_selector(step, request) if override_pre_call_check else None
             if selector is not None:
                 for record in self._records_of(step.get("candidates")):
                     await selector.async_pre_call_check(dict(record), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
@@ -3671,8 +3674,13 @@ class RustCore(
                 ),
             )
         )
-        if picked is not None and selector is not None and self._selectors.is_override(strategy, selector):
-            await selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
+        override_selector: Final = (
+            selector
+            if override_pre_call_check and selector is not None and self._selectors.is_override(strategy, selector)
+            else None
+        )
+        if picked is not None and override_selector is not None:
+            await override_selector.async_pre_call_check(dict(as_str_mapping(picked) or {}), None)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # every selector is a CustomLogger
         if picked is not None and timed:
             self.service_logged("<routing_strategy>.async_get_available_deployments", start_time, clock(), request)
         return _pick_answer(step, candidates, picked)
@@ -4202,8 +4210,10 @@ class _Selection:
         probe: bool = False,
         batch_upload: bool = False,
         batch_api: bool = False,
+        override_pre_call_check: bool = True,
     ) -> None:
         self._core: Final = core
+        self._override_pre_call_check: Final = override_pre_call_check
         # `_async_get_available_deployment` reads the alias map first, every other pick its names.
         self._model: Final = (
             model if isinstance(model, str) else core.routed_name(model, read_as_member=kind in _MEMBER_READ_PICKS)
@@ -4314,6 +4324,7 @@ class _Selection:
                         self._messages,
                         self._input,
                         pass_through=self._kind == "async_pass_through",
+                        override_pre_call_check=self._override_pre_call_check,
                     )
                 case "pre_route":
                     outcome = await core._pre_route(  # pyright: ignore[reportPrivateUsage]  # see above

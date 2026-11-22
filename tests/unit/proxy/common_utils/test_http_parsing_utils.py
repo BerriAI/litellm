@@ -1437,6 +1437,7 @@ class TestCoerceNumericFormFields:
         ("speech", {"completion_model": "text"}, None, None, "body", "body"),
         ("body", {"completion_model": "text"}, "cli", None, "body", "body"),
         ("path", {"completion_model": "text"}, "cli", "path", "body", "path"),
+        ("path", {"completion_model": "text"}, "cli", None, "body", "body"),
     ],
 )
 def test_shared_inference_model_selection_preserves_handler_precedence(

@@ -708,8 +708,8 @@ _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _DECODED_BODY: Final = TypeAdapter(object)
-_LoggedResponse: Final = TypeVar("_LoggedResponse")
-_LoggedMessages: Final = TypeVar("_LoggedMessages")
+_LoggedResponse = TypeVar("_LoggedResponse")
+_LoggedMessages = TypeVar("_LoggedMessages")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
