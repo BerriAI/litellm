@@ -13,13 +13,13 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import JsonValue
 from integration._support.client import JSON_OBJECT, gateway_from_environment
 from integration._support.openai_wire import chat_reply
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.providers._cache_control_marks_support import owned_config
 from integration.routing.test_payment_required_mapping import OPENAI_MODEL, is_model_info_probe, model_list_reply
+from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
