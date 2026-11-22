@@ -4,9 +4,12 @@ import copy
 import json
 import logging
 import os
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import datetime, timezone
+from email.message import Message
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10108,6 +10111,111 @@ async def test_the_pin_follows_the_oauth_token_that_survives_a_caller_scoped_aut
     assert len(received) == 1
     assert received[0].headers.get_list("authorization") == [sent_credential]
     assert received[0].headers.get_list("anthropic-user-profile-id") == [sent_profile]
+
+
+@pytest.fixture
+def recording_anthropic() -> Iterator[tuple[str, list[Message]]]:
+    received: Final[list[Message]] = []  # mutable-ok: the fake Anthropic endpoint records what the proxy sent
+    answer: Final = json.dumps(dict(_ANTHROPIC_MESSAGE_REPLY)).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            _ = self.rfile.read(int(self.headers["Content-Length"]))
+            received.append(self.headers)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            _ = self.wfile.write(answer)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", received
+    server.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["messages", "chat"])
+@pytest.mark.parametrize("pinned", [True, False], ids=["pinned_key", "unpinned_key"])
+@pytest.mark.parametrize(
+    "caller_channel,deployment_token,sent_credential",
+    [
+        ("request_header", True, "deployment"),
+        ("body_headers", True, "deployment"),
+        ("body_extra_headers", True, "caller"),
+        ("request_header", False, "caller"),
+        ("body_headers", False, "caller"),
+        ("body_extra_headers", False, "caller"),
+    ],
+    ids=[
+        "configured_token_wins_over_a_request_header",
+        "configured_token_wins_over_body_headers",
+        "body_extra_headers_win_over_the_configured_token",
+        "request_header_token_replaces_the_deployment_key",
+        "body_headers_token_replaces_the_deployment_key",
+        "body_extra_headers_token_replaces_the_deployment_key",
+    ],
+)
+async def test_a_caller_oauth_token_keeps_its_own_id_only_when_anthropic_receives_it(
+    recording_anthropic: tuple[str, list[Message]],
+    route: str,
+    pinned: bool,
+    caller_channel: str,
+    deployment_token: bool,
+    sent_credential: str,
+) -> None:
+    from litellm import Router
+
+    api_base, received = recording_anthropic
+    caller_authorization: Final = {"Authorization": "Bearer sk-ant-oat01-caller"}
+    updated: Final = await _request_data_added_by_the_proxy(
+        {"body_headers": {"headers": caller_authorization}, "body_extra_headers": {"extra_headers": caller_authorization}}.get(
+            caller_channel, {}
+        ),
+        {
+            "x-litellm-api-key": "Bearer sk-virtual-key",
+            USER_PROFILE_ID_HEADER: "uprof_client",
+            **({"authorization": caller_authorization["Authorization"]} if caller_channel == "request_header" else {}),
+        },
+        {},
+        _PINNED_KEY if pinned else UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+    )
+    deployment_headers: Final = {
+        USER_PROFILE_ID_HEADER: "uprof_deployment",
+        **({"Authorization": "Bearer sk-ant-oat01-deployment"} if deployment_token else {}),
+    }
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {
+                    "model": "anthropic/claude-sonnet-5-5",
+                    "api_base": api_base,
+                    "api_key": "sk-ant-api03-deployment",
+                    "extra_headers": deployment_headers,
+                },
+            }
+        ]
+    )
+    call: Final[dict[str, object]] = {
+        "model": "claude",
+        "messages": [{"role": "user", "content": "Say OK"}],
+        "max_tokens": 8,
+        **{field: updated[field] for field in ("headers", "extra_headers", "provider_specific_header") if field in updated},
+    }
+    if route == "chat":
+        await router.acompletion(**call)
+    else:
+        await router.aanthropic_messages(**call)
+
+    assert len(received) == 1
+    assert received[0].get_all("authorization") == [f"Bearer sk-ant-oat01-{sent_credential}"]
+    assert received[0].get_all("anthropic-user-profile-id") == [
+        "uprof_client" if sent_credential == "caller" else "uprof_key" if pinned else "uprof_deployment"
+    ]
 
 
 @pytest.mark.asyncio

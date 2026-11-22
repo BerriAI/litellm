@@ -1,6 +1,6 @@
 from bisect import bisect_left
 from collections.abc import Mapping, Sequence
-from itertools import chain, groupby
+from itertools import chain, groupby, islice, takewhile
 from types import MappingProxyType
 from typing import Final, TypeVar
 
@@ -81,10 +81,14 @@ def _sorted_text_values_by_name(headers: Mapping[str, object]) -> Mapping[str, t
     )
 
 
-def _carries(values_by_name: Mapping[str, tuple[str, ...]], name: str, prefix: str) -> bool:
+def _carries(
+    values_by_name: Mapping[str, tuple[str, ...]], name: str, prefix: str, caller_credentials: frozenset[str]
+) -> bool:
     values: Final = values_by_name.get(name, ())
-    position: Final = bisect_left(values, prefix)
-    return position < len(values) and values[position].startswith(prefix)
+    matching: Final = takewhile(
+        lambda value: value.startswith(prefix), islice(values, bisect_left(values, prefix), None)
+    )
+    return any(value not in caller_credentials for value in matching)
 
 
 def _configures_a_listed_credential(
@@ -93,8 +97,14 @@ def _configures_a_listed_credential(
     credential_headers: Final = frozenset(
         name.lower() for name in scoped_header.get("configured_credential_headers", ())
     )
+    if not credential_headers:
+        return True
     prefix: Final = scoped_header.get("configured_credential_prefix", "")
-    return not credential_headers or any(_carries(configured_values, name, prefix) for name in credential_headers)
+    caller_credentials: Final = frozenset(scoped_header.get("caller_credentials", ()))
+    configured: Final = any(
+        _carries(configured_values, name, prefix, caller_credentials) for name in credential_headers
+    )
+    return configured != scoped_header.get("without_configured_credential", False)
 
 
 def _contributed_headers(scoped_header: ProviderSpecificHeader, configured_names: frozenset[str]) -> Mapping[str, str]:
@@ -148,8 +158,9 @@ class ProviderSpecificHeaderUtils:
         `non_user_profile_id_models_only` only when neither does, and entries marked `yields_to_configured` never
         replace a header already in `configured_headers`, and
         entries listing `configured_credential_headers` contribute only when `configured_headers` carries one of them,
-        whose value starts with `configured_credential_prefix` when the entry sets one, under a name no other
-        applicable entry replaces.
+        whose value starts with `configured_credential_prefix` when the entry sets one and is not one of the entry's
+        `caller_credentials`, under a name no other applicable entry replaces, and those also marked
+        `without_configured_credential` only when it does not.
 
         Returns:
             Dict: The provider specific headers for the given custom llm provider

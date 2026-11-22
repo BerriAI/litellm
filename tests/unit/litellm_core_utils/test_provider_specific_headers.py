@@ -301,6 +301,34 @@ def test_a_configured_credential_prefix_applies_only_beside_a_matching_value(
     )
 
 
+@pytest.mark.parametrize("without_configured_credential", [False, True])
+@pytest.mark.parametrize(
+    "configured_headers,configured_token_sent",
+    [
+        ({"authorization": "Bearer sk-ant-oat01-caller"}, False),
+        ({"Authorization": "Bearer sk-ant-oat01-deployment"}, True),
+        ({"authorization": "Bearer sk-ant-oat01-caller", "Authorization": "Bearer sk-ant-oat01-deployment"}, True),
+        ({}, False),
+    ],
+    ids=["caller_token_survives_the_merge", "configured_token_survives_the_merge", "both_tokens_survive", "no_token"],
+)
+def test_an_entry_waits_on_whether_a_configured_token_that_is_not_the_callers_own_is_sent(
+    configured_headers: dict[str, str], configured_token_sent: bool, without_configured_credential: bool
+) -> None:
+    scoped_header: Final[ProviderSpecificHeader] = {
+        "custom_llm_provider": "anthropic",
+        "extra_headers": {"anthropic-user-profile-id": "uprof_pinned"},
+        "configured_credential_headers": ("authorization",),
+        "configured_credential_prefix": "Bearer sk-ant-oat",
+        "caller_credentials": ("Bearer sk-ant-oat01-caller",),
+        "without_configured_credential": without_configured_credential,
+    }
+
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        scoped_header, "anthropic", model="claude-sonnet-5-5", configured_headers=configured_headers
+    ) == ({"anthropic-user-profile-id": "uprof_pinned"} if configured_token_sent != without_configured_credential else {})
+
+
 @pytest.mark.parametrize(
     "configured_headers,expected",
     [
