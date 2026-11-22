@@ -13,6 +13,7 @@ from litellm.types.proxy.agent_identity import (
     OKTA_CUSTOM_ISSUER_PATTERN,
     AgentIdentityBinding,
     AgentIdentityFailure,
+    AgentStamp,
     ManagedAgentContext,
 )
 
@@ -247,3 +248,67 @@ async def resolve_okta_claims(
             return await _actor_token(claims, issuer, lookup, person, token)
         case None:
             return None
+
+
+class AgentGrants(Protocol):
+    def __call__(self, user_id: str, team_id: str | None, /) -> Awaitable[frozenset[str]]: ...
+
+
+class RecordAuthentication(Protocol):
+    def __call__(self, context: ManagedAgentContext, /) -> Awaitable[AgentIdentityFailure | None]: ...
+
+
+class AgentLoader(Protocol):
+    def __call__(self, agent_id: str, /) -> Awaitable[AgentResponse | AgentIdentityFailure | None]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class IdJagAgents:
+    issuers: Mapping[str, OktaIssuer]
+    lookup: BindingLookup
+    grants: AgentGrants
+    record: RecordAuthentication
+
+
+async def id_jag_agent(
+    claims: Mapping[str, object], client_id: str, user_id: str, team_id: str | None, agents: IdJagAgents
+) -> AgentStamp | AgentIdentityFailure | None:
+    issuer: Final = agents.issuers.get(str(claims.get("iss")))
+    if issuer is None:
+        return None
+    agent: Final = await _delegated_agent(agents.lookup, issuer.org, client_id)
+    if agent is None or isinstance(agent, AgentIdentityFailure):
+        return agent
+    binding: Final = _bound_identity(agent)
+    if binding is None:
+        return AgentIdentityFailure(message=f"agent {agent.agent_id} is disabled")
+    if (binding.provider, binding.tenant_id, binding.client_id) != ("okta", issuer.org, client_id):
+        return AgentIdentityFailure(message="Agent binding changed; redeem a new assertion")
+    if agent.agent_id not in await agents.grants(user_id, team_id):
+        return AgentIdentityFailure(message=f"user {user_id} has no grant for agent {agent.agent_id}")
+    recorded: Final = await agents.record(
+        ManagedAgentContext(
+            agent_id=agent.agent_id, binding_revision=binding.revision, mode="delegated", user_id=user_id
+        )
+    )
+    if recorded is not None:
+        return recorded
+    return AgentStamp(agent_id=agent.agent_id, binding_revision=binding.revision)
+
+
+async def stamped_agent_context(
+    load: AgentLoader, agent_id: str, revision: str, user_id: str | None
+) -> ManagedAgentContext | AgentIdentityFailure:
+    agent: Final = await load(agent_id)
+    if isinstance(agent, AgentIdentityFailure):
+        return agent
+    if agent is None:
+        return AgentIdentityFailure(message="Agent no longer exists")
+    binding: Final = _bound_identity(agent)
+    if binding is None:
+        return AgentIdentityFailure(message="Agent execution is disabled")
+    if binding.revision != revision:
+        return AgentIdentityFailure(message="Agent binding changed; redeem a new assertion")
+    if agent.execution_mode == "autonomous":
+        return AgentIdentityFailure(message="Agent is not enabled for this execution mode")
+    return ManagedAgentContext(agent_id=agent.agent_id, binding_revision=revision, mode="delegated", user_id=user_id)
