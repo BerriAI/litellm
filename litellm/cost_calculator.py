@@ -3973,6 +3973,18 @@ def _live_response_token_costs(
     return (0.0, 0.0) if costs is None else costs
 
 
+def live_delegated_model_costs(
+    results: Sequence[Mapping[str, object]], custom_llm_provider: str, data_residency: str | None = None
+) -> tuple[tuple[str, float], ...]:
+    """Each model a GPT-Live session delegated a response to, with what that response cost."""
+    return tuple(
+        (response.model, cost)
+        for response in _unique_live_response_payloads(results)
+        if response.model is not None
+        and (cost := sum(_live_response_token_costs(response, custom_llm_provider, data_residency))) > 0
+    )
+
+
 def _candidate_realtime_token_costs(
     model_name: str,
     combined_usage_object: Usage,

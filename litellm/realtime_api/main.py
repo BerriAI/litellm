@@ -63,7 +63,13 @@ from ..llms.azure.realtime.handler import AzureOpenAIRealtime, azure_realtime_pr
 from ..llms.bedrock.realtime.handler import BedrockRealtime, raise_if_session_committed
 from ..llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, realtime_ssl_for_url
 from ..llms.openai.common_utils import is_openai_backed_api_base
-from ..llms.openai.live.handler import LiveAttach, LiveClientFrameDenial, LiveUpstream, OpenAILiveSessions
+from ..llms.openai.live.handler import (
+    LiveAttach,
+    LiveProviderFrameGate,
+    LiveRelayedFrame,
+    LiveUpstream,
+    OpenAILiveSessions,
+)
 from ..llms.openai.realtime.handler import (
     OpenAIRealtime,
     confirm_gateway_session_started,
@@ -844,6 +850,12 @@ async def _azure_live_upstream(
             assert_never(upstream)
 
 
+@dataclass(frozen=True, slots=True)
+class _RelayedUnchanged:
+    frame: str
+    denial: str | None = None
+
+
 async def _alive_session(
     model: str,
     websocket: "WebSocket",
@@ -856,11 +868,18 @@ async def _alive_session(
     litellm_metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
     attach: LiveAttach | None = None,
-    client_frame_denial: LiveClientFrameDenial | None = None,
+    client_frame_gate: LiveProviderFrameGate | None = None,
 ) -> None:
     rejection: Final = _live_session_rejection(custom_llm_provider, litellm_metadata)
     if rejection is not None:
         _raise_live_session_rejection(rejection)
+    provider_frame_gate: Final = client_frame_gate
+
+    async def _gated(client_frame: str) -> LiveRelayedFrame:
+        if provider_frame_gate is None:
+            return _RelayedUnchanged(frame=client_frame)
+        return await provider_frame_gate(client_frame, custom_llm_provider)
+
     if custom_llm_provider in AZURE_OPENAI_AUDIO_PROVIDERS:
         azure_upstream: Final = await _azure_live_upstream(api_base, api_key, azure_ad_token, litellm_params)
         await openai_live_sessions.async_live_session(
@@ -872,7 +891,7 @@ async def _alive_session(
             api_key=api_key,
             upstream=azure_upstream,
             attach=attach,
-            client_frame_denial=client_frame_denial,
+            client_frame_gate=None if provider_frame_gate is None else _gated,
         )
         return
     resolved_api_base: Final = api_base or litellm.api_base or "https://api.openai.com/"
@@ -886,7 +905,7 @@ async def _alive_session(
             static_api_key=openai_static_api_key(api_key), api_base=resolved_api_base, litellm_params=litellm_params
         ),
         attach=attach,
-        client_frame_denial=client_frame_denial,
+        client_frame_gate=None if provider_frame_gate is None else _gated,
     )
 
 
@@ -933,7 +952,7 @@ async def _arealtime(
     live_session_start: Mapping[str, object] | None = None,
     realtime_mode: str = "realtime",
     live_attach: LiveAttach | None = None,
-    live_client_frame_denial: LiveClientFrameDenial | None = None,
+    live_client_frame_gate: LiveProviderFrameGate | None = None,
     **kwargs,
 ) -> None:
     """
@@ -1007,7 +1026,7 @@ async def _arealtime(
             litellm_metadata=session_litellm_metadata,
             litellm_params=deployment_params,
             attach=live_attach,
-            client_frame_denial=live_client_frame_denial,
+            client_frame_gate=live_client_frame_gate,
         )
         return
 

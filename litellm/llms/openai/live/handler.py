@@ -102,7 +102,19 @@ class LiveUpstream:
     headers: Mapping[str, str]
 
 
-LiveClientFrameDenial: TypeAlias = Callable[[str], Awaitable[str | None]]
+class LiveRelayedFrame(Protocol):
+    """A client frame as the provider should get it, or why it will not be relayed."""
+
+    @property
+    def frame(self) -> str: ...
+
+    @property
+    def denial(self) -> str | None: ...
+
+
+LiveClientFrameGate: TypeAlias = Callable[[str], Awaitable[LiveRelayedFrame]]
+LiveProviderFrameGate: TypeAlias = Callable[[str, str], Awaitable[LiveRelayedFrame]]
+"""Gates a client frame for the provider named by its second argument."""
 
 
 class LiveClientWebSocket(Protocol):
@@ -369,14 +381,14 @@ async def _forward_live_client_frames(
     backend_websocket: LiveBackendWebSocket,
     client_gone: asyncio.Event,
     client_close_sent: asyncio.Event,
-    client_frame_denial: LiveClientFrameDenial | None = None,
+    client_frame_gate: LiveClientFrameGate | None = None,
 ) -> None:
     async for message in _live_client_messages(websocket, client_gone):
-        denial = None if client_frame_denial is None else await client_frame_denial(message)
-        if denial is not None:
-            await websocket.send_text(realtime_error_event(denial, error_type="invalid_request_error"))
+        relayed = None if client_frame_gate is None else await client_frame_gate(message)
+        if relayed is not None and relayed.denial is not None:
+            await websocket.send_text(realtime_error_event(relayed.denial, error_type="invalid_request_error"))
             continue
-        await backend_websocket.send(message)
+        await backend_websocket.send(message if relayed is None else relayed.frame)
         if _is_session_close_message(message):
             client_close_sent.set()
 
@@ -511,7 +523,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         api_key: str | None,
         upstream: LiveUpstream | None = None,
         attach: LiveAttach | None = None,
-        client_frame_denial: LiveClientFrameDenial | None = None,
+        client_frame_gate: LiveClientFrameGate | None = None,
     ) -> None:
         resolved_upstream: Final = upstream if upstream is not None else self.openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
@@ -526,7 +538,11 @@ class OpenAILiveSessions(OpenAIRealtime):
             **session_start,
             "session": {**session, "model": model},
         }
-        upstream_start: Final = json.dumps(rewritten_start)
+        gated_start: Final = None if client_frame_gate is None else await client_frame_gate(json.dumps(rewritten_start))
+        if gated_start is not None and gated_start.denial is not None:
+            await websocket.close(code=1008, reason="Session not allowed")
+            return
+        upstream_start: Final = json.dumps(rewritten_start) if gated_start is None else gated_start.frame
         pre_call_args: Final[_LivePreCallArgs] = {
             "api_base": url,
             "headers": headers,
@@ -552,7 +568,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                         event_retention=event_retention,
                         upstream_ended_abnormally=session_ended_abnormally,
                         closes_session_with_client=attach is None,
-                        client_frame_denial=client_frame_denial,
+                        client_frame_gate=client_frame_gate,
                     )
                 except Exception:
                     session_ended_abnormally.set()
@@ -599,7 +615,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         event_retention: _LiveEventRetention,
         upstream_ended_abnormally: asyncio.Event,
         closes_session_with_client: bool = True,
-        client_frame_denial: LiveClientFrameDenial | None = None,
+        client_frame_gate: LiveClientFrameGate | None = None,
     ) -> None:
         from websockets.exceptions import ConnectionClosed
 
@@ -611,7 +627,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 backend_websocket=backend_websocket,
                 client_gone=client_gone,
                 client_close_sent=client_close_sent,
-                client_frame_denial=client_frame_denial,
+                client_frame_gate=client_frame_gate,
             )
         )
         backend_forward_task: Final = asyncio.create_task(

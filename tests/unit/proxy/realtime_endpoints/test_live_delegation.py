@@ -11,7 +11,11 @@ from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.realtime_endpoints import live_endpoints
-from litellm.proxy.realtime_endpoints.live_delegation import LiveDelegation, live_delegation, live_delegation_denial
+from litellm.proxy.realtime_endpoints.live_delegation import (
+    LiveDelegation,
+    live_client_frame,
+    live_delegation,
+)
 from litellm.proxy.realtime_endpoints.live_endpoints import _LiveSession
 
 _FILE_SEARCH: Final = {"type": "file_search", "vector_store_ids": ["vs_granted", "vs_other"]}
@@ -156,8 +160,8 @@ def test_create_forwards_a_delegation_the_key_may_use(
     assert response.status_code == 201, response.text
     assert json.loads(upstream.calls.last.request.content)["session"] == {
         "model": "gpt-live-1",
-        "delegation": {"type": "responses", "responses": responses},
-    }
+        "delegation": {"type": "responses", "responses": {**responses, "model": "gpt-6-luna"}},
+    }, "the provider must get the delegated model under its own name, not the proxy's name for it"
     assert len(started_sidebands) == 1
 
 
@@ -176,9 +180,9 @@ def test_create_forwards_a_delegation_the_key_may_use(
 async def test_a_client_frame_is_denied_only_when_it_delegates_to_what_the_key_cannot_use(
     client_frame: dict[str, object], denied: bool
 ) -> None:
-    denial: Final = await live_delegation_denial(json.dumps(client_frame), _key(["live-group"]))
+    relayed: Final = await live_client_frame(json.dumps(client_frame), "openai", _key(["live-group"]))
 
-    assert (denial is not None) is denied, denial
+    assert (relayed.denial is not None) is denied, relayed.denial
 
 
 @pytest.mark.asyncio
@@ -188,4 +192,56 @@ async def test_a_client_frame_that_spells_delegation_with_a_json_escape_is_still
     )
 
     assert "delegation" not in client_frame
-    assert await live_delegation_denial(client_frame, _key(["live-group"])) is not None
+    assert (await live_client_frame(client_frame, "openai", _key(["live-group"]))).denial is not None
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+@pytest.mark.parametrize(
+    ("provider", "delegated", "relayed_as"),
+    [
+        ("openai", "text-group", "gpt-6-luna"),
+        ("azure", "text-group", "text-group"),
+        ("openai", "gpt-6-terra", "gpt-6-terra"),
+    ],
+    ids=["a-proxy-model-on-this-provider", "a-proxy-model-on-another-provider", "a-name-the-proxy-does-not-route"],
+)
+async def test_a_relayed_client_frame_names_the_delegated_model_as_the_provider_knows_it(
+    provider: str, delegated: str, relayed_as: str
+) -> None:
+    client_frame: Final = {"type": "session.update", "session": _session({"model": delegated, "tools": []})}
+
+    relayed: Final = await live_client_frame(json.dumps(client_frame), provider, _key(["all-proxy-models"]))
+
+    assert relayed.denial is None, relayed.denial
+    assert json.loads(relayed.frame) == {
+        "type": "session.update",
+        "session": _session({"model": relayed_as, "tools": []}),
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("proxy_with_live_and_text_groups")
+@pytest.mark.parametrize(
+    ("spend", "denied"), [(0.5, False), (1.0, True)], ids=["under-the-model-budget", "at-the-model-budget"]
+)
+async def test_a_delegation_to_a_model_over_its_budget_is_refused(spend: float, denied: bool) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
+
+    key: Final = _key(["live-group", "text-group"]).model_copy(
+        update={"model_max_budget": {"text-group": {"budget_limit": 1.0, "time_period": "1d"}}}
+    )
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY, entity_id=key.token, budget_model="text-group", budget_duration="1d"
+    )
+    await proxy_server.model_max_budget_limiter.dual_cache.async_set_cache(spend_key, spend)
+    try:
+        relayed: Final = await live_client_frame(
+            json.dumps({"type": "session.update", "session": _session({"model": "text-group"})}), "openai", key
+        )
+    finally:
+        await proxy_server.model_max_budget_limiter.dual_cache.async_delete_cache(spend_key)
+
+    assert (relayed.denial is not None) is denied, relayed.denial

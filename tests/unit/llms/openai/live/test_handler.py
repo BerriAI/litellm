@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import Callable, Coroutine, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final, NoReturn, cast
 
@@ -1444,8 +1445,14 @@ async def test_a_metering_sideband_bills_the_session_total_less_what_earlier_sid
     assert reported == [billed_event[1]]
 
 
+@dataclass(frozen=True)
+class _GatedFrame:
+    frame: str
+    denial: str | None
+
+
 @pytest.mark.asyncio
-async def test_a_client_frame_the_proxy_denies_is_answered_with_an_error_and_never_reaches_the_provider() -> None:
+async def test_a_denied_client_frame_gets_an_error_and_the_rest_reach_the_provider_as_the_proxy_rewrote_them() -> None:
     denied_frame: Final = '{"type":"session.update","session":{"delegation":{"responses":{"model":"other"}}}}'
     client_frames: Final = (
         '{"type":"input_audio.append","audio":"client-a"}',
@@ -1459,8 +1466,11 @@ async def test_a_client_frame_the_proxy_denies_is_answered_with_an_error_and_nev
     upstream: Final = _FakeUpstream(client_frames=(client_frames[0], client_frames[2]), upstream_frames=upstream_frames)
     client: Final = _FakeClientWebSocket(messages=client_frames)
 
-    async def _denial(client_frame: str) -> str | None:
-        return "key not allowed to access model" if client_frame == denied_frame else None
+    async def _gate(client_frame: str) -> _GatedFrame:
+        return _GatedFrame(
+            frame=client_frame.replace("client-a", "rewritten-a"),
+            denial="key not allowed to access model" if client_frame == denied_frame else None,
+        )
 
     await OpenAILiveSessions(
         logging_worker=_FakeLoggingWorker(), websocket_connector=_FakeConnector(upstream)
@@ -1471,11 +1481,11 @@ async def test_a_client_frame_the_proxy_denies_is_answered_with_an_error_and_nev
         session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
         api_base="https://api.openai.com/",
         api_key="live-test-key",
-        client_frame_denial=_denial,
+        client_frame_gate=_gate,
     )
 
     sent_upstream: Final = tuple(upstream.sent_text.get_nowait() for _ in range(upstream.sent_text.qsize()))
     sent_to_client: Final = tuple(json.loads(client.sent_text.get_nowait()) for _ in range(client.sent_text.qsize()))
-    assert sent_upstream[1:] == (client_frames[0], client_frames[2])
+    assert sent_upstream[1:] == ('{"type":"input_audio.append","audio":"rewritten-a"}', client_frames[2])
     errors: Final = tuple(event["error"] for event in sent_to_client if event["type"] == "error")
     assert tuple(error["message"] for error in errors) == ("key not allowed to access model",)

@@ -20,7 +20,11 @@ from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth, user_api_key_auth_live_websocket
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.realtime_endpoints.live_delegation import authorize_live_delegation, live_delegation_denial
+from litellm.proxy.realtime_endpoints.live_delegation import (
+    authorize_live_delegation,
+    deployment_delegation,
+    live_client_frame,
+)
 from litellm.proxy.realtime_endpoints.sideband import join_sideband, webrtc_calls_are_metered
 from litellm.realtime_api.main import live_guardrails_configured, live_session_upstream
 from litellm.types.llms.custom_http import httpxSpecialProvider
@@ -218,7 +222,10 @@ async def create_live_session(
             detail="Live sessions over WebRTC require an OpenAI or Azure deployment",
         )
     provider_model, upstream = resolved
-    upstream_response: Final = await _post_session(upstream, {**body, "session": {**session, "model": provider_model}})
+    provider_session: Final = deployment_delegation(session, litellm_params or {}, user_api_key_dict)
+    upstream_response: Final = await _post_session(
+        upstream, {**body, "session": {**provider_session, "model": provider_model}}
+    )
     created_parts: Final = _created_session(upstream_response) if upstream_response.is_success else None
     if created_parts is None:
         return Response(
@@ -306,6 +313,6 @@ async def attach_live_session(
         request_path=websocket.url.path,
         live_session_start={"type": "session.start", "session": {"model": attachable.model}},
         live_attach=LiveAttach(session_id=attachable.session_id, metered=False),
-        live_client_frame_denial=lambda client_frame: live_delegation_denial(client_frame, session_auth),
+        live_client_frame_gate=lambda client_frame, provider: live_client_frame(client_frame, provider, session_auth),
         pinned_deployment_id=attachable.deployment_id,
     )
