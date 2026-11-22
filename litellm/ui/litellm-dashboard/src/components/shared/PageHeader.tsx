@@ -31,7 +31,7 @@ export function PageHeaderControls({ className, ...props }: ComponentProps<"div"
     <div
       role="group"
       aria-label={t("shell.pageHeader.controls")}
-      className={cn("mt-5 flex min-h-9 items-center gap-2", className)}
+      className={cn("mt-5 flex min-h-9 flex-wrap items-center gap-2", className)}
       {...props}
     />
   );
