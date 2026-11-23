@@ -3758,7 +3758,8 @@ def test_realtime_websocket_team_alias_selects_restricted_deployment(
     monkeypatch.setattr("websockets.connect", connect)
 
     is_live_session: Final = route == "/v1/live/sessions"
-    with TestClient(app).websocket_connect(route if is_live_session else f"{route}?model={alias}") as websocket:
+    url: Final = route if is_live_session else f"{route}?model={alias}"
+    with TestClient(proxy_server.app).websocket_connect(url) as websocket:
         if is_live_session:
             websocket.send_json({"type": "session.start", "session": {"model": alias}})
         with pytest.raises(WebSocketDisconnect):
