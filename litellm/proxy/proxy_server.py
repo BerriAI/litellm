@@ -2070,6 +2070,10 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         ## SYNC UI SETTINGS ##
         await ProxyStartupEvent.sync_ui_settings_to_general_settings()
 
+        from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
+
+        start_delivery_worker()
+
         await install_background_interaction_settlement(
             prisma_client, router=lambda: llm_router, spend_logs_kept=lambda: disable_spend_logs is False
         )
@@ -2177,6 +2181,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            from litellm.proxy.mcp_server.events.webhooks.worker import stop_delivery_worker
+
+            await stop_delivery_worker()
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:

@@ -2,9 +2,10 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Final, TypeAlias
 
+import anyio
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.shared.exceptions import MCPError
-from mcp.types import METHOD_NOT_FOUND
+from mcp.types import METHOD_NOT_FOUND, EmptyResult
 from mcp_types import CLIENT_CAPABILITIES_META_KEY
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.requests import Request as StarletteRequest
@@ -16,6 +17,7 @@ from litellm.proxy.mcp_server.events.errors import invalid_params
 from litellm.proxy.mcp_server.events.poll import poll
 from litellm.proxy.mcp_server.events.push import push
 from litellm.proxy.mcp_server.events.runtime import DEFAULT_RUNTIME, EventsRuntime
+from litellm.proxy.mcp_server.events.webhooks.store import default_store
 from litellm.proxy.mcp_server.outbound_credentials.result import Error
 from litellm.types.mcp_server.events import (
     EVENTS_EXTENSION,
@@ -28,6 +30,9 @@ from litellm.types.mcp_server.events import (
     PollEventsResult,
     StreamEventsParams,
     StreamEventsResult,
+    SubscribeEventsParams,
+    SubscribeEventsResult,
+    UnsubscribeEventsParams,
 )
 
 if TYPE_CHECKING:
@@ -112,16 +117,22 @@ async def advertised_extensions(
     meta: Mapping[str, object] | None,
     settings: Callable[[], EventsSettings] = events_settings,
     runtime: EventsRuntime = DEFAULT_RUNTIME,
+    *,
+    timeout: float | None = None,
 ) -> Mapping[str, JsonObject]:
     if not events_served(settings(), context.protocol_version, context.mcp_proxy_mode) or not client_declares_events(
         meta
     ):
         return {}
     try:
-        servers: Final = event_servers(await runtime.allowed_servers(context))
+        if timeout is not None and timeout <= 0:
+            return {}
+        with anyio.move_on_after(timeout):
+            servers: Final = event_servers(await runtime.allowed_servers(context))
+            return {EVENTS_EXTENSION: {}} if servers else {}
     except Exception:  # noqa: BLE001  # an optional extension probe must not fail server/discover
         return {}
-    return {EVENTS_EXTENSION: {}} if servers else {}
+    return {}
 
 
 def request_headers(ctx: ServerRequestContext[object, object]) -> Mapping[str, str] | None:
@@ -147,7 +158,9 @@ def register_event_handlers(
             current: Final = served(ctx, context)
             if params.cursor is not None:
                 raise invalid_params("Invalid pagination cursor").to_mcp()
-            return ListEventsResult(events=await list_events(context, current, runtime))
+            return ListEventsResult(
+                events=await list_events(context, current, runtime, store_available=default_store() is not None)
+            )
 
     async def poll_handler(ctx: ServerRequestContext[object, object], params: PollEventsParams) -> PollEventsResult:
         async with operation_scope(ctx) as context:
@@ -175,6 +188,30 @@ def register_event_handlers(
                 )
         return StreamEventsResult.model_validate({"_meta": {SUBSCRIPTION_ID_META_KEY: subscription_id}})
 
+    async def subscribe_handler(
+        ctx: ServerRequestContext[object, object], params: SubscribeEventsParams
+    ) -> SubscribeEventsResult:
+        from litellm.proxy.mcp_server.events.webhooks.subscribe import subscribe
+
+        async with operation_scope(ctx) as context:
+            result: Final = await subscribe(context, params, request_headers(ctx), served(ctx, context), runtime)
+            if isinstance(result, Error):
+                raise result.error.to_mcp()
+            return result.ok
+
+    async def unsubscribe_handler(
+        ctx: ServerRequestContext[object, object], params: UnsubscribeEventsParams
+    ) -> EmptyResult:
+        from litellm.proxy.mcp_server.events.webhooks.subscribe import unsubscribe
+
+        async with operation_scope(ctx) as context:
+            result: Final = await unsubscribe(context, params, request_headers(ctx), served(ctx, context), runtime)
+            if isinstance(result, Error):
+                raise result.error.to_mcp()
+            return EmptyResult()
+
     server.add_request_handler("events/list", ListEventsParams, list_handler)
     server.add_request_handler("events/poll", PollEventsParams, poll_handler)
     server.add_request_handler("events/stream", StreamEventsParams, stream_handler)
+    server.add_request_handler("events/subscribe", SubscribeEventsParams, subscribe_handler)
+    server.add_request_handler("events/unsubscribe", UnsubscribeEventsParams, unsubscribe_handler)

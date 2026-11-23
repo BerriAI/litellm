@@ -1,6 +1,8 @@
+import asyncio
 import json
 from collections.abc import AsyncGenerator, Mapping
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from typing import Final
 
 import httpx2
@@ -21,8 +23,9 @@ from litellm.proxy.mcp_server.events.handlers import (
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.upstream import StreamFrame
 from litellm.types.mcp_server.events import EventType
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
-from .fakes import SETTINGS, FakeUpstream, context, occurrence, runtime, server
+from .fakes import CALLER, SETTINGS, FakeUpstream, context, occurrence, runtime, server
 
 META: Final = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
@@ -249,3 +252,70 @@ def test_gating(
         params={"_meta": meta} if meta is not None else {},
     )
     assert gated_events_method(request, proxy, lambda: settings) is gated
+
+
+@pytest.mark.asyncio
+async def test_unsubscribe_returns_an_empty_result_after_teardown(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.mcp_server.events.access import principal_of
+    from litellm.proxy.mcp_server.events.webhooks.policy import subscription_id
+    from litellm.proxy.mcp_server.events.webhooks.store import SubscriptionRow
+
+    from .webhooks.memory_store import MemoryStore
+
+    principal: Final = principal_of(CALLER)
+    assert principal is not None
+    hook: Final = "https://client.example/hook"
+    args: Final = {"repo": "acme/web"}
+    sid: Final = subscription_id(principal, hook, "ci-build.failed", args)
+    store: Final = MemoryStore()
+    await store.save(
+        SubscriptionRow(
+            id=sid,
+            principal=principal,
+            server_id="srv-ci",
+            event_name="build.failed",
+            client_url=hook,
+            client_secret="unused",
+            upstream_secret="unused",
+            arguments=args,
+            upstream_subscription_id="upstream-sub",
+            status="active",
+        )
+    )
+    monkeypatch.setattr("litellm.proxy.mcp_server.events.webhooks.subscribe.default_store", lambda: store)
+    upstream: Final = FakeUpstream(responses={"events/unsubscribe": {}})
+    status, frames = await _call(
+        _server(SETTINGS, runtime((server(),), upstream=upstream)),
+        "events/unsubscribe",
+        {"name": "ci-build.failed", "arguments": args, "delivery": {"url": hook}},
+        {"Mcp-Name": "ci-build.failed", "Mcp-Param-Repo": "acme/web"},
+    )
+    assert status == 200 and frames == [
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {
+                "resultType": "complete",
+                "_meta": {"io.modelcontextprotocol/serverInfo": {"name": "gateway", "version": ""}},
+            },
+        }
+    ]
+    assert store.rows == {} and [method for method, *_ in upstream.calls] == ["events/unsubscribe"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_omits_events_when_its_remaining_budget_expires() -> None:
+    cancelled: Final = asyncio.Event()
+
+    async def slow_admission(ctx: OperationContext) -> tuple[MCPServer, ...]:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+        return ()
+
+    services: Final = replace(runtime(()), allowed_servers=slow_admission)
+    extensions: Final = await asyncio.wait_for(
+        advertised_extensions(context(), META, lambda: SETTINGS, services, timeout=0.01), timeout=5
+    )
+    assert extensions == {} and cancelled.is_set()

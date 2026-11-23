@@ -616,7 +616,10 @@ if MCP_AVAILABLE:
         disabled_capabilities,
         disabled_operations,
     )
+    from litellm.proxy.mcp_server.events.config import events_settings
     from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
+    from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
+    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker, stop_delivery_worker
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -898,6 +901,7 @@ if MCP_AVAILABLE:
             await _session_manager_cm.__aenter__()
             await _session_manager_stateful_cm.__aenter__()
             _stateful_auth_context_cleanup_task = asyncio.create_task(_cleanup_expired_stateful_session_auth_contexts())
+            start_delivery_worker()
 
             _SESSION_MANAGERS_INITIALIZED = True
             verbose_logger.info("MCP Server started with StreamableHTTP and SSE session managers!")
@@ -910,6 +914,7 @@ if MCP_AVAILABLE:
             _session_manager_stateful_cm, \
             _stateful_auth_context_cleanup_task
 
+        await stop_delivery_worker()
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
 
@@ -3112,6 +3117,20 @@ if MCP_AVAILABLE:
         ("/sse/messages/", "POST"),
     ):
         app.router.routes.append(Route(sse_path, endpoint=_LegacySseEndpoint(), methods=[sse_method]))
+
+    class _EventWebhookEndpoint:
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            if not events_settings().enabled:
+                await handle_streamable_http_mcp(scope, receive, send)
+                return
+            start_delivery_worker()
+            request: Final = StarletteRequest(scope, receive)
+            response: Final = await receive_webhook(request.path_params["subscription_id"], request)
+            await response(scope, receive, send)
+
+    app.router.routes.append(
+        Route("/events/webhooks/{subscription_id}", endpoint=_EventWebhookEndpoint(), methods=["POST"])
+    )
 
     # Mount the MCP handlers
     app.mount("/", handle_streamable_http_mcp)

@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from collections.abc import Awaitable, Callable, Mapping
@@ -15,7 +16,7 @@ from litellm.proxy.mcp_server.events.webhooks.reauth import Authorized, Reauthor
 from litellm.proxy.mcp_server.events.webhooks.settlement import SUSPEND_AFTER_FAILURES
 from litellm.proxy.mcp_server.events.webhooks.signing import verify
 from litellm.proxy.mcp_server.events.webhooks.store import Activation, QueuedDelivery, SubscriptionRow
-from litellm.proxy.mcp_server.events.webhooks.worker import RETRY_DELAYS_SECONDS, DeliveryWorker
+from litellm.proxy.mcp_server.events.webhooks.worker import RETRY_DELAYS_SECONDS, DeliveryWorker, _WorkerHandle
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import CallbackFailure
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
@@ -513,3 +514,29 @@ async def test_a_worker_reading_an_expired_deadline_preserves_a_concurrently_ren
     client: Final = _Client()
     await _worker(store, client).process(delivery)
     assert not client.posts and store.queue["d1"].body == delivery.body and not store.delivered
+
+
+@pytest.mark.asyncio
+async def test_shutdown_waits_for_the_in_flight_batch_after_a_database_rotation() -> None:
+    first: Final = MemoryStore()
+    await first.enqueue(_delivery({"test": True}))
+    claiming: Final = asyncio.Event()
+    stopped: Final = asyncio.Event()
+
+    class RotatedStore(MemoryStore):
+        async def claim(self, now: datetime, lease_until: datetime, limit: int) -> tuple[QueuedDelivery, ...]:
+            claiming.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+            return ()
+
+    stores: Final = iter((first, RotatedStore()))
+    handle: Final = _WorkerHandle()
+    handle.start(lambda: SETTINGS, lambda: next(stores))
+    try:
+        await asyncio.wait_for(claiming.wait(), timeout=5)
+    finally:
+        await handle.stop()
+    assert stopped.is_set() and handle.task is None
