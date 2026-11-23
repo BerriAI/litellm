@@ -78,15 +78,19 @@ class MemoryStore:
             status="suspended" if current.status == "active" and failures >= suspend_after else current.status,
         )
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         current: Final = self.rows.get(subscription_id)
         if (
             current is None
             or current.status == "terminated"
+            or generation not in (None, current.generation)
             or current.upstream_subscription_id != upstream_subscription_id
         ):
             return False
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        await self.drop_deliveries(subscription_id)
         return True
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:

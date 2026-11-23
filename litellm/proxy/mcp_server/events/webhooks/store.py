@@ -108,7 +108,9 @@ class EventStore(Protocol):
 
     async def terminate(self, subscription_id: str) -> None: ...
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
@@ -295,15 +297,21 @@ class PrismaEventStore:
     async def terminate(self, subscription_id: str) -> None:
         await self._subscriptions.update_many(where={"id": subscription_id}, data={"status": "terminated"})
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        ended: Final = await self._subscriptions.update_many(
-            where={
-                "id": subscription_id,
-                "upstream_subscription_id": upstream_subscription_id,
-                "status": _NOT_TERMINATED,
-            },
-            data={"status": "terminated"},
-        )
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
+        async with self._client.tx() as tx:
+            ended: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={
+                    "id": subscription_id,
+                    **({"generation": generation} if generation is not None else {}),
+                    "upstream_subscription_id": upstream_subscription_id,
+                    "status": _NOT_TERMINATED,
+                },
+                data={"status": "terminated"},
+            )
+            if ended:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
