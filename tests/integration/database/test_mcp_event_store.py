@@ -447,32 +447,6 @@ async def test_delayed_teardown_preserves_reused_upstream_id_and_replacement_del
 
 
 @pytest.mark.asyncio
-async def test_refresh_retains_the_cursor_when_a_receiver_enqueues_before_activation() -> None:
-    async with _connected() as subscriber, _connected() as receiver:
-        row: Final = await _active(subscriber)
-        try:
-            active: Final = await subscriber.get(row.id)
-            assert active is not None and active.cursor == "c1"
-            assert not await subscriber.has_pending(row.id)
-            assert await receiver.enqueue_current(active, _delivery(row.id))
-            assert await subscriber.activate(
-                row.id,
-                Activation(
-                    expected_generation=active.generation,
-                    client_secret=SECRET,
-                    upstream_subscription_id="up_1",
-                    upstream_refresh_before=None,
-                    refresh_before=None,
-                    cursor="c2",
-                ),
-            )
-            refreshed: Final = await subscriber.get(row.id)
-            assert refreshed is not None and refreshed.cursor == "c1"
-        finally:
-            await subscriber.delete(row.id)
-
-
-@pytest.mark.asyncio
 async def test_delayed_teardown_ack_is_scoped_to_the_terminated_generation() -> None:
     async with _connected() as old, _connected() as new:
         row: Final = await _active(old)
@@ -499,3 +473,54 @@ async def test_delayed_teardown_ack_is_scoped_to_the_terminated_generation() -> 
             assert acknowledged is not None and acknowledged.upstream_subscription_id is None
         finally:
             await new.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_expiry_rechecks_a_renewed_deadline_before_removing_its_deliveries() -> None:
+    async with _connected() as sweeper, _connected() as subscriber:
+        row: Final = await _active(sweeper)
+        after_old_deadline: Final = NOW + timedelta(hours=2)
+        try:
+            assert row.id in {item.id for item in await sweeper.expired(after_old_deadline)}
+            renewal: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=NOW + timedelta(hours=3),
+                cursor=None,
+            )
+            assert await subscriber.activate(row.id, renewal)
+            renewed: Final = await subscriber.get(row.id)
+            assert renewed is not None and await subscriber.enqueue_current(renewed, _delivery(row.id))
+            assert not await sweeper.end_if_expired(row.id, after_old_deadline)
+            assert await subscriber.has_pending(row.id)
+            assert await sweeper.end_if_expired(row.id, NOW + timedelta(hours=4))
+            assert not await subscriber.has_pending(row.id)
+        finally:
+            await subscriber.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_refresh_retains_the_cursor_when_a_receiver_enqueues_before_activation() -> None:
+    async with _connected() as subscriber, _connected() as receiver:
+        row: Final = await _active(subscriber)
+        try:
+            active: Final = await subscriber.get(row.id)
+            assert active is not None and active.cursor == "c1"
+            assert not await subscriber.has_pending(row.id)
+            assert await receiver.enqueue_current(active, _delivery(row.id))
+            assert await subscriber.activate(
+                row.id,
+                Activation(
+                    expected_generation=active.generation,
+                    client_secret=SECRET,
+                    upstream_subscription_id="up_1",
+                    upstream_refresh_before=None,
+                    refresh_before=None,
+                    cursor="c2",
+                ),
+            )
+            refreshed: Final = await subscriber.get(row.id)
+            assert refreshed is not None and refreshed.cursor == "c1"
+        finally:
+            await subscriber.delete(row.id)

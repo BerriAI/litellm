@@ -206,6 +206,7 @@ class MemoryStore:
         if current.refresh_before > now:
             return False
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
+        await self.drop_deliveries(subscription_id)
         return True
 
     async def has_pending(self, subscription_id: str) -> bool:

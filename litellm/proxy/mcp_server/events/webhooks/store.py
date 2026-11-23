@@ -452,10 +452,13 @@ class PrismaEventStore:
         return tuple(_row_from_record(record) for record in records)
 
     async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
-        ended: Final = await self._subscriptions.update_many(
-            where={"id": subscription_id, "status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}},
-            data={"status": "terminated"},
-        )
+        async with self._client.tx() as tx:
+            ended: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={"id": subscription_id, "status": {"in": list(LIVE_STATUSES)}, "refresh_before": {"lte": now}},
+                data={"status": "terminated"},
+            )
+            if ended:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
 
     async def has_pending(self, subscription_id: str) -> bool:
