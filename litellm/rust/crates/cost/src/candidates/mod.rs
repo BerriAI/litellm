@@ -190,7 +190,7 @@ pub fn priced_row<T: CandidateTable + ?Sized>(
     model: &str,
     provider: &str,
     region: Option<&str>,
-) -> Result<Option<RowRef>, Deferral> {
+) -> Result<Option<RowRef>, RustRefusal> {
     Walk { table }.priced_row(model, provider, region)
 }
 
@@ -313,10 +313,10 @@ impl<T: CandidateTable + ?Sized> Walk<'_, T> {
         model: &str,
         provider: &str,
         region: Option<&str>,
-    ) -> Result<Option<RowRef>, Deferral> {
-        let cost_provider = CostProvider::from_str(provider).map_err(|_| Deferral::Provider)?;
+    ) -> Result<Option<RowRef>, RustRefusal> {
+        let cost_provider = CostProvider::from_str(provider).map_err(|_| RustRefusal::Provider)?;
         if self.priced_elsewhere(model) {
-            return Err(Deferral::ModelName);
+            return Err(RustRefusal::ModelName);
         }
         match self.priced_key(model, cost_provider, region) {
             Step::Row(key, provenance) => Ok(Some(RowRef {

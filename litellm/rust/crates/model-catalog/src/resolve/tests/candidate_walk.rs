@@ -16,7 +16,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use litellm_cost::candidates::{
-    AfterRows, CallIdentity, CandidateRows, RustRefusal, RowProvenance, Tried, candidates,
+    AfterRows, CallIdentity, CandidateRows, RowProvenance, RustRefusal, Tried, candidates,
 };
 use serde_json::Value;
 
