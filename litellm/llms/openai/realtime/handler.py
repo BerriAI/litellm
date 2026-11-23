@@ -260,6 +260,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
                     usage_meter=self._make_usage_meter(),
                     translation_session=realtime_mode == "translation",
                     drop_params=drop_params,
+                    listens_only=bool((query_params or {}).get("call_id")),
                 )
                 await realtime_streaming.bidirectional_forward()
 

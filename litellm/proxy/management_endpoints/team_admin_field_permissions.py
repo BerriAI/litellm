@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, OTEL_SERVICE_NAME_METADATA_KEYS
+from litellm.integrations.lens.policy import LENS_ENABLED_METADATA_KEY
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -50,6 +51,7 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
         "metadata",
         "team_member_budget",
         "team_member_budget_duration",
+        "team_member_rollover_max_budget",
         "team_member_tpm_limit",
         "team_member_rpm_limit",
     }
@@ -96,6 +98,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "spend_logs_metadata",
         "model_config",
         "callback_settings",
+        LENS_ENABLED_METADATA_KEY,
         "priority",
         "zguard_policy_id",
         "allowed_tools",
@@ -122,12 +125,19 @@ _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 class TeamMemberDefaults:
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: float | None = None
     team_member_tpm_limit: int | None = None
     team_member_rpm_limit: int | None = None
 
 
 TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
+    {
+        "team_member_budget",
+        "team_member_budget_duration",
+        "team_member_rollover_max_budget",
+        "team_member_tpm_limit",
+        "team_member_rpm_limit",
+    }
 )
 
 
@@ -344,6 +354,7 @@ def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaul
     return TeamMemberDefaults(
         team_member_budget=budget.max_budget,
         team_member_budget_duration=budget.budget_duration,
+        team_member_rollover_max_budget=budget.rollover_max_budget,
         team_member_tpm_limit=budget.tpm_limit,
         team_member_rpm_limit=budget.rpm_limit,
     )
@@ -381,6 +392,7 @@ def _member_defaults_by_field(member_defaults: TeamMemberDefaults | None) -> Map
         {
             "team_member_budget": stored.team_member_budget,
             "team_member_budget_duration": stored.team_member_budget_duration,
+            "team_member_rollover_max_budget": stored.team_member_rollover_max_budget,
             "team_member_tpm_limit": stored.team_member_tpm_limit,
             "team_member_rpm_limit": stored.team_member_rpm_limit,
         }

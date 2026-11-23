@@ -18,6 +18,8 @@ from litellm.llms.base_llm.embedding.transformation import extra_body_fields
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
+    HTTPHandler,
     get_async_httpx_client,
     get_httpx_client,
 )
@@ -331,7 +333,7 @@ class SagemakerLLM(BaseAWSLLM):
         headers: dict,
         data: str,
         logging_obj,
-        client=None,
+        client: HTTPHandler | None = None,
     ):
         if client is None:
             client = get_httpx_client()
@@ -346,7 +348,7 @@ class SagemakerLLM(BaseAWSLLM):
             raise SagemakerError(status_code=sync_response.status_code, message=str(sync_response.read()))
 
         decoder: Final = AWSEventStreamDecoder(model="")
-        return decoder.iter_bytes(sync_response.iter_bytes())
+        return decoder.iter_bytes(sync_response.iter_bytes(), response_headers=sync_response.headers)
 
     async def make_async_call(
         self,
@@ -354,7 +356,7 @@ class SagemakerLLM(BaseAWSLLM):
         headers: dict,
         data: str,
         logging_obj,
-        client=None,
+        client: AsyncHTTPHandler | None = None,
     ):
         try:
             if client is None:
@@ -372,7 +374,7 @@ class SagemakerLLM(BaseAWSLLM):
                 raise SagemakerError(status_code=response.status_code, message=response.text)
 
             decoder: Final = AWSEventStreamDecoder(model="")
-            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes())
+            completion_stream: Final = decoder.aiter_bytes(response.aiter_bytes(), response_headers=response.headers)
 
             return completion_stream
 

@@ -11,7 +11,7 @@ import PromptEditorView from "./prompt_editor_view";
 import { toast } from "@/lib/toast";
 import { isProxyAdminRole } from "@/utils/roles";
 import { Button } from "@/components/ui/button";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import {
   AlertDialog,
@@ -146,7 +146,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
   };
 
   return (
-    <Page>
+    <>
       {showEditorView ? (
         <PromptEditorView
           onClose={handleCloseEditor}
@@ -249,7 +249,7 @@ const PromptsPanel: React.FC<PromptsProps> = ({ accessToken, userRole }) => {
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </Page>
+    </>
   );
 };
 

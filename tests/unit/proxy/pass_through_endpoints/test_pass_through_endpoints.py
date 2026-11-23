@@ -35,6 +35,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import ANTHROPIC_COMPATIBLE_MAX_USER_ID_LENGTH, ANTHROPIC_MAX_USER_ID_LENGTH, DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2199,18 +2200,17 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
                         mock_request.headers = Headers({})
                         mock_request.query_params = QueryParams({})
 
-                        # Create mock user API key dict
-                        mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = "test-api-key"
-                        mock_user_api_key_dict.key_alias = "test-alias"
-                        mock_user_api_key_dict.is_session_token = False
-                        mock_user_api_key_dict.user_email = "test@example.com"
-                        mock_user_api_key_dict.user_id = "test-user-id"
-                        mock_user_api_key_dict.team_id = "test-team-id"
-                        mock_user_api_key_dict.org_id = "test-org-id"
-                        mock_user_api_key_dict.team_alias = "test-team-alias"
-                        mock_user_api_key_dict.end_user_id = "test-end-user-id"
-                        mock_user_api_key_dict.request_route = "/api/endpoint"
+                        mock_user_api_key_dict = UserAPIKeyAuth(
+                            api_key="test-api-key",
+                            key_alias="test-alias",
+                            user_email="test@example.com",
+                            user_id="test-user-id",
+                            team_id="test-team-id",
+                            org_id="test-org-id",
+                            team_alias="test-team-alias",
+                            end_user_id="test-end-user-id",
+                            request_route="/api/endpoint",
+                        )
 
                         # Call pass_through_request (the parent method)
                         await pass_through_request(
@@ -2308,7 +2308,7 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
                     request=mock_request,
                     target="http://target-api.com/v1/messages",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -2376,7 +2376,7 @@ async def test_pass_through_request_preserves_caller_streaming_request_field(bod
                     request=mock_request,
                     target="https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -2439,7 +2439,7 @@ async def test_streaming_pass_through_drops_marker_after_hook_rebuilds_body_from
                     request=mock_request,
                     target="https://api.openai.com/v1/chat/completions",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                 )
 
                 upstream_json = async_client.build_request.call_args.kwargs["json"]
@@ -2515,7 +2515,7 @@ async def test_passthrough_guardrails_follow_effective_relay_stream_decision(
                     request=mock_request,
                     target="http://upstream.test/guardrail-stream-scope",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=route_stream,
                 )
                 hook_data: Final[dict[str, object]] = mock_proxy_logging.pre_call_hook.call_args.kwargs["data"]
@@ -2587,7 +2587,7 @@ async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
                     request=mock_request,
                     target="http://target-api.com/v1/messages",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=False,
                 )
 
@@ -3566,8 +3566,7 @@ async def test_pass_through_request_query_params_forwarding():
                         mock_request.query_params = QueryParams([("api-version", "2025-01-01-preview")])
 
                         # Create mock user API key dict
-                        mock_user_api_key_dict = MagicMock()
-                        mock_user_api_key_dict.api_key = MASTER_KEY
+                        mock_user_api_key_dict = UserAPIKeyAuth(api_key=MASTER_KEY)
 
                         # Call pass_through_request
                         await pass_through_request(
@@ -3666,7 +3665,7 @@ async def _run_pass_through_and_capture_wire_url(
                 request=mock_request,
                 target=target,
                 custom_headers={},
-                user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else MagicMock(),
+                user_api_key_dict=user_api_key_dict if user_api_key_dict is not None else UserAPIKeyAuth(),
                 merge_query_params=merge_query_params,
                 default_query_params=default_query_params,
                 custom_llm_provider=custom_llm_provider,
@@ -3891,7 +3890,7 @@ async def test_pass_through_request_follows_redirect_to_final_response(httpx_tra
 
     mock_request.body = mock_body
 
-    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict = UserAPIKeyAuth()
 
     with respx.mock(assert_all_called=True) as upstream:
         upstream.get("https://upstream.test/redirect/1").respond(302, headers={"Location": "/get"})
@@ -4415,8 +4414,7 @@ async def test_pass_through_request_non_streaming_uses_content_for_state_raw_bod
     setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
-    mock_user = MagicMock()
-    mock_user.api_key = "sk-test"
+    mock_user = UserAPIKeyAuth(api_key="sk-test")
 
     upstream = httpx.Response(
         status_code=200,
@@ -4488,8 +4486,7 @@ async def test_pass_through_request_streaming_uses_content_for_state_raw_body():
     setattr(mock_request.state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, raw_signed)
     mock_request.body = AsyncMock(return_value=json.dumps(parsed_from_wire).encode("utf-8"))
 
-    mock_user = MagicMock()
-    mock_user.api_key = "sk-test"
+    mock_user = UserAPIKeyAuth(api_key="sk-test")
 
     mock_built = MagicMock()
     mock_async_client = AsyncMock()
@@ -5148,7 +5145,7 @@ async def test_pass_through_request_non_streaming_upstream_error_returned_unchan
                         request=mock_request,
                         target="http://target-api.com/api/denied",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -5234,7 +5231,7 @@ async def test_pass_through_request_upstream_error_failure_hook_exception_is_swa
                         request=mock_request,
                         target="http://target-api.com/api/denied",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -5283,7 +5280,7 @@ async def test_pass_through_request_streaming_upstream_error_returned_unchanged(
                     request=mock_request,
                     target="http://target-api.com/api/stream-denied",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -5373,7 +5370,7 @@ async def test_pass_through_request_non_streaming_upstream_error_body_logged_and
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     warning_messages: Final = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
@@ -5428,7 +5425,7 @@ async def test_pass_through_request_streaming_upstream_error_body_reaches_client
                     request=_upstream_error_request(),
                     target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                     stream=True,
                 )
 
@@ -5481,7 +5478,7 @@ async def test_truncate_upstream_error_body_caps_at_log_limit():
                     request=_upstream_error_request(),
                     target="http://target-api.com/api/big-error",
                     custom_headers={},
-                    user_api_key_dict=MagicMock(),
+                    user_api_key_dict=UserAPIKeyAuth(),
                 )
 
     detail: Final = mock_proxy_logging.post_call_failure_hook.call_args.kwargs["original_exception"].detail
@@ -5523,7 +5520,7 @@ async def test_pass_through_request_upstream_error_log_strips_provider_key_from_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     upstream_warnings: Final = [
@@ -5665,7 +5662,7 @@ async def test_pass_through_request_streaming_upstream_error_reads_only_preview_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5730,7 +5727,7 @@ async def test_pass_through_request_streaming_upstream_error_single_large_chunk_
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5802,7 +5799,7 @@ async def test_pass_through_request_streaming_upstream_error_body_read_failure_k
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5885,7 +5882,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_read_failure_r
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5939,7 +5936,7 @@ async def test_pass_through_request_streaming_upstream_error_gzip_body_decoded_f
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                         stream=True,
                     )
 
@@ -5992,7 +5989,7 @@ async def test_pass_through_request_upstream_error_body_sanitized_against_log_fo
                         request=_upstream_error_request(),
                         target="http://target-api.com/v1beta/models/claude-nope-9:generateContent",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
 
     upstream_warnings: Final = [
@@ -6131,7 +6128,7 @@ async def test_pass_through_request_non_streaming_success_unchanged():
                         request=mock_request,
                         target="http://target-api.com/api/success",
                         custom_headers={},
-                        user_api_key_dict=MagicMock(),
+                        user_api_key_dict=UserAPIKeyAuth(),
                     )
                     await asyncio.sleep(0)
 
@@ -10088,7 +10085,7 @@ async def _drive_streaming_pass_through(upstream_content_type, chunk_delay_secon
             request=mock_request,
             target="http://target-api.com/v1/messages",
             custom_headers={},
-            user_api_key_dict=MagicMock(),
+            user_api_key_dict=UserAPIKeyAuth(),
             stream=client_asked_for_stream,
         )
         return [chunk async for chunk in response.body_iterator]
@@ -11449,7 +11446,7 @@ def _split_pass_through_body(
 GEMINI_BODY: Final = '{"contents": [{"parts": [{"text": "hi"}]}], "generationConfig": {"temperature": 0}}'
 
 
-PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM)
+PROXY_SET_PARAMS: Final = ("metadata", "proxy_server_request", COMMITTED_BUDGET_SPEND_PARAM, LENS_LOGGING_POLICY_PARAM)
 
 
 def _metadata_of(split: _PassThroughSplit) -> Mapping[str, object]:

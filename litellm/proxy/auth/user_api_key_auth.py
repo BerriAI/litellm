@@ -3630,7 +3630,7 @@ async def return_user_api_key_auth_obj(
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=getattr(user_obj, "max_budget", None),
+            user_max_budget=user_obj.effective_max_budget(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
         )
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):

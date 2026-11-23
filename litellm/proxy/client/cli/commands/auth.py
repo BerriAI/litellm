@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -145,7 +146,7 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
-_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+_TeamMapping = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -1152,8 +1153,13 @@ def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
 
 
 @click.command(name="print-token")
+@click.option(
+    "--otel-headers",
+    is_flag=True,
+    help="Print the token as the JSON headers Claude Code's `otelHeadersHelper` expects.",
+)
 @click.pass_context
-def print_token(ctx: click.Context):
+def print_token(ctx: click.Context, otel_headers: bool = False):
     """Print a valid API token for this proxy.
 
     Designed to be used as Claude Code's `apiKeyHelper`
@@ -1206,7 +1212,7 @@ def print_token(ctx: click.Context):
         click.echo(f"Key expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
-    click.echo(api_key)
+    click.echo(json.dumps({"Authorization": f"Bearer {api_key}"}) if otel_headers else api_key)
 
 
 @click.command(name="whoami")

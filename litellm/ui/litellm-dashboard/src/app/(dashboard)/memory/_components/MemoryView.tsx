@@ -1,6 +1,6 @@
 "use client";
 
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
@@ -179,7 +179,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   };
 
   return (
-    <Page>
+    <>
       <PageContent>
         <PageHeader>
           <PageHeaderTitle>
@@ -261,7 +261,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
         confirmLoading={deleteMutation.isPending}
         requiredConfirmation={deleteRow?.key}
       />
-    </Page>
+    </>
   );
 };
 

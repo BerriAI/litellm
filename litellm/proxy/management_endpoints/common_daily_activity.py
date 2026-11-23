@@ -58,7 +58,7 @@ from litellm.types.repositories.daily_activity import (
     SpendLogsWindow,
 )
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
