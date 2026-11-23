@@ -27,6 +27,22 @@ def _status_event() -> str:
     return json.dumps({"jsonrpc": "2.0", "id": "req-1", "result": {"kind": "status-update", "status": {}}})
 
 
+def _working_task_status_message_event(text: str) -> str:
+    return json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": "req-1",
+            "result": {
+                "kind": "task",
+                "status": {
+                    "state": "working",
+                    "message": {"parts": [{"kind": "text", "text": text}]},
+                },
+            },
+        }
+    )
+
+
 class TestA2AGuardrailHandlerStreamingScanKey:
     def test_key_joins_the_text_of_every_message_event(self):
         key = A2AGuardrailHandler().get_streaming_scan_key([_text_event("hello "), _text_event("world")])
@@ -44,6 +60,13 @@ class TestA2AGuardrailHandlerStreamingScanKey:
     def test_json_items_that_are_not_objects_are_ignored(self):
         key = A2AGuardrailHandler().get_streaming_scan_key([_text_event("hi"), "[1, 2]", "5"])
         assert key.texts == ("hi",)
+
+    def test_working_task_status_message_text_is_included_for_guardrail_scan(self):
+        """Nonterminal task status text must reach guardrails even when chat conversion suppresses it."""
+        key = A2AGuardrailHandler().get_streaming_scan_key(
+            [_working_task_status_message_event("policy-sensitive interim output")]
+        )
+        assert key == StreamingScanKey(texts=("policy-sensitive interim output",))
 
 
 SSN_REPLY: Final = {"kind": "message", "role": "agent", "parts": [{"kind": "text", "text": "SSN 123-45-6789"}]}
