@@ -145,7 +145,9 @@ resource "litellm_key" "example" {
 
 Set `callback_name` to the proxy callback name. `callback_type` accepts `success`, `failure`, or `success_and_failure` (the default). `callback_vars_wo` is a write-only JSON object with string values. Use `jsonencode({})` for callbacks without variables. Terraform does not save the value in plans or state. Bump `callback_vars_wo_version` when the values change, since Terraform cannot detect changes to the variables themselves. Use sensitive, ephemeral Terraform variables for secret inputs rather than hardcoding values.
 
-The blocks manage the key's entire logging callback list. With no blocks, an existing unmanaged list is preserved. Removing previously managed blocks removes the key's logging configuration, so the key can inherit team logging again. To migrate, remove `metadata.logging` from your configuration and declare the blocks instead. If you previously stored secret values in metadata, rotate them and review access to old plans, state, and logs.
+Terraform manages only the key callbacks you declare, matching them by name and type. Refresh does not add other callbacks to the managed blocks, and rotating or removing managed callbacks leaves the others on the key. If you remove every block, Terraform removes only the callbacks it managed. The key can inherit team logging again only when no key callbacks remain.
+
+To migrate, remove `metadata.logging` from your configuration and declare the blocks instead. If you previously stored secret values in metadata, rotate them and review access to old plans, state, and logs.
 
 ## State Management
 
