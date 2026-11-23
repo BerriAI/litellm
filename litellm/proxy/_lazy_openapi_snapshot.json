@@ -46556,6 +46556,12 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "preserve_explicit_oauth_settings": {
+              "default": false,
+              "description": "Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.",
+              "title": "Preserve Explicit Oauth Settings",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {

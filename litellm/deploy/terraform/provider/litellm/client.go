@@ -477,19 +477,22 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 }
 
 var sensitiveLogFields = map[string]bool{
-	"api_key":               true,
-	"key":                   true,
-	"token":                 true,
-	"password":              true,
-	"secret":                true,
-	"credential":            true,
-	"auth":                  true,
-	"model_api_key":         true,
-	"aws_access_key_id":     true,
-	"aws_secret_access_key": true,
-	"vertex_credentials":    true,
-	"x-api-key":             true,
-	"credential_values":     true,
+	"api_key":                       true,
+	"key":                           true,
+	"token":                         true,
+	"password":                      true,
+	"secret":                        true,
+	"credential":                    true,
+	"auth":                          true,
+	"model_api_key":                 true,
+	"aws_access_key_id":             true,
+	"aws_secret_access_key":         true,
+	"vertex_credentials":            true,
+	"x-api-key":                     true,
+	"credential_values":             true,
+	"client_private_key":            true,
+	"client_secret":                 true,
+	"id_jag_resource_client_secret": true,
 }
 
 func redactJSONValue(value interface{}) interface{} {
@@ -519,6 +522,7 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`"(api_key|key|token|password|secret|credential|auth)":\s*"[^"]*"`),
 	regexp.MustCompile(`"(model_api_key|aws_access_key_id|aws_secret_access_key|vertex_credentials)":\s*"[^"]*"`),
 	regexp.MustCompile(`"(x-api-key)":\s*"[^"]*"`),
+	regexp.MustCompile(`"(client_private_key|client_secret|id_jag_resource_client_secret)"\s*:\s*"(?:[^"\\]|\\.)*"`),
 }
 
 func redactWithPatterns(data string) string {
