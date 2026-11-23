@@ -309,7 +309,7 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                     upstream_subscription_id="up_1",
                     upstream_refresh_before=None,
                     refresh_before=None,
-                    cursor=None,
+                    cursor="previous-safe",
                 ),
             )
             assert not await second_worker.settle(winner, active.generation, later, outcome, gap=True)
@@ -330,6 +330,6 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (['{"type":"gap","cursor":null}'] if outcome == "timeout" else [])
+            assert [d.body for d in due] == (['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else [])
         finally:
             await first_worker.delete(row.id)

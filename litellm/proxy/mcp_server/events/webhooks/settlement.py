@@ -24,10 +24,11 @@ async def settle_delivery(
         return False
     async with client.tx() as tx:
         locked: Final = await tx.query_raw(
-            """SELECT id FROM "LiteLLM_MCPEventSubscription"
+            """SELECT cursor FROM "LiteLLM_MCPEventSubscription"
             WHERE id = $1 AND generation = $2 AND status IN ('active', 'suspended') FOR UPDATE""",
             delivery.subscription_id,
             generation,
+            model=GapEnvelope,
         )
         if not locked:
             return False
@@ -72,7 +73,7 @@ async def settle_delivery(
                     VALUES ($1, $2, $1, $3, $4::timestamp, true)""",
                     gap_id,
                     delivery.subscription_id,
-                    GapEnvelope(cursor=None).model_dump_json(),
+                    locked[0].model_dump_json(),
                     at.isoformat(),
                 )
     return True
