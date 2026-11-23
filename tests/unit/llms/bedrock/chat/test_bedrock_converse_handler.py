@@ -822,20 +822,10 @@ def _answer_with_json_mode_thinking_response(request: httpx.Request) -> httpx.Re
     return httpx.Response(200, json=JSON_MODE_THINKING_CONVERSE_RESPONSE, request=request)
 
 
-def _bedrock_claude_without_native_structured_output() -> str:
-    return next(
-        f"bedrock/{model}"
-        for model, info in litellm.model_cost.items()
-        if info.get("litellm_provider") == "bedrock_converse"
-        and model.startswith("us.anthropic.claude")
-        and info.get("supports_native_structured_output") is False
-        and info.get("supports_reasoning") is True
-    )
-
-
 def _json_mode_thinking_kwargs() -> dict[str, object]:
     return {
-        "model": _bedrock_claude_without_native_structured_output(),
+        "model": "bedrock/us-gov-east-1/anthropic.claude-opus-4-8",
+        "model_info": {"supports_native_structured_output": False},
         "messages": [{"role": "user", "content": "How many people live in Tokyo, in millions?"}],
         "response_format": {
             "type": "json_schema",

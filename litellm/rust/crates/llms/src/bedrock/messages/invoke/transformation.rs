@@ -251,7 +251,7 @@ pub(crate) fn should_retry_anthropic_messages_without_native_output(
         && is_bedrock_native_output_rejection(status, error_text);
     if retries {
         let opt_out_advice = if error_text.contains(NATIVE_OUTPUT_UNSUPPORTED) {
-            " Set `supports_bedrock_native_structured_output: false` in this deployment's model_info to skip the rejected call."
+            " Set `supports_native_structured_output: false` in this deployment's model_info to skip the rejected call."
         } else {
             ""
         };

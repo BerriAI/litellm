@@ -1,6 +1,7 @@
 import asyncio, importlib, json, litellm, pytest
 import respx
 from httpx import Response
+from pathlib import Path
 from typing import Final
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -9,8 +10,10 @@ from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
-    bedrock_native_output_is_opt_in,
+    _bedrock_native_output_flag,
+    _warn_deprecated_bedrock_native_output_model_info,
     bedrock_strict_tools_fallback,
+    bedrock_chat_uses_native_structured_output,
     bedrock_model_name_without_provider,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
@@ -20,7 +23,6 @@ from litellm.llms.bedrock.common_utils import (
     is_bedrock_native_output_rejection,
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
-    without_bedrock_native_output_opt_in,
 )
 from collections.abc import Iterator
 from litellm import completion
@@ -2605,48 +2607,70 @@ def test_is_bedrock_native_output_rejection_matches_only_the_400s_that_reject_na
 
 
 @pytest.mark.parametrize(
-    ("model", "model_info", "expected"),
+    ("model", "model_info", "expected", "custom_llm_provider", "expected_native"),
     [
-        ("us.anthropic.claude-opus-4-8", None, False),
-        ("global.anthropic.claude-sonnet-5", None, False),
-        ("us-gov.anthropic.claude-opus-4-8", None, True),
-        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False),
-        ("us.anthropic.claude-opus-5-5", {"supports_bedrock_native_structured_output": True}, False),
-        ("us.anthropic.claude-sonnet-4-6", {"supports_bedrock_native_structured_output": True}, False),
+        ("us.anthropic.claude-opus-4-8", None, True, "bedrock", True),
+        ("global.anthropic.claude-sonnet-5", None, True, "bedrock", True),
+        ("us-gov.anthropic.claude-opus-4-8", None, True, "bedrock", True),
+        ("us.anthropic.claude-opus-4-8", {"supports_native_structured_output": False}, False, "bedrock", False),
+        ("us.anthropic.claude-opus-4-8", {"supports_bedrock_native_structured_output": False}, False, "bedrock", False),
+        ("us.anthropic.claude-4-5", {"supports_bedrock_native_structured_output": True}, True, "bedrock", True),
+        ("anthropic.claude-fable-5-2", None, None, "bedrock", True),
+        ("bedrock/mantle/anthropic.claude-opus-5-5", None, None, "bedrock", True),
+        (
+            "bedrock_mantle/us-gov-west-1/anthropic.claude-fable-5-1",
+            None,
+            None,
+            "bedrock_mantle",
+            True,
+        ),
     ],
-    ids=["opus_4_8", "sonnet_5", "govcloud_opus_4_8", "deployment_opt_out", "deployment_opt_in", "native_model"],
+    ids=[
+        "default_model",
+        "default_global_model",
+        "default_govcloud_model",
+        "deployment_opt_out",
+        "deprecated_opt_out",
+        "deprecated_opt_in_honored",
+        "fable-5-2-unsupported-forced-tool",
+        "mantle-opus-5-5-unsupported-forced-tool",
+        "gov-west-fable-5-1-unsupported-forced-tool",
+    ],
 )
-def test_bedrock_native_output_is_opt_in_only_where_the_opt_in_key_turns_native_output_on(
-    local_model_cost_map, model, model_info, expected
-):
-    assert bedrock_native_output_is_opt_in(model, model_info=model_info) is expected
+def test_bedrock_native_output_uses_map_defaults_and_deployment_overrides(
+    local_model_cost_map: None,
+    model: str,
+    model_info: dict[str, object] | None,
+    expected: bool | None,
+    custom_llm_provider: str,
+    expected_native: bool,
+) -> None:
+    assert _bedrock_native_output_flag(model, custom_llm_provider, model_info) is expected
+    assert bedrock_chat_uses_native_structured_output(model, custom_llm_provider, model_info) is expected_native
 
 
-def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the_deployment(local_model_cost_map):
-    litellm_params: Final = {"api_base": "https://bedrock.example", "model_info": {"id": "deployment-1"}}
-
-    turned_off: Final = without_bedrock_native_output_opt_in(litellm_params)
-
-    assert not bedrock_native_output_is_opt_in(
-        "us.anthropic.claude-opus-4-8", model_info=deployment_model_info(turned_off)
-    )
-    assert turned_off["api_base"] == "https://bedrock.example"
-    assert deployment_model_info(turned_off) == {
-        "id": "deployment-1",
-        "supports_bedrock_native_structured_output": False,
-    }
-    assert litellm_params["model_info"] == {"id": "deployment-1"}
-
-    native_default: Final = without_bedrock_native_output_opt_in(
-        {"model_info": {"supports_native_structured_output": True}}
-    )
-    assert deployment_model_info(native_default) == {
-        "supports_native_structured_output": True,
-        "supports_bedrock_native_structured_output": False,
-    }
+@pytest.mark.parametrize(
+    ("model", "deprecated_flag", "expected"),
+    [
+        ("us.anthropic.claude-opus-4-8", False, False),
+        ("us.anthropic.claude-4-5", True, True),
+    ],
+    ids=["opt-out", "opt-in"],
+)
+def test_deprecated_native_output_model_info_warns_once(
+    local_model_cost_map: None, model: str, deprecated_flag: bool, expected: bool
+) -> None:
+    _warn_deprecated_bedrock_native_output_model_info.cache_clear()
+    model_info: Final = {"supports_bedrock_native_structured_output": deprecated_flag}
+    with patch("litellm.llms.bedrock.common_utils.verbose_logger.warning") as warning:
+        assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
+        assert _bedrock_native_output_flag(model, "bedrock", model_info) is expected
+    assert warning.call_count == 1
+    assert "supports_native_structured_output" in warning.call_args.args[0]
+    _warn_deprecated_bedrock_native_output_model_info.cache_clear()
 
 
-def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_model_cost_map: None) -> None:
+def test_for_bedrock_json_tool_retry_disables_only_the_new_native_output_flag(local_model_cost_map: None) -> None:
     litellm_params: Final = {
         "model_info": {
             "id": "deployment-1",
@@ -2660,13 +2684,46 @@ def test_for_bedrock_json_tool_retry_disables_both_native_output_flags(local_mod
     assert deployment_model_info(retry_params) == {
         "id": "deployment-1",
         "supports_native_structured_output": False,
-        "supports_bedrock_native_structured_output": False,
+        "supports_bedrock_native_structured_output": True,
     }
     assert litellm_params["model_info"] == {
         "id": "deployment-1",
         "supports_native_structured_output": True,
         "supports_bedrock_native_structured_output": True,
     }
+
+
+def test_bedrock_claude_model_maps_preserve_legacy_flags_and_match(local_model_cost_map: None) -> None:
+    root: Final = Path(__file__).parents[4]
+    model_maps: Final = tuple(
+        json.loads(path.read_text())
+        for path in (
+            root / "model_prices_and_context_window.json",
+            root / "litellm" / "model_prices_and_context_window_backup.json",
+        )
+    )
+    providers: Final = frozenset({"bedrock", "bedrock_converse", "bedrock_mantle"})
+    row_sets: Final = tuple(
+        {
+            key: value
+            for key, value in model_map.items()
+            if isinstance(value, dict) and "claude" in key.lower() and value.get("litellm_provider") in providers
+        }
+        for model_map in model_maps
+    )
+    assert set(row_sets[0]) == set(row_sets[1])
+
+    for key, row in row_sets[0].items():
+        backup_row: Final = row_sets[1][key]
+        for flag in (
+            "supports_native_structured_output",
+            "supports_bedrock_native_structured_output",
+            "supports_bedrock_native_structured_output_by_default",
+        ):
+            assert row.get(flag) == backup_row.get(flag), key
+        legacy_flag: Final = row.get("supports_bedrock_native_structured_output")
+        if isinstance(legacy_flag, bool):
+            assert row.get("supports_bedrock_native_structured_output_by_default") is legacy_flag, key
 
 
 def test_bedrock_response_stream_shape_is_unavailable_when_botocore_describes_the_service_as_a_list():
