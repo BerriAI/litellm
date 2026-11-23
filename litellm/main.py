@@ -80,6 +80,12 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
 )
@@ -120,6 +126,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
@@ -5814,6 +5821,16 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        raise_if_a_forced_hosted_tool_stays(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {"tools": tools, "tool_choice": tool_choice},
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drops_unsupported,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = provider_config.translate_developer_role_to_system_role(messages=messages)
@@ -8015,11 +8032,14 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    completion_kwargs: Final = bridged_audio_output_request(kwargs, _model, custom_llm_provider)
+    if isinstance(completion_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(completion_kwargs, "/v1/completions")
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **completion_kwargs,
         **optional_params,
     )
     if kwargs.get("acompletion", False) is True:

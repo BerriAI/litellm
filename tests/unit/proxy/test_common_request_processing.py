@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import datetime
+import gzip
 import json
 import threading
 from base64 import urlsafe_b64encode
@@ -19,6 +20,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import litellm
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
+from litellm.litellm_core_utils.exception_mapping_utils import _get_response_headers
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
@@ -12462,3 +12465,84 @@ class TestResponseCostFromLoggingObjForBridgedMessages:
         assert logging_obj.cost_breakdown is not None
         assert logging_obj.cost_breakdown["output_cost"] == pytest.approx(expected_output)
         assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
+
+
+_UPSTREAM_REJECTION_BODY: Final = b'{"error":{"message":"upstream said no","type":"upstream_rejection"}}'
+
+
+def _upstream_rejection_wire(content_encoding: Literal["gzip"] | None) -> tuple[bytes, dict[str, str]]:
+    wire_body: Final = gzip.compress(_UPSTREAM_REJECTION_BODY) if content_encoding else _UPSTREAM_REJECTION_BODY
+    return wire_body, {
+        "x-request-id": "req_upstream",
+        "x-upstream-trace": "trace-7",
+        "content-type": "application/json",
+        "content-length": str(len(wire_body)),
+        **({"content-encoding": content_encoding} if content_encoding else {}),
+    }
+
+
+async def _call_the_shared_handler(route: Literal["responses", "chat", "anthropic"], client: AsyncHTTPHandler) -> None:
+    match route:
+        case "responses":
+            await litellm.aresponses(
+                model="openai/gpt-5.6",
+                input="hi",
+                api_key="transport-only",
+                api_base="https://upstream.example/v1",
+                client=client,
+            )
+        case "chat":
+            await litellm.acompletion(
+                model="groq/llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="transport-only",
+                max_retries=0,
+                client=client,
+            )
+        case "anthropic":
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "hi"}],
+                api_key="transport-only",
+                client=client,
+            )
+
+
+async def _rejected_through_the_shared_handler(
+    route: Literal["responses", "chat", "anthropic"], transport: httpx.MockTransport
+) -> Exception:
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=transport)
+    with pytest.raises(litellm.RateLimitError) as mapped:
+        await _call_the_shared_handler(route, client)
+    return mapped.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("responses", "chat", "anthropic"))
+@pytest.mark.parametrize("content_encoding", (None, "gzip"))
+async def test_proxy_forwards_the_same_headers_and_retry_after_when_the_error_exposes_the_provider_reply(
+    route: Literal["responses", "chat", "anthropic"], content_encoding: Literal["gzip"] | None
+) -> None:
+    wire_body, wire_headers = _upstream_rejection_wire(content_encoding)
+    upstream_headers: Final = {**wire_headers, "retry-after": "7"}
+    mapped: Final = await _rejected_through_the_shared_handler(
+        route, httpx.MockTransport(lambda _request: httpx.Response(429, content=wire_body, headers=upstream_headers))
+    )
+    with pytest.raises(ProxyException) as forwarded:
+        await ProxyBaseLLMRequestProcessing(data={}).handle_llm_api_exception(
+            e=mapped,
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        )
+
+    decoded_reply_headers: Final = {
+        **{name: value for name, value in upstream_headers.items() if name != "content-encoding"},
+        "content-length": str(len(_UPSTREAM_REJECTION_BODY)),
+    }
+    assert forwarded.value.code == "429"
+    assert {name: value for name, value in forwarded.value.headers.items() if name.startswith("llm_provider-")} == {
+        f"llm_provider-{name}": value for name, value in decoded_reply_headers.items()
+    }
+    assert _get_response_headers(mapped)["retry-after"] == "7"
+    assert mapped.response.content == _UPSTREAM_REJECTION_BODY

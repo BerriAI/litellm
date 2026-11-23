@@ -731,6 +731,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+perplexity_orchestrator_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -1045,6 +1046,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "perplexity_orchestrator":
+            perplexity_orchestrator_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1183,6 +1186,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | perplexity_orchestrator_models
     | set(clarifai_models)
 )
 
@@ -1306,6 +1310,7 @@ def _build_models_by_provider() -> dict:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "perplexity_orchestrator": perplexity_orchestrator_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1725,6 +1730,9 @@ if TYPE_CHECKING:
     )
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.gemini.decisions.transformation import (
+        GeminiDecisionsConfig as GeminiDecisionsConfig,
     )
     from .llms.typesafe.decisions.transformation import (
         TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
