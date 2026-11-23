@@ -127343,5 +127343,505 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
+    },
+    "kunavo/claude-sonnet-5-5": {
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.75e-06,
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-sonnet-5": {
+        "cache_creation_input_token_cost": 1.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 1.75e-06,
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 7e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-fable-5-2": {
+        "cache_creation_input_token_cost": 7e-06,
+        "cache_creation_input_token_cost_above_1hr": 7e-06,
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 5.6e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-fable-5-1": {
+        "cache_creation_input_token_cost": 8.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 8.75e-06,
+        "cache_read_input_token_cost": 1.75e-07,
+        "input_cost_per_token": 7e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-fable-5": {
+        "cache_creation_input_token_cost": 8.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 8.75e-06,
+        "cache_read_input_token_cost": 7e-07,
+        "input_cost_per_token": 7e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-opus-5-5": {
+        "cache_creation_input_token_cost": 3.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 3.5e-06,
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 2.8e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-opus-5": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.375e-06,
+        "cache_read_input_token_cost": 3.5e-07,
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-opus-4-8": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.375e-06,
+        "cache_read_input_token_cost": 3.5e-07,
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-opus-4-7": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.375e-06,
+        "cache_read_input_token_cost": 3.5e-07,
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-opus-4-6": {
+        "cache_creation_input_token_cost": 4.375e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.375e-06,
+        "cache_read_input_token_cost": 3.5e-07,
+        "input_cost_per_token": 3.5e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-sonnet-4-6": {
+        "cache_creation_input_token_cost": 2.625e-06,
+        "cache_creation_input_token_cost_above_1hr": 2.625e-06,
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 2.1e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.05e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-haiku-5-5": {
+        "cache_creation_input_token_cost": 8.75e-08,
+        "cache_creation_input_token_cost_above_100k_tokens": 4.375e-07,
+        "cache_creation_input_token_cost_above_1hr": 8.75e-08,
+        "cache_creation_input_token_cost_above_1hr_above_100k_tokens": 4.375e-07,
+        "cache_read_input_token_cost": 7e-09,
+        "cache_read_input_token_cost_above_100k_tokens": 3.5e-08,
+        "input_cost_per_token": 7e-08,
+        "input_cost_per_token_above_100k_tokens": 3.5e-07,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-07,
+        "output_cost_per_token_above_100k_tokens": 1.75e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/claude-haiku-4-5": {
+        "cache_creation_input_token_cost": 8.75e-07,
+        "cache_creation_input_token_cost_above_1hr": 8.75e-07,
+        "cache_read_input_token_cost": 7e-08,
+        "input_cost_per_token": 7e-07,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-06,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.007,
+            "search_context_size_low": 0.007,
+            "search_context_size_medium": 0.007
+        },
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": false,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "kunavo/gpt-6-astra": {
+        "cache_creation_input_token_cost": 5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 1e-05,
+        "cache_read_input_token_cost": 4e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-07,
+        "input_cost_per_token": 4e-06,
+        "input_cost_per_token_above_272k_tokens": 8e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-05,
+        "output_cost_per_token_above_272k_tokens": 3e-05,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "kunavo/gpt-6-sol": {
+        "cache_creation_input_token_cost": 1e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2e-06,
+        "cache_read_input_token_cost": 8e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 1.6e-07,
+        "input_cost_per_token": 8e-07,
+        "input_cost_per_token_above_272k_tokens": 1.6e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4e-06,
+        "output_cost_per_token_above_272k_tokens": 6e-06,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "kunavo/gpt-6-luna": {
+        "cache_creation_input_token_cost": 5e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 1e-07,
+        "cache_read_input_token_cost": 4e-09,
+        "cache_read_input_token_cost_above_272k_tokens": 8e-09,
+        "input_cost_per_token": 4e-08,
+        "input_cost_per_token_above_272k_tokens": 8e-08,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2e-07,
+        "output_cost_per_token_above_272k_tokens": 3e-07,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "kunavo/gpt-5-6-sol": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "kunavo/gpt-5-6-terra": {
+        "cache_creation_input_token_cost": 8.75e-07,
+        "cache_creation_input_token_cost_above_272k_tokens": 1.75e-06,
+        "cache_read_input_token_cost": 7e-08,
+        "cache_read_input_token_cost_above_272k_tokens": 1.4e-07,
+        "input_cost_per_token": 7e-07,
+        "input_cost_per_token_above_272k_tokens": 1.4e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.2e-06,
+        "output_cost_per_token_above_272k_tokens": 6.3e-06,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "kunavo/gpt-5-5": {
+        "cache_creation_input_token_cost": 2e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 4e-06,
+        "cache_read_input_token_cost": 2e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
+        "input_cost_per_token": 2e-06,
+        "input_cost_per_token_above_272k_tokens": 4e-06,
+        "litellm_provider": "kunavo",
+        "max_input_tokens": 1050000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "output_cost_per_token_above_272k_tokens": 1.8e-05,
+        "source": "https://kunavo.com/pricing.json",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": false,
+        "supports_tool_choice": true,
+        "supports_vision": false
     }
 }

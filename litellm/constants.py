@@ -1255,6 +1255,7 @@ openai_compatible_providers: Final[list[str]] = [
     "streamlake",
     "wally",
     "huawei_maas",
+    "kunavo",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
