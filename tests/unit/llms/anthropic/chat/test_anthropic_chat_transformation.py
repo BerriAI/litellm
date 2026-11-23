@@ -1,5 +1,6 @@
 import copy
 import json
+from collections import deque
 from collections.abc import Mapping
 from itertools import chain
 from typing import Final
@@ -10126,6 +10127,21 @@ def _replayed_turn(thinking_blocks: object) -> list[dict[str, object]]:
     ]
 
 
+_SECOND_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "They want more.", "signature": "sig-2"}
+
+
+def _two_replayed_turns(first: object, second: object) -> list[dict[str, object]]:
+    return [
+        *_replayed_turn(first),
+        {"role": "assistant", "content": "Sure", "thinking_blocks": second},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+def _replayed_signatures(converted: dict) -> list[object]:
+    return [block.get("signature") for block in converted["messages"][1]["content"] if block["type"] == "thinking"]
+
+
 _MALFORMED_THINKING_BLOCKS: Final = (
     pytest.param("abc", "messages[1].thinking_blocks", "a list", "str", id="string"),
     pytest.param("", "messages[1].thinking_blocks", "a list", "str", id="empty_string"),
@@ -10160,6 +10176,25 @@ def test_chat_transform_request_answers_400_naming_a_malformed_thinking_blocks(
         pytest.param(
             _replayed_turn([_REPLAYED_THINKING, "abc"]), _replayed_turn([_REPLAYED_THINKING]), id="string_after_a_block"
         ),
+        pytest.param(
+            _replayed_turn(["abc", _REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            _replayed_turn([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            id="string_before_two_blocks",
+        ),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, "abc", _SECOND_REPLAYED_THINKING]),
+            _replayed_turn([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            id="string_between_two_blocks",
+        ),
+        pytest.param(_replayed_turn((_REPLAYED_THINKING, "abc")), _replayed_turn([_REPLAYED_THINKING]), id="tuple"),
+        pytest.param(
+            _replayed_turn(deque([_REPLAYED_THINKING, "abc"])), _replayed_turn([_REPLAYED_THINKING]), id="deque"
+        ),
+        pytest.param(
+            _two_replayed_turns([_REPLAYED_THINKING], "abc"),
+            _two_replayed_turns([_REPLAYED_THINKING], None),
+            id="second_assistant_turn",
+        ),
     ],
 )
 def test_chat_transform_request_drops_a_malformed_thinking_blocks_under_drop_params(
@@ -10186,3 +10221,51 @@ def test_chat_transform_request_ignores_thinking_blocks_on_a_turn_it_never_repla
         converted["messages"]
         == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [{"role": "user", "content": "Hi"}])["messages"]
     )
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING], id="list"),
+        pytest.param((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING), id="tuple"),
+        pytest.param(deque([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="deque"),
+    ],
+)
+def test_chat_transform_request_replays_every_well_formed_thinking_block(local_model_cost_map, thinking_blocks: object):
+    converted: Final = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(thinking_blocks))
+
+    assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
+
+
+@pytest.mark.parametrize("thinking_blocks", [pytest.param(None, id="none"), pytest.param([], id="empty_list")])
+def test_chat_transform_request_treats_no_thinking_blocks_as_absent(local_model_cost_map, thinking_blocks: object):
+    absent: Final = [
+        {key: value for key, value in message.items() if key != "thinking_blocks"} for message in _replayed_turn(None)
+    ]
+
+    assert (
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(thinking_blocks))["messages"]
+        == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, absent)["messages"]
+    )
+
+
+def test_chat_transform_request_names_a_malformed_thinking_blocks_past_the_first_assistant_turn(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _two_replayed_turns([_REPLAYED_THINKING], "abc"))
+
+    assert raised.value.message == "Invalid type for 'messages[3].thinking_blocks': expected a list, got str"
+
+
+def test_chat_transform_request_leaves_the_callers_messages_alone_when_dropping_thinking_blocks(local_model_cost_map):
+    messages: Final = _two_replayed_turns([_REPLAYED_THINKING, "abc"], "abc")
+    before: Final = copy.deepcopy(messages)
+
+    AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert messages == before

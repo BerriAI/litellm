@@ -186,19 +186,20 @@ def _is_json_object(value: object) -> bool:
     return isinstance(value, Mapping)
 
 
+def _is_block_list(value: object) -> bool:
+    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray))
+
+
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
-    blocks: Final = parts_of(thinking_blocks)
-    match thinking_blocks:
-        case None:
-            return ()
-        case list() | tuple():
-            return tuple(
-                (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
-                for position, block in enumerate(blocks)
-                if not _is_json_object(block)
-            )
-        case _:
-            return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
+    if thinking_blocks is None:
+        return ()
+    if not _is_block_list(thinking_blocks):
+        return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
+    return tuple(
+        (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
+        for position, block in enumerate(parts_of(thinking_blocks))
+        if not _is_json_object(block)
+    )
 
 
 def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
@@ -221,17 +222,14 @@ def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageVa
     thinking_blocks: Final = message_field(message, "thinking_blocks")
     if message_field(message, "role") != "assistant" or not _thinking_blocks_faults(0, thinking_blocks):
         return message
-    blocks: Final = parts_of(thinking_blocks)
-    match thinking_blocks:
-        case list() | tuple():
-            kept: Final = tuple(block for block in blocks if _is_json_object(block))
-            return cast(  # cast-ok: dict spread keeps message shape
-                AllMessageValues, {**message, "thinking_blocks": kept}
-            )
-        case _:
-            return cast(  # cast-ok: dropping one key keeps message shape
-                AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
-            )
+    if _is_block_list(thinking_blocks):
+        kept: Final = tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block))
+        return cast(  # cast-ok: dict spread keeps message shape
+            AllMessageValues, {**message, "thinking_blocks": kept}
+        )
+    return cast(  # cast-ok: dropping one key keeps message shape
+        AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
+    )
 
 
 def _tool_type(tool: object) -> str | None:
@@ -361,7 +359,7 @@ def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     if isinstance(declared_type, list):
         return True
     check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
-    return check is not None and not all(check(value) for value in enum_values)
+    return check is not None and not all(check(value) for value in parts_of(enum_values))
 
 
 # Single, internal-only key on ``litellm_params`` used to thread the per-
