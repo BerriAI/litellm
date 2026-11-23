@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Final, cast  # noqa: TID251  # moved unchanged from litellm/main.py
 from urllib.parse import urlsplit
 
@@ -115,41 +116,75 @@ def bridge_reasoning_effort(
     if reasoning_effort is not None or nested_body is None:
         return reasoning_effort
     nested_effort: Final = nested_body.get("reasoning_effort")
-    return nested_effort if isinstance(nested_effort, str) else str_keyed_mapping(nested_effort)
+    if isinstance(nested_effort, str):
+        return nested_effort
+    nested_object: Final = str_keyed_mapping(nested_effort)
+    return nested_object if nested_object is not None else str_keyed_mapping(nested_body.get("reasoning"))
 
 
-def targets_openai_api(api_base: str | None) -> bool:
+def _targets_openai_api(api_base: str | None) -> bool:
     resolved_api_base: Final = _resolve_openai_api_base(api_base).strip()
     return resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
 
 
 def _reaches_openai(custom_llm_provider: str, api_base: str | None) -> bool:
-    return custom_llm_provider == "openai" and targets_openai_api(api_base)
+    return custom_llm_provider == "openai" and _targets_openai_api(api_base)
 
 
-def lift_extra_body_reasoning(
-    reasoning_effort: str | Mapping[str, object] | None,
+@dataclass(frozen=True, slots=True)
+class _OpenAIReasoningJudge:
+    model: str
+    base_model: str | None
+    api_base: str | None
+    deployment_model_info: Mapping[str, object] | None
+    additional_drop_params: object
+
+    def accepted(self, requested: Mapping[str, object]) -> Mapping[str, object] | None:
+        from litellm.responses.utils import bridge_reasoning
+
+        return str_keyed_mapping(
+            bridge_reasoning(
+                requested=requested,
+                effort_kept=True,
+                summary_alias=None,
+                model=self.model,
+                base_model=self.base_model,
+                custom_llm_provider="openai",
+                api_base=self.api_base,
+                deployment_model_info=self.deployment_model_info,
+                drop_params=True,
+                additional_drop_params=self.additional_drop_params,
+            )
+        )
+
+    def cleaned(self, extra_body: Mapping[str, object]) -> Mapping[str, object]:
+        judged: Final = {
+            key: self.accepted(nested)
+            for key in _REASONING_OBJECT_KEYS
+            if (nested := str_keyed_mapping(extra_body.get(key))) is not None
+        }
+        return {
+            **{key: value for key, value in extra_body.items() if key not in judged},
+            **{key: value for key, value in judged.items() if value is not None},
+        }
+
+
+def drop_refused_extra_body_reasoning(
     params: Mapping[str, object],
     *,
+    model: str,
+    base_model: str | None,
     custom_llm_provider: str,
     api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
     drop_params: bool,
-) -> tuple[str | Mapping[str, object] | None, Mapping[str, object]]:
+    additional_drop_params: object,
+) -> Mapping[str, object]:
     extra_body: Final = str_keyed_mapping(params.get("extra_body"))
     if extra_body is None or not drop_params or not _reaches_openai(custom_llm_provider, api_base):
-        return reasoning_effort, params
-    lifted: Final = tuple(
-        (key, nested)
-        for key in _REASONING_OBJECT_KEYS
-        if (nested := str_keyed_mapping(extra_body.get(key))) is not None
-    )
-    if not lifted:
-        return reasoning_effort, params
-    lifted_keys: Final = frozenset(key for key, _ in lifted)
-    return (
-        lifted[0][1] if reasoning_effort is None else reasoning_effort,
-        {**params, "extra_body": {key: value for key, value in extra_body.items() if key not in lifted_keys}},
-    )
+        return params
+    judge: Final = _OpenAIReasoningJudge(model, base_model, api_base, deployment_model_info, additional_drop_params)
+    return {**params, "extra_body": judge.cleaned(extra_body)}
 
 
 def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, model: str) -> Mapping[str, object]:
@@ -157,40 +192,60 @@ def drop_refused_forwarded_reasoning(forwarded_kwargs: Mapping[str, object], *, 
     api_base: Final = requested_api_base if isinstance(requested_api_base, str) else None
     if (
         forwarded_kwargs.get("custom_llm_provider") != "openai"
-        or not targets_openai_api(api_base)
+        or not _targets_openai_api(api_base)
         or not drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     ):
         return forwarded_kwargs
-    requested: Final = forwarded_kwargs.get("reasoning_effort")
-    reasoning_effort, lifted_kwargs = lift_extra_body_reasoning(
-        requested if isinstance(requested, str) else str_keyed_mapping(requested),
-        forwarded_kwargs,
-        custom_llm_provider="openai",
-        api_base=api_base,
-        drop_params=True,
-    )
-    reasoning_object: Final = str_keyed_mapping(reasoning_effort)
-    if reasoning_object is None:
-        return lifted_kwargs
-
-    from litellm.responses.utils import bridge_reasoning
-
     base_model: Final = forwarded_kwargs.get("base_model")
-    accepted: Final = str_keyed_mapping(
-        bridge_reasoning(
-            requested=reasoning_object,
-            effort_kept=True,
-            summary_alias=None,
-            model=model.removeprefix("openai/"),
-            base_model=base_model if isinstance(base_model, str) else None,
-            custom_llm_provider="openai",
-            api_base=api_base,
-            deployment_model_info=str_keyed_mapping(forwarded_kwargs.get("model_info")),
-            drop_params=True,
-            additional_drop_params=forwarded_kwargs.get("additional_drop_params"),
+    judge: Final = _OpenAIReasoningJudge(
+        model=model.removeprefix("openai/"),
+        base_model=base_model if isinstance(base_model, str) else None,
+        api_base=api_base,
+        deployment_model_info=str_keyed_mapping(forwarded_kwargs.get("model_info")),
+        additional_drop_params=forwarded_kwargs.get("additional_drop_params"),
+    )
+    requested: Final = str_keyed_mapping(forwarded_kwargs.get("reasoning_effort"))
+    extra_body: Final = str_keyed_mapping(forwarded_kwargs.get("extra_body"))
+    return {
+        **forwarded_kwargs,
+        **({} if requested is None else {"reasoning_effort": judge.accepted(requested)}),
+        **({} if extra_body is None else {"extra_body": _with_responses_reasoning(judge.cleaned(extra_body))}),
+    }
+
+
+def _with_responses_reasoning(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    effort_object: Final = str_keyed_mapping(extra_body.get("reasoning_effort"))
+    if effort_object is None:
+        return extra_body
+    kept: Final = {key: value for key, value in extra_body.items() if key != "reasoning_effort"}
+    return kept if str_keyed_mapping(kept.get("reasoning")) is not None else {**kept, "reasoning": effort_object}
+
+
+def _with_chat_extra_body_effort(
+    optional_params: dict[str, object],  # mutable-ok: the provider handlers write to this dict and logging shares it
+) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
+    extra_body: Final = str_keyed_mapping(optional_params.get("extra_body"))
+    objects: Final = (
+        ()
+        if extra_body is None
+        else tuple(
+            nested for key in _REASONING_OBJECT_KEYS if (nested := str_keyed_mapping(extra_body.get(key))) is not None
         )
     )
-    return {**lifted_kwargs, "reasoning_effort": accepted}
+    if extra_body is None or not objects:
+        return optional_params
+    kept: Final = {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _REASONING_OBJECT_KEYS or str_keyed_mapping(value) is None
+    }
+    effort: Final = objects[0].get("effort")
+    return {
+        **optional_params,
+        "extra_body": (
+            kept if "reasoning_effort" in kept or not isinstance(effort, str) else {**kept, "reasoning_effort": effort}
+        ),
+    }
 
 
 def settle_chat_reasoning_effort(
@@ -205,13 +260,18 @@ def settle_chat_reasoning_effort(
     drop_params: bool,
     additional_drop_params: object,
 ) -> dict[str, object]:  # mutable-ok: the provider handlers write to this dict and logging shares it
+    chat_params: Final = (
+        _with_chat_extra_body_effort(optional_params)
+        if drop_params and _reaches_openai(custom_llm_provider, api_base)
+        else optional_params
+    )
     reasoning_object: Final = str_keyed_mapping(requested)
     if (
         reasoning_object is None
-        or "reasoning_effort" not in optional_params
+        or "reasoning_effort" not in chat_params
         or not _reaches_openai(custom_llm_provider, api_base)
     ):
-        return optional_params
+        return chat_params
 
     from litellm.responses.utils import (
         RefusedReasoningFields,
@@ -232,10 +292,10 @@ def settle_chat_reasoning_effort(
     if isinstance(effort, RefusedReasoningFields):
         raise_refused_reasoning_fields(effort, model, custom_llm_provider)
     if effort is not None:
-        return {**optional_params, "reasoning_effort": effort}
+        return {**chat_params, "reasoning_effort": effort}
     if not drop_params:
-        return optional_params
-    return {key: value for key, value in optional_params.items() if key != "reasoning_effort"}
+        return chat_params
+    return {key: value for key, value in chat_params.items() if key != "reasoning_effort"}
 
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
@@ -366,7 +426,7 @@ def responses_api_bridge_check(
     )
     gpt_series_name: Final = mantle_series_name or model
     on_constraint_enforcing_endpoint: Final = (
-        custom_llm_provider == "azure" or on_mantle_responses_endpoint or targets_openai_api(api_base)
+        custom_llm_provider == "azure" or on_mantle_responses_endpoint or _targets_openai_api(api_base)
     )
     chat_rejects_function_tools: Final = (
         has_function_tool

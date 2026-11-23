@@ -1403,7 +1403,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
-    lift_extra_body_reasoning,
+    drop_refused_extra_body_reasoning,
     serves_only_responses,
     settle_chat_reasoning_effort,
     str_keyed_mapping,
@@ -6129,6 +6129,7 @@ def completion(
         deployment_model_info: Final = str_keyed_mapping(
             cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
         )
+        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
@@ -6143,16 +6144,19 @@ def completion(
         reasoning_model_group: Final = model_group_from_metadata(
             routing_kwargs.get("metadata"), routing_kwargs.get("litellm_metadata")
         )
-        requested_reasoning_effort, chat_params = lift_extra_body_reasoning(
-            reasoning_effort,
+        chat_params: Final = drop_refused_extra_body_reasoning(
             non_default_params,
+            model=model,
+            base_model=deployment_base_model,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            deployment_model_info=deployment_model_info,
             drop_params=drop_unsupported_reasoning,
+            additional_drop_params=routing_kwargs.get("additional_drop_params"),
         )
         requested_output_config: Final = as_str_mapping(chat_params.get("output_config"))
         chat_reasoning: Final = resolve_chat_reasoning(
-            requested_reasoning_effort,
+            reasoning_effort,
             thinking,
             requested_output_config,
             model=model,
@@ -6357,7 +6361,6 @@ def completion(
         validated_model_info: Final = (
             _MODEL_INFO_ADAPTER.validate_python(model_info) if isinstance(model_info, dict) else None
         )
-        deployment_base_model: Final = base_model if isinstance(base_model, str) else None
         optional_params = optional_params_for_model_info(validated_model_info, reasoning_drop_warnings)
         fakes_stream: Final = partial(
             _completion_fakes_stream,

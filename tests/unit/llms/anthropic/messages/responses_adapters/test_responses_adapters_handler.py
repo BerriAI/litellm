@@ -1527,7 +1527,7 @@ async def test_messages_applies_additional_drop_params_to_a_reasoning_object(
 
 
 @pytest.mark.asyncio
-async def test_messages_keeps_a_string_effort_and_other_extra_body_fields_under_drop_params(
+async def test_messages_lets_extra_body_reasoning_override_a_string_effort_without_its_refused_mode(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
     body: Final = await _body_sent_upstream(
@@ -1538,9 +1538,40 @@ async def test_messages_keeps_a_string_effort_and_other_extra_body_fields_under_
         extra_body={"reasoning": REFUSED_REASONING, "safety_identifier": "user-1"},
     )
 
-    assert body["reasoning"]["effort"] == "high"
-    assert "mode" not in body["reasoning"]
+    assert body["reasoning"] == {"effort": "low"}
     assert body["safety_identifier"] == "user-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_key", ["reasoning", "reasoning_effort"])
+async def test_messages_keeps_an_extra_body_effort_over_the_one_thinking_translates_to_under_drop_params(
+    reasoning_key: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        thinking={"type": "adaptive"},
+        extra_body={reasoning_key: {"effort": "high", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_prefers_extra_body_reasoning_over_a_reasoning_effort_object_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": "high"}, "reasoning_effort": REFUSED_REASONING},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
 
 
 @pytest.mark.asyncio

@@ -3256,7 +3256,7 @@ def test_openai_chat_keeps_extra_body_reasoning_as_sent_without_drop_params(key:
 
 
 @pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
-def test_openai_chat_prefers_the_top_level_reasoning_effort_and_keeps_other_extra_body_fields(
+def test_openai_chat_lets_the_extra_body_effort_override_the_top_level_one_and_keeps_other_fields(
     key: str, openai_chat_route: respx.Route
 ):
     litellm.completion(
@@ -3271,7 +3271,7 @@ def test_openai_chat_prefers_the_top_level_reasoning_effort_and_keeps_other_extr
     request_body: Final = json.loads(openai_chat_route.calls[0].request.content)
     assert "reasoning" not in request_body
     assert request_body["vendor_field"] == 1
-    assert request_body["reasoning_effort"] == "high"
+    assert request_body["reasoning_effort"] == "low"
 
 
 @pytest.mark.parametrize("base_source", ["argument", "env"])
@@ -3311,8 +3311,7 @@ def test_openai_chat_does_not_judge_reasoning_fields_for_a_compatible_backend(
     assert {key: request_body[key] for key in extra_body} == extra_body
 
 
-@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
-@pytest.mark.parametrize(
+_BRIDGED_OPENAI_ROUTES: Final = pytest.mark.parametrize(
     "model, route_kwargs",
     [
         ("openai/responses/gpt-6.1-standard-only", {}),
@@ -3323,6 +3322,10 @@ def test_openai_chat_does_not_judge_reasoning_fields_for_a_compatible_backend(
     ],
     ids=["responses-prefix", "function-tools"],
 )
+
+
+@pytest.mark.parametrize("key", ["reasoning", "reasoning_effort"])
+@_BRIDGED_OPENAI_ROUTES
 def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_under_drop_params(
     key: str,
     model: str,
@@ -3341,6 +3344,30 @@ def test_openai_responses_bridge_drops_a_refused_mode_from_extra_body_reasoning_
 
     assert openai_chat_route.called is False
     assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {"effort": "low"}
+
+
+@_BRIDGED_OPENAI_ROUTES
+def test_openai_responses_bridge_keeps_extra_body_reasoning_over_the_top_level_effort_under_drop_params(
+    model: str,
+    route_kwargs: dict[str, list[dict[str, object]]],
+    openai_chat_route: respx.Route,
+    openai_responses_route: respx.Route,
+):
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        reasoning_effort="low",
+        extra_body={"reasoning": {"effort": "high", "summary": "detailed", "mode": "pro"}},
+        drop_params=True,
+        api_key="fake-key",
+        **route_kwargs,
+    )
+
+    assert openai_chat_route.called is False
+    assert json.loads(openai_responses_route.calls[0].request.content)["reasoning"] == {
+        "effort": "high",
+        "summary": "detailed",
+    }
 
 
 def test_openai_chat_reads_the_reasoning_effort_key_first_when_extra_body_carries_both_objects(
