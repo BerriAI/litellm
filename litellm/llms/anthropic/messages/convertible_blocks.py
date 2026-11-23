@@ -13,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.factory import sanitize_anthropic_tool_use_id
 from litellm.llms.anthropic.messages.native.utils import normalize_native_messages
+from litellm.llms.anthropic.messages.utils import search_result_text
 from litellm.types.utils import TokenCountMessagesFormat
 
 _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
@@ -22,7 +23,7 @@ _CONVERTIBLE_BLOCK_TYPES: Final = MappingProxyType(
     }
 )
 _SOURCED_BLOCK_TYPES: Final = frozenset({"image", "document"})
-_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document"})
+_TOOL_RESULT_BLOCK_TYPES: Final = frozenset({"text", "image", "document", "search_result"})
 
 
 _JSON_MESSAGES: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -151,6 +152,12 @@ def tool_result_text_part(block: object) -> str | None:
             return None
         case {"type": "text"}:
             return ""
+        case {"type": "search_result"}:
+            fields: Final = as_str_mapping(block)
+            if fields is None:
+                return None
+            rendered: Final = search_result_text(fields)
+            return rendered or None
         case _:
             return None
 

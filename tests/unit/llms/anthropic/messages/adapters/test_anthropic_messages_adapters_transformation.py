@@ -5116,7 +5116,7 @@ def test_tool_result_text_beside_tool_reference_keeps_both_parts_in_order():
         "",
         {"not": "a list"},
         [{"type": "future_block", "payload": 1}],
-        [{"type": "search_result", "source": "https://example.com", "title": "t", "content": []}],
+        [{"type": "search_result", "content": []}],
     ],
     ids=["empty_list", "null", "empty_string", "non_list", "unknown_block", "search_result_only"],
 )
@@ -6415,3 +6415,119 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+def test_translate_anthropic_to_openai_keeps_search_result_tool_output():
+    """A tool_result carrying search_result blocks (RAG citations) must reach the model as text.
+
+    The adapter only translated text/image/document/tool_reference blocks, so a
+    search_result-only tool result became an empty tool message and the retrieved
+    content never reached the model.
+    """
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 100,
+            "messages": [
+                {"role": "user", "content": "How do I configure the timeout?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_1",
+                            "name": "search_knowledge_base",
+                            "input": {"query": "timeout"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {
+                                    "type": "search_result",
+                                    "source": "https://docs.company.com/product-guide",
+                                    "title": "Product Configuration Guide",
+                                    "content": [
+                                        {
+                                            "type": "text",
+                                            "text": "The default timeout is 30 seconds.",
+                                        }
+                                    ],
+                                    "citations": {"enabled": True},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+
+    tool_message: Final = openai_request["messages"][2]
+    assert tool_message["role"] == "tool"
+    assert tool_message["content"] == (
+        "Title: Product Configuration Guide\n"
+        "Source: https://docs.company.com/product-guide\n"
+        "The default timeout is 30 seconds."
+    )
+
+
+def test_translate_anthropic_to_openai_keeps_text_beside_search_result_tool_output():
+    """Junction: a regular text block must still be kept when a search_result is also present."""
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": [
+                            {"type": "text", "text": "Loaded from cache."},
+                            {
+                                "type": "search_result",
+                                "title": "Timeouts",
+                                "source": "https://docs.example.com/timeouts",
+                                "content": [{"type": "text", "text": "Default is 30s."}],
+                            },
+                        ],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["role"] == "tool"
+    assert result[1]["content"] == [
+        {"type": "text", "text": "Loaded from cache."},
+        {
+            "type": "text",
+            "text": "Title: Timeouts\nSource: https://docs.example.com/timeouts\nDefault is 30s.",
+        },
+    ]
+
+
+def test_translate_anthropic_to_openai_keeps_title_only_search_result_tool_output():
+    """A search_result with only a title is still translatable text, not an empty tool message."""
+    result = LiteLLMAnthropicMessagesAdapter().translate_anthropic_messages_to_openai(
+        messages=[
+            _anthropic_tool_use_turn("toolu_01"),
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_01",
+                        "content": [{"type": "search_result", "title": "Untitled source", "content": []}],
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert result[1]["content"] == "Title: Untitled source"

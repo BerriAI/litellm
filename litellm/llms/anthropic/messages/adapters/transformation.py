@@ -1455,6 +1455,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 return None if text is None else ChatCompletionTextObject(type="text", text=text)
             case "image" | "document":
                 return self._source_image_url_part(block.get("source"))
+            case "search_result":
+                rendered: Final = tool_result_text_part(block)
+                return None if rendered is None else ChatCompletionTextObject(type="text", text=rendered)
             case "tool_reference":
                 return ChatCompletionToolReferenceObject(
                     type="tool_reference", tool_name=str(block.get("tool_name") or "")
