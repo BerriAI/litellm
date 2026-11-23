@@ -173,7 +173,7 @@ class InMemoryCache(BaseCache):
         else:
             return False
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key, value, reset_ttl: bool = False, **kwargs):
         # Handle the edge case where max_size_in_memory is 0
         if self.max_size_in_memory == 0:
             return  # Don't cache anything if max size is 0
@@ -187,7 +187,7 @@ class InMemoryCache(BaseCache):
                 return
 
             self.cache_dict[key] = value
-            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            if reset_ttl or self.allow_ttl_override(key):  # response writes may explicitly refresh an active TTL
                 if "ttl" in kwargs and kwargs["ttl"] is not None:
                     self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
