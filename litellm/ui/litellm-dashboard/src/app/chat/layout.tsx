@@ -18,6 +18,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
     userRole,
     userId,
     userEmail,
+    userAlias,
     premiumUser,
     isLoading: isIdentityLoading,
     isAuthorized,
@@ -45,6 +46,7 @@ function ChatLayoutContent({ children }: { children: React.ReactNode }) {
             accessToken={accessToken ?? ""}
             userId={userId ?? ""}
             userEmail={userEmail ?? ""}
+            userAlias={userAlias}
             userRole={userRole ?? ""}
             premiumUser={premiumUser ?? false}
           >

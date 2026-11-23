@@ -36,7 +36,7 @@ interface CustomerUsageRankingsProps {
   colorByModel: ReadonlyMap<string, string>;
   onSearchChange: (search: string) => void;
   onPageChange: (page: number) => void;
-  onDrillDown: (dimension: "teams", id: string) => void;
+  onDrillDown?: (dimension: "teams", id: string) => void;
 }
 
 export default function CustomerUsageRankings({
@@ -55,7 +55,7 @@ export default function CustomerUsageRankings({
   const lastPage = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const currentPage = Math.min(Math.max(1, page), lastPage);
   const start = (currentPage - 1) * PAGE_SIZE;
-  const canDrillDown = dimension === "teams";
+  const canDrillDown = dimension === "teams" && Boolean(onDrillDown);
 
   return (
     <section className="min-w-0" aria-label={t("customerPortal.analytics.breakdown")}>
@@ -72,7 +72,6 @@ export default function CustomerUsageRankings({
         </div>
       </div>
       <div>
-        <p className="py-3 text-xs text-muted-foreground">{t("customerPortal.analytics.rankingHint")}</p>
         <Table aria-label={t(DIMENSION_LABELS[dimension])}>
           <TableHeader>
             <TableRow>
@@ -98,7 +97,7 @@ export default function CustomerUsageRankings({
                   {canDrillDown && row.id ? (
                     <button
                       type="button"
-                      onClick={() => onDrillDown(dimension, row.id)}
+                      onClick={() => onDrillDown?.("teams", row.id)}
                       className="flex max-w-full items-center gap-2 text-left font-medium hover:text-primary focus-visible:outline-2 focus-visible:outline-ring"
                     >
                       <span className="truncate">{row.label}</span>

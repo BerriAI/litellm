@@ -19,6 +19,10 @@ use crate::{Error, error::Repr};
 /// Returns the headers to add to the request; it never sees a mutable request.
 pub trait RequestSigner: Send + Sync {
     fn sign(&self, request: &Request) -> Result<HeaderMap, Error>;
+
+    fn owned_headers(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 pub fn json(
@@ -65,7 +69,11 @@ pub fn from_http<B: Into<reqwest::Body>>(request: http::Request<B>) -> Result<Re
 
 pub fn signed(mut request: Request, signer: &dyn RequestSigner) -> Result<Request, Error> {
     let signature = signer.sign(&request)?;
-    request.headers_mut().extend(signature);
+    let headers = request.headers_mut();
+    for name in signer.owned_headers() {
+        headers.remove(*name);
+    }
+    headers.extend(signature);
     Ok(request)
 }
 
@@ -159,7 +167,7 @@ mod tests {
         struct Refuses;
         impl RequestSigner for Refuses {
             fn sign(&self, _request: &Request) -> Result<HeaderMap, Error> {
-                Err(Error::computed_header("authorization"))
+                Err(Error::unsignable_body())
             }
         }
 
@@ -168,7 +176,44 @@ mod tests {
             &Refuses,
         )
         .unwrap_err();
-        assert!(error.is_computed_header());
+        assert!(!error.dispatched());
+    }
+
+    #[test]
+    fn a_header_the_signer_owns_is_dropped_even_when_the_signer_omits_it() {
+        struct OwnsDate;
+        impl RequestSigner for OwnsDate {
+            fn sign(&self, _request: &Request) -> Result<HeaderMap, Error> {
+                Ok(HeaderMap::from_iter([(
+                    reqwest::header::AUTHORIZATION,
+                    HeaderValue::from_static("signed"),
+                )]))
+            }
+
+            fn owned_headers(&self) -> &'static [&'static str] {
+                &["date", "authorization"]
+            }
+        }
+
+        let request = signed(
+            json(
+                "https://u.test/",
+                &[
+                    ("Date".into(), "caller".into()),
+                    ("Authorization".into(), "caller".into()),
+                    ("x-kept".into(), "1".into()),
+                ],
+                &json!({}),
+                None,
+            )
+            .unwrap(),
+            &OwnsDate,
+        )
+        .unwrap();
+
+        assert!(!request.headers().contains_key("date"));
+        assert_eq!(request.headers()["authorization"], "signed");
+        assert_eq!(request.headers()["x-kept"], "1");
     }
 
     #[rstest]

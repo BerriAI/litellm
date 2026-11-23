@@ -471,8 +471,14 @@ def without_message_content(span: ReadableSpan) -> ReadableSpan:
 class _CountedSpanView(_SpanView):
     """A ``_SpanView`` of ``inner`` with other attributes that reports the dropped counts ``inner`` reports."""
 
-    def __init__(self, inner: ReadableSpan, attributes: Attributes, dropped_attributes: int = 0) -> None:
-        super().__init__(inner, inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
+    def __init__(
+        self,
+        inner: ReadableSpan,
+        attributes: Attributes,
+        dropped_attributes: int = 0,
+        resource: Resource | None = None,
+    ) -> None:
+        super().__init__(inner, resource or inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
         self._dropped_counts: Final = (
             inner.dropped_attributes + dropped_attributes,
             inner.dropped_events,
@@ -1299,6 +1305,36 @@ class _DestinationLangfuseAttributeFilter(SpanProcessor):
         return self._inner.force_flush(timeout_millis)
 
 
+class _ExporterResource(SpanProcessor):
+    """Add one exporter's own resource attributes to every span before ``inner`` exports it, under any value the
+    span's own resource already names. The merged resource is kept for the next span, since a provider's spans share
+    one resource."""
+
+    def __init__(self, inner: SpanProcessor, attributes: Mapping[str, str]) -> None:
+        self._inner: Final = inner
+        self._extra: Final = Resource(dict(attributes))
+        self._merged: tuple[Resource, Resource] | None = None
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        cached: Final = self._merged
+        merged: Final = (
+            cached
+            if cached is not None and cached[0] is span.resource
+            else (span.resource, self._extra.merge(span.resource))
+        )
+        self._merged = merged
+        self._inner.on_end(_CountedSpanView(span, span.attributes, resource=merged[1]))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
+
+
 class _MessageContentFilter(SpanProcessor):
     """Strip prompt and response content from every span before ``inner`` exports it."""
 
@@ -1444,7 +1480,7 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
 
         tls: Final = resolve_otlp_http_tls("LOGS")
         return HTTPLogExporter(
-            endpoint=_otlp_logs_endpoint(config.endpoint),
+            endpoint=config.logs_endpoint or _otlp_logs_endpoint(config.endpoint),
             headers=parse_headers(config.headers),
             certificate_file=tls.certificate_file,
             session=tls.session,
@@ -1460,7 +1496,10 @@ def build_log_exporter(config: OpenTelemetryV2Config) -> LogExporter:
                 "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
             ) from exc
 
-        return GRPCLogExporter(endpoint=config.endpoint, headers=parse_headers(config.headers))
+        return GRPCLogExporter(
+            endpoint=config.logs_endpoint or config.endpoint,
+            headers=parse_headers(config.headers),
+        )
     return ConsoleLogExporter()
 
 
@@ -1576,10 +1615,11 @@ def _spec_processor(
     strip_destination_langfuse_attributes: bool,
     langfuse_mapped: bool,
 ) -> SpanProcessor:
-    exporting: Final = _processor_for(
+    batching: Final = _processor_for(
         _exporter_from_spec(spec),
         (spec.use_simple_processor if spec.use_simple_processor is not None else use_simple_processor),
     )
+    exporting: Final = _ExporterResource(batching, spec.resource_attributes) if spec.resource_attributes else batching
     scoped: Final = (
         _DestinationLangfuseAttributeFilter(exporting, langfuse_mapped)
         if strip_destination_langfuse_attributes

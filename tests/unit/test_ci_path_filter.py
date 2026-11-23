@@ -49,6 +49,15 @@ CI = [".github/workflows/test-unit.yml"]
 @pytest.mark.parametrize(
     "category,changed,expected",
     [
+        ("tests-only", ["tests/test_root.py"], "run"),
+        ("tests-only", ["tests/unit/router/test_router.py", "README.md", "docs/guide.mdx"], "run"),
+        ("tests-only", ["tests/unit/test_x.py", "tests/unit/conftest.py"], "skip"),
+        ("tests-only", ["tests/unit/test_x.py", "tests/unit/helpers.py"], "skip"),
+        ("tests-only", ["tests/unit/test_x.py", "tests/fixtures/data.json"], "skip"),
+        ("tests-only", ["tests/unit/test_x.py", "litellm/router.py"], "skip"),
+        ("tests-only", ["test_outside.py"], "skip"),
+        ("tests-only", DOCS, "skip"),
+        ("tests-only", [], "skip"),
         ("mcp-dependencies", ["pyproject.toml"], "run"),
         ("mcp-dependencies", ["uv.lock"], "run"),
         ("mcp-dependencies", ["litellm/mcp_client/client.py"], "run"),

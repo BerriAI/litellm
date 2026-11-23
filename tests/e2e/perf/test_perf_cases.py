@@ -18,7 +18,7 @@ from lifecycle import ResourceManager
 from memory_readings import read_rss_everywhere
 from models import SpendLogsParams
 from proxy_client import ProxyClient
-from setup.datastore import connections_sampler, read_db_counters, read_redis_counters, redis_monitor
+from setup.datastore import read_db_counters, read_redis_counters, redis_monitor
 from setup.event_loop import (
     LOG_FILE_ENV,
     OPT_IN_ENV,
@@ -119,7 +119,6 @@ def test_perf_case(
     with (
         gateway_cpu_sampler() as cpu,
         redis_monitor() as monitor,
-        connections_sampler() as connections,
         telemetry_sampler(proxy) as telemetry,
     ):
         outcome: Final = run_plan(case, plan, setup)
@@ -154,12 +153,11 @@ def test_perf_case(
         redis_after=redis_after,
         redis_commands=monitor.commands,
         gateway_cpu_seconds=cpu.seconds,
+        gateway_cpu_coverage=cpu.coverage,
         telemetry_before=telemetry_before,
         telemetry_after=telemetry_after,
-        peak_connections=connections.peak,
         ramp=case.traffic.ramp,
         cpu_series=cpu.series,
-        connection_series=connections.series,
         telemetry_series=telemetry.series,
     )
     rows, exceeded_limits = evaluate(case, observation)

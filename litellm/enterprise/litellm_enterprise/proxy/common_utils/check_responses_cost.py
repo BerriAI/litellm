@@ -36,6 +36,7 @@ from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
     ResponseCreator,
+    creator_billing_started_at,
 )
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -101,6 +102,7 @@ class BilledBackgroundResponse:
     litellm_params: Mapping[str, object]
     metadata: Mapping[str, object]
     creator_logging: Mapping[str, object]
+    started_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,7 +170,7 @@ def _billed_logging_obj(billed: BilledBackgroundResponse, creator_logging: Mappi
         messages=[{"role": "user", "content": "<retrieve_response>"}],
         stream=False,
         call_type=_RETRIEVE_RESPONSE_CALL_TYPE,
-        start_time=datetime.now(),
+        start_time=billed.started_at or datetime.now(),
         litellm_call_id=str(uuid.uuid4()),
         function_id=str(uuid.uuid4()),
         dynamic_success_callbacks=list(sync_callbacks),
@@ -408,6 +410,7 @@ class CheckResponsesCost:
                 }
             ),
             creator_logging=creator_logging_fields(creator, self._proxy_config),
+            started_at=creator_billing_started_at(job),
         )
 
     def _requested_model_group(self, target: _PollTarget, team_id: str | None) -> Mapping[str, object]:

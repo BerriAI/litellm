@@ -2,12 +2,14 @@
 
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import { useAllTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
+  createSelectionColumn,
   DataTable,
   DataTableFilterDrawer,
   DataTableFilterField,
@@ -23,17 +25,27 @@ import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle 
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
-import { ColumnFiltersState, functionalUpdate, OnChangeFn } from "@tanstack/react-table";
+import {
+  ColumnFiltersState,
+  functionalUpdate,
+  OnChangeFn,
+  type Row,
+  type RowSelectionState,
+} from "@tanstack/react-table";
 import { KeyRound } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
 import { useResetDetailState } from "@/hooks/useUrlTab";
 import React, { useCallback, useMemo, useState } from "react";
 import type { ParseKeys } from "i18next";
 import { useTranslation } from "react-i18next";
+import { canModifyKey } from "@/utils/keyPermissions";
+import { hasProxyWideSpendView, isProxyAdminRole } from "@/utils/roles";
 
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
+import { KeyDetailSkeleton } from "../templates/key_detail/KeyDetailSkeleton";
 import { getKeyTableColumns, KEY_TABLE_HIDDEN_COLUMNS, KEY_TABLE_SORT_FIELDS } from "./keyTableColumns";
+import { VirtualKeysBulkActions } from "./VirtualKeysBulkActions";
 
 interface VirtualKeysTableProps {
   headerActions?: React.ReactNode;
@@ -92,8 +104,30 @@ const appliedFilter = (filters: ColumnFiltersState, column: FilterColumn): strin
   return typeof value === "string" ? value : undefined;
 };
 
+function useScopedRowSelection(scope: string) {
+  const [selection, setSelection] = useState<{ scope: string; enabled: boolean; rows: RowSelectionState }>({
+    scope,
+    enabled: false,
+    rows: {},
+  });
+  if (selection.scope !== scope) {
+    setSelection({ scope, enabled: false, rows: {} });
+  }
+  const selectionMode = selection.scope === scope && selection.enabled;
+  const rowSelection = selection.scope === scope ? selection.rows : {};
+  const setSelectionMode = (enabled: boolean) => setSelection({ scope, enabled, rows: {} });
+  const onRowSelectionChange: OnChangeFn<RowSelectionState> = (updater) =>
+    setSelection((current) => ({
+      scope,
+      enabled: current.scope === scope && current.enabled,
+      rows: functionalUpdate(updater, current.scope === scope ? current.rows : {}),
+    }));
+  return { rowSelection, onRowSelectionChange, selectionMode, setSelectionMode };
+}
+
 export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const { t } = useTranslation();
+  const { accessToken, token, userId, userRole, isViewOnly, isAuthorized, isLoading: isAuthLoading } = useAuthorized();
   const { data: fetchedOrganizations } = useOrganizations();
   const organizations = useMemo(() => fetchedOrganizations ?? [], [fetchedOrganizations]);
   const { data: fetchedTeams } = useAllTeams();
@@ -148,14 +182,18 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
   const keyList = useMemo(() => keys?.keys ?? [], [keys]);
   const rowCount = keys?.total_count ?? 0;
 
-  const teamIds = useMemo(
+  const memberBudgetUserIds = useMemo(
     () =>
-      Array.from(
-        new Set(keyList.flatMap((key) => (key.max_budget == null && key.team_id && key.user_id ? [key.team_id] : []))),
+      keyList.reduce<Record<string, string[]>>(
+        (byTeam, key) =>
+          key.max_budget == null && key.team_id && key.user_id
+            ? { ...byTeam, [key.team_id]: [...(byTeam[key.team_id] ?? []), key.user_id] }
+            : byTeam,
+        {},
       ),
     [keyList],
   );
-  const teamMemberBudgets = useTeamMemberBudgets(teamIds);
+  const teamMemberBudgets = useTeamMemberBudgets(memberBudgetUserIds);
   const applyUserBudgetToTeamKeys = useApplyUserBudgetToTeamKeys();
 
   const columnDeps = useMemo(
@@ -171,7 +209,41 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
     }),
     [allTeams, organizations, teamMemberBudgets, setSelectedKeyId, applyUserBudgetToTeamKeys, resetDetailState],
   );
-  const columns = useMemo(() => getKeyTableColumns(columnDeps, t), [columnDeps, t]);
+  const isReadOnly = isViewOnly || !isAuthorized || isAuthLoading;
+  const bulkSelectionAllowed = Boolean(accessToken && userId) && !isReadOnly && keyListOptions.status !== "deleted";
+  const hasCurrentRows = !isPending && !isPlaceholderData && keys !== undefined;
+  const selectionReady = bulkSelectionAllowed && hasCurrentRows && searchInput === searchQuery;
+  const selectionScope = JSON.stringify([
+    token,
+    accessToken,
+    userId,
+    userRole,
+    isViewOnly,
+    isAuthorized,
+    isAuthLoading,
+    pagination,
+    sorting,
+    searchInput,
+    searchQuery,
+    columnFilters,
+    selectedKeyId,
+  ]);
+  const { rowSelection, onRowSelectionChange, selectionMode, setSelectionMode } = useScopedRowSelection(selectionScope);
+  const isRowSelectable = (row: Row<KeyResponse>) => {
+    if (!selectionMode || !selectionReady || !row.original.token || row.original.deleted_at) return false;
+    return canModifyKey(row.original, allTeams, userId, userRole);
+  };
+  const columns = useMemo(() => {
+    const keyColumns = getKeyTableColumns(columnDeps, t);
+    if (!bulkSelectionAllowed || !selectionMode) return keyColumns;
+    return [
+      createSelectionColumn<KeyResponse>({
+        rowAriaLabel: ({ original }) =>
+          t("apiKeys.virtualKeysTable.bulkDelete.selectKey", { key: original.key_alias || original.token }),
+      }),
+      ...keyColumns,
+    ];
+  }, [columnDeps, t, bulkSelectionAllowed, selectionMode]);
 
   const selectedKeyFromList = useMemo(
     () => keyList.find((key) => key.token === selectedKeyId),
@@ -234,7 +306,17 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
 
   if (selectedKeyId) {
     if (!selectedKey && !selectedKeyLoadFailed) {
-      return <div className="p-4 text-sm text-muted-foreground">{t("apiKeys.virtualKeysTable.loadingKey")}</div>;
+      return (
+        <KeyDetailSkeleton
+          keyId={selectedKeyId}
+          backButtonText={t("keyDetail.keyInfoView.backToKeys")}
+          onBack={() => {
+            resetDetailState();
+            void setSelectedKeyId(null);
+          }}
+          showAutoRouter={hasProxyWideSpendView(userRole)}
+        />
+      );
     }
     return (
       <div className="w-full h-full overflow-hidden">
@@ -267,6 +349,9 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
         data={keyList}
         columns={columns}
         getRowId={(row) => row.token}
+        enableRowSelection={isRowSelectable}
+        rowSelection={rowSelection}
+        onRowSelectionChange={onRowSelectionChange}
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={onColumnVisibilityChange}
         sortingMode="server"
@@ -299,7 +384,19 @@ export function VirtualKeysTable({ headerActions }: VirtualKeysTableProps) {
               onOpenFilters={() => setFiltersOpen(true)}
               filterLabels={filterLabels}
               formatFilterValue={formatFilterValue}
-            />
+            >
+              {bulkSelectionAllowed && accessToken && (
+                <VirtualKeysBulkActions
+                  key={selectionScope}
+                  table={table}
+                  accessToken={accessToken}
+                  disabled={!selectionReady}
+                  canEdit={isProxyAdminRole(userRole ?? "")}
+                  selectionMode={selectionMode}
+                  onSelectionModeChange={setSelectionMode}
+                />
+              )}
+            </DataTableToolbar>
             <DataTableFilterDrawer
               table={table}
               open={filtersOpen}

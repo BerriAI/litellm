@@ -145,7 +145,7 @@ mod tests {
     use super::*;
     use crate::{
         common_utils::{chat_completions_provider, resolve_request},
-        types::{ChatCompletionsCall, ResolvedChatCompletionsRequest},
+        types::{ChatCompletionsCall, OptionalParams, ResolvedChatCompletionsRequest},
     };
     use litellm_inference::provider::resolve_llm_provider;
 
@@ -200,13 +200,16 @@ mod tests {
             ChatCompletionsCall {
                 model: "anthropic/claude-sonnet-4-5".into(),
                 messages: json!([{"role": "user", "content": "hi"}]),
-                optional_params: json!({"max_tokens": 16}).as_object().unwrap().clone(),
+                optional_params: OptionalParams::ProviderMapped(
+                    json!({"max_tokens": 16}).as_object().unwrap().clone(),
+                ),
                 api_key: Some("sk-test".into()),
                 api_base: Some(api_base.into()),
                 custom_llm_provider: None,
                 extra_headers: None,
                 timeout: None,
             },
+            provider.model,
             config,
         )
         .unwrap();

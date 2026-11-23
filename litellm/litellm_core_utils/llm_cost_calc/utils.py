@@ -15,6 +15,7 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
@@ -54,7 +55,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
-_IMAGE_USAGE_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_IMAGE_TOKEN_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -768,7 +769,9 @@ def _get_token_base_cost(
     # For image generation models that don't have output_cost_per_token,
     # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
     if completion_base_cost == 0.0:
-        output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
+        output_image_cost: Final = get_cost_per_unit(
+            model_info, get_service_tier_cost_key("output_cost_per_image_token", service_tier), None
+        )
         if output_image_cost is not None:
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
@@ -1210,7 +1213,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,
@@ -2103,6 +2106,31 @@ def calculate_prompt_caching_savings(
     return (read_discount - write_premium) * uplift
 
 
+def _complete_image_cache_details(
+    cached_details: object,
+    cached_tokens: int,
+    prompt_tokens: int,
+    text_tokens: int | None,
+    image_tokens: int | None,
+) -> CachedTokensDetails | None:
+    """The text and image cache split when it accounts for every cached token, otherwise None."""
+    modality_cache: Final = (
+        CachedTokensDetails.model_validate(cached_details, from_attributes=True)
+        if cached_details is not None
+        else (
+            CachedTokensDetails(text_tokens=text_tokens, image_tokens=image_tokens)
+            if cached_tokens == prompt_tokens
+            else None
+        )
+    )
+    if modality_cache is None:
+        return None
+    accounted_tokens: Final = (modality_cache.text_tokens or 0) + (modality_cache.image_tokens or 0)
+    if accounted_tokens != cached_tokens:
+        return None
+    return modality_cache
+
+
 def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
@@ -2140,32 +2168,30 @@ def calculate_image_response_cost_from_usage(
     input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
-        cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
-        text_input_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
-        image_input_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
+        # or an object; read it tolerantly like the output side below, so image
+        # input tokens are priced at input_cost_per_image_token instead of
+        # silently falling back to the text rate.
+        input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
+        input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        input_cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
         cached_details: Final[object] = (
-            _IMAGE_USAGE_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
-            if isinstance(input_tokens_details, Mapping)
+            _IMAGE_TOKEN_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
+            if isinstance(input_tokens_details, dict)
             else getattr(input_tokens_details, "cached_tokens_details", None)
         )
-        modality_cache: Final = (
-            CachedTokensDetails.model_validate(cached_details, from_attributes=True)
-            if cached_details is not None
-            else (
-                CachedTokensDetails(text_tokens=text_input_tokens, image_tokens=image_input_tokens)
-                if cached_tokens == prompt_tokens
-                else None
-            )
-        )
-        has_complete_cache_split: Final = (
-            modality_cache is not None
-            and (modality_cache.text_tokens or 0) + (modality_cache.image_tokens or 0) == cached_tokens
+        modality_cache: Final = _complete_image_cache_details(
+            cached_details=cached_details,
+            cached_tokens=input_cached_tokens,
+            prompt_tokens=prompt_tokens,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
         )
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=text_input_tokens,
-            image_tokens=image_input_tokens,
-            cached_tokens=cached_tokens if has_complete_cache_split else 0,
-            cached_tokens_details=modality_cache if has_complete_cache_split else None,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
+            cached_tokens=input_cached_tokens if modality_cache is not None else 0,
+            cached_tokens_details=modality_cache,
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)
@@ -2227,7 +2253,7 @@ def calculate_image_response_web_search_cost(
     if usage is None:
         return 0.0
 
-    web_search_requests: Final = getattr(usage, "web_search_requests", None)
+    web_search_requests: Final = attribute_or_none(usage, "web_search_requests")
     if not web_search_requests:
         return 0.0
 

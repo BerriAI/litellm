@@ -35,7 +35,7 @@ class V0ChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         v0 supports a limited subset of OpenAI parameters
         Reference: https://v0.dev/docs/v0-model-api#request-body

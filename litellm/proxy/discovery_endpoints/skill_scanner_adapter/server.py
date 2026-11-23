@@ -37,6 +37,8 @@ def authenticate(credentials: Annotated[HTTPAuthorizationCredentials, Depends(HT
 
 
 def source_target(source: dict[str, str]) -> str:
+    if source.get("sha"):
+        raise HTTPException(400, "Upload a ZIP to scan this source's exact commit")
     target: Final = (
         "https://github.com/" + source.get("repo", "") if source.get("source") == "github" else source.get("url", "")
     )

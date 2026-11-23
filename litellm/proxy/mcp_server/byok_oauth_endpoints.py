@@ -92,7 +92,7 @@ def user_id_from_session_cookie(request: Request) -> str | None:
 _user_id_from_session_cookie: Final = user_id_from_session_cookie
 
 
-def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
+def session_identity_from_cookie(request: Request) -> tuple[str | None, str | None]:
     """Return ``(user_id, session_key)`` from the UI ``token`` cookie
     (HS256-signed with ``master_key``), or ``(None, None)`` if missing/invalid.
 
@@ -133,6 +133,9 @@ def _session_identity_from_cookie(request: Request) -> tuple[str | None, str | N
         return None, None
     session_key: Final = payload.get("key")
     return user_id, session_key if isinstance(session_key, str) and session_key else None
+
+
+_session_identity_from_cookie: Final = session_identity_from_cookie
 
 
 async def _session_key_is_live(session_key: str | None) -> bool:

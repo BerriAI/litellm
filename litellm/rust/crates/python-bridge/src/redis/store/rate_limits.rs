@@ -20,7 +20,7 @@ use crate::redis::client::NativeRedisClient;
 /// The v3 rate limiter's keyspace. Memory reads and writes are synchronous like `InMemoryCache`;
 /// every Redis call is a future.
 #[pyclass(frozen, name = "NativeRateLimits")]
-pub(crate) struct NativeRateLimits(Arc<RateLimits>);
+pub(crate) struct NativeRateLimits(pub(crate) Arc<RateLimits>);
 
 /// An `int` or `float` counter, a `str` window start, or a `{slot_id: acquired_at}` registry.
 #[derive(FromPyObject)]

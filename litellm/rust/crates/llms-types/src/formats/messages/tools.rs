@@ -1226,7 +1226,7 @@ mod tests {
     fn cache_control(cache_type: &str, ttl: &str) -> CacheControl {
         CacheControl {
             cache_type: Some(String::from(cache_type)),
-            ttl: Some(String::from(ttl)),
+            ttl: Some(crate::recognized::Recognized::Known(String::from(ttl))),
             ..CacheControl::default()
         }
     }
