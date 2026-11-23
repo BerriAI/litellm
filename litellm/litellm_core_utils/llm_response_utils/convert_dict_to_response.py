@@ -539,6 +539,7 @@ class _PromptCacheTokenCounts(TypedDict, total=False):
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_RERANK_RESPONSE_FIELDS: Final[TypeAdapter[dict[object, object]]] = TypeAdapter(dict[object, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
 _PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
 _PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
@@ -1111,7 +1112,7 @@ def convert_to_model_response_object(
                 raise Exception("Error in response object format")
 
             if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
+                model_response_object = RerankResponse.model_validate(response_object)
                 return model_response_object
 
             if "id" in response_object:
@@ -1123,8 +1124,9 @@ def convert_to_model_response_object(
             if "results" in response_object:
                 model_response_object.results = response_object["results"]
 
+            rerank_fields: Final = _RERANK_RESPONSE_FIELDS.validate_python(response_object)
             reported_usage: Final = provider_usage_or_none(
-                response_object.get("usage", response_object.get("provider_usage"))
+                rerank_fields.get("usage", rerank_fields.get("provider_usage"))
             )
             if reported_usage is not None:
                 set_extra_attribute(model_response_object, "provider_usage", reported_usage)

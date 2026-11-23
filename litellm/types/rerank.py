@@ -129,7 +129,7 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
-_PROVIDER_USAGE: Final = TypeAdapter(Mapping[str, object] | None)
+_PROVIDER_USAGE: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _DUMPED_FIELDS: Final = TypeAdapter(dict[str, object])
 _PROVIDER_USAGE_KEYS: Final = frozenset({"usage", "provider_usage"})
 

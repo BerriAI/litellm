@@ -2437,13 +2437,14 @@ def completion_cost(
                 if litellm_logging_obj is not None:
                     request_model_for_cost = litellm_logging_obj.model
 
+                priced_model: Final = model
                 (
                     prompt_tokens_cost_usd_dollar,
                     completion_tokens_cost_usd_dollar,
                 ) = _rerank_cost_or_caller_priced_zero(
                     caller_set_prices,
                     lambda: cost_per_token(
-                        model=model,
+                        model=priced_model,
                         prompt_tokens=prompt_tokens or 0,
                         completion_tokens=completion_tokens or 0,
                         custom_llm_provider=_pricing_provider_for_cost_candidate(
