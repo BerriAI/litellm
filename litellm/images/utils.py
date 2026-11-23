@@ -36,6 +36,16 @@ def _nested_value(entries: tuple[tuple[tuple[str, ...], object], ...]) -> object
     return _nest_bracket_entries(deeper) if deeper else entries[-1][1]
 
 
+def _camel_case_tree(config: Mapping[str, object], depth: int = 0) -> Mapping[str, object]:
+    return camel_case_keys({key: _camel_case_subtree(value, depth + 1) for key, value in config.items()})
+
+
+def _camel_case_subtree(value: object, depth: int) -> object:
+    if depth >= _MAX_BRACKET_DEPTH or not isinstance(value, Mapping):
+        return value
+    return _camel_case_tree(_JSON_OBJECT.validate_python(value), depth)
+
+
 def _nest_bracket_entries(entries: tuple[tuple[tuple[str, ...], object], ...]) -> Mapping[str, object]:
     return {
         head: _nested_value(tuple((path[1:], value) for path, value in entries if path[0] == head))
@@ -84,10 +94,10 @@ def _fold_bracket_form_field(
     sent: Final = params.get(field)
     base: Final[Mapping[str, object] | None] = {} if sent is None else _json_object_or_none(sent)
     if base is None and not drop_params:
-        return rest
+        return UnsupportedImageParam(field, "must be a JSON object")
     if not entries:
         return rest
-    return {**rest, field: _deep_merge(camel_case_keys(base or {}), camel_case_keys(_nest_bracket_entries(entries)))}
+    return {**rest, field: _deep_merge(_camel_case_tree(base or {}), _camel_case_tree(_nest_bracket_entries(entries)))}
 
 
 class _ReadsBytes(Protocol):

@@ -327,6 +327,17 @@ def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object
             {"imageConfig": '{"aspectRatio": "1:1", "imageSize": "2K"}', "imageConfig[aspectRatio]": "9:16"},
             {"aspectRatio": "9:16", "imageSize": "2K"},
         ),
+        (
+            {"imageConfig": '{"aspect_ratio": "9:16"}', "imageConfig[aspectRatio]": "1:1"},
+            {"aspectRatio": "1:1"},
+        ),
+        (
+            {
+                "imageConfig": '{"imageOutputOptions": {"mimeType": "image/jpeg"}}',
+                "imageConfig[image_output_options][mime_type]": "image/png",
+            },
+            {"imageOutputOptions": {"mimeType": "image/png"}},
+        ),
     ),
 )
 def test_gemini_edit_folds_bracket_image_config_fields(
@@ -342,3 +353,12 @@ def test_gemini_edit_rejects_more_than_64_bracket_fields_unless_dropping_params(
         _sent_gemini_edit_generation_config(**fields)
 
     assert "imageConfig" not in _sent_gemini_edit_generation_config(**fields, drop_params=True)
+
+
+def test_gemini_edit_rejects_bracket_fields_beside_a_non_object_image_config_unless_dropping_params() -> None:
+    fields: Final = {"imageConfig": "[1]", "imageConfig[aspectRatio]": "9:16"}
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="`imageConfig` must be a JSON object"):
+        _sent_gemini_edit_generation_config(**fields)
+
+    assert _sent_gemini_edit_generation_config(**fields, drop_params=True)["imageConfig"] == {"aspectRatio": "9:16"}
