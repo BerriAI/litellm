@@ -1487,7 +1487,7 @@ async def test_agent_permissions_are_written_atomically_with_the_registration(op
     ]
     assert permission["models"] == ["new"]
     if operation != "create":
-        assert permission["mcp_servers"] == ["slack"]
+        assert "mcp_servers" not in permission
         assert permission["object_permission_id"] == "permissions"
     client.db.litellm_objectpermissiontable.update.assert_not_called()
     client.db.litellm_objectpermissiontable.create.assert_not_called()
