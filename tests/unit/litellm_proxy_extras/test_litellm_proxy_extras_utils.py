@@ -800,7 +800,9 @@ class TestLensRenamePendingCheck:
         with pytest.raises(psycopg.Error) as libpq:
             psycopg.connect(database_url, connect_timeout=10, autocommit=True)
 
-        def raise_libpq_error(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> NoReturn:
+        def raise_libpq_error(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> NoReturn:
             raise libpq.value
 
         with pytest.raises(RuntimeError) as err:
@@ -812,7 +814,9 @@ class TestLensRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_tables_present(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> _FakePsycopgConn:
+        def legacy_tables_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
@@ -828,7 +832,9 @@ class TestCustomerMemberBudgetRenamePendingCheck:
         monkeypatch.setenv("DATABASE_URL", self._DATABASE_URL)
         executed: Final[list[tuple[str, tuple[str]]]] = []
 
-        def legacy_column_present(conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str) -> _FakePsycopgConn:
+        def legacy_column_present(
+            conninfo: str, *, connect_timeout: int, autocommit: bool, client_encoding: str
+        ) -> _FakePsycopgConn:
             return _FakePsycopgConn(executed)
 
         with pytest.raises(RuntimeError) as err:
