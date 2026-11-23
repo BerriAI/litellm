@@ -55,11 +55,11 @@ class FirecrawlSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """
@@ -79,9 +79,9 @@ class FirecrawlSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: Mapping[str, object],
+        data: object = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -92,8 +92,8 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Firecrawl API format.
 
@@ -150,7 +150,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Firecrawl API response to LiteLLM unified SearchResponse format.
@@ -173,7 +173,7 @@ class FirecrawlSearchConfig(BaseSearchConfig):
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results: Final[list[SearchResult]] = []
 
         data: Final = response_json.get("data", {})
 

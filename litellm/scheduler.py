@@ -148,7 +148,7 @@ class Scheduler:
         await self.save_queue(queue=filtered_queue, model_name=model_name)
         print_verbose(f"Removed request_id: {request_id} from queue for model: {model_name}")
 
-    async def peek(self, id: str, model_name: str, health_deployments: list) -> bool:
+    async def peek(self, id: str, model_name: str, health_deployments: Sequence[object]) -> bool:
         """Return if the id is at the top of the queue. Don't pop the value from heap."""
         queue: Final = await self.get_queue(model_name=model_name)
         if not queue:
