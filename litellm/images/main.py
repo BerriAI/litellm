@@ -959,7 +959,6 @@ def image_edit(
                 dropped_form_params
                 | (_DROP_PARAM_KWARGS if drops_for_upstream else frozenset[str]())
                 | unsupported_edit_params
-                | frozenset(additional_drop_params)
             )
             dropped_form_field_roots: Final[frozenset[str]] = (
                 unsupported_edit_params if should_drop_params else frozenset()
@@ -968,7 +967,7 @@ def image_edit(
                 flatten_form_field_values(
                     {
                         key: value
-                        for key, value in non_default_params.items()
+                        for key, value in kept_params.items()
                         if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
                     },
                     (
