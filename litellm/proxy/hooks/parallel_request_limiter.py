@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -84,6 +85,11 @@ class CacheObject(TypedDict):
     request_count_user_id: dict | None
     request_count_team_id: dict | None
     request_count_end_user_id: dict | None
+
+
+_admission_write: Final[ContextVar["asyncio.Task[None] | None"]] = ContextVar(
+    "legacy_parallel_request_admission_write", default=None
+)
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
@@ -523,13 +529,25 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache=values_to_update_in_cache,
             )
 
-        asyncio.create_task(
-            self.internal_usage_cache.async_batch_set_cache(
-                cache_list=values_to_update_in_cache,
-                ttl=60,
-                litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-            )  # don't block execution for cache updates
+        _admission_write.set(
+            asyncio.create_task(
+                self.internal_usage_cache.async_batch_set_cache(
+                    cache_list=values_to_update_in_cache,
+                    ttl=60,
+                    litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
+                )  # don't block execution for cache updates
+            )
         )
+
+    async def async_release_admitted_max_parallel_requests(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot this request's ``async_pre_call_hook`` took, once its counter write has landed, and
+        nothing when it never admitted."""
+        admission_write: Final = _admission_write.get()
+        if admission_write is None:
+            return
+        _admission_write.set(None)
+        await admission_write
+        await self.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
