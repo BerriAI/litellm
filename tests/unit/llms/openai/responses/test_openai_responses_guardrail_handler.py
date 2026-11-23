@@ -5,10 +5,12 @@ Tests the handler's ability to process input/output for the Responses API
 with guardrail transformations.
 """
 
+import asyncio
 import copy
 import json
 import uuid
 from collections.abc import Callable
+from itertools import chain
 from typing import Any, Final, List, Literal, Optional, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -20,12 +22,19 @@ import pytest
 
 from fastapi import HTTPException
 from pydantic import BaseModel
+from openai.types.responses.response_function_web_search import ActionSearch
 from openai.types.responses import (
+    ResponseFunctionWebSearch,
     ResponseCustomToolCall,
     ResponseCustomToolCallInputDeltaEvent,
     ResponseCustomToolCallInputDoneEvent,
     ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputRefusal,
+    ResponseOutputText,
+    ResponseReasoningItem,
 )
+from openai.types.responses.response_compaction_item import ResponseCompactionItem
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -34,13 +43,37 @@ from litellm.llms.openai.responses.guardrail_translation.handler import (
     OpenAIResponsesHandler,
 )
 from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge_guardrailed_tools
+from litellm.litellm_core_utils.tool_fields import chat_member_name
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+from litellm.llms.vertex_ai.gemini.web_search_calls import gemini_web_search_calls
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import BedrockGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
-from litellm.types.guardrails import ContentFilterAction, ContentFilterPattern
-from litellm.types.llms.openai import ChatCompletionToolCallChunk
+from litellm.types.guardrails import BlockedWord, ContentFilterAction, ContentFilterPattern
+from litellm.types.llms.openai import (
+    BaseLiteLLMOpenAIResponseObject,
+    ChatCompletionToolCallChunk,
+    ContentPartAddedEvent,
+    ContentPartDoneEvent,
+    ContentPartDonePartReasoningText,
+    ContentPartDonePartRefusal,
+    GenericEvent,
+    OutputItemDoneEvent,
+    ReasoningSummaryPartDoneEvent,
+    ReasoningSummaryTextDeltaEvent,
+    ReasoningSummaryTextDoneEvent,
+    RefusalDeltaEvent,
+    RefusalDoneEvent,
+    ResponseIncompleteEvent,
+    ResponsePartAddedEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import compaction_summary
+from litellm.responses.litellm_completion_transformation.reasoning_items import decode_thinking_blocks
+from litellm.responses.streaming_iterator import build_synthetic_response_events
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
@@ -48,6 +81,7 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.responses.litellm_completion_transformation.tool_search import build_tool_search_call
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
+    build_web_search_call,
     GenericResponseOutputItem,
     OutputText,
     OutputToolSearchCall,
@@ -235,6 +269,30 @@ CUSTOM_TOOL_CALL_ITEM = {
     "input": "echo persimmon",
     "status": "completed",
 }
+
+
+def _claude_web_calls_and_a_native_search() -> list[ResponseFunctionWebSearch]:
+    return [
+        build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed"),
+        build_web_search_call("srvtoolu_2", {"url": "https://persimmon.example"}, None, "in_progress", "web_fetch"),
+        ResponseFunctionWebSearch(
+            id="ws_native",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="persimmon"),
+        ),
+    ]
+
+
+def _web_call_actions(items: list[object]) -> list[dict[str, object]]:
+    return [ResponseFunctionWebSearch.model_validate(item, from_attributes=True).action.model_dump() for item in items]
+
+
+_MASKED_WEB_CALL_ACTIONS: Final = [
+    {"type": "search", "query": "[MASKED]", "queries": ["[MASKED]"], "sources": []},
+    {"type": "open_page", "url": "https://[MASKED].example"},
+    {"type": "search", "query": "persimmon", "queries": None, "sources": None},
+]
 
 
 class TestOpenAIResponsesHandlerDiscovery:
@@ -724,16 +782,42 @@ class TestToolResultItemsReachTextsGuardrails:
         assert blocked.value.status_code == 400
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("empty_output", ["", None], ids=["empty_string", "null"])
-    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(self, empty_output: str | None) -> None:
+    @pytest.mark.parametrize(
+        "output",
+        [
+            [{"type": "tool_reference", "tool_name": "get_weather"}],
+            [{"type": "input_text", "text": ""}, {"type": "tool_reference", "tool_name": "get_weather"}],
+        ],
+        ids=["reference_only", "empty_text_and_reference"],
+    )
+    async def test_tool_reference_output_without_text_is_scanned_as_its_json(self, output: object) -> None:
         guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
         call_item, output_type = _TOOL_TURNS[0]
+
+        await OpenAIResponsesHandler().process_input_messages(
+            _tool_result_request(call_item, output_type, output), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Weather?", json.dumps(output)]]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("call_item", "output_type"), _TOOL_TURNS, ids=["function", "custom"])
+    @pytest.mark.parametrize(
+        "empty_output",
+        ["", None, [], *[[{"type": kind, "text": ""}] for kind in ("input_text", "output_text", "text")]],
+        ids=["empty_string", "null", "empty_list", "input_text", "output_text", "text"],
+    )
+    async def test_empty_tool_output_sends_no_text_and_stays_as_sent(
+        self, call_item: dict[str, str], output_type: str, empty_output: object
+    ) -> None:
+        guardrail: Final = RecordingMaskingGuardrail(guardrail_name="test")
 
         result: Final = await OpenAIResponsesHandler().process_input_messages(
             _tool_result_request(call_item, output_type, empty_output), guardrail
         )
 
         assert guardrail.seen_texts == [["Weather?"]]
+        assert guardrail.seen_message_contents == [["Weather?", None]]
         assert result["input"][2] == {"type": output_type, "call_id": "call_1", "output": empty_output}
 
     @pytest.mark.asyncio
@@ -1103,7 +1187,6 @@ class TestToolResultItemsReachTextsGuardrails:
                 ["visible"],
                 id="non_dict_part",
             ),
-            pytest.param([], ["[]"], id="empty"),
             pytest.param({"result": "SECRET forecast"}, ['{"result": "SECRET forecast"}'], id="dict"),
             pytest.param(
                 [{"type": "input_image", "file_id": "file-map"}],
@@ -1803,6 +1886,47 @@ class TestOpenAIResponsesHandlerToolCallExtraction:
         assert search_call.arguments == {"query": "[MASKED]"}
         assert search_call.call_id == "srvtoolu_1"
         assert "name" not in search_call.model_dump()
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="claude-sonnet-5-5",
+            object="response",
+            status="completed",
+            output=_claude_web_calls_and_a_native_search(),
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.seen_tool_calls == [
+            ("web_search", '{"query": "persimmon"}'),
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+        ]
+        assert [item.type for item in result.output] == ["web_search_call"] * 3
+        assert _web_call_actions(result.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_process_output_response_blocks_a_gemini_web_search_query_with_a_blocked_word(self):
+        content_filter: Final = ContentFilterGuardrail(
+            guardrail_name="block-persimmon",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.BLOCK)],
+        )
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            model="gemini-3-pro-preview",
+            object="response",
+            status="completed",
+            output=[*gemini_web_search_calls("resp_1", ["persimmon tree"]), _message_item("a fig")],
+        )
+
+        with pytest.raises(HTTPException) as blocked:
+            await OpenAIResponsesHandler().process_output_response(response, content_filter, request_data={})
+
+        assert blocked.value.status_code == 400
 
     @pytest.mark.asyncio
     async def test_process_output_response_never_returns_original_search_arguments_after_a_non_json_rewrite(self):
@@ -2740,6 +2864,138 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert "name" not in done.item.model_dump()
 
     @pytest.mark.asyncio
+    async def test_deliver_ended_stream_scans_and_rewrites_claude_web_calls_but_not_native_search(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import (
+            OutputItemAddedEvent,
+            OutputItemDoneEvent,
+            ResponseCompletedEvent,
+            ResponsesAPIStreamEvents,
+        )
+
+        items: Final = _claude_web_calls_and_a_native_search()
+        added: Final = [
+            OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=index,
+                item=BaseLiteLLMOpenAIResponseObject(**{**item.model_dump(), "action": None}),
+            )
+            for index, item in enumerate(items)
+        ]
+        done: Final = [
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=index,
+                sequence_number=index + 3,
+                item=BaseLiteLLMOpenAIResponseObject(**item.model_dump()),
+            )
+            for index, item in enumerate(items)
+        ]
+        completed: Final = ResponseCompletedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+            response=ResponsesAPIResponse(
+                id="resp_1",
+                created_at=1,
+                model="claude-sonnet-5-5",
+                object="response",
+                status="completed",
+                output=_claude_web_calls_and_a_native_search(),
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*added, *done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert [event.item.model_dump()["action"] for event in added] == [None, None, None]
+        assert _web_call_actions([event.item for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed.response.output) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_dict_shaped_claude_web_calls_but_not_native_search(self):
+        items: Final = [item.model_dump() for item in _claude_web_calls_and_a_native_search()]
+        done: Final = [
+            {"type": "response.output_item.done", "output_index": index, "item": dict(item)}
+            for index, item in enumerate(items)
+        ]
+        completed: Final = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "model": "claude-sonnet-5-5",
+                "status": "completed",
+                "output": [dict(item) for item in items],
+            },
+        }
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[*done, completed],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert sorted(guardrail.seen_tool_calls) == [
+            ("web_fetch", '{"url": "https://persimmon.example"}'),
+            ("web_search", '{"query": "persimmon"}'),
+        ]
+        assert _web_call_actions([event["item"] for event in done]) == _MASKED_WEB_CALL_ACTIONS
+        assert _web_call_actions(completed["response"]["output"]) == _MASKED_WEB_CALL_ACTIONS
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_claude_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **build_web_search_call("srvtoolu_1", {"query": "persimmon"}, None, "completed").model_dump()
+            ),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
+    async def test_streaming_output_item_done_reports_a_gemini_web_search_call(self):
+        from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+        from litellm.types.llms.openai import OutputItemDoneEvent, ResponsesAPIStreamEvents
+
+        done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=1,
+            item=BaseLiteLLMOpenAIResponseObject(**gemini_web_search_calls("resp_1", ["persimmon"])[0].model_dump()),
+        )
+        guardrail: Final = RecordingPersimmonMaskingGuardrail(guardrail_name="mask")
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[done],
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert guardrail.seen_tool_calls == [("web_search", '{"query": "persimmon"}')]
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_rewrites_a_native_tool_search_call_that_has_no_call_id(self):
         def search_call(arguments: dict, status: str) -> dict:
             return {
@@ -3105,7 +3361,12 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
 
         handler = OpenAIResponsesHandler()
         events = [
-            {"type": "response.reasoning_summary_text.delta", "output_index": 0, "summary_index": 0, "delta": "hello "},
+            {
+                "type": "response.code_interpreter_call_code.delta",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "hello ",
+            },
             {"type": "response.output_text.delta", "output_index": 1, "content_index": 0, "delta": "world"},
         ]
 
@@ -3330,6 +3591,25 @@ class TestGetStructuredMessages:
         data = {"input": None}
         result = handler.get_structured_messages(data)
         assert result is None
+
+    def test_should_return_none_for_a_moderation_style_list_of_strings(self):
+        handler = OpenAIResponsesHandler()
+        data = {"model": "omni-moderation-latest", "input": ["safe text", "more safe text"]}
+        assert handler.get_structured_messages(data) is None
+
+    def test_should_keep_an_image_item_replayed_with_an_sdk_compaction_item(self):
+        handler = OpenAIResponsesHandler()
+        image_url = "https://example.com/cat.png"
+        data = {
+            "model": "gpt-5.5",
+            "input": [
+                ResponseCompactionItem(type="compaction", id="cmp_1", encrypted_content="abc"),
+                {"role": "user", "content": [{"type": "input_image", "image_url": image_url}]},
+            ],
+        }
+        result = handler.get_structured_messages(data)
+        assert result is not None
+        assert image_url in json.dumps(result)
 
 
 class ToolAppendingGuardrail(CustomGuardrail):
@@ -4026,6 +4306,26 @@ class TestProvenancePatching:
 
         assert _input_item_provenance(["not a mapping"], []) is None
 
+    def test_provenance_reads_a_self_named_namespace_echo_with_the_request_tools(self):
+        from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            LiteLLMCompletionResponsesConfig,
+        )
+
+        tools = [{"type": "namespace", "name": "search", "tools": [{"type": "function", "name": "search"}]}]
+        raw_input = [
+            {"role": "user", "content": "Search for the release notes."},
+            {"type": "function_call", "name": "search", "namespace": "search", "call_id": "call_1", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "found"},
+        ]
+        expected = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=raw_input, responses_api_request={"tools": tools}
+        )
+
+        assert expected[1]["tool_calls"][0]["function"]["name"] == "search__search"
+        assert _input_item_provenance(raw_input, expected, tools) is not None
+        assert _input_item_provenance(raw_input, expected) is None
+
     def test_provenance_bails_when_expected_messages_disagree(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _input_item_provenance
 
@@ -4247,6 +4547,43 @@ def _tool_named(tools, name):
     return next(tool for tool in tools if tool.get("name") == name)
 
 
+def _with_description(chat_tool: dict, description: str) -> dict:
+    return {**chat_tool, "function": {**chat_tool["function"], "description": description}}
+
+
+def _replayed_tool_calls(messages: list[dict]) -> list[dict]:
+    return list(chain.from_iterable(message.get("tool_calls") or [] for message in messages))
+
+
+_LONG_NAMESPACE: Final = "mcp__codex_apps__codex_document_control"
+_LONG_MEMBER: Final = "_get_document_tool_schemas"
+_LONG_MEMBER_TOOLS: Final = (
+    {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "Document tools",
+        "tools": [{"type": "function", "name": _LONG_MEMBER, "description": "Get schemas", "parameters": {}}],
+    },
+)
+
+
+def _replayed_long_member_call_input(call: dict) -> list[dict]:
+    return [
+        {"type": "message", "role": "user", "content": "Get the schemas"},
+        call,
+        {"type": "function_call_output", "call_id": call["call_id"], "output": "the schemas"},
+        {"type": "message", "role": "user", "content": "Thanks"},
+    ]
+
+
+def _function_tool_descriptions(tools: list[dict]) -> list[tuple[str | None, str, str]]:
+    return [
+        (tool["name"] if tool["type"] == "namespace" else None, function["name"], function["description"])
+        for tool in tools
+        for function in (tool["tools"] if tool["type"] == "namespace" else [tool])
+    ]
+
+
 class TestOpenAIResponsesHandlerNamespaceTools:
     """Codex sends MCP tools as ``namespace`` tools; a guardrail must never flatten them (GH #39183)"""
 
@@ -4285,6 +4622,246 @@ class TestOpenAIResponsesHandlerNamespaceTools:
             "mcp__confluence__confluence_search",
             "apply_patch",
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_scanning_tools_whose_chat_names_collide_leaves_them_for_the_route_to_judge(self, top_level: bool):
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {"type": "function", "name": "_get_document_tool_schemas", "parameters": {"type": "object"}}
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "parameters": {"type": "object"},
+        }
+        members: Final = [long_member] if top_level else [long_member, colliding]
+        data: Final = {
+            **_codex_request("hi"),
+            "tools": [*([colliding] if top_level else []), {"type": "namespace", "name": namespace, "tools": members}],
+        }
+        expected_tools: Final = copy.deepcopy(data["tools"])
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert result["tools"] == expected_tools
+        assert [tool["function"]["name"] for tool in guardrail.seen_inputs[0]["tools"]] == (
+            [shortened, f"{namespace}__{long_member['name']}"]
+            if top_level
+            else [f"{namespace}__{long_member['name']}", shortened]
+        )
+
+    @staticmethod
+    def _tools_sharing_a_shortened_name(top_level: bool) -> tuple[list[dict], dict, dict, str]:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "description": "Fetch the schemas of a document",
+            "parameters": {"type": "object"},
+        }
+        shortened: Final = chat_member_name(namespace, long_member["name"])
+        colliding: Final = {
+            "type": "function",
+            "name": shortened if top_level else shortened.removeprefix(f"{namespace}__"),
+            "description": "Fetch the raw bytes of a document",
+            "parameters": {"type": "object"},
+        }
+        tools: Final = (
+            [colliding, {"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [long_member, colliding]}]
+        )
+        return tools, long_member, colliding, namespace
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_the_first_of_two_tools_sharing_a_shortened_name_keeps_the_second(
+        self, top_level: bool
+    ):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [long_member]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [colliding]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(edit=lambda chat_tools: chat_tools[1:], guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert result["tools"] == expected_tools
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("top_level", [False, True], ids=["sibling_member", "top_level_function"])
+    async def test_a_guardrail_dropping_one_tool_sharing_a_shortened_name_edits_the_one_it_kept(self, top_level: bool):
+        tools, long_member, colliding, namespace = self._tools_sharing_a_shortened_name(top_level)
+        expected_tools: Final = (
+            [{"type": "namespace", "name": namespace, "tools": [{**long_member, "description": "edited"}]}]
+            if top_level
+            else [{"type": "namespace", "name": namespace, "tools": [{**colliding, "description": "edited"}]}]
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert result["tools"] == expected_tools
+
+    @staticmethod
+    def _top_level_function_named_like_a_member(member_parameters: dict) -> list[dict]:
+        return [
+            {
+                "type": "function",
+                "name": "mcp__docs__get_document",
+                "description": "Top-level document getter",
+                "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__docs",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "get_document",
+                        "description": "Namespace document getter",
+                        "parameters": member_parameters,
+                    }
+                ],
+            },
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "edited")]),
+            (1, [(None, "mcp__docs__get_document", "edited")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_edits_the_one_it_kept(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"path": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "dropped, expected",
+        [
+            (0, [("mcp__docs", "get_document", "Namespace document getter")]),
+            (1, [(None, "mcp__docs__get_document", "Top-level document getter")]),
+        ],
+        ids=["drop_top_level", "drop_member"],
+    )
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_stripping_defaults_keeps_the_right_one(
+        self, dropped: int, expected: list[tuple[str | None, str, str]]
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+
+        def drop_and_strip_defaults(chat_tools: list[dict]) -> list[dict]:
+            kept: Final = chat_tools[1 - dropped]
+            function: Final = {key: value for key, value in kept["function"].items() if key != "strict"}
+            return [{**kept, "function": function}]
+
+        guardrail: Final = ToolEditingGuardrail(edit=drop_and_strip_defaults, guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == expected
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_dropping_one_of_two_same_named_tools_and_rewriting_the_other_beyond_recognition_is_rejected(
+        self,
+    ):
+        tools: Final = self._top_level_function_named_like_a_member(
+            {"type": "object", "properties": {"doc_id": {"type": "string"}}}
+        )
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1], "edited")], guardrail_name="test"
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIResponsesHandler().process_input_messages({**_codex_request("hi"), "tools": tools}, guardrail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dropped", [0, 1], ids=["drop_first", "drop_second"])
+    async def test_a_guardrail_dropping_one_of_two_same_named_top_level_functions_edits_the_one_it_kept(
+        self, dropped: int
+    ):
+        parameters: Final = {"type": "object", "properties": {"city": {"type": "string"}}}
+        tools: Final = [
+            {"type": "function", "name": "lookup_city", "description": "Look up a city", "parameters": parameters},
+            {"type": "function", "name": "lookup_city", "description": "Find a city", "parameters": parameters},
+        ]
+        guardrail: Final = ToolEditingGuardrail(
+            edit=lambda chat_tools: [_with_description(chat_tools[1 - dropped], "edited")], guardrail_name="test"
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request("hi"), "tools": tools}, guardrail
+        )
+
+        assert _function_tool_descriptions(result["tools"]) == [(None, "lookup_city", "edited")]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_sees_a_replayed_long_member_call_under_the_name_it_sees_the_tool_by(self):
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+        }
+        guardrail: Final = MockRecordingGuardrail(guardrail_name="test")
+
+        await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)}, guardrail
+        )
+
+        seen: Final = guardrail.seen_inputs[0]
+        tool_names: Final = [tool["function"]["name"] for tool in seen["tools"]]
+        call_names: Final = [call["function"]["name"] for call in _replayed_tool_calls(seen["structured_messages"])]
+        assert call_names == tool_names == [f"{_LONG_NAMESPACE}__{_LONG_MEMBER}"]
+
+    @pytest.mark.asyncio
+    async def test_a_message_rewrite_resends_a_replayed_long_member_call_as_it_came(self):
+        call: Final = {
+            "type": "function_call",
+            "namespace": _LONG_NAMESPACE,
+            "name": _LONG_MEMBER,
+            "call_id": "call_1",
+            "arguments": "{}",
+            "id": "fc_1",
+            "status": "completed",
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(
+            {**_codex_request(_replayed_long_member_call_input(call)), "tools": list(_LONG_MEMBER_TOOLS)},
+            StructuredRewriteGuardrail(guardrail_name="test"),
+        )
+
+        assert result["input"][0]["content"] == COMPRESSED_MARKER
+        assert [item for item in result["input"] if item.get("type") == "function_call"] == [call]
 
     @pytest.mark.asyncio
     async def test_a_function_only_guardrail_keeps_the_tool_search_tool_it_never_scans(self):
@@ -4423,7 +5000,14 @@ class TestBuildBlockSseChunks:
     def _payloads(self, chunks):
         import json
 
-        return [json.loads(chunk.decode().removeprefix("data: ").strip()) for chunk in chunks]
+        payloads: Final = [
+            json.loads(next(line[6:] for line in chunk.decode().splitlines() if line.startswith("data: ")))
+            for chunk in chunks
+        ]
+        assert [chunk.decode().splitlines()[0] for chunk in chunks] == [
+            f"event: {payload['type']}" for payload in payloads
+        ]
+        return payloads
 
     def test_standalone_block_emits_complete_synthetic_stream(self):
         handler = OpenAIResponsesHandler()
@@ -4508,6 +5092,34 @@ class TestBuildBlockSseChunks:
         assert completed["model"] == "gpt-5.4-mini-2026-01-01"
         assert completed["output"][0]["content"][0]["text"] == "Blocked by policy."
         assert completed["usage"] == {"input_tokens": 7, "output_tokens": 21, "total_tokens": 28}
+
+    def test_continuation_numbers_every_event_after_the_last_one_relayed(self):
+        yielded: Final = [
+            {"type": "response.created", "sequence_number": 0, "response": {"id": "resp_live", "output": []}},
+            {
+                "type": "response.output_item.added",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": {"id": "msg_orig", "type": "message", "role": "assistant"},
+            },
+            {
+                "type": "response.output_text.delta",
+                "sequence_number": 2,
+                "item_id": "msg_orig",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "partial",
+            },
+        ]
+
+        payloads: Final = self._payloads(
+            OpenAIResponsesHandler().build_block_sse_chunks(
+                self._exc(original_response=yielded), stream_started=True, responses_so_far=yielded
+            )
+        )
+
+        assert payloads[-1]["type"] == "response.completed"
+        assert [payload.get("sequence_number") for payload in payloads] == list(range(3, 3 + len(payloads)))
 
     def test_continuation_reads_usage_from_typed_completed_event(self):
         from litellm.types.llms.openai import (
@@ -5011,3 +5623,2012 @@ class TestCompactionOutputSummaryReachesOutputGuardrails:
             )
 
         assert ended_key(self.SUMMARY) != ended_key("The user lives elsewhere.")
+
+
+def stream_part(part: object) -> dict:
+    return part if isinstance(part, dict) else part.model_dump()
+
+
+class PersimmonTextMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="mask-persimmon")
+        self.scanned_texts: list[str] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        self.scanned_texts.extend(texts)
+        return {**inputs, "texts": [text.replace("persimmon", "[MASKED]") for text in texts]}
+
+
+class RecordingScanCountGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="count-scans")
+        self.scans = 0
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.scans += 1
+        return inputs
+
+
+class OneEndTextGuardrail(PersimmonTextMaskingGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return False
+
+
+class FirstTextReturningGuardrail(PersimmonTextMaskingGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        first_text: Final = inputs.get("texts", [])[0]
+        self.scanned_texts.append(first_text)
+        return {**inputs, "texts": [first_text.replace("persimmon", "[MASKED]")]}
+
+
+class FirstTextOnlyGuardrail(FirstTextReturningGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return False
+
+
+class LastTextOnlyGuardrail(OneEndTextGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        last_text: Final = inputs.get("texts", [])[-1]
+        self.scanned_texts.append(last_text)
+        return {**inputs, "texts": [last_text.replace("persimmon", "[MASKED]")]}
+
+
+class CallRecordingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="record-calls")
+        self.calls: list[GenericGuardrailAPIInputs] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.calls.append(inputs)
+        return inputs
+
+
+class PerTextRecordingGuardrail(CallRecordingGuardrail):
+    def scans_each_text_separately(self) -> bool:
+        return False
+
+
+class LastTextScanningGuardrail(OneEndTextGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = inputs.get("texts", [])
+        self.scanned_texts.append(texts[-1])
+        return {**inputs, "texts": [*texts[:-1], texts[-1].replace("persimmon", "[MASKED]")]}
+
+
+class ResponseSnapshotGuardrail(PersimmonTextMaskingGuardrail):
+    def __init__(self) -> None:
+        super().__init__()
+        self.response_snapshots: list[str] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.response_snapshots.append(json.dumps(request_data["response"]))
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class FixedOutputGuardrail(CustomGuardrail):
+    def __init__(self, output: GenericGuardrailAPIInputs) -> None:
+        super().__init__(guardrail_name="fixed-output")
+        self.output = output
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return self.output
+
+
+def _sent(events: object) -> str:
+    return json.dumps(events, default=lambda value: value.model_dump())
+
+
+def _openai_reasoning_item(*summaries: str) -> dict:
+    return {
+        "id": "rs_1",
+        "type": "reasoning",
+        "content": [],
+        "encrypted_content": "gAAAAABopaque-persimmon",
+        "summary": [{"type": "summary_text", "text": summary} for summary in summaries],
+    }
+
+
+def _message_item(text: str = "the fruit is a persimmon") -> dict:
+    return {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+    }
+
+
+def _thinking_blob(*thinking: str) -> str:
+    blocks = [{"type": "thinking", "thinking": text, "signature": f"sig{i}"} for i, text in enumerate(thinking)]
+    return json.dumps([*blocks, {"type": "redacted_thinking", "data": "cmVkYWN0ZWQ="}], separators=(",", ":"))
+
+
+def _claude_reasoning_item(text: str = "I think of a persimmon", blob: str | None = None) -> dict:
+    return {
+        "id": "rs_1",
+        "type": "reasoning",
+        "status": "completed",
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": text, "annotations": []}],
+        "encrypted_content": _thinking_blob(text) if blob is None else blob,
+    }
+
+
+def _provider_fields(*thinking: str) -> dict:
+    blocks = [{"type": "thinking", "thinking": text, "signature": f"sig{i}"} for i, text in enumerate(thinking)]
+    return {"citations": None, "thinking_blocks": [*blocks, {"type": "redacted_thinking", "data": "cmVkYWN0ZWQ="}]}
+
+
+def _response(*output: object) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_1", created_at=1, model="test-model", object="response", status="completed", output=list(output)
+    )
+
+
+def _completed_event(*output: object) -> dict:
+    return {"type": "response.completed", "response": {"id": "resp_1", "model": "test-model", "output": list(output)}}
+
+
+def _openai_stream_events() -> list[dict]:
+    added_part = {"type": "summary_text", "text": ""}
+    done_part = {"type": "summary_text", "text": "I think of a persimmon"}
+    position = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning"}},
+        {"type": "response.reasoning_summary_part.added", **position, "part": added_part},
+        {"type": "response.reasoning_summary_text.delta", **position, "delta": "I think of a pers"},
+        {"type": "response.reasoning_summary_text.delta", **position, "delta": "immon"},
+        {"type": "response.reasoning_summary_text.done", **position, "text": "I think of a persimmon"},
+        {"type": "response.reasoning_summary_part.done", **position, "part": done_part},
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": _openai_reasoning_item("I think of a persimmon"),
+        },
+        _completed_event(_openai_reasoning_item("I think of a persimmon"), _message_item()),
+    ]
+
+
+def _claude_stream_events() -> list[dict]:
+    delta = {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "output_index": 0}
+    position = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+    done_item = {
+        "id": "rs_1",
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "I think of a persimmon"}],
+    }
+    return [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"id": "rs_1", "type": "reasoning", "status": "in_progress"},
+        },
+        {**delta, "delta": "I think of a persimmon"},
+        {"type": "response.reasoning_summary_text.done", **position, "text": "I think of a persimmon"},
+        {
+            "type": "response.reasoning_summary_part.done",
+            **position,
+            "part": {"type": "summary_text", "text": "I think of a persimmon"},
+        },
+        {"type": "response.output_item.done", "output_index": 0, "item": done_item},
+        _completed_event(_claude_reasoning_item(), _message_item()),
+    ]
+
+
+def _cut_short_stream_events() -> list[dict]:
+    summary = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+    text = {"item_id": "msg_1", "output_index": 1, "content_index": 0}
+    return [
+        {"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning"}},
+        {"type": "response.reasoning_summary_text.delta", **summary, "delta": "I think of a pers"},
+        {"type": "response.reasoning_summary_text.delta", **summary, "delta": "immon"},
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"id": "msg_1", "type": "message", "role": "assistant", "content": []},
+        },
+        {"type": "response.output_text.delta", **text, "delta": "a persimmon"},
+    ]
+
+
+def _envelope_missing_the_streamed_answer() -> list[dict]:
+    return [
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": "rs_1",
+            "output_index": 0,
+            "summary_index": 0,
+            "delta": "I think of a fig",
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "the persimmon",
+        },
+        {
+            "type": "response.incomplete",
+            "response": {"id": "resp_1", "output": [_openai_reasoning_item("I think of a fig")]},
+        },
+    ]
+
+
+async def _deliver(events: list, guardrail: CustomGuardrail | None = None) -> list:
+    return await OpenAIResponsesHandler().process_output_streaming_response(
+        responses_so_far=events,
+        guardrail_to_apply=guardrail or PersimmonTextMaskingGuardrail(),
+        deliver_ended_stream_rewrites=True,
+    )
+
+
+class TestReasoningOutputReachesOutputGuardrails:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "item",
+        [
+            _openai_reasoning_item("I think of a persimmon"),
+            ResponseReasoningItem.model_validate(_openai_reasoning_item("I think of a persimmon")),
+            BaseLiteLLMOpenAIResponseObject.model_validate(_openai_reasoning_item("I think of a persimmon")),
+        ],
+        ids=["dict", "sdk-model", "litellm-model"],
+    )
+    async def test_summary_is_masked_on_a_non_streaming_response(self, item: object) -> None:
+        response: Final = {"output": [copy.deepcopy(item), _message_item()]}
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        summary_part: Final = (
+            response["output"][0]["summary"][0]
+            if isinstance(item, dict)
+            else stream_part(response["output"][0].summary[0])
+        )
+        assert summary_part["text"] == "I think of a [MASKED]"
+        assert response["output"][1]["content"][0]["text"] == "the fruit is a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_pydantic_response_gets_its_summary_masked(self) -> None:
+        response: Final = _response(_openai_reasoning_item("I think of a persimmon"), _message_item())
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        assert "persimmon" not in response.output[1].model_dump_json()
+        assert "I think of a [MASKED]" in str(response.output[0])
+
+    @pytest.mark.asyncio
+    async def test_a_text_held_in_several_fields_is_scanned_once_and_masked_in_each(self) -> None:
+        text: Final = "I think of a persimmon"
+        response: Final = {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "content": [{"type": "output_text", "text": text}],
+                    "encrypted_content": json.dumps([{"type": "thinking", "thinking": text, "signature": "sig"}]),
+                },
+                _message_item(),
+            ],
+            "provider_specific_fields": _provider_fields(text),
+        }
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.scanned_texts == ["the fruit is a persimmon", text]
+        assert "persimmon" not in json.dumps(response)
+        assert json.loads(response["output"][0]["encrypted_content"])[0]["signature"] == "sig"
+
+    @pytest.mark.asyncio
+    async def test_every_summary_part_keeps_its_own_masked_text(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon", "", "the persimmon again")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a [MASKED]", "", "the [MASKED] again"]
+
+    @pytest.mark.asyncio
+    async def test_an_sdk_item_gets_its_reasoning_content_masked(self) -> None:
+        item: Final = ResponseReasoningItem.model_validate(
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [],
+                "content": [{"type": "reasoning_text", "text": "a persimmon"}],
+            }
+        )
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, PersimmonTextMaskingGuardrail())
+
+        assert item.content[0].text == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "build_item",
+        [_claude_reasoning_item, lambda: GenericResponseOutputItem.model_validate(_claude_reasoning_item())],
+        ids=["dict", "generic-output-item"],
+    )
+    async def test_claude_content_and_blob_are_masked_and_the_signature_survives(
+        self, build_item: Callable[[], object]
+    ) -> None:
+        item: Final = build_item()
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, PersimmonTextMaskingGuardrail())
+
+        fields: Final = item if isinstance(item, dict) else item.model_dump()
+        assert fields["content"][0]["text"] == "I think of a [MASKED]"
+        assert json.loads(fields["encrypted_content"]) == [
+            {"type": "thinking", "thinking": "I think of a [MASKED]", "signature": "sig0"},
+            {"type": "redacted_thinking", "data": "cmVkYWN0ZWQ="},
+        ]
+        assert decode_thinking_blocks(fields["encrypted_content"]) is not None
+
+    @pytest.mark.asyncio
+    async def test_a_blob_with_several_blocks_masks_only_the_blocks_that_changed(self) -> None:
+        blob: Final = _thinking_blob("clean thought", "a persimmon")
+        item: Final = _claude_reasoning_item("clean thought a persimmon", blob)
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, PersimmonTextMaskingGuardrail())
+
+        assert [block.get("thinking") for block in json.loads(item["encrypted_content"])] == [
+            "clean thought",
+            "a [MASKED]",
+            None,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_blob_stays_byte_identical_when_no_thinking_text_changed(self) -> None:
+        blob: Final = json.dumps([{"type": "thinking", "thinking": "clean thought", "signature": "sig"}], indent=2)
+        item: Final = _claude_reasoning_item("clean thought", blob)
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, PersimmonTextMaskingGuardrail())
+
+        assert item["encrypted_content"] == blob
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "blob",
+        [
+            "gAAAAABopaque-persimmon",
+            json.dumps([{"type": "thinking", "thinking": "a persimmon"}]),
+            json.dumps({"type": "thinking", "thinking": "a persimmon", "signature": "sig"}),
+        ],
+        ids=["provider-ciphertext", "unverifiable-block", "json-object"],
+    )
+    async def test_an_opaque_blob_is_never_touched_or_scanned(self, blob: str) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        item: Final = _claude_reasoning_item("clean thought", blob)
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, guardrail)
+
+        assert item["encrypted_content"] == blob
+        assert guardrail.scanned_texts == ["clean thought"]
+
+    @pytest.mark.asyncio
+    async def test_an_affinity_wrapped_blob_is_masked_inside_its_wrap(self) -> None:
+        wrapped: Final = ResponsesAPIRequestUtils.wrap_encrypted_content_with_model_id(
+            _thinking_blob("a persimmon"), "m1"
+        )
+        item: Final = _claude_reasoning_item("a persimmon", wrapped)
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, PersimmonTextMaskingGuardrail())
+
+        model_id, unwrapped = ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(item["encrypted_content"])
+        assert model_id == "m1"
+        assert json.loads(unwrapped)[0] == {"type": "thinking", "thinking": "a [MASKED]", "signature": "sig0"}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("typed", [False, True], ids=["dict", "pydantic"])
+    async def test_provider_field_thinking_text_is_masked_and_keeps_its_signature(self, typed: bool) -> None:
+        payload: Final = {
+            **_completed_event(_message_item())["response"],
+            "created_at": 1,
+            "provider_specific_fields": _provider_fields("a persimmon", "a fig"),
+        }
+        response: Final = ResponsesAPIResponse.model_validate(payload) if typed else payload
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        fields: Final = response.provider_specific_fields if typed else response["provider_specific_fields"]
+        assert fields == _provider_fields("a [MASKED]", "a fig")
+
+    @pytest.mark.asyncio
+    async def test_provider_field_thinking_is_masked_when_the_output_is_empty(self) -> None:
+        response: Final = {"output": [], "provider_specific_fields": _provider_fields("a persimmon")}
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        assert response["provider_specific_fields"] == _provider_fields("a [MASKED]")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "fields",
+        [None, {"citations": None, "thinking_blocks": None}, _provider_fields("")],
+        ids=["no-fields", "no-blocks", "empty-text"],
+    )
+    async def test_provider_fields_without_thinking_text_are_left_alone(self, fields: dict | None) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        response: Final = {"output": [_message_item("a fig")], "provider_specific_fields": copy.deepcopy(fields)}
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert response["provider_specific_fields"] == fields
+        assert guardrail.scanned_texts == ["a fig"]
+
+    @pytest.mark.asyncio
+    async def test_a_stream_envelope_masks_provider_field_thinking_text(self) -> None:
+        events: Final = _claude_stream_events()
+        events[-1]["response"]["provider_specific_fields"] = _provider_fields("I think of a persimmon")
+
+        await _deliver(events)
+
+        assert events[-1]["response"]["provider_specific_fields"] == _provider_fields("I think of a [MASKED]")
+        assert "persimmon" not in _sent(events)
+
+    @pytest.mark.asyncio
+    async def test_a_provider_field_rewrite_leaves_the_stream_events_as_they_were(self) -> None:
+        item_done: Final = {"type": "response.output_item.done", "output_index": 0, "item": _message_item("a fig")}
+        completed: Final = _completed_event(_message_item("a fig"))
+        completed["response"]["provider_specific_fields"] = _provider_fields("a persimmon")
+
+        await _deliver([item_done, completed])
+
+        assert item_done["item"] == _message_item("a fig")
+        assert completed["response"]["provider_specific_fields"] == _provider_fields("a [MASKED]")
+
+    @pytest.mark.asyncio
+    async def test_a_provider_field_rewrite_reaches_an_earlier_envelope(self) -> None:
+        earlier: Final = {
+            "type": "response.in_progress",
+            "response": {"id": "resp_1", "output": [], "provider_specific_fields": _provider_fields("a persimmon")},
+        }
+        completed: Final = _completed_event()
+        completed["response"]["provider_specific_fields"] = _provider_fields("a persimmon")
+
+        await _deliver([earlier, completed])
+
+        assert earlier["response"]["provider_specific_fields"] == _provider_fields("a [MASKED]")
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_answer_in_the_envelope_is_scanned_once(self) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+        delta: Final = {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "a fig",
+        }
+
+        await _deliver([delta, _completed_event(_message_item("a fig"))], guardrail)
+
+        assert [call["texts"] for call in guardrail.calls] == [["a fig"]]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("model", "named_model"),
+        [("test-model", {"model": "test-model"}), ("", {}), (7, {})],
+        ids=["named", "empty", "not-a-string"],
+    )
+    async def test_a_reasoning_call_names_only_a_real_model(self, model: object, named_model: dict) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"model": model, "output": [_openai_reasoning_item("a fig")]}, guardrail
+        )
+
+        assert guardrail.calls == [{"texts": ["a fig"], **named_model}]
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_call_keeps_what_the_caller_put_in_request_data(self) -> None:
+        request_data: Final = {"response": "from the caller", "litellm_metadata": {"team": "from the caller"}}
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig")]},
+            CallRecordingGuardrail(),
+            request_data=request_data,
+            user_api_key_dict=UserAPIKeyAuth(user_id="someone-else"),
+        )
+
+        assert request_data["response"] == "from the caller"
+        assert request_data["litellm_metadata"]["team"] == "from the caller"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_only_match_reaches_a_blocking_guardrail(self) -> None:
+        with pytest.raises(HTTPException) as exc_info:
+            await OpenAIResponsesHandler().process_output_response(
+                {"output": [_openai_reasoning_item("a persimmon")]}, MockGuardrail(guardrail_name="block")
+            )
+
+        assert exc_info.value.detail["texts"] == ["a persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_openai_stream_masks_every_event_that_carries_the_summary(self) -> None:
+        events: Final = _openai_stream_events()
+
+        await _deliver(events)
+
+        assert events[1]["part"]["text"] == ""
+        assert [event["delta"] for event in events[2:4]] == ["I think of a [MASKED]", ""]
+        assert events[4]["text"] == "I think of a [MASKED]"
+        assert events[5]["part"]["text"] == "I think of a [MASKED]"
+        assert events[6]["item"]["summary"][0]["text"] == "I think of a [MASKED]"
+        assert events[7]["response"]["output"][0]["summary"][0]["text"] == "I think of a [MASKED]"
+        assert "persimmon" not in _sent(events).replace("gAAAAABopaque-persimmon", "")
+        assert events[6]["item"]["encrypted_content"] == "gAAAAABopaque-persimmon"
+
+    @pytest.mark.asyncio
+    async def test_typed_stream_events_take_the_summary_mask(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+        done_part: Final = BaseLiteLLMOpenAIResponseObject(type="summary_text", text="a persimmon")
+        added: Final = ResponsePartAddedEvent(
+            type=ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+            part={"type": "summary_text", "text": ""},
+            **position,
+        )
+        delta: Final = ReasoningSummaryTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA, delta="a persimmon", **position
+        )
+        text_done: Final = ReasoningSummaryTextDoneEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+            text="a persimmon",
+            sequence_number=2,
+            **position,
+        )
+        part_done: Final = ReasoningSummaryPartDoneEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+            part=done_part,
+            sequence_number=3,
+            **position,
+        )
+        item_done: Final = OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject.model_validate(_openai_reasoning_item("a persimmon")),
+        )
+
+        await _deliver(
+            [added, delta, text_done, part_done, item_done, _completed_event(_openai_reasoning_item("a persimmon"))]
+        )
+
+        assert added.part["text"] == ""
+        assert delta.delta == "a [MASKED]"
+        assert text_done.text == "a [MASKED]"
+        assert part_done.part.text == "a [MASKED]"
+        assert stream_part(item_done.item.summary[0])["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_claude_stream_without_a_summary_index_on_its_delta_takes_the_content_rewrite(self) -> None:
+        events: Final = _claude_stream_events()
+
+        await _deliver(events)
+
+        assert "summary_index" not in events[1]
+        assert events[1]["delta"] == "I think of a [MASKED]"
+        assert events[2]["text"] == "I think of a [MASKED]"
+        assert events[3]["part"]["text"] == "I think of a [MASKED]"
+        assert events[4]["item"]["summary"][0]["text"] == "I think of a [MASKED]"
+        reasoning: Final = events[5]["response"]["output"][0]
+        assert reasoning["content"][0]["text"] == "I think of a [MASKED]"
+        assert json.loads(reasoning["encrypted_content"])[0]["signature"] == "sig0"
+        assert "persimmon" not in _sent(events)
+
+    @pytest.mark.asyncio
+    async def test_a_summary_rewrite_stays_on_its_own_part_and_item(self) -> None:
+        def part_events(output_index: int, summary_index: int, text: str) -> list[dict]:
+            position = {"output_index": output_index, "summary_index": summary_index}
+            return [
+                {"type": "response.reasoning_summary_text.delta", **position, "delta": text},
+                {"type": "response.reasoning_summary_text.done", **position, "text": text},
+            ]
+
+        stream: Final = [
+            *part_events(0, 0, "clean first"),
+            *part_events(0, 1, "a persimmon"),
+            *part_events(1, 0, "clean other"),
+        ]
+        events: Final = [
+            *stream,
+            _completed_event(
+                _openai_reasoning_item("clean first", "a persimmon"), _openai_reasoning_item("clean other")
+            ),
+        ]
+
+        await _deliver(events)
+
+        assert [event.get("delta", event.get("text")) for event in events[:-1]] == [
+            "clean first",
+            "clean first",
+            "a [MASKED]",
+            "a [MASKED]",
+            "clean other",
+            "clean other",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_summary_part_announced_with_text_is_masked_too(self) -> None:
+        added: Final = {
+            "type": "response.reasoning_summary_part.added",
+            "output_index": 0,
+            "summary_index": 0,
+            "part": {"type": "summary_text", "text": "a persimmon"},
+        }
+
+        await _deliver([added, _completed_event(_openai_reasoning_item("a persimmon"))])
+
+        assert added["part"]["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_text_events_that_parse_as_generic_events_take_the_mask(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0, "content_index": 0}
+        deltas: Final = [
+            GenericEvent(type="response.reasoning_text.delta", delta=delta, **position) for delta in ("a pers", "immon")
+        ]
+        done: Final = GenericEvent(type="response.reasoning_text.done", text="a persimmon", **position)
+        part_done: Final = ContentPartDoneEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+            part=ContentPartDonePartReasoningText(type="reasoning_text", reasoning="a persimmon"),
+            **position,
+        )
+        sdk_part_done: Final = GenericEvent(
+            type="response.content_part.done",
+            part={"type": "reasoning_text", "text": "a persimmon"},
+            **position,
+        )
+        item: Final = {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "a persimmon"}],
+        }
+        item_done: Final = {"type": "response.output_item.done", "output_index": 0, "item": copy.deepcopy(item)}
+
+        await _deliver([*deltas, done, part_done, sdk_part_done, item_done, _completed_event(item)])
+
+        assert [event.delta for event in deltas] == ["a [MASKED]", ""]
+        assert done.text == "a [MASKED]"
+        assert part_done.part.reasoning == "a [MASKED]"
+        assert sdk_part_done.part["text"] == "a [MASKED]"
+        assert item_done["item"]["content"][0]["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_part_done_event_with_no_part_does_not_stop_the_mask(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0, "content_index": 0}
+        done: Final = {"type": "response.reasoning_text.done", "text": "a persimmon", **position}
+        part_done: Final = {"type": "response.content_part.done", **position}
+        item: Final = {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [],
+            "content": [{"type": "reasoning_text", "text": "a persimmon"}],
+        }
+
+        await _deliver([part_done, done, _completed_event(item)])
+
+        assert done["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_part_announced_with_text_is_masked_and_an_empty_one_stays_empty(self) -> None:
+        announced: Final = ContentPartAddedEvent(
+            type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
+            item_id="rs_1",
+            output_index=0,
+            content_index=0,
+            part=ContentPartDonePartReasoningText(type="reasoning_text", reasoning="a persimmon"),
+        )
+        announced_empty: Final = {
+            "type": "response.content_part.added",
+            "item_id": "rs_1",
+            "output_index": 0,
+            "content_index": 1,
+            "part": {"type": "reasoning_text", "text": ""},
+        }
+        item: Final = {
+            "id": "rs_1",
+            "type": "reasoning",
+            "summary": [],
+            "content": [
+                {"type": "reasoning_text", "text": "a persimmon"},
+                {"type": "reasoning_text", "text": "another persimmon"},
+            ],
+        }
+
+        await _deliver([announced, announced_empty, _completed_event(item)])
+
+        assert announced.part.reasoning == "a [MASKED]"
+        assert announced_empty["part"]["text"] == ""
+
+    @pytest.mark.asyncio
+    async def test_a_message_rewrite_never_lands_on_a_reasoning_item_at_the_same_index(self) -> None:
+        reasoning_done: Final = {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": {"id": "rs_1", "type": "reasoning", "content": [{"type": "reasoning_text", "text": "clean"}]},
+        }
+
+        await _deliver([reasoning_done, _completed_event(_message_item())])
+
+        assert reasoning_done["item"]["content"][0]["text"] == "clean"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_rewrite_never_lands_on_a_message_at_the_same_index(self) -> None:
+        message_done: Final = {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": _message_item("clean answer"),
+        }
+
+        await _deliver([message_done, _completed_event(_openai_reasoning_item("a persimmon"))])
+
+        assert message_done["item"]["content"][0]["text"] == "clean answer"
+
+    @pytest.mark.asyncio
+    async def test_a_stream_with_no_terminal_event_masks_each_part_where_it_streamed(self) -> None:
+        events: Final = _cut_short_stream_events()
+        count_before: Final = len(events)
+
+        result: Final = await _deliver(events)
+
+        assert result is events
+        assert len(events) == count_before
+        assert [events[1]["delta"], events[2]["delta"]] == ["I think of a [MASKED]", ""]
+        assert events[4]["delta"] == "a [MASKED]"
+        assert "persimmon" not in _sent(events)
+
+    @pytest.mark.asyncio
+    async def test_a_cut_short_stream_with_no_guardrail_finding_is_left_alone(self) -> None:
+        events: Final = _cut_short_stream_events()
+        untouched: Final = copy.deepcopy(events)
+
+        class Passthrough(CustomGuardrail):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: LiteLLMLoggingObj | None = None,
+            ) -> GenericGuardrailAPIInputs:
+                return inputs
+
+        await _deliver(events, Passthrough(guardrail_name="pass"))
+
+        assert events == untouched
+
+    @pytest.mark.asyncio
+    async def test_a_finished_reasoning_item_with_no_terminal_event_is_masked(self) -> None:
+        events: Final = [
+            {"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning"}},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": _openai_reasoning_item("a persimmon"),
+            },
+        ]
+
+        await _deliver(events)
+
+        assert events[1]["item"]["summary"][0]["text"] == "a [MASKED]"
+        assert events[1]["item"]["encrypted_content"] == "gAAAAABopaque-persimmon"
+
+    @pytest.mark.asyncio
+    async def test_a_summary_part_only_the_finished_item_holds_is_masked_with_no_terminal_event(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0, "summary_index": 0}
+        events: Final = [
+            {"type": "response.reasoning_summary_text.done", **position, "text": "a fig"},
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": _openai_reasoning_item("a fig", "a persimmon"),
+            },
+        ]
+
+        await _deliver(events)
+
+        assert [part["text"] for part in events[1]["item"]["summary"]] == ["a fig", "a [MASKED]"]
+
+    @pytest.mark.asyncio
+    async def test_a_second_summary_part_with_no_terminal_event_keeps_its_place(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0}
+        events: Final = [
+            {"type": "response.reasoning_summary_text.done", **position, "summary_index": 1, "text": "a persimmon"},
+        ]
+
+        await _deliver(events)
+
+        assert events[0]["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("event_type", "field"),
+        [("response.reasoning_text.delta", "delta"), ("response.reasoning_text.done", "text")],
+        ids=["delta", "done"],
+    )
+    async def test_reasoning_text_with_no_terminal_event_is_masked(self, event_type: str, field: str) -> None:
+        events: Final = [
+            {
+                "type": event_type,
+                "item_id": "rs_1",
+                "output_index": 0,
+                "content_index": 0,
+                field: "a persimmon",
+            },
+        ]
+
+        await _deliver(events)
+
+        assert events[0][field] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_cut_short_stream_is_only_scanned_when_no_rewrite_delivery_was_asked_for(self) -> None:
+        events: Final = _cut_short_stream_events()
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events, guardrail_to_apply=guardrail
+        )
+
+        assert events == _cut_short_stream_events()
+        assert guardrail.scanned_texts == ["I think of a persimmona persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_finished_tool_call_next_to_streamed_reasoning_reaches_the_guardrail(self) -> None:
+        guardrail: Final = ToolCallRecordingGuardrail("record-tools")
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "delta": "a persimmon",
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup_fruit",
+                    "arguments": '{"fruit":"fig"}',
+                },
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 2,
+                "content_index": 0,
+                "delta": "a fig",
+            },
+        ]
+
+        await _deliver(events, guardrail)
+
+        assert [call["function"]["name"] for call in guardrail.seen_tool_calls] == ["lookup_fruit"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_envelope_with_no_output_still_masks_the_streamed_reasoning(self) -> None:
+        events: Final = [
+            *_cut_short_stream_events(),
+            {"type": "response.failed", "response": {"id": "resp_1", "output": []}},
+        ]
+
+        await _deliver(events)
+
+        assert events[1]["delta"] == "I think of a [MASKED]"
+        assert events[4]["delta"] == "a [MASKED]"
+        assert events[-1] == {"type": "response.failed", "response": {"id": "resp_1", "output": []}}
+
+    @pytest.mark.asyncio
+    async def test_a_failed_envelope_with_no_output_masks_a_stream_of_only_reasoning(self) -> None:
+        events: Final = [
+            *_cut_short_stream_events()[:3],
+            {"type": "response.failed", "response": {"id": "resp_1", "output": []}},
+        ]
+
+        await _deliver(events)
+
+        assert events[1]["delta"] == "I think of a [MASKED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "outside_position",
+        [
+            {"item_id": "rs_2", "output_index": 1, "summary_index": 0},
+            {"item_id": "rs_1", "output_index": 0, "summary_index": 1},
+        ],
+        ids=["another-item", "another-summary-part"],
+    )
+    async def test_reasoning_a_partial_envelope_lacks_is_scanned_and_masked(self, outside_position: dict) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        delta: Final = {"type": "response.reasoning_summary_text.delta", "delta": "a persimmon"}
+        envelope: Final = {"id": "resp_1", "output": [_openai_reasoning_item("a persimmon")]}
+        events: Final = [
+            {**delta, "item_id": "rs_1", "output_index": 0, "summary_index": 0},
+            {**delta, **outside_position},
+            {"type": "response.incomplete", "response": envelope},
+        ]
+
+        await _deliver(events, guardrail)
+
+        assert guardrail.scanned_texts == ["a persimmon", "a persimmon"]
+        assert [event["delta"] for event in events[:2]] == ["a [MASKED]", "a [MASKED]"]
+        assert envelope["output"] == [_openai_reasoning_item("a [MASKED]")]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "events",
+        [
+            _claude_stream_events(),
+            [
+                *_claude_stream_events()[:4],
+                {"type": "response.output_item.done", "output_index": 0, "item": _claude_reasoning_item()},
+                _claude_stream_events()[5],
+            ],
+        ],
+        ids=["summary-only-item", "signed-item"],
+    )
+    async def test_a_claude_stream_whose_envelope_holds_its_reasoning_scans_it_once(self, events: list[dict]) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await _deliver(events, guardrail)
+
+        assert guardrail.scanned_texts == ["the fruit is a persimmon", "I think of a persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_tool_call_between_reasoning_and_the_answer_keeps_every_text_in_place(self) -> None:
+        function_call: Final = {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup_fruit",
+            "arguments": '{"fruit":"fig"}',
+        }
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "delta": "a persimmon",
+            },
+            {"type": "response.output_item.done", "output_index": 1, "item": function_call},
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 2,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+        ]
+
+        await _deliver(events)
+
+        assert events[0]["delta"] == "a [MASKED]"
+        assert events[2]["delta"] == "the [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_unplaceable_answer_text_next_to_reasoning_fails_open(self) -> None:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "a persimmon",
+            },
+            {"type": "response.output_text.delta", "output_index": 1, "delta": "a persimmon"},
+        ]
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await _deliver(events)
+        assert [event["delta"] for event in events] == ["a persimmon", "a persimmon"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stray_event",
+        [
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+            {
+                "type": "response.code_interpreter_call_code.delta",
+                "item_id": "ci_1",
+                "output_index": 1,
+                "delta": "the persimmon",
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_never_announced",
+                "output_index": 1,
+                "delta": "the persimmon",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+            {"type": "response.reasoning_text.delta", "item_id": "rs_2", "output_index": 1, "delta": "the persimmon"},
+            {"type": "response.reasoning_summary_text.delta", "item_id": "rs_2", "delta": "the persimmon"},
+        ],
+        ids=[
+            "refusal",
+            "code-interpreter",
+            "unannounced-tool-call",
+            "answer-at-the-reasoning-index",
+            "reasoning-text-with-no-content-index",
+            "summary-with-no-output-index",
+        ],
+    )
+    async def test_text_a_released_envelope_cannot_hold_is_still_scanned_and_fails_open(
+        self, stray_event: dict
+    ) -> None:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        reasoning: Final = {
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": "rs_1",
+            "output_index": 0,
+            "delta": "I think of a fig ",
+        }
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await _deliver([reasoning, stray_event], guardrail)
+
+        assert guardrail.scanned_texts == ["I think of a fig the persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_streamed_tool_call_next_to_reasoning_stays_on_the_released_envelope(self) -> None:
+        function_call: Final = {
+            "type": "function_call",
+            "id": "fc_1",
+            "call_id": "call_1",
+            "name": "lookup_fruit",
+            "arguments": "",
+        }
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "delta": "a persimmon",
+            },
+            {"type": "response.output_item.added", "output_index": 1, "item": function_call},
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1",
+                "output_index": 1,
+                "delta": '{"fruit":"fig"}',
+            },
+        ]
+
+        await _deliver(events)
+
+        assert events[0]["delta"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_reads_an_envelope_missing_the_answer_also_sees_the_answer(self) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=_envelope_missing_the_streamed_answer(), guardrail_to_apply=guardrail
+        )
+
+        assert guardrail.scanned_texts == ["I think of a fig", "I think of a figthe persimmon"]
+
+    @pytest.mark.asyncio
+    async def test_a_mask_on_an_answer_missing_from_the_envelope_fails_open(self) -> None:
+        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        with pytest.raises(UndeliverableStreamRewrite):
+            await _deliver(_envelope_missing_the_streamed_answer(), guardrail)
+
+        assert guardrail.scanned_texts == ["I think of a fig", "I think of a figthe persimmon"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("streamed_event", "envelope_item"),
+        [
+            (
+                {"type": "response.reasoning_summary_text.delta", "item_id": "rs_1", "output_index": 0, "delta": "a"},
+                None,
+            ),
+            (
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "fc_1",
+                    "output_index": 1,
+                    "delta": '{"fruit":"fig"}',
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_1",
+                    "call_id": "call_1",
+                    "name": "lookup_fruit",
+                    "arguments": '{"fruit":"fig"}',
+                },
+            ),
+            (
+                {
+                    "type": "response.output_text.delta",
+                    "item_id": "msg_1",
+                    "output_index": 2,
+                    "content_index": 0,
+                    "delta": "a",
+                },
+                _message_item("a"),
+            ),
+            (
+                {"type": "response.output_text.delta", "item_id": "msg_1", "output_index": 2, "delta": "a"},
+                {
+                    "type": "compaction",
+                    "id": "cmp_1",
+                    "encrypted_content": json.dumps({"type": "compaction", "content": "a"}),
+                },
+            ),
+        ],
+        ids=["reasoning-only", "tool-call", "message", "compaction"],
+    )
+    async def test_an_envelope_that_holds_what_streamed_is_scanned_as_answer_and_reasoning_alone(
+        self, streamed_event: dict, envelope_item: dict | None
+    ) -> None:
+        guardrail: Final = RecordingScanCountGuardrail()
+        envelope_items: Final = () if envelope_item is None else (envelope_item,)
+
+        await _deliver([streamed_event, _completed_event(_openai_reasoning_item("a fig"), *envelope_items)], guardrail)
+
+        assert guardrail.scans == 1 + len(envelope_items)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "item",
+        [_openai_reasoning_item("a fig"), _claude_reasoning_item("a fig")],
+        ids=["openai", "claude"],
+    )
+    async def test_the_answer_is_the_first_text_a_guardrail_sees(self, item: dict) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item, _message_item()]}, guardrail)
+
+        assert guardrail.scanned_texts[0] == "the fruit is a persimmon"
+        assert "a fig" in guardrail.scanned_texts
+
+    @pytest.mark.asyncio
+    async def test_a_stream_envelope_also_puts_the_answer_first(self) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await _deliver(_openai_stream_events(), guardrail)
+
+        assert guardrail.scanned_texts == ["the fruit is a persimmon", "I think of a persimmon"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("guardrail_class", [FirstTextOnlyGuardrail, LastTextOnlyGuardrail])
+    async def test_a_guardrail_reading_one_end_of_the_texts_keeps_each_text_in_its_place(
+        self, guardrail_class: type[PersimmonTextMaskingGuardrail]
+    ) -> None:
+        guardrail: Final = guardrail_class()
+        response: Final = {"output": [_openai_reasoning_item("a persimmon"), _message_item()]}
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail)
+
+        assert guardrail.scanned_texts == ["the fruit is a persimmon", "a persimmon"]
+        assert response["output"][1]["content"][0]["text"] == "the fruit is a [MASKED]"
+        assert response["output"][0]["summary"][0]["text"] == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("guardrail_class", [FirstTextOnlyGuardrail, LastTextOnlyGuardrail])
+    async def test_a_stream_with_a_guardrail_reading_one_end_keeps_each_text_in_its_place(
+        self, guardrail_class: type[PersimmonTextMaskingGuardrail]
+    ) -> None:
+        events: Final = _openai_stream_events()
+
+        await _deliver(events, guardrail_class())
+
+        assert events[-1]["response"]["output"][1]["content"][0]["text"] == "the fruit is a [MASKED]"
+        assert events[-1]["response"]["output"][0]["summary"][0]["text"] == "I think of a [MASKED]"
+        assert events[4]["text"] == "I think of a [MASKED]"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "item",
+        [_openai_reasoning_item("a persimmon"), _claude_reasoning_item("a persimmon")],
+        ids=["openai", "claude"],
+    )
+    async def test_the_answer_call_carries_only_the_answer(self, item: dict) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"model": "test-model", "output": [item, _message_item()]}, guardrail
+        )
+
+        assert guardrail.calls == [
+            {"texts": ["the fruit is a persimmon"], "model": "test-model"},
+            {"texts": ["a persimmon"], "model": "test-model"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_a_tool_call_next_to_reasoning_reaches_a_guardrail_that_skips_tools_when_it_has_text(self) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+        tool_call: Final = {"type": "function_call", "call_id": "call_1", "name": "look_up", "arguments": "{}"}
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a persimmon"), tool_call]}, guardrail
+        )
+
+        assert not guardrail.calls[0]["texts"]
+        assert len(guardrail.calls[0]["tool_calls"]) == 1
+        assert guardrail.calls[1] == {"texts": ["a persimmon"]}
+
+    @pytest.mark.asyncio
+    async def test_a_stream_scans_a_tool_call_apart_from_the_reasoning_next_to_it(self) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+        tool_call: Final = {"type": "function_call", "call_id": "call_1", "name": "look_up", "arguments": "{}"}
+
+        await _deliver([_completed_event(_openai_reasoning_item("a persimmon"), tool_call)], guardrail)
+
+        assert not guardrail.calls[0]["texts"]
+        assert len(guardrail.calls[0]["tool_calls"]) == 1
+        assert guardrail.calls[1] == {"texts": ["a persimmon"], "model": "test-model"}
+
+    @pytest.mark.asyncio
+    async def test_distinct_reasoning_texts_share_one_call_by_default(self) -> None:
+        guardrail: Final = CallRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
+        )
+
+        assert [call["texts"] for call in guardrail.calls] == [["a fig", "a plum"]]
+
+    @pytest.mark.asyncio
+    async def test_each_distinct_reasoning_text_gets_its_own_call_with_a_guardrail_that_reads_one_text(self) -> None:
+        guardrail: Final = PerTextRecordingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig", "a plum"), _openai_reasoning_item("a fig")]}, guardrail
+        )
+
+        assert [call["texts"] for call in guardrail.calls] == [["a fig"], ["a plum"]]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_returns_fewer_texts_than_it_got_still_masks_every_reasoning_text(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a fig", "a persimmon")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, FirstTextReturningGuardrail())
+
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a fig", "a [MASKED]"]
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_reads_only_the_last_text_still_masks_every_reasoning_text(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon", "a fig")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, LastTextScanningGuardrail())
+
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a [MASKED]", "a fig"]
+
+    @pytest.mark.asyncio
+    async def test_the_content_filter_masks_every_reasoning_text_in_one_call(self) -> None:
+        content_filter: Final = ContentFilterGuardrail(
+            guardrail_name="mask-persimmon",
+            blocked_words=[BlockedWord(keyword="persimmon", action=ContentFilterAction.MASK)],
+        )
+        response: Final = {
+            "output": [_openai_reasoning_item("a persimmon", "two persimmon trees"), _message_item("a fig")]
+        }
+        request_data: Final[dict] = {"metadata": {}}
+
+        await OpenAIResponsesHandler().process_output_response(response, content_filter, request_data=request_data)
+
+        assert not any("persimmon" in part["text"] for part in response["output"][0]["summary"])
+        assert len(request_data["metadata"]["standard_logging_guardrail_information"]) == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("guardrail_class", [FirstTextOnlyGuardrail, LastTextOnlyGuardrail])
+    async def test_a_guardrail_reading_one_end_of_many_reasoning_texts_masks_each_in_its_place(
+        self, guardrail_class: type[PersimmonTextMaskingGuardrail]
+    ) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon", "a fig and a persimmon")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail_class())
+
+        assert [part["text"] for part in response["output"][0]["summary"]] == ["a [MASKED]", "a fig and a [MASKED]"]
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_text_equal_to_the_answer_is_masked_in_both_places(self) -> None:
+        response: Final = {"output": [_openai_reasoning_item("the fruit is a persimmon"), _message_item()]}
+
+        await OpenAIResponsesHandler().process_output_response(response, PersimmonTextMaskingGuardrail())
+
+        assert response["output"][0]["summary"][0]["text"] == "the fruit is a [MASKED]"
+        assert response["output"][1]["content"][0]["text"] == "the fruit is a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_reasoning_is_scanned_after_the_answer_rewrite_reaches_the_response(self) -> None:
+        guardrail: Final = ResponseSnapshotGuardrail()
+        response: Final = {"output": [_openai_reasoning_item("a fig"), _message_item()]}
+
+        await OpenAIResponsesHandler().process_output_response(response, guardrail, request_data={})
+
+        assert "the fruit is a persimmon" in guardrail.response_snapshots[0]
+        assert "the fruit is a [MASKED]" in guardrail.response_snapshots[1]
+
+    @pytest.mark.asyncio
+    async def test_a_stream_scans_reasoning_after_the_answer_rewrite_reaches_the_envelope(self) -> None:
+        guardrail: Final = ResponseSnapshotGuardrail()
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=[_completed_event(_openai_reasoning_item("a fig"), _message_item())],
+            guardrail_to_apply=guardrail,
+            request_data={},
+        )
+
+        assert "the fruit is a [MASKED]" in guardrail.response_snapshots[1]
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_only_response_hands_the_guardrail_the_caller_metadata(self) -> None:
+        request_data: Final[dict] = {}
+
+        await OpenAIResponsesHandler().process_output_response(
+            {"output": [_openai_reasoning_item("a fig")]},
+            CallRecordingGuardrail(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="reader"),
+            request_data=request_data,
+        )
+
+        assert request_data["litellm_metadata"]["user_api_key_key_alias"] == "reader"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("output", [{}, {"texts": []}, {"texts": None}], ids=["missing", "empty", "none"])
+    async def test_a_guardrail_that_returns_no_text_leaves_the_reasoning_as_it_was(
+        self, output: GenericGuardrailAPIInputs
+    ) -> None:
+        response: Final = {"output": [_openai_reasoning_item("a persimmon")]}
+
+        await OpenAIResponsesHandler().process_output_response(response, FixedOutputGuardrail(output))
+
+        assert response["output"][0]["summary"][0]["text"] == "a persimmon"
+
+    @pytest.mark.asyncio
+    async def test_a_reasoning_rewrite_stays_on_the_envelope_when_no_delivery_was_asked_for(self) -> None:
+        events: Final = _openai_stream_events()
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events, guardrail_to_apply=PersimmonTextMaskingGuardrail()
+        )
+
+        assert events[-1]["response"]["output"][0]["summary"][0]["text"] == "I think of a [MASKED]"
+        assert events[4]["text"] == "I think of a persimmon"
+
+    @pytest.mark.asyncio
+    async def test_a_cached_replay_masks_every_event_that_repeats_the_response(self) -> None:
+        response: Final = _response(_claude_reasoning_item(), _message_item())
+        response.provider_specific_fields = _provider_fields("I think of a persimmon")
+        events: Final = build_synthetic_response_events(transformed=response, logging_obj=None, chunk_size=8)
+        assert "persimmon" in _sent(events)
+
+        await _deliver(events)
+
+        sent: Final = _sent(events)
+        assert "persimmon" not in sent
+        assert "[MASKED]" in sent
+
+    @pytest.mark.asyncio
+    async def test_a_cached_replay_keeps_the_signature_on_its_opening_events(self) -> None:
+        response: Final = _response(_claude_reasoning_item(), _message_item())
+        response.provider_specific_fields = _provider_fields("I think of a persimmon")
+        events: Final = build_synthetic_response_events(transformed=response, logging_obj=None, chunk_size=8)
+
+        await _deliver(events)
+
+        expected_fields: Final = _provider_fields("I think of a [MASKED]")
+        assert events[0].response.provider_specific_fields == expected_fields
+        assert events[1].response.provider_specific_fields == expected_fields
+        opened_blob: Final = decode_thinking_blocks(events[2].item.encrypted_content)
+        assert opened_blob[0]["signature"] == "sig0"
+        assert opened_blob[0]["thinking"] == "I think of a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_response_status_event_without_provider_fields_is_left_alone(self) -> None:
+        created: Final = {"type": "response.created", "response": {"id": "resp_1", "output": []}}
+        completed: Final = _completed_event(_message_item("a fig"))
+        completed["response"]["provider_specific_fields"] = _provider_fields("a persimmon")
+
+        await _deliver([created, completed])
+
+        assert created == {"type": "response.created", "response": {"id": "resp_1", "output": []}}
+
+    @pytest.mark.asyncio
+    async def test_a_blob_member_that_is_no_thinking_block_is_kept_and_never_scanned(self) -> None:
+        stray_block: Final = {"type": "redacted_thinking", "data": "cmVkYWN0ZWQ=", "thinking": "a stray persimmon"}
+        blob: Final = json.dumps(
+            [{"type": "thinking", "thinking": "a persimmon", "signature": "sig0"}, 7, stray_block],
+            separators=(",", ":"),
+        )
+        item: Final = _claude_reasoning_item("a fig", blob)
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, guardrail)
+
+        assert guardrail.scanned_texts == ["a fig", "a persimmon"]
+        assert json.loads(item["encrypted_content"]) == [
+            {"type": "thinking", "thinking": "a [MASKED]", "signature": "sig0"},
+            7,
+            stray_block,
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "empty_text"),
+        [("summary", ""), ("summary", 7), ("summary", None), ("content", ""), ("content", None)],
+    )
+    async def test_a_reasoning_part_with_no_text_is_not_scanned(self, field: str, empty_text: object) -> None:
+        guardrail: Final = RecordingScanCountGuardrail()
+        item: Final = {"type": "reasoning", "id": "rs_1", field: [{"type": "summary_text", "text": empty_text}]}
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, guardrail)
+
+        assert guardrail.scans == 0
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("item", "part_text"),
+        [
+            (
+                lambda: GenericResponseOutputItem.model_construct(
+                    type="message",
+                    id="msg_1",
+                    status="completed",
+                    role="assistant",
+                    content=[{"type": "output_text", "text": "a persimmon", "annotations": []}],
+                ),
+                lambda item: item.content[0]["text"],
+            ),
+            (
+                lambda: {
+                    "type": "message",
+                    "content": [OutputText(type="output_text", text="a persimmon", annotations=[])],
+                },
+                lambda item: item["content"][0].text,
+            ),
+        ],
+        ids=["dict-part-on-a-model", "model-part-on-a-dict"],
+    )
+    async def test_an_answer_part_is_masked_however_it_is_held(
+        self, item: Callable[[], object], part_text: Callable[[object], str]
+    ) -> None:
+        held_item: Final = item()
+
+        await OpenAIResponsesHandler().process_output_response({"output": [held_item]}, PersimmonTextMaskingGuardrail())
+
+        assert part_text(held_item) == "a [MASKED]"
+
+    @pytest.mark.asyncio
+    async def test_a_message_model_the_generic_shape_rejects_is_still_scanned(self) -> None:
+        class MessageWithNoId(BaseModel):
+            type: str = "message"
+            content: list[OutputText]
+
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        item: Final = MessageWithNoId(content=[OutputText(type="output_text", text="a persimmon", annotations=[])])
+
+        await OpenAIResponsesHandler().process_output_response({"output": [item]}, guardrail)
+
+        assert guardrail.scanned_texts == ["a persimmon"]
+
+    def test_two_items_at_one_index_both_reach_the_accumulated_string(self) -> None:
+        position: Final = {"output_index": 0, "content_index": 0}
+        events: Final = [
+            {"type": "response.output_text.done", **position, "item_id": "msg_1", "text": "first "},
+            {"type": "response.output_text.done", **position, "item_id": "msg_2", "text": "second"},
+        ]
+
+        assert OpenAIResponsesHandler().get_streaming_string_so_far(events) == "first second"
+
+    def test_two_summary_parts_both_reach_the_accumulated_string(self) -> None:
+        position: Final = {"item_id": "rs_1", "output_index": 0}
+        events: Final = [
+            {"type": "response.reasoning_summary_text.delta", **position, "summary_index": 0, "delta": "first "},
+            {"type": "response.reasoning_summary_text.done", **position, "summary_index": 0, "text": "first "},
+            {"type": "response.reasoning_summary_text.delta", **position, "summary_index": 1, "delta": "second"},
+            {"type": "response.reasoning_summary_text.done", **position, "summary_index": 1, "text": "second"},
+        ]
+
+        assert OpenAIResponsesHandler().get_streaming_string_so_far(events) == "first second"
+
+    def test_a_delta_with_no_summary_index_and_its_done_event_are_one_part(self) -> None:
+        events: Final = _claude_stream_events()[1:3]
+
+        assert OpenAIResponsesHandler().get_streaming_string_so_far(events) == "I think of a persimmon"
+
+    @pytest.mark.parametrize(
+        ("build_item", "changed"),
+        [
+            (_openai_reasoning_item, "a fig"),
+            (lambda text: _claude_reasoning_item("same", _thinking_blob(text)), "a fig"),
+        ],
+        ids=["summary", "thinking-block"],
+    )
+    def test_a_changed_reasoning_text_changes_the_ended_stream_scan_key(
+        self, build_item: Callable[[str], dict], changed: str
+    ) -> None:
+        def ended_key(text: str) -> object:
+            return OpenAIResponsesHandler().get_streaming_scan_key(
+                [{"type": "response.completed", "response": {"output": [build_item(text)]}}]
+            )
+
+        assert ended_key("a persimmon") != ended_key(changed)
+
+    def test_a_changed_provider_field_thinking_text_changes_the_ended_stream_scan_key(self) -> None:
+        def ended_key(thinking: str) -> object:
+            completed = _completed_event(_message_item("the same answer"))
+            completed["response"]["provider_specific_fields"] = _provider_fields(thinking)
+            return OpenAIResponsesHandler().get_streaming_scan_key([completed])
+
+        assert ended_key("a persimmon") != ended_key("a fig")
+
+    def test_released_stream_carries_reasoning_a_mid_delta_cut_would_lose(self) -> None:
+        events: Final = _cut_short_stream_events()
+
+        released: Final = OpenAIResponsesHandler().released_stream_as_ended(events)
+
+        assert list(released[:-1]) == events
+        assert released[-1]["type"] == "response.incomplete"
+        assert released[-1]["response"]["status"] == "incomplete"
+        reasoning, message = released[-1]["response"]["output"]
+        assert reasoning["summary"] == ({"type": "summary_text", "text": "I think of a persimmon"},)
+        assert message == {
+            "type": "message",
+            "role": "assistant",
+            "content": ({"type": "output_text", "text": "a persimmon"},),
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_refusal_released_next_to_reasoning_reaches_the_guardrail_after_the_stream_is_cut_short(
+        self,
+    ) -> None:
+        guardrail: Final = PersimmonTextMaskingGuardrail()
+        events: Final = [
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "summary_index": 0,
+                "delta": "I think of a fig",
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "a clean answer",
+            },
+            {
+                "type": "response.refusal.delta",
+                "item_id": "msg_1",
+                "output_index": 1,
+                "content_index": 0,
+                "delta": "the persimmon",
+            },
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=list(OpenAIResponsesHandler().released_stream_as_ended(events)),
+            guardrail_to_apply=guardrail,
+        )
+
+        assert any("the persimmon" in text for text in guardrail.scanned_texts)
+
+    @pytest.mark.parametrize(
+        "item",
+        [_openai_reasoning_item("a persimmon"), _claude_reasoning_item("a persimmon")],
+        ids=["openai", "claude"],
+    )
+    def test_released_stream_prefers_the_finished_item_fields(self, item: dict) -> None:
+        events: Final = [{"type": "response.output_item.done", "output_index": 0, "item": item}]
+
+        released: Final = OpenAIResponsesHandler().released_stream_as_ended(events)
+
+        released_item: Final = released[-1]["response"]["output"][0]
+        assert released_item["summary"] == item.get("summary")
+        assert released_item["content"] == item["content"]
+        assert released_item["encrypted_content"] == item["encrypted_content"]
+
+    def test_released_stream_carries_reasoning_text_parts(self) -> None:
+        events: Final = [
+            {
+                "type": "response.reasoning_text.delta",
+                "item_id": "rs_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "a persimmon",
+            },
+        ]
+
+        released: Final = OpenAIResponsesHandler().released_stream_as_ended(events)
+
+        assert released[-1]["response"]["output"][0]["content"] == ({"type": "reasoning_text", "text": "a persimmon"},)
+
+    def test_released_stream_without_reasoning_text_keeps_the_flat_envelope(self) -> None:
+        events: Final = [
+            {"type": "response.output_item.added", "output_index": 0, "item": {"id": "rs_1", "type": "reasoning"}},
+            {"type": "response.output_text.delta", "output_index": 3, "content_index": 0, "delta": "hello"},
+            {"type": "response.output_item.done", "output_index": 3, "item": _message_item("hello")},
+        ]
+
+        released: Final = OpenAIResponsesHandler().released_stream_as_ended(events)
+
+        assert released[-1]["response"]["output"] == [
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "hello"}]}
+        ]
+
+    def test_released_stream_mid_delta_without_reasoning_stays_unenveloped(self) -> None:
+        events: Final = [{"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": "hi"}]
+
+        assert OpenAIResponsesHandler().released_stream_as_ended(events) == tuple(events)
+
+
+@pytest.mark.asyncio
+async def test_output_guardrail_rewrite_reaches_the_text_of_an_openai_sdk_message_item() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    response: Final = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="gpt-4",
+        object="response",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                type="message",
+                id="msg_123",
+                status="completed",
+                role="assistant",
+                content=[ResponseOutputText(type="output_text", text="My SSN is 123-45-6789", annotations=[])],
+            )
+        ],
+    )
+
+    await OpenAIResponsesHandler().process_output_response(
+        response, TextsReplacingGuardrail(guardrail_name="masker", texts=("My SSN is [MASKED]",))
+    )
+
+    assert [part.text for part in response.output[0].content] == ["My SSN is [MASKED]"]
+
+
+class _WordMaskingGuardrail(CustomGuardrail):
+    def __init__(self, word: str) -> None:
+        super().__init__(guardrail_name="word-masker")
+        self.word = word
+        self.seen_tool_call_arguments: list[str] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        messages: Final = inputs.get("structured_messages") or []
+        tool_calls: Final = chain.from_iterable(message.get("tool_calls") or [] for message in messages)
+        self.seen_tool_call_arguments.extend(tool_call["function"]["arguments"] for tool_call in tool_calls)
+        return {**inputs, "structured_messages": json.loads(json.dumps(messages).replace(self.word, "[MASKED]"))}
+
+
+_REPLAYED_CLAUDE_SEARCH_INPUT: Final = (
+    {"role": "user", "content": "What is the weather in Paris?"},
+    {
+        "type": "tool_search_call",
+        "id": "tsc_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "arguments": {"pattern": "Paris weather"},
+    },
+    {
+        "type": "tool_search_output",
+        "id": "tso_srvtoolu_01Search",
+        "call_id": "srvtoolu_01Search",
+        "execution": "server",
+        "status": "completed",
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}, "defer_loading": True}],
+    },
+    {
+        "type": "function_call",
+        "call_id": "toolu_01GuardrailWeather",
+        "name": "get_weather",
+        "arguments": '{"city": "Paris"}',
+    },
+    {"type": "function_call_output", "call_id": "toolu_01GuardrailWeather", "output": "14C"},
+    {"role": "user", "content": "Thanks"},
+)
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_masks_the_arguments_of_a_replayed_claude_tool_search_and_keeps_the_search() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[1], "arguments": {"pattern": "[MASKED] weather"}},
+        _REPLAYED_CLAUDE_SEARCH_INPUT[2],
+        {**_REPLAYED_CLAUDE_SEARCH_INPUT[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+    assert "Paris" not in json.dumps(result["input"])
+
+
+@pytest.mark.asyncio
+async def test_a_follow_up_without_a_search_tool_still_scans_the_claude_search_and_keeps_it_through_a_rewrite() -> None:
+    guardrail: Final = _WordMaskingGuardrail("Paris")
+    sent_input: Final = [{"role": "user", "content": "What is the weather?"}, *_REPLAYED_CLAUDE_SEARCH_INPUT[1:]]
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(sent_input),
+        "tools": [{"type": "function", "name": "get_weather", "parameters": {"type": "object"}}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+    assert guardrail.seen_tool_call_arguments == ['{"pattern": "Paris weather"}', '{"city": "Paris"}']
+    assert result["input"][1:4] == [
+        {**sent_input[1], "arguments": {"pattern": "[MASKED] weather"}},
+        sent_input[2],
+        {**sent_input[3], "arguments": '{"city": "[MASKED]"}'},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_rewriting_another_turn_leaves_a_replayed_claude_tool_search_as_sent() -> None:
+    data: Final = {
+        "model": "anthropic/claude-sonnet-5-5",
+        "input": copy.deepcopy(list(_REPLAYED_CLAUDE_SEARCH_INPUT)),
+        "tools": [{"type": "tool_search"}],
+    }
+
+    result: Final = await OpenAIResponsesHandler().process_input_messages(data, _WordMaskingGuardrail("Thanks"))
+
+    assert result["input"] == [*_REPLAYED_CLAUDE_SEARCH_INPUT[:5], {"role": "user", "content": "[MASKED]"}]
+
+
+_REFUSAL: Final = "I can't share where Jane lives."
+_MASKED_REFUSAL: Final = "I can't share where [NAME] lives."
+
+
+class NameMaskingGuardrail(CustomGuardrail):
+    def __init__(self, guardrail_name: str) -> None:
+        super().__init__(guardrail_name=guardrail_name)
+        self.seen_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts: Final = list(inputs.get("texts", []))
+        self.seen_texts.append(texts)
+        return {**inputs, "texts": [text.replace("Jane", "[NAME]") for text in texts]}
+
+
+def _refused_message(*leading_text: str) -> GenericResponseOutputItem:
+    return GenericResponseOutputItem(
+        type="message",
+        id="msg_123",
+        status="incomplete",
+        role="assistant",
+        content=[
+            *(OutputText(type="output_text", text=text, annotations=[]) for text in leading_text),
+            ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+        ],
+    )
+
+
+def _refused_response(*leading_text: str) -> ResponsesAPIResponse:
+    return ResponsesAPIResponse(
+        id="resp_123",
+        created_at=1234567890,
+        model="claude-opus-5-5",
+        object="response",
+        status="incomplete",
+        output=[_refused_message(*leading_text)],
+    )
+
+
+class TestRefusalPartsReachTextGuardrails:
+    @pytest.mark.asyncio
+    async def test_input_refusal_part_is_scanned_and_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        data: Final = {
+            "model": "claude-opus-5-5",
+            "input": [
+                {"role": "user", "content": "Where does Jane live?"},
+                {"type": "message", "role": "assistant", "content": [{"type": "refusal", "refusal": _REFUSAL}]},
+            ],
+        }
+
+        result: Final = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Where does Jane live?", _REFUSAL]]
+        assert result["input"][1]["content"] == [{"type": "refusal", "refusal": _MASKED_REFUSAL}]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("leading_text", "expected_parts"),
+        [
+            ((), [("refusal", _MASKED_REFUSAL)]),
+            (("Jane asked first.",), [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]),
+        ],
+        ids=["refusal_only", "text_then_refusal"],
+    )
+    async def test_output_refusal_part_is_scanned_and_rewritten(
+        self, leading_text: tuple[str, ...], expected_parts: list[tuple[str, str]]
+    ) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response(*leading_text), guardrail
+        )
+
+        assert guardrail.seen_texts == [[*leading_text, _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
+        ] == expected_parts
+
+    @pytest.mark.asyncio
+    async def test_output_refusal_part_in_an_openai_message_is_rewritten(self) -> None:
+        guardrail: Final = NameMaskingGuardrail(guardrail_name="test")
+        openai_message: Final = ResponseOutputMessage(
+            type="message",
+            id="msg_123",
+            role="assistant",
+            status="incomplete",
+            content=[
+                ResponseOutputText(type="output_text", text="Jane asked first.", annotations=[]),
+                ResponseOutputRefusal(type="refusal", refusal=_REFUSAL),
+            ],
+        )
+
+        result: Final = await OpenAIResponsesHandler().process_output_response(
+            _refused_response().model_copy(update={"output": [openai_message]}), guardrail
+        )
+
+        assert guardrail.seen_texts == [["Jane asked first.", _REFUSAL]]
+        assert [
+            (part["type"], part.get("text") or part.get("refusal"))
+            for part in result.model_dump()["output"][0]["content"]
+        ] == [("output_text", "[NAME] asked first."), ("refusal", _MASKED_REFUSAL)]
+
+    @pytest.mark.asyncio
+    async def test_streamed_refusal_events_carry_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+            ContentPartDoneEvent(
+                type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                part=ContentPartDonePartRefusal(type="refusal", refusal=_REFUSAL),
+                **position,
+            ),
+            OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE, output_index=0, item=_refused_message()
+            ),
+            ResponseIncompleteEvent(type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE, response=_refused_response()),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert [json.loads(event.model_dump_json()) for event in events] == [
+            json.loads(event.model_dump_json())
+            for event in (
+                RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_MASKED_REFUSAL, **position),
+                RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_MASKED_REFUSAL, **position),
+                ContentPartDoneEvent(
+                    type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
+                    part=ContentPartDonePartRefusal(type="refusal", refusal=_MASKED_REFUSAL),
+                    **position,
+                ),
+                OutputItemDoneEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    output_index=0,
+                    item=_refused_message().model_copy(
+                        update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                    ),
+                ),
+                ResponseIncompleteEvent(
+                    type=ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    response=_refused_response().model_copy(
+                        update={
+                            "output": [
+                                _refused_message().model_copy(
+                                    update={"content": [ResponseOutputRefusal(type="refusal", refusal=_MASKED_REFUSAL)]}
+                                )
+                            ]
+                        }
+                    ),
+                ),
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_cut_refusal_stream_carries_the_rewrite(self) -> None:
+        position: Final = {"item_id": "msg_123", "output_index": 0, "content_index": 0}
+        events: Final = [
+            RefusalDeltaEvent(type=ResponsesAPIStreamEvents.REFUSAL_DELTA, delta=_REFUSAL, **position),
+            RefusalDoneEvent(type=ResponsesAPIStreamEvents.REFUSAL_DONE, refusal=_REFUSAL, **position),
+        ]
+
+        await OpenAIResponsesHandler().process_output_streaming_response(
+            responses_so_far=events,
+            guardrail_to_apply=NameMaskingGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert (events[0].delta, events[1].refusal) == (_MASKED_REFUSAL, _MASKED_REFUSAL)

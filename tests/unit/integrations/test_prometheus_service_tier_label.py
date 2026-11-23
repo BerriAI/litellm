@@ -10,6 +10,7 @@ Run with:
 """
 
 import datetime
+from typing import Final
 
 import pytest
 
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
     get_service_tier_from_standard_logging_payload,
 )
+from litellm.llms.bedrock.chat.converse_transformation import BEDROCK_SERVICE_TIERS
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
     UserAPIKeyLabelNames,
@@ -138,7 +140,7 @@ def test_requested_tier_used_when_no_served_tier():
 def test_unrecognized_requested_tier_is_not_labelled():
     """
     A caller-supplied tier survives param mapping even where the provider then
-    ignores it (Bedrock and Groq drop an unrecognized tier and still answer), so
+    ignores it (Groq drops an unrecognized tier and still answers), so
     labelling it verbatim would let one caller mint a series per string.
     """
     payload = _standard_logging_payload(model_parameters={"service_tier": "attacker-controlled-a1b2c3"})
@@ -164,6 +166,20 @@ def test_every_known_requested_tier_is_labelled(tier):
     payload = _standard_logging_payload(model_parameters={"service_tier": tier})
 
     assert get_service_tier_from_standard_logging_payload(payload) == tier
+
+
+@pytest.mark.parametrize("tier", BEDROCK_SERVICE_TIERS)
+def test_every_tier_bedrock_forwards_is_labelled(tier: str):
+    payload: Final = _standard_logging_payload(model_parameters={"service_tier": tier})
+
+    assert get_service_tier_from_standard_logging_payload(payload) == tier
+
+
+@pytest.mark.parametrize("tier", ["Priority", "FLEX", "Reserved"])
+def test_a_requested_tier_in_any_case_is_labelled_in_lowercase(tier: str):
+    payload: Final = _standard_logging_payload(model_parameters={"service_tier": tier})
+
+    assert get_service_tier_from_standard_logging_payload(payload) == tier.lower()
 
 
 @pytest.mark.parametrize(

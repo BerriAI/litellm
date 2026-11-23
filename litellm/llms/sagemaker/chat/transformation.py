@@ -8,7 +8,7 @@ Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messa
 """
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
 from httpx._models import Headers
@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -39,6 +40,8 @@ else:
 
 
 class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = SAGEMAKER_SESSION_POLICY
+
     def __init__(self, **kwargs):
         OpenAIGPTConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
@@ -179,7 +182,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.iter_bytes(response.iter_bytes())
+        completion_stream: Final = custom_stream_decoder.iter_bytes(
+            response.iter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -228,7 +233,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
+        completion_stream: Final = custom_stream_decoder.aiter_bytes(
+            response.aiter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

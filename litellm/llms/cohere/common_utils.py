@@ -1,8 +1,12 @@
 import json
+from collections.abc import Mapping
 from typing import Final, Literal
+
+from pydantic import TypeAdapter
 
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.types.llms.cohere import CohereV2StreamedToolCall
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
@@ -11,9 +15,11 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
 )
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
 
 class CohereError(BaseLLMException):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         super().__init__(status_code=status_code, message=message)
 
 
@@ -45,14 +51,14 @@ class CohereModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     @staticmethod
@@ -118,7 +124,7 @@ class ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: list[object] = []
         self.tool_index = -1
         self.json_mode = json_mode
 
@@ -158,10 +164,10 @@ class ModelResponseIterator:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
 
     # Sync iterator
-    def __iter__(self):
+    def __iter__(self) -> "ModelResponseIterator":
         return self
 
-    def __next__(self):
+    def __next__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
@@ -189,15 +195,17 @@ class ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
-        return self.chunk_parser(chunk=data_json)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line))
+        if isinstance(data_json, dict):
+            return self.chunk_parser(chunk=data_json)
+        raise AttributeError(f"{type(data_json).__name__!r} object has no attribute 'get'", name="get", obj=data_json)
 
     # Async iterator
-    def __aiter__(self):
+    def __aiter__(self) -> "ModelResponseIterator":
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:
@@ -219,9 +227,10 @@ class CohereV2ModelResponseIterator:
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
-        self.content_blocks: list = []
+        self.content_blocks: list[object] = []
         self.tool_index = -1
         self.json_mode = json_mode
+        self.tool_call_indexes_with_arguments: frozenset[int] = frozenset()
 
     def _parse_content_delta(self, chunk: dict) -> str:
         """Parse content-delta chunks to extract text."""
@@ -234,20 +243,23 @@ class CohereV2ModelResponseIterator:
             return content
         return ""
 
-    def _parse_tool_call_delta(self, chunk: dict) -> ChatCompletionToolCallChunk | None:
-        """Parse tool-call-delta chunks to extract tool calls."""
-        delta: Final = chunk.get("delta", {})
-        tool_calls: Final = delta.get("tool_calls", [])
-        if tool_calls:
-            return {
-                "id": tool_calls[0].get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": tool_calls[0].get("name", ""),
-                    "arguments": tool_calls[0].get("arguments", ""),
-                },
-            }
-        return None
+    def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk:
+        """Parse tool-call-start and tool-call-delta chunks to extract tool calls."""
+        tool_call: Final = CohereV2StreamedToolCall.model_validate(chunk)
+        if tool_call.arguments:
+            self.tool_call_indexes_with_arguments = self.tool_call_indexes_with_arguments | {index}
+        return {
+            "id": tool_call.id,
+            "type": "function",
+            "function": {"name": tool_call.name, "arguments": tool_call.arguments},
+            "index": index,
+        }
+
+    def _parse_tool_call_end(self, index: int) -> ChatCompletionToolCallChunk | None:
+        """Close a tool call that streamed no arguments with an empty JSON object, as OpenAI streams one."""
+        if index in self.tool_call_indexes_with_arguments:
+            return None
+        return {"id": None, "type": "function", "function": {"name": None, "arguments": "{}"}, "index": index}
 
     def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
         """Parse tool-plan-delta events to extract tool plan."""
@@ -301,7 +313,8 @@ class CohereV2ModelResponseIterator:
 
         v2 format:
         - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text
-        - Tool calls: chunk.type == "tool-call-delta" -> chunk.delta.tool_calls
+        - Tool calls: chunk.type in ("tool-call-start", "tool-call-delta") -> chunk.delta.message.tool_calls
+        - Tool call end: chunk.type == "tool-call-end" -> "{}" arguments when the call streamed none
         - Tool plan: chunk.event == "tool-plan-delta" -> chunk.data.delta.message.tool_plan
         - Citations: chunk.event == "citation-start" -> chunk.data.delta.message.citations
         - Finish: chunk.event == "message-end" -> chunk.data.delta.finish_reason
@@ -321,8 +334,12 @@ class CohereV2ModelResponseIterator:
             # Handle different chunk types
             if chunk_type == "content-delta":
                 text = self._parse_content_delta(chunk)
-            elif chunk_type == "tool-call-delta":
-                tool_use = self._parse_tool_call_delta(chunk)
+            elif chunk_type in ("tool-call-start", "tool-call-delta", "tool-call-end"):
+                tool_use = (
+                    self._parse_tool_call_end(index)
+                    if chunk_type == "tool-call-end"
+                    else self._parse_tool_call_delta(chunk, index)
+                )
             elif event_type == "tool-plan-delta":
                 provider_specific_fields = self._parse_tool_plan_delta(chunk)
             elif event_type == "citation-start":
@@ -350,10 +367,10 @@ class CohereV2ModelResponseIterator:
             raise ValueError(f"Failed to parse v2 chunk: {e}, chunk: {chunk}")
 
     # Sync iterator
-    def __iter__(self):
+    def __iter__(self) -> "CohereV2ModelResponseIterator":
         return self
 
-    def __next__(self):
+    def __next__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
@@ -381,15 +398,19 @@ class CohereV2ModelResponseIterator:
             if index != -1:
                 str_line = str_line[index:]
 
-        data_json: Final = json.loads(str_line)
-        return self.chunk_parser(chunk=data_json)
+        data_json: Final = _DECODED_JSON.validate_python(json.loads(str_line))
+        if isinstance(data_json, dict):
+            return self.chunk_parser(chunk=data_json)
+        raise ValueError(
+            f"Failed to parse v2 chunk: {type(data_json).__name__!r} object has no attribute 'get', chunk: {data_json}"
+        )
 
     # Async iterator
-    def __aiter__(self):
+    def __aiter__(self) -> "CohereV2ModelResponseIterator":
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> GenericStreamingChunk:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:

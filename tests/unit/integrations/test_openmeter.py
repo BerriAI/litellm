@@ -1,11 +1,30 @@
 import json
 import os
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
+from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.openmeter import OpenMeterLogger
+from litellm.litellm_core_utils.internal_call_metadata import BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX
+from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+    SETTLES_BACKGROUND_RESPONSE_KWARG,
+    BackgroundResponseSettlement,
+)
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+
+BACKGROUND_COST_POLL_KWARGS: Final[Mapping[str, object]] = {
+    "call_type": "aget_responses",
+    "litellm_params": {"metadata": {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}},
+}
+PASSTHROUGH_SETTLEMENT_KWARGS: Final[Mapping[str, object]] = {
+    "call_type": "pass_through_endpoint",
+    "litellm_params": {"metadata": {}},
+    SETTLES_BACKGROUND_RESPONSE_KWARG: BackgroundResponseSettlement.SETTLES,
+}
 
 
 class TestOpenMeterIntegration:
@@ -35,6 +54,31 @@ class TestOpenMeterIntegration:
         os.environ.pop("OPENMETER_API_KEY", None)
         with pytest.raises(Exception, match=r"Missing keys.*OPENMETER_API_KEY"):
             OpenMeterLogger()
+
+    @pytest.mark.parametrize(
+        "cost_kwargs",
+        (
+            pytest.param(BACKGROUND_COST_POLL_KWARGS, id="cost-poll"),
+            pytest.param(PASSTHROUGH_SETTLEMENT_KWARGS, id="passthrough-settlement"),
+        ),
+    )
+    @pytest.mark.usefixtures("sdk_only_install")
+    def test_background_cost_event_gets_its_own_event_id_beside_its_create(
+        self, cost_kwargs: Mapping[str, object]
+    ) -> None:
+        logger: Final = OpenMeterLogger()
+        response_obj: Final = {"id": "resp_YWJjZA"}
+        create_kwargs: Final[Mapping[str, object]] = {
+            "user": "user-1",
+            "call_type": "aresponses",
+            "litellm_params": {"metadata": {}},
+        }
+
+        create_event: Final = logger._common_logic(create_kwargs, response_obj)
+        cost_event: Final = logger._common_logic({**cost_kwargs, "user": "user-1", "response_cost": 0.42}, response_obj)
+
+        assert create_event["id"] == "resp_YWJjZA"
+        assert cost_event["id"] == f"resp_YWJjZA{BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX}"
 
     def test_common_logic_with_string_user(self):
         """Test that _common_logic correctly handles string user parameter"""

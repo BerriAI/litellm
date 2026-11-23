@@ -24,9 +24,9 @@ class InsensitiveContains(TypedDict):
 
 
 class UserSearchWhere(TypedDict):
-    """Prisma filter behind `/user/list?search=`: user_id or user_email contains the term, case-insensitive."""
+    """Case-insensitive partial-match predicates for user search."""
 
-    OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email"], InsensitiveContains], ...]]
+    OR: ReadOnly[tuple[Mapping[Literal["user_id", "user_email", "user_alias"], InsensitiveContains], ...]]
 
 
 class UserListResponse(LiteLLMBaseModel):
@@ -120,6 +120,7 @@ class BulkNewUserItem(NewUserRequest):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    user_id: str | None = None
     auto_create_key: bool = False
 
     @field_validator("send_invite_email")

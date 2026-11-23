@@ -637,8 +637,7 @@ class TestNova2MultiTurnMessageTranslation:
         assert "Simple addition" in texts
         assert "4." in texts
 
-    def test_should_keep_signed_thinking_blocks_as_reasoning_content(self):
-        """With a signature, reasoning is preserved as a reasoningContent block."""
+    def test_should_drop_signed_thinking_blocks_from_another_model(self):
         bedrock_msgs = self._to_bedrock(
             [
                 {"role": "user", "content": "What is 2+2?"},
@@ -653,13 +652,9 @@ class TestNova2MultiTurnMessageTranslation:
             ]
         )
         assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
-        rc_blocks = [b for b in assistant["content"] if "reasoningContent" in b]
-        assert len(rc_blocks) >= 1
-        assert rc_blocks[0]["reasoningContent"]["reasoningText"]["text"] == "math"
-        assert rc_blocks[0]["reasoningContent"]["reasoningText"]["signature"] == "sig-1"
+        assert assistant["content"] == [{"text": "4."}]
 
-    def test_should_translate_inline_content_list_thinking_type(self):
-        """content=[{type:'thinking',...},{type:'text',...}] should also round-trip."""
+    def test_should_drop_inline_signed_thinking_and_keep_the_answer(self):
         bedrock_msgs = self._to_bedrock(
             [
                 {"role": "user", "content": "Hi"},
@@ -674,11 +669,4 @@ class TestNova2MultiTurnMessageTranslation:
             ]
         )
         assistant = next(m for m in bedrock_msgs if m["role"] == "assistant")
-        rc_blocks = [b for b in assistant["content"] if "reasoningContent" in b]
-        text_blocks = [
-            b
-            for b in assistant["content"]
-            if "text" in b and "reasoningContent" not in b
-        ]
-        assert len(rc_blocks) >= 1
-        assert any("Hello!" in b["text"] for b in text_blocks)
+        assert assistant["content"] == [{"text": "Hello!"}]
