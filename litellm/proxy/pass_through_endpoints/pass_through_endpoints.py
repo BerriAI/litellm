@@ -1349,6 +1349,18 @@ from litellm.passthrough.timeout_utils import (
 )
 
 _UPSTREAM_CREDENTIAL_HEADERS: Final = frozenset(("authorization", "x-api-key", "api-key"))
+_BODY_PROFILE_ID_FIELD: Final = "user_profile_id"
+
+UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
+UpstreamRequestFilter: TypeAlias = Callable[
+    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
+]
+
+
+def _with_body_profile_id(body: Mapping[str, object] | None, profile_id: str) -> Mapping[str, object] | None:
+    if body is None or _BODY_PROFILE_ID_FIELD not in body:
+        return body
+    return {**body, _BODY_PROFILE_ID_FIELD: profile_id}
 
 
 def _with_pinned_profile_id_where_taken_or_sent(
@@ -1357,20 +1369,25 @@ def _with_pinned_profile_id_where_taken_or_sent(
     custom_llm_provider: str | None,
     headers: Mapping[str, str],
     body: Mapping[str, object] | None,
-) -> Mapping[str, str]:
-    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers)
+) -> UpstreamRequest:
+    sends_profile_id: Final = any(name.lower() == ANTHROPIC_USER_PROFILE_ID_HEADER for name in headers) or (
+        body is not None and _BODY_PROFILE_ID_FIELD in body
+    )
     sends_caller_credential: Final = any(
         caller_credentials.get(name.lower()) == value for name, value in headers.items()
     )
     model: Final = None if body is None else body.get("model")
     takes_profile_id: Final = isinstance(model, str) and supports_anthropic_user_profile_id(model, custom_llm_provider)
     if pinned_profile_id is None or sends_caller_credential or not (sends_profile_id or takes_profile_id):
-        return headers
-    return override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id})
+        return headers, body
+    return (
+        override_headers(headers, {ANTHROPIC_USER_PROFILE_ID_HEADER: pinned_profile_id}),
+        _with_body_profile_id(body, pinned_profile_id),
+    )
 
 
-def _headers_unchanged(headers: Mapping[str, str], body: Mapping[str, object] | None) -> Mapping[str, str]:
-    return headers
+def _request_unpinned(headers: Mapping[str, str], body: Mapping[str, object] | None) -> UpstreamRequest:
+    return headers, body
 
 
 def _filtered_upstream_headers(
@@ -1386,12 +1403,12 @@ def _profile_pin_for_generic_routes(
     route_headers: Mapping[str, object],
     custom_llm_provider: str | None,
     configured_route: bool,
-) -> Callable[[Mapping[str, str], Mapping[str, object] | None], Mapping[str, str]]:
+) -> Callable[[Mapping[str, str], Mapping[str, object] | None], UpstreamRequest]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_authenticated_caller_secret
 
     profile_id_route: Final = configured_route or custom_llm_provider in ANTHROPIC_USER_PROFILE_ID_PROVIDERS
     if upstream_headers_filter is not None or not profile_id_route:
-        return _headers_unchanged
+        return _request_unpinned
     route_sets_credential: Final = any(name.lower() in _UPSTREAM_CREDENTIAL_HEADERS for name in route_headers)
     caller_credentials: Final[Mapping[str, str]] = (
         {}
@@ -1419,12 +1436,6 @@ def _forwarded_json_body(
 ) -> Mapping[str, object] | None:
     sends_body: Final = method not in _METHODS_WITHOUT_REQUEST_BODY or bool(parsed_body) or client_sent_body
     return parsed_body if sends_body else None
-
-
-UpstreamRequest: TypeAlias = tuple[Mapping[str, str], Mapping[str, object] | None]
-UpstreamRequestFilter: TypeAlias = Callable[
-    [Mapping[str, str], Mapping[str, object] | None, Mapping[str, object]], UpstreamRequest
-]
 
 
 def _unfiltered_request(
@@ -2087,10 +2098,11 @@ async def pass_through_request(
                 logging_url = str(url) + "?" + requested_query_params_str
 
         outgoing_body: Final = cast("Mapping[str, object] | None", _parsed_body)  # cast-ok: json
+        pinned_headers, pinned_body = profile_pin(upstream_headers, outgoing_body)
         outbound_headers, upstream_body = _filtered_upstream_request(
             upstream_request_filter,
-            profile_pin(upstream_headers, outgoing_body),
-            _with_anthropic_user_id(outgoing_body, client_user_id),
+            pinned_headers,
+            _with_anthropic_user_id(pinned_body, client_user_id),
             _METADATA_ADAPTER.validate_python(kwargs["litellm_params"]),
         )
         logging_obj.pre_call(
