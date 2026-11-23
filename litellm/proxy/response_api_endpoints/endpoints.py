@@ -292,8 +292,8 @@ def _convert_tool_envelope(obj: object, *, to_chat: bool) -> object:
 
 
 def _normalize_tool_dialect(
-    data: dict, *, to_chat: bool
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], *, to_chat: bool
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     tools: Final = data.get("tools")
     tool_choice: Final = data.get("tool_choice")
     normalized_tools: Final = (
@@ -336,8 +336,8 @@ def _router_can_serve(model: str, llm_router: "Router | None") -> bool:
 
 
 def _resolve_cursor_model_variant(
-    data: dict, llm_router: "Router | None"
-) -> dict:  # mutable-ok: the parsed request body contract is a plain dict
+    data: dict[str, object], llm_router: "Router | None"
+) -> dict[str, object]:  # mutable-ok: the parsed request body contract is a plain dict
     model: Final = data.get("model")
     if not isinstance(model, str) or _router_can_serve(model, llm_router):
         return data
@@ -761,7 +761,9 @@ async def cursor_chat_completions(
 
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
 
-    def cursor_data_generator(response, user_api_key_dict, request_data, request=None):
+    def cursor_data_generator(
+        response: object, user_api_key_dict: UserAPIKeyAuth, request_data, request: Request | None = None
+    ):
         """
         Custom generator that transforms Responses API streaming chunks to chat completion chunks.
 
@@ -2250,7 +2252,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
         user_custom_auth,
     )
 
-    request_data: Final = {"model": model}
+    request_data: Final[dict[str, object]] = {"model": model}
     route: Final = request.scope.get("path") or "/v1/responses"
     if master_key is None and not (
         general_settings.get("enable_jwt_auth", False)

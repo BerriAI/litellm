@@ -55,7 +55,7 @@ def refusal_stop_details(explanation: str | None) -> AnthropicStopDetails:
     return AnthropicStopDetails(type="refusal", category=None, explanation=explanation)
 
 
-MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results")
+MESSAGE_DELTA_OPTIONAL_KEYS: Final = ("stop_details", "safeguard_results", "container")
 
 
 def anthropic_message_delta(
@@ -63,10 +63,11 @@ def anthropic_message_delta(
 ) -> Mapping[str, object]:
     """
     The ``delta`` of the ``message_delta`` event synthesized from a complete
-    Anthropic Messages response. A real stream carries ``stop_details`` and
-    ``safeguard_results`` there, so a client that asked to stream reads them
-    from this event and nowhere else. ``optional_fields`` replaces the
-    response's own when it was rebuilt from a stream that carried them.
+    Anthropic Messages response. A real stream carries ``stop_details``,
+    ``safeguard_results`` and ``container`` there, so a client that asked to
+    stream reads them from this event and nowhere else. ``optional_fields``
+    replaces the response's own when it was rebuilt from a stream that carried
+    them.
     """
     optional_source: Final = response if optional_fields is None else optional_fields
     present_optional: Final = {

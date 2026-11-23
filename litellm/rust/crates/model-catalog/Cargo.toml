@@ -12,7 +12,7 @@ schema = ["dep:schemars", "litellm-cost/schema"]
 litellm-python-compat.workspace = true
 litellm-cost = { workspace = true, features = ["serde"] }
 litellm-error.workspace = true
-litellm-tracing.workspace = true
+tracing.workspace = true
 
 encoding_rs = "0.8.35"
 fancy-regex.workspace = true
