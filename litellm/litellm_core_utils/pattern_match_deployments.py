@@ -25,6 +25,7 @@ class _RoutedDeployment(BaseModel):
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
 _PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(
     (
+        "supports_explicit_prompt_caching",
         "supports_prompt_cache_breakpoint",
         "supports_openai_prompt_cache_breakpoint",
         "supports_bedrock_converse_cache_point",
