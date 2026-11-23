@@ -47,7 +47,7 @@ from litellm.llms.anthropic.common_utils import (
     write_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
-    claude_hosted_web_tool_arguments,
+    hosted_web_tool_arguments,
     with_web_search_call_arguments,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -1717,7 +1717,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             return False
         applied = False
         for index, item in enumerate(output_items):
-            if claude_hosted_web_tool_arguments(item):
+            if hosted_web_tool_arguments(item):
                 output_items[index] = with_web_search_call_arguments(item, "{}")  # rebind-ok: in-place redaction
                 applied = True
             content = getattr(item, "content", None) or (item.get("content") if isinstance(item, dict) else None)
@@ -2109,7 +2109,7 @@ class CiscoAIDefenseGuardrail(CiscoAIDefenseMcpMixin, CustomGuardrail):
             direct = get("text")
             if isinstance(direct, str) and direct:
                 output_parts.append(direct)
-            if hosted_arguments := claude_hosted_web_tool_arguments(item):
+            if hosted_arguments := hosted_web_tool_arguments(item):
                 output_parts.append(hosted_arguments)
         joined = " ".join(output_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
