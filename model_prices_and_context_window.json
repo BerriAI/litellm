@@ -302,8 +302,7 @@
         "supports_vision": false,
         "reasoning_effort_levels": [
             "low",
-            "high",
-            "max"
+            "high"
         ]
     },
     "abliteratedllm/deepseek-v4.1-flash-1017": {
