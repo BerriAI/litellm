@@ -6276,11 +6276,12 @@ class Logging(LiteLLMLoggingBaseClass):
         | ResponsesAPIResponse
         | InteractionsAPIResponse
         | TranscriptionResponse
+        | ImageResponse
         | None
     ):
         if self.stream is not True:
             return None
-        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse, ImageResponse)):
             return result
         elif isinstance(
             result,
