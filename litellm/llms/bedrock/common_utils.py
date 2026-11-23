@@ -2789,7 +2789,7 @@ class CommonBatchFilesUtils:
     def sign_aws_request(
         self,
         service_name: str,
-        data: str | Mapping[str, object] | BedrockCreateBatchRequest,
+        data: str | dict[str, object] | BedrockCreateBatchRequest,
         endpoint_url: str,
         optional_params: dict,
         method: str = "POST",

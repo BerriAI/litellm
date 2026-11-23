@@ -129,7 +129,7 @@ class CodestralTextCompletion:
     def _validate_environment(
         self,
         api_key: str | None,
-        user_headers: Mapping[str, object],
+        user_headers: dict[str, object],
     ) -> dict[str, object]:
         if api_key is None:
             raise ValueError("Missing CODESTRAL_API_Key - Please add CODESTRAL_API_Key to your environment variables")
@@ -250,7 +250,7 @@ class CodestralTextCompletion:
         acompletion: object = None,
         litellm_params: object = None,
         logger_fn: object = None,
-        headers: Mapping[str, object] = {},
+        headers: dict[str, object] = {},
     ) -> TextCompletionResponse | CustomStreamWrapper:
         headers = self._validate_environment(api_key, headers)
 
