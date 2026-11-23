@@ -320,6 +320,21 @@ async def test_a_new_subscription_reserves_its_id_before_upstream_creation() -> 
 
 
 @pytest.mark.asyncio
+async def test_a_lost_reservation_rechecks_the_winning_binding_on_retry() -> None:
+    store: Final = MemoryStore()
+    target: Final = runtime((server(),), upstream=FakeUpstream())
+    pending: Final = await prepare_subscription(
+        context(), _params(), None, SETTINGS, target, _request(store), _Client()
+    )
+    assert isinstance(pending, Ok)
+    winner: Final = pending.ok.base.model_copy(update={"server_id": "replacement-server", "status": "active"})
+    store.rows[SID] = winner
+    result: Final = await reserve_subscription(pending.ok, SETTINGS)
+    assert isinstance(result, Error)
+    assert store.rows[SID] == winner
+
+
+@pytest.mark.asyncio
 async def test_a_reservation_past_the_cap_backs_itself_out() -> None:
     capped: Final = EventsSettings(enabled=True, public_base_url="https://gw", max_subscriptions_per_key=1)
     store: Final = MemoryStore()
