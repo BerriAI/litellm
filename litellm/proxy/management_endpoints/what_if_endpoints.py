@@ -6,11 +6,11 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import accumulate, chain, groupby, pairwise, takewhile
-from typing import Annotated, Final, Literal
+from typing import Annotated, Final, Literal, Protocol
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -1119,7 +1119,8 @@ def _git(tree: str, *args: str) -> str | None:
     return done.stdout if done.returncode == 0 else None
 
 
-Git = Callable[..., str | None]
+class Git(Protocol):
+    def __call__(self, tree: str, *args: str) -> str | None: ...
 
 
 def _already_in(git: Git, tree: str, ref: str, path: str, patch: str) -> bool:
