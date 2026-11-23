@@ -10,6 +10,7 @@ SELECT object_permission_id,
        COALESCE(mcp_toolsets, '{}') AS "mcp_toolsets!",
        COALESCE(search_tools, '{}') AS "search_tools!",
        mcp_tool_search_enabled,
-       COALESCE(skills, '{}') AS "skills!"
+       COALESCE(skills, '{}') AS "skills!",
+       NULLIF(mcp_auth_profiles, '{}'::jsonb) AS "mcp_auth_profiles?: RawJson"
 FROM "LiteLLM_ObjectPermissionTable"
 WHERE object_permission_id = $1

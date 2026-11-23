@@ -115,7 +115,8 @@ TEAM_ENTRY: Final = (
     r' "mcp_access_groups": [], "mcp_tool_permissions": {"server-a": ["search"]},'
     r' "vector_stores": ["store-a"], "agents": [], "agent_access_groups": [], "models": [],'
     r' "mcp_toolsets": [], "blocked_tools": [], "search_tools": [], "mcp_tool_search_enabled": null,'
-    r' "skills": [], "apps": null}, "access_group_ids": [], "rotation_count": 0, "auto_rotate": false,'
+    r' "skills": [], "apps": null, "mcp_auth_profiles": {"server-a": "Build"}},'
+    r' "access_group_ids": [], "rotation_count": 0, "auto_rotate": false,'
     r' "rotation_interval": null, "last_rotation_at": null, "key_rotation_at": null,'
     r' "router_settings": null, "budget_limits": null, "team_spend": 2.25, "team_alias": "Team KV",'
     r' "team_tpm_limit": null, "team_rpm_limit": null, "team_tpd_limit": null, "team_max_budget": 12.0,'
@@ -140,9 +141,36 @@ PERMISSION_ROW: Final = (
     r'{"object_permission_id":"kv-permission","mcp_servers":["server-a"],"mcp_access_groups":[],'
     r'"mcp_tool_permissions":{"server-a": ["search"]},"vector_stores":["store-a"],"agents":[],'
     r'"agent_access_groups":[],"models":[],"blocked_tools":[],"mcp_toolsets":[],"search_tools":[],'
-    r'"mcp_tool_search_enabled":null,"skills":[]}'
+    r'"mcp_tool_search_enabled":null,"skills":[],"mcp_auth_profiles":{"server-a": "Build"}}'
 )
 PERMISSION_ENTRY: Final = (
+    r'{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],'
+    r' "mcp_tool_permissions": {"server-a": ["search"]}, "vector_stores": ["store-a"], "agents": [],'
+    r' "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],'
+    r' "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null,'
+    r' "mcp_auth_profiles": {"server-a": "Build"}}'
+)
+UNREADABLE_PERMISSION_ENTRY: Final = (
+    r'{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],'
+    r' "mcp_tool_permissions": {"server-a": ["search"]}, "vector_stores": ["store-a"], "agents": [],'
+    r' "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],'
+    r' "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null,'
+    r' "mcp_auth_profiles": "unreadable"}'
+)
+UNREADABLE_PERMISSION_ROW: Final = (
+    r'{"object_permission_id":"kv-permission","mcp_servers":["server-a"],"mcp_access_groups":[],'
+    r'"mcp_tool_permissions":{"server-a": ["search"]},"vector_stores":["store-a"],"agents":[],'
+    r'"agent_access_groups":[],"models":[],"blocked_tools":[],"mcp_toolsets":[],"search_tools":[],'
+    r'"mcp_tool_search_enabled":null,"skills":[],"mcp_auth_profiles":{"server-a": 9}}'
+)
+EMPTY_GRANTS_PERMISSION_ENTRY: Final = (
+    r'{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],'
+    r' "mcp_tool_permissions": {"server-a": ["search"]}, "vector_stores": ["store-a"], "agents": [],'
+    r' "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],'
+    r' "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null,'
+    r' "mcp_auth_profiles": null}'
+)
+GRANTS_NOT_READ_PERMISSION_ENTRY: Final = (
     r'{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],'
     r' "mcp_tool_permissions": {"server-a": ["search"]}, "vector_stores": ["store-a"], "agents": [],'
     r' "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],'
@@ -228,7 +256,8 @@ FULL_PERMISSION_ROW: Final = (
     r'"mcp_access_groups":["mcp-group"],"mcp_tool_permissions":{"server": ["tool"]},'
     r'"vector_stores":["store"],"agents":["agent"],"agent_access_groups":["agent-group"],'
     r'"models":["p-model"],"blocked_tools":["blocked-tool"],"mcp_toolsets":["toolset"],'
-    r'"search_tools":["search-tool"],"mcp_tool_search_enabled":true,"skills":["skill"]}'
+    r'"search_tools":["search-tool"],"mcp_tool_search_enabled":true,"skills":["skill"],'
+    r'"mcp_auth_profiles":null}'
 )
 FULL_PERMISSION_ENTRY: Final = (
     r'{"object_permission_id": "full-key-permission", "mcp_servers": ["server"],'
@@ -307,8 +336,12 @@ async def test_python_caches_the_key_it_read_from_the_entry_in_the_same_bytes(
 
 @pytest.mark.parametrize(
     ("row", "entry"),
-    [(PERMISSION_ROW, PERMISSION_ENTRY), (FULL_PERMISSION_ROW, FULL_PERMISSION_ENTRY)],
-    ids=["its_defaults", "every_column_set"],
+    [
+        (PERMISSION_ROW, PERMISSION_ENTRY),
+        (FULL_PERMISSION_ROW, FULL_PERMISSION_ENTRY),
+        (UNREADABLE_PERMISSION_ROW, UNREADABLE_PERMISSION_ENTRY),
+    ],
+    ids=["named_grants", "every_column_set_and_no_grants", "numeric_profile_id"],
 )
 def test_the_object_permission_entry_is_what_python_caches_for_the_repository_row(row: str, entry: str) -> None:
     permission: Final = LiteLLM_ObjectPermissionTable.model_validate_json(row)
@@ -329,7 +362,26 @@ def test_python_refuses_each_key_role_and_region_the_rust_store_refuses(fields: 
 def test_python_keeps_the_key_role_and_region_the_rust_store_keeps() -> None:
     key: Final = UserAPIKeyAuth.model_validate({"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"})
 
+    assert '"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"' in json.dumps(
+        CacheCodec.serialize(key, model_type=UserAPIKeyAuth)
+    )
+
+
+@pytest.mark.parametrize(
+    ("stored", "read"),
+    [(FULL_PERMISSION_ROW, True), (EMPTY_GRANTS_PERMISSION_ENTRY, True), (GRANTS_NOT_READ_PERMISSION_ENTRY, False)],
+    ids=["repository_row", "entry_read_empty", "entry_not_read"],
+)
+def test_a_grant_column_read_empty_is_told_apart_from_one_never_read(stored: str, read: bool) -> None:
+    permission: Final = LiteLLM_ObjectPermissionTable.model_validate_json(stored)
+
+    assert ("mcp_auth_profiles" in permission.model_fields_set, permission.mcp_auth_profiles) == (read, None)
+
+
+def test_python_re_caches_a_read_empty_entry_without_its_receipt() -> None:
+    permission: Final = LiteLLM_ObjectPermissionTable.model_validate_json(EMPTY_GRANTS_PERMISSION_ENTRY)
+
     assert (
-        '"user_role": "proxy_admin_viewer", "allowed_model_region": "eu"'
-        in json.dumps(CacheCodec.serialize(key, model_type=UserAPIKeyAuth))
+        json.dumps(CacheCodec.serialize(permission, model_type=LiteLLM_ObjectPermissionTable))
+        == GRANTS_NOT_READ_PERMISSION_ENTRY
     )

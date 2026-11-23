@@ -659,7 +659,8 @@ class FakeAccessGroupStore(FakeFindStore):
 
 class FakeObjectPermissionStore(FakeFindStore):
     async def find_by_object_permission_id(self, object_permission_id: str, *, use_writer: bool = False) -> str | None:
-        return await self._find(object_permission_id, use_writer=use_writer)
+        found: Final = await self._find(object_permission_id, use_writer=use_writer)
+        return None if found is None else json.dumps({"mcp_auth_profiles": None, **json.loads(found)})
 
 
 class FakeKeyReader:

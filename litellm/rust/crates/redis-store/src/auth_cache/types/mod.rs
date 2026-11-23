@@ -22,7 +22,7 @@ pub use self::{
     end_user::{EndUserEntry, ModelRegion, RestrictedEndUsers},
     key::KeyEntry,
     member::{MemberEntry, MemberRole},
-    object_permission::ObjectPermissionEntry,
+    object_permission::{ObjectPermissionEntry, ProfileGrants},
     organization::OrganizationEntry,
     organization_membership::OrganizationMembershipEntry,
     project::ProjectEntry,
