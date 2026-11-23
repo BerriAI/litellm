@@ -45,7 +45,6 @@ from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, new_web
 from litellm.proxy.mcp_server.events.webhooks.store import (
     Activation,
     EventStore,
-    QueuedDelivery,
     SubscriptionRow,
     SubscriptionStatus,
     default_store,
@@ -56,7 +55,6 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import (
     DeliveryStatus,
     EventsErrorCode,
-    GapEnvelope,
     JsonObject,
     SubscribeEventsParams,
     SubscribeEventsResult,
@@ -198,18 +196,6 @@ async def _discard_pending(subscription: _Subscription) -> None:
             await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
 
 
-def _reactivation_gap(row: SubscriptionRow, cursor: str | None) -> QueuedDelivery:
-    gap_id: Final = new_webhook_id("gap")
-    return QueuedDelivery(
-        delivery_id=gap_id,
-        subscription_id=row.id,
-        body=GapEnvelope(cursor=cursor).model_dump_json(),
-        webhook_id=gap_id,
-        next_attempt_at=datetime.now(timezone.utc),
-        prepared=True,
-    )
-
-
 async def _roll_back(
     subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
 ) -> None:
@@ -244,18 +230,14 @@ async def activate_subscription(
     if isinstance(sealed, Error):
         await _roll_back(subscription, upstream, settings, runtime)
         return Error(sealed.error)
-    pending: Final = await subscription.request.store.has_pending(base.id)
-    watermark: Final = base.cursor if pending else sealed.ok
     activation: Final = Activation(
-        reactivation_gap=_reactivation_gap(base, watermark)
-        if existing is not None and existing.status == "suspended"
-        else None,
+        reactivation_gap_id=new_webhook_id("gap") if existing is not None and existing.status == "suspended" else None,
         expected_generation=base.generation,
         client_secret=base.client_secret,
         upstream_subscription_id=upstream.id,
         upstream_refresh_before=upstream_refresh,
         refresh_before=refresh_before,
-        cursor=watermark,
+        cursor=sealed.ok,
     )
     expected: Final[tuple[SubscriptionStatus, ...]] = (
         ("pending",) if subscription.reserved else (existing.status,) if existing is not None else ("pending",)
@@ -265,7 +247,7 @@ async def activate_subscription(
     except Exception:
         await _roll_back(subscription, upstream, settings, runtime)
         raise
-    if not activated:
+    if activated is None:
         await _roll_back(subscription, upstream, settings, runtime)
         return Error(subscription_not_found())
     refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
@@ -283,7 +265,7 @@ async def activate_subscription(
     result: Final = SubscribeEventsResult(
         id=base.id,
         refresh_before=iso(refresh_before),
-        cursor=watermark,
+        cursor=activated.cursor,
         truncated=upstream.truncated or subscription.opened.expired,
         delivery_status=delivery_status(refreshed) if refreshed is not None else None,
     )
