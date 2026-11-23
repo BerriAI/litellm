@@ -459,6 +459,31 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
             ],
             False,
         ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "video_url", "video_url": {"url": "gs://bucket/clip-without-extension"}}],
+                }
+            ],
+            True,
+        ),
+        (
+            [{"role": "user", "content": [{"type": "video_url", "video_url": "gs://bucket/clip.mp4"}]}],
+            False,
+        ),
+        (
+            [
+                litellm.Message(
+                    role="assistant",
+                    content=None,
+                    images=[
+                        {"type": "image_url", "image_url": {"url": "gs://bucket/gen-without-extension"}, "index": 0}
+                    ],
+                )
+            ],
+            True,
+        ),
     ],
 )
 def test_openai_messages_may_need_sync_gcs_metadata_fetch_matrix(messages, expected):
