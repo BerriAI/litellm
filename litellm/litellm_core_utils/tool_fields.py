@@ -75,7 +75,9 @@ class _ToolEntry(TypedDict, total=False):
 
 
 _TOOL_ENTRY: Final = TypeAdapter(_ToolEntry)
-_WEB_SEARCH_OPTIONS: Final = TypeAdapter(dict[str, object] | None, config=ConfigDict(strict=True))
+_WEB_SEARCH_OPTIONS: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None, config=ConfigDict(strict=True)
+)
 
 
 def declared_function_name(tool: object) -> str | None:

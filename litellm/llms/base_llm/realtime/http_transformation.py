@@ -31,7 +31,7 @@ class BaseRealtimeHTTPConfig(ABC):
     def get_api_base(
         self,
         api_base: str | None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Resolve the provider API base URL.
@@ -44,7 +44,7 @@ class BaseRealtimeHTTPConfig(ABC):
     def get_api_key(
         self,
         api_key: str | None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Resolve the provider API key.
