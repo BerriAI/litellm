@@ -33,6 +33,10 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
                 litellm_params, optional_params, "streaming_end_of_stream_only"
             ),
             "streaming_sampling_rate": _get_config_value(litellm_params, optional_params, "streaming_sampling_rate"),
+            "category_score_thresholds": _get_config_value(
+                litellm_params, optional_params, "category_score_thresholds"
+            ),
+            "moderate_images": _get_config_value(litellm_params, optional_params, "moderate_images"),
         },
     )
 

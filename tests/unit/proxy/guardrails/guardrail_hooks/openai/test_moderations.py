@@ -139,18 +139,12 @@ async def test_openai_moderation_guardrail_safe_content():
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             # Test apply_guardrail with safe content using structured_messages
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "Hello, how are you today?"}
-                ]
+                structured_messages=[{"role": "user", "content": "Hello, how are you today?"}]
             )
 
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
-                request_data={
-                    "messages": [
-                        {"role": "user", "content": "Hello, how are you today?"}
-                    ]
-                },
+                request_data={"messages": [{"role": "user", "content": "Hello, how are you today?"}]},
                 input_type="request",
             )
 
@@ -202,9 +196,7 @@ async def test_openai_moderation_guardrail_apply_guardrail():
 
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             # Test apply_guardrail with texts (embeddings-style input)
-            inputs = GenericGuardrailAPIInputs(
-                texts=["Hello, how are you?", "What is the weather?"]
-            )
+            inputs = GenericGuardrailAPIInputs(texts=["Hello, how are you?", "What is the weather?"])
 
             result = await guardrail.apply_guardrail(
                 inputs=inputs,
@@ -261,9 +253,7 @@ async def test_openai_moderation_guardrail_harmful_content():
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             # Test apply_guardrail with harmful content using structured_messages
             inputs = GenericGuardrailAPIInputs(
-                structured_messages=[
-                    {"role": "user", "content": "This is hateful content"}
-                ]
+                structured_messages=[{"role": "user", "content": "This is hateful content"}]
             )
 
             # Should raise HTTPException
@@ -272,11 +262,7 @@ async def test_openai_moderation_guardrail_harmful_content():
             with pytest.raises(HTTPException) as exc_info:
                 await guardrail.apply_guardrail(
                     inputs=inputs,
-                    request_data={
-                        "messages": [
-                            {"role": "user", "content": "This is hateful content"}
-                        ]
-                    },
+                    request_data={"messages": [{"role": "user", "content": "This is hateful content"}]},
                     input_type="request",
                 )
 
@@ -374,9 +360,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(
-                api_key="test", request_route="/chat/completions"
-            )
+            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
             request_data = {
                 "messages": [{"role": "user", "content": "Hello, how are you today?"}],
                 "guardrail_to_apply": guardrail,
@@ -385,9 +369,7 @@ async def test_openai_moderation_guardrail_streaming_safe_content():
 
             # Test streaming hook with safe content via UnifiedLLMGuardrails
             result_chunks = []
-            async for (
-                chunk
-            ) in unified_guardrail.async_post_call_streaming_iterator_hook(
+            async for chunk in unified_guardrail.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=user_api_key_dict,
                 response=mock_stream(),
                 request_data=request_data,
@@ -493,9 +475,7 @@ async def test_openai_moderation_guardrail_streaming_harmful_content():
                 return_value=mock_model_response,
             ),
         ):
-            user_api_key_dict = UserAPIKeyAuth(
-                api_key="test", request_route="/chat/completions"
-            )
+            user_api_key_dict = UserAPIKeyAuth(api_key="test", request_route="/chat/completions")
             request_data = {
                 "messages": [{"role": "user", "content": "Generate harmful content"}],
                 "guardrail_to_apply": guardrail,
@@ -566,9 +546,7 @@ async def test_openai_moderation_guardrail_logs_full_response_safe_content():
         )
 
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
-            inputs = GenericGuardrailAPIInputs(
-                structured_messages=[{"role": "user", "content": "Hello, how are you?"}]
-            )
+            inputs = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "Hello, how are you?"}])
             request_data = {"metadata": {}}
 
             await guardrail.apply_guardrail(
@@ -577,9 +555,7 @@ async def test_openai_moderation_guardrail_logs_full_response_safe_content():
                 input_type="request",
             )
 
-            guardrail_info_list = request_data["metadata"][
-                "standard_logging_guardrail_information"
-            ]
+            guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
             assert len(guardrail_info_list) == 1
 
             info = guardrail_info_list[0]
@@ -639,9 +615,7 @@ async def test_openai_moderation_guardrail_logs_full_response_harmful_content():
         )
 
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
-            inputs = GenericGuardrailAPIInputs(
-                structured_messages=[{"role": "user", "content": "Hateful content"}]
-            )
+            inputs = GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "Hateful content"}])
             request_data = {"metadata": {}}
 
             from fastapi import HTTPException
@@ -653,9 +627,7 @@ async def test_openai_moderation_guardrail_logs_full_response_harmful_content():
                     input_type="request",
                 )
 
-            guardrail_info_list = request_data["metadata"][
-                "standard_logging_guardrail_information"
-            ]
+            guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
             info = guardrail_info_list[0]
             assert info["guardrail_status"] == "guardrail_intervened"
 
@@ -742,9 +714,7 @@ async def test_openai_moderation_post_call_request_data_passthrough():
         with patch.object(guardrail, "async_make_request", mock_make_request):
             await unified_guardrail.async_post_call_success_hook(
                 data=request_data,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="test", request_route="/chat/completions"
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
                 response=llm_response,
             )
 
@@ -789,9 +759,7 @@ def test_openai_moderation_process_response_metadata_none_edge_case():
         )
 
         # Full moderation dict should be logged, not "allow"
-        info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
-        )
+        info_list = request_data["metadata"].get("standard_logging_guardrail_information")
         assert info_list is not None
         assert info_list[0]["guardrail_response"] == mod_dict
 
@@ -838,9 +806,7 @@ def test_openai_moderation_process_error_metadata_none_edge_case():
             )
 
         # Full moderation dict should be logged, not the exception
-        info_list = request_data["metadata"].get(
-            "standard_logging_guardrail_information"
-        )
+        info_list = request_data["metadata"].get("standard_logging_guardrail_information")
         assert info_list is not None
         assert info_list[0]["guardrail_response"] == mod_dict
         assert info_list[0]["guardrail_status"] == "guardrail_intervened"
@@ -891,9 +857,7 @@ async def test_openai_moderation_logs_violation_categories_harmful_content():
             request_data = {"metadata": {}}
             with pytest.raises(HTTPException):
                 await guardrail.apply_guardrail(
-                    inputs=GenericGuardrailAPIInputs(
-                        structured_messages=[{"role": "user", "content": "harmful"}]
-                    ),
+                    inputs=GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "harmful"}]),
                     request_data=request_data,
                     input_type="request",
                 )
@@ -933,9 +897,7 @@ async def test_openai_moderation_no_violation_categories_safe_content():
         with patch.object(guardrail, "async_make_request", return_value=mock_response):
             request_data = {"metadata": {}}
             await guardrail.apply_guardrail(
-                inputs=GenericGuardrailAPIInputs(
-                    structured_messages=[{"role": "user", "content": "hi"}]
-                ),
+                inputs=GenericGuardrailAPIInputs(structured_messages=[{"role": "user", "content": "hi"}]),
                 request_data=request_data,
                 input_type="request",
             )
@@ -1249,3 +1211,195 @@ def test_proxy_boot_skips_an_openai_moderation_with_a_partial_identity() -> None
 
     booted: Final = IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values()
     assert {guardrail["guardrail_name"] for guardrail in booted} == {"keyed-mod"}
+
+
+def _moderation_result(flagged: bool, scores: dict[str, float]) -> dict[str, object]:
+    return {
+        "flagged": flagged,
+        "categories": {category: score >= 0.5 for category, score in scores.items()},
+        "category_scores": scores,
+        "category_applied_input_types": None,
+    }
+
+
+def _guardrail_answering(results_per_request: list[dict[str, object]], **guardrail_kwargs: object):
+    """A guardrail whose moderation endpoint answers each request in turn and records the bodies it was sent."""
+    sent_bodies: Final[list[object]] = []
+    answers: Final = iter(results_per_request)
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"id": f"modr-{len(sent_bodies)}", "model": "omni-moderation-latest", "results": [next(answers)]}
+        )
+
+    http_client: Final = AsyncHTTPHandler()
+    http_client.client = httpx.AsyncClient(transport=httpx.MockTransport(answer))
+    guardrail: Final = OpenAIModerationGuardrail(
+        guardrail_name="openai-moderation-test", api_key="fake-key-for-testing", **guardrail_kwargs
+    )
+    guardrail.async_handler = http_client
+    return guardrail, sent_bodies
+
+
+_VIOLENT: Final = {"violence": 0.95, "sexual": 0.2, "sexual/minors": 0.01}
+_BORDERLINE_MINORS: Final = {"violence": 0.01, "sexual": 0.2, "sexual/minors": 0.1}
+
+
+@pytest.mark.parametrize(
+    ("thresholds", "flagged", "scores", "blocked_categories"),
+    [
+        pytest.param(None, True, _VIOLENT, ["violence"], id="no-thresholds-blocks-on-flagged"),
+        pytest.param(None, False, _BORDERLINE_MINORS, None, id="no-thresholds-passes-unflagged"),
+        pytest.param({"sexual/minors": 0.1}, True, _VIOLENT, None, id="flagged-for-an-unlisted-category-passes"),
+        pytest.param(
+            {"sexual/minors": 0.1, "sexual": 0.3},
+            False,
+            _BORDERLINE_MINORS,
+            ["sexual/minors"],
+            id="unflagged-score-at-threshold-blocks",
+        ),
+        pytest.param({"sexual/minors": 0.11}, False, _BORDERLINE_MINORS, None, id="score-below-threshold-passes"),
+        pytest.param({"not-a-category": 0.0}, True, _VIOLENT, None, id="unscored-category-never-blocks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_openai_moderation_blocks_by_category_score_thresholds(
+    thresholds: dict[str, float] | None,
+    flagged: bool,
+    scores: dict[str, float],
+    blocked_categories: list[str] | None,
+) -> None:
+    from fastapi import HTTPException
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    guardrail, _ = _guardrail_answering([_moderation_result(flagged, scores)], category_score_thresholds=thresholds)
+    inputs: Final = GenericGuardrailAPIInputs(texts=["some text"])
+
+    if blocked_categories is None:
+        assert await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request") is inputs
+        return
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    assert blocked.value.status_code == 400
+    assert blocked.value.detail["moderation_result"]["violated_categories"] == blocked_categories
+
+
+@pytest.mark.parametrize("thresholds", [{"sexual": 1.5}, {"sexual": -0.1}, {"sexual": "high"}])
+def test_openai_moderation_rejects_category_score_thresholds_outside_zero_to_one(thresholds: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="category_score_thresholds"):
+        OpenAIModerationGuardrail(
+            guardrail_name="openai-moderation-test", api_key="fake-key", category_score_thresholds=thresholds
+        )
+
+
+def test_openai_moderation_rejects_image_moderation_on_a_text_only_model() -> None:
+    with pytest.raises(ValueError, match="moderate_images"):
+        OpenAIModerationGuardrail(
+            guardrail_name="openai-moderation-test",
+            api_key="fake-key",
+            model="text-moderation-latest",
+            moderate_images=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_sends_text_only_unless_image_moderation_is_on() -> None:
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    guardrail, sent_bodies = _guardrail_answering([_moderation_result(False, {"violence": 0.0})])
+
+    await guardrail.apply_guardrail(
+        inputs=GenericGuardrailAPIInputs(texts=["first", "second"], images=["https://example.com/a.png"]),
+        request_data={},
+        input_type="request",
+    )
+
+    assert sent_bodies == [{"model": "omni-moderation-latest", "input": "first\nsecond"}]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_sends_each_image_in_its_own_request_and_blocks_on_any() -> None:
+    from fastapi import HTTPException
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    guardrail, sent_bodies = _guardrail_answering(
+        [_moderation_result(False, {"violence": 0.0}), _moderation_result(True, {"violence": 0.9})],
+        moderate_images=True,
+    )
+    request_data: Final[dict[str, object]] = {}
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(
+                texts=["what is this"], images=["https://example.com/a.png", "data:image/png;base64,AAAA"]
+            ),
+            request_data=request_data,
+            input_type="request",
+        )
+
+    assert blocked.value.detail["moderation_result"]["violated_categories"] == ["violence"]
+    assert sent_bodies == [
+        {
+            "model": "omni-moderation-latest",
+            "input": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+            ],
+        },
+        {
+            "model": "omni-moderation-latest",
+            "input": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}],
+        },
+    ]
+    logged_scores: Final = [
+        result["category_scores"]
+        for result in request_data["metadata"]["standard_logging_guardrail_information"][0]["guardrail_response"][
+            "results"
+        ]
+    ]
+    assert logged_scores == [{"violence": 0.0}, {"violence": 0.9}]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_moderates_an_image_that_comes_without_text() -> None:
+    from fastapi import HTTPException
+
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    guardrail, sent_bodies = _guardrail_answering([_moderation_result(True, {"violence": 0.9})], moderate_images=True)
+
+    with pytest.raises(HTTPException):
+        await guardrail.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(images=["https://example.com/a.png"]),
+            request_data={},
+            input_type="request",
+        )
+
+    assert sent_bodies == [
+        {
+            "model": "omni-moderation-latest",
+            "input": [{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}],
+        }
+    ]
+
+
+def test_openai_moderation_initialize_guardrail_reads_thresholds_and_image_moderation_from_config() -> None:
+    litellm_params: Final = LitellmParams(
+        guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+        api_key="test-key",
+        mode="pre_call",
+        category_score_thresholds={"sexual/minors": 0.1},
+        moderate_images=True,
+    )
+
+    guardrail: Final = initialize_openai_moderation_guardrail(
+        litellm_params=litellm_params,
+        guardrail=Guardrail(guardrail_name="openai-moderation-test", litellm_params=litellm_params),
+    )
+
+    assert guardrail.category_score_thresholds == {"sexual/minors": 0.1}
+    assert guardrail.moderate_images is True
