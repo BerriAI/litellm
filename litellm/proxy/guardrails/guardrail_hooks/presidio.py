@@ -1958,7 +1958,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         if unmasked != delta["text"]:
                             event["delta"]["text"] = unmasked
                             line = "data: " + json.dumps(event, ensure_ascii=False)
-                except (json.JSONDecodeError, KeyError, TypeError):
+                except (ValueError, RecursionError, KeyError, TypeError):
                     pass
             result_lines.append(line)
 

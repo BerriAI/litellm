@@ -412,16 +412,22 @@ def estimate_audio_tokens(data: str | None, models: Sequence[str] = (), fallback
     """Estimate audio tokens from container duration within a bounded decoding budget."""
     if not data:
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
-    fallback_estimate: Final = max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    duration_tokens: Final = audio_duration_tokens(data, models, fallback_model)
+    if duration_tokens is None:
+        return max(len(data) * 3 // 4 // AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
+    return duration_tokens
+
+
+def audio_duration_tokens(data: str, models: Sequence[str], fallback_model: str | None) -> int | None:
     padding: Final = 2 if data.endswith("==") else 1 if data.endswith("=") else 0
     if len(data) * 3 // 4 - padding > _MAX_AUDIO_ESTIMATE_BYTES:
-        return fallback_estimate
+        return None
     try:
         duration: Final = calculate_request_duration(base64.b64decode(data, validate=True))
     except (ValueError, binascii.Error):
-        return fallback_estimate
+        return None
     if duration is None or not math.isfinite(duration) or duration <= 0:
-        return fallback_estimate
+        return None
     fallback_rate: Final = _audio_token_rate(fallback_model) if fallback_model is not None else None
     rate: Final = max(
         (_audio_token_rate(model) or fallback_rate or AUDIO_TOKENS_PER_SECOND for model in models),

@@ -66,7 +66,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
         messages, model="gemini-3.8-flash", custom_llm_provider="gemini"
     )
     media: Final = [
-        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}},
+        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
         {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}},
         {"inline_data": {"data": "cGRm", "mime_type": "application/pdf"}},
     ]
@@ -85,14 +85,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             ],
         }
         if role == "tool"
-        else {
-            "role": "model" if role == "assistant" else "user",
-            "parts": [
-                {"text": '{"ok":true}'},
-                {**media[0], "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
-                *media[1:],
-            ],
-        }
+        else {"role": "model" if role == "assistant" else "user", "parts": [{"text": '{"ok":true}'}, *media]}
     )
 
 
