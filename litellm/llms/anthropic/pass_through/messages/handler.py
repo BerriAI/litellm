@@ -169,6 +169,10 @@ def _native_messages_config(
     return OpenAILikeAnthropicMessagesConfig(cache_control_ttl=_deployment_supports_cache_control_ttl(model_info))
 
 
+def messages_request_bridges(model: str, custom_llm_provider: str | None, model_info: object) -> bool:
+    return _native_messages_config(model, custom_llm_provider, model_info) is None
+
+
 def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
     safeguards: Final = kwargs.get("safeguards")

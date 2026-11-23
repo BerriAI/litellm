@@ -679,6 +679,7 @@ nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set = set()
 sambanova_models: Set = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
@@ -694,12 +695,14 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
 darkbloom_models: Set = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -938,6 +941,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "gnani":
+            gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -968,6 +973,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "gradium":
+            gradium_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -984,6 +991,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             publicai_models.add(key)
         elif value.get("litellm_provider") == "darkbloom":
             darkbloom_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1132,6 +1141,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | gnani_models
     | soniox_models
     | sambanova_models
     | scaledown_models
@@ -1146,12 +1156,14 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | gradium_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
     | moonshot_models
     | publicai_models
     | darkbloom_models
+    | resetdata_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1243,6 +1255,7 @@ def _build_models_by_provider() -> dict:
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
+        "gnani": gnani_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
@@ -1258,6 +1271,7 @@ def _build_models_by_provider() -> dict:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "gradium": gradium_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,
@@ -1266,6 +1280,7 @@ def _build_models_by_provider() -> dict:
         "moonshot": moonshot_models,
         "publicai": publicai_models,
         "darkbloom": darkbloom_models,
+        "resetdata": resetdata_models,
         "v0": v0_models,
         "morph": morph_models,
         "lambda_ai": lambda_ai_models,
@@ -1749,6 +1764,9 @@ if TYPE_CHECKING:
     )
     from .llms.vercel_ai_gateway.decisions.transformation import (
         VercelAIGatewayDecisionsConfig as VercelAIGatewayDecisionsConfig,
+    )
+    from .llms.litellm_proxy.decisions.transformation import (
+        LiteLLMProxyDecisionsConfig as LiteLLMProxyDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,

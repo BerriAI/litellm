@@ -29002,7 +29002,7 @@ export interface components {
             /** Choice */
             choice: string;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Probabilities */
             probabilities: {
                 [key: string]: number;
@@ -39501,7 +39501,7 @@ export interface components {
             /** Choice */
             choice: string | boolean;
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -39597,7 +39597,7 @@ export interface components {
         /** OpenAIScoreAnswer */
         OpenAIScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Name */
             name: string | null;
             /** Probabilities */
@@ -40070,6 +40070,37 @@ export interface components {
              * @constant
              */
             type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputToolSearchOutput */
+        OutputToolSearchOutput: {
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Tools
+             * @default []
+             */
+            tools: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
         } & {
             [key: string]: unknown;
         };
@@ -41469,11 +41500,8 @@ export interface components {
         };
         /** PromptTokensDetails */
         PromptTokensDetails: {
-            /**
-             * Modality
-             * @enum {string}
-             */
-            modality: "TEXT" | "AUDIO" | "IMAGE" | "VIDEO";
+            /** Modality */
+            modality: string;
             /** Tokencount */
             tokenCount: number;
         };
@@ -44050,7 +44078,7 @@ export interface components {
             /** Output */
             output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
                 [key: string]: unknown;
-            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"])[];
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"] | components["schemas"]["OutputToolSearchCall"] | components["schemas"]["OutputToolSearchOutput"])[];
             /** Parallel Tool Calls */
             parallel_tool_calls?: boolean | null;
             /** Previous Response Id */
@@ -44786,7 +44814,7 @@ export interface components {
         /** ScoreAnswer */
         ScoreAnswer: {
             /** Confidence */
-            confidence: number;
+            confidence?: number | null;
             /** Legend */
             legend: {
                 [key: string]: string | {
@@ -57612,7 +57640,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -57634,6 +57662,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -77581,7 +77621,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     * @description The text being judged, or user messages whose content mixes input_text, input_image and input_json parts
                      */
                     input: string | {
                         /** Content */
@@ -77603,6 +77643,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role

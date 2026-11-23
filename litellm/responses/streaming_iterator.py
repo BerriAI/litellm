@@ -36,6 +36,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     update_response_metadata,
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
+from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -640,6 +641,7 @@ class BaseResponsesAPIStreamingIterator:
         target.hidden_params = {
             "additional_headers": {**headers},
             "headers": {**raw_headers},
+            **{key: source[key] for key in (AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY,) if key in source},
             **existing,
         }
 
@@ -1121,6 +1123,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             await self._await_pending_logging()
             raise
 
+    async def aclose(self) -> None:
+        await self.response.aclose()
+
     async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
@@ -1203,6 +1208,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def __iter__(self):
         return self
+
+    def close(self) -> None:
+        self.response.close()
 
     def __next__(self):
         try:
@@ -1635,6 +1643,54 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return ResponseAPIUsage.model_validate(usage)
     except ValidationError:
         return None
+
+
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
+
+
+def _answered_approval_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    approval_ids: Final = (
+        item.get("approval_request_id") for item in items if item.get("type") == "mcp_approval_response"
+    )
+    return frozenset(approval_id for approval_id in approval_ids if isinstance(approval_id, str))
+
+
+def _call_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+
+
+def _unanswered_call_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    call_ids: Final = tuple(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+    return frozenset(call_id for call_id in call_ids if call_ids.count(call_id) == 1)
+
+
+def _has_call_id_in(item: Mapping[str, object], call_ids: frozenset[str]) -> bool:
+    call_id: Final = item.get("call_id")
+    return isinstance(call_id, str) and call_id in call_ids
+
+
+def _is_replayed_call_item(item: Mapping[str, object], answered_approval_ids: frozenset[str]) -> bool:
+    item_type: Final = item.get("type")
+    if (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+        item.get("call_id"), str
+    ):
+        return True
+    approval_request_id: Final = item.get("approval_request_id")
+    return (
+        item_type == "mcp_call"
+        and isinstance(approval_request_id, str)
+        and approval_request_id in answered_approval_ids
+    )
 
 
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
@@ -2750,6 +2806,7 @@ class ManagedResponsesWebSocketHandler:
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
         self._session_history: dict[str, list[dict[str, object]]] = {}
+        self._cut_off_call_ids: Mapping[str, frozenset[str]] = MappingProxyType({})
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -2778,7 +2835,9 @@ class ManagedResponsesWebSocketHandler:
         except Exception:
             pass
 
-    def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
+    def _get_history_messages(
+        self, previous_response_id: str, current_messages: Sequence[Mapping[str, object]]
+    ) -> list[dict[str, object]]:
         """
         Return accumulated message history for *previous_response_id*.
 
@@ -2787,7 +2846,8 @@ class ManagedResponsesWebSocketHandler:
         """
         decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         raw_id: Final = decoded.get("response_id", previous_response_id)
-        return list(self._session_history.get(raw_id, []))
+        skipped_call_ids: Final = self._cut_off_call_ids.get(raw_id, frozenset()) - _call_ids(current_messages)
+        return [item for item in self._session_history.get(raw_id, []) if not _has_call_id_in(item, skipped_call_ids)]
 
     def _store_history(self, response_id: str, messages: list[dict[str, object]]) -> None:
         """
@@ -2815,25 +2875,27 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_output_messages(
         completed_event: _MutableJsonObject,
+        answered_approval_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
-        API message dicts suitable for the next turn's ``input``.
+        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer.
         """
         resp_obj: Final = completed_event.get("response", {})
-        if not isinstance(resp_obj, dict):
+        if not _is_json_object(resp_obj):
             return []
+        output: Final = resp_obj.get("output")
         messages: Final[list[dict[str, object]]] = []
-        for item in resp_obj.get("output", []) or []:
-            if not isinstance(item, dict):
+        for item in output if _is_json_array(output) else []:
+            if not _is_json_object(item):
                 continue
             item_type = item.get("type")
             role = item.get("role", "assistant")
             if item_type == "message":
-                content_parts = item.get("content") or []
+                content_parts = item.get("content")
                 text_parts = [
                     p.get("text", "")
-                    for p in content_parts
+                    for p in (content_parts if _is_json_array(content_parts) else [])
                     if isinstance(p, dict) and p.get("type") in ("output_text", "text")
                 ]
                 text = "".join(text_parts)
@@ -2845,7 +2907,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif item_type == "function_call":
+            elif _is_replayed_call_item(item, answered_approval_ids):
                 messages.append(item)
         return messages
 
@@ -3097,9 +3159,14 @@ class ManagedResponsesWebSocketHandler:
         new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(terminal_event)
-        all_messages: Final = prior_history + current_messages + output_msgs
+        earlier_messages: Final = prior_history + current_messages
+        output_msgs: Final = self._extract_output_messages(terminal_event, _answered_approval_ids(earlier_messages))
+        all_messages: Final = earlier_messages + output_msgs
         self._store_history(new_response_id, all_messages)
+        if terminal_event.get("type") == "response.incomplete":
+            self._cut_off_call_ids = MappingProxyType(
+                {**self._cut_off_call_ids, new_response_id: _unanswered_call_ids(output_msgs)}
+            )
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
             len(all_messages),
@@ -3175,7 +3242,9 @@ class ManagedResponsesWebSocketHandler:
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
-        prior_history: Final = self._get_history_messages(previous_response_id) if previous_response_id else []
+        prior_history: Final = (
+            self._get_history_messages(previous_response_id, current_messages) if previous_response_id else []
+        )
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)

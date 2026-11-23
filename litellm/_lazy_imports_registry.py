@@ -174,6 +174,7 @@ LLM_CONFIG_NAMES: Final = (
     "AzureDecisionsConfig",
     "AzureAIDecisionsConfig",
     "VercelAIGatewayDecisionsConfig",
+    "LiteLLMProxyDecisionsConfig",
     "NvidiaNimRerankConfig",
     "NvidiaNimRankingConfig",
     "VertexAIRerankConfig",
@@ -752,6 +753,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "VercelAIGatewayDecisionsConfig": (
         ".llms.vercel_ai_gateway.decisions.transformation",
         "VercelAIGatewayDecisionsConfig",
+    ),
+    "LiteLLMProxyDecisionsConfig": (
+        ".llms.litellm_proxy.decisions.transformation",
+        "LiteLLMProxyDecisionsConfig",
     ),
     "NvidiaNimRerankConfig": (
         ".llms.nvidia_nim.rerank.transformation",
