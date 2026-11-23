@@ -202,6 +202,10 @@ def _without_token_data(holder: Mapping[str, object]) -> Mapping[str, object]:
     return {**dropped, "provider_specific_fields": {**fields, "token_ids": None}}
 
 
+def keeps_original_output(original: object, served: object) -> bool:
+    return original == served or (isinstance(original, str) and isinstance(served, str) and served.startswith(original))
+
+
 def _choice_with_text(choice: object, text: str | None) -> object:
     choice_obj: Final = _as_json_object(choice)
     if choice_obj is None or text is None:
@@ -210,7 +214,15 @@ def _choice_with_text(choice: object, text: str | None) -> object:
     if message is not None:
         if message.get("content") == text:
             return choice
-        return _without_token_data({**choice_obj, "message": _without_token_data({**message, "content": text})})
+        served_message: Final = {**message, "content": text}
+        if keeps_original_output(message.get("content"), text):
+            return {**choice_obj, "message": served_message}
+        return _without_token_data({**choice_obj, "message": _without_token_data(served_message)})
     if isinstance(choice_obj.get("text"), str):
-        return choice if choice_obj.get("text") == text else _without_token_data({**choice_obj, "text": text})
+        if choice_obj.get("text") == text:
+            return choice
+        served_choice: Final = {**choice_obj, "text": text}
+        return (
+            served_choice if keeps_original_output(choice_obj.get("text"), text) else _without_token_data(served_choice)
+        )
     return choice

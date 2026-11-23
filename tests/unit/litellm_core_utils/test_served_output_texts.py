@@ -190,7 +190,11 @@ def _choice_token_ids(choice: dict[str, object]) -> tuple[object, object, object
     ),
     ids=("chat-choice-fields", "chat-message-fields", "text-completion"),
 )
-@pytest.mark.parametrize(("served", "keeps_token_data"), ((MASKED, False), (RAW, True)), ids=("rewritten", "unchanged"))
+@pytest.mark.parametrize(
+    ("served", "keeps_token_data"),
+    ((MASKED, False), (RAW, True), (f"{RAW} (verified)", True), (f"Note: {RAW}", False)),
+    ids=("rewritten", "unchanged", "appended", "prepended"),
+)
 def test_overlay_drops_logged_token_data_only_when_it_rewrites_the_choice_text(
     logged_choice: dict[str, object], served: str, keeps_token_data: bool
 ) -> None:

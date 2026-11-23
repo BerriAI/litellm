@@ -332,6 +332,7 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 
 
 _TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
+_TOKEN_DATA_HOLDERS: Final = frozenset({"choices", "output"})
 _RESPONSE_ITEMS: Final = TypeAdapter(list[object])
 
 
@@ -360,8 +361,11 @@ def _response_fingerprint(response: object) -> str | None:
         content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
         if not content:
             return None
+        hashed: Final = {
+            key: _without_token_data(value) if key in _TOKEN_DATA_HOLDERS else value for key, value in content.items()
+        }
         return hashlib.sha256(
-            json.dumps(_without_token_data(content), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(hashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
     except (TypeError, ValueError):
         return None

@@ -27,7 +27,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     has_attributes,
 )
-from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY
+from litellm.litellm_core_utils.served_output_texts import SERVED_OUTPUT_TEXTS_KEY, keeps_original_output
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.vertex_ai.common_utils import (
     redact_vertex_ai_metadata_from_litellm_params,
@@ -374,11 +374,15 @@ def _drop_token_data(holder: object) -> None:
         _set_field(holder, "logprobs", None)
 
 
+def _rewrite_hides_output(before: tuple[object, ...], after: tuple[object, ...]) -> bool:
+    return not all(keeps_original_output(original, served) for original, served in zip(before, after, strict=True))
+
+
 def drop_token_data_of_rewritten_outputs(
     response: object, outputs_before: Mapping[tuple[int, ...], tuple[object, ...]]
 ) -> None:
     for key, holder in _token_data_holders(response):
-        if key in outputs_before and _holder_output(holder) != outputs_before[key]:
+        if key in outputs_before and _rewrite_hides_output(outputs_before[key], _holder_output(holder)):
             _drop_token_data(holder)
 
 

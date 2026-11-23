@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -355,6 +356,45 @@ async def test_post_call_success_hook_drops_token_data_when_a_callback_rewrites_
     assert "Paris" not in json.dumps(choice["message"][field])
     assert choice["provider_specific_fields"]["token_ids"] is None
     assert choice["logprobs"] is None
+
+
+class _InPlaceContentEditingLogger(CustomLogger):
+    def __init__(self, edit: Callable[[str], str]) -> None:
+        super().__init__()
+        self.edit = edit
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        message = response["choices"][0]["message"]
+        message["content"] = self.edit(message["content"])
+        return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("edit", "keeps_token_data"),
+    [
+        (lambda content: f"{content}\n\nSource: atlas", True),
+        (lambda content: f"Answer: {content}", False),
+        (lambda content: content[:-1], False),
+    ],
+    ids=["appended-footer", "prepended-label", "truncated"],
+)
+async def test_post_call_success_hook_keeps_token_data_only_when_a_callback_appends_to_the_answer(
+    proxy_logging, make_user_api_key_auth, monkeypatch, edit, keeps_token_data
+):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceContentEditingLogger(edit)])
+    content = "The capital of France is Lyon."
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=_vllm_chat_response(content).model_dump(),
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert choice["message"]["content"] == edit(content)
+    assert (choice["provider_specific_fields"]["token_ids"] == [785, 6722, 315, 9625, 374, 12095, 13]) is keeps_token_data
+    assert (choice["logprobs"] is not None) is keeps_token_data
 
 
 def _responses_output_text(text: str, logprobs_requested: bool):
