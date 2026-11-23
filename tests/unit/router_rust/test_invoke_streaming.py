@@ -107,6 +107,8 @@ def test_a_client_cut_after_a_fallback_charges_the_fixed_margin_once(deployments
     assert billed is not None
     billed_cost: Final = (get_hidden_params(billed.response) or {}).get("response_cost")
     assert billed_cost == pytest.approx(0.00105 + 0.0010325 - _FIXED_MARGIN)
+    assert billed.response.usage is not None
+    assert billed.response.usage.cost == pytest.approx(billed_cost)
     assert primary_logging.cost_breakdown is not None
     assert primary_logging.cost_breakdown.get("total_cost") == pytest.approx(billed_cost)
     assert primary_logging.cost_breakdown.get("margin_total_amount") == pytest.approx(_FIXED_MARGIN)

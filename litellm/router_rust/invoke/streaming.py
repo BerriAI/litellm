@@ -66,7 +66,13 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
-from litellm.litellm_core_utils.core_helpers import FinishEvidence, as_str_mapping, finish_evidence_of, without
+from litellm.litellm_core_utils.core_helpers import (
+    FinishEvidence,
+    as_str_mapping,
+    finish_evidence_of,
+    stamp_litellm_bill_on_usage,
+    without,
+)
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.on_end_byte_stream import StreamClosedEarly, StreamCompleted, StreamEnd, StreamFailed
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -1753,10 +1759,23 @@ def _billed_for_both_deployments(primary: _PricedPartial, current: _PricedPartia
         return _PricedPartial(
             primary.event.model_copy(update={"response": primary.billed}), primary.breakdown, primary.priced
         )
-    billed: Final = billed_for_every_round(primary.billed, primary.breakdown, current.billed, current.breakdown)
+    billed: Final = _usage_cost_as_billed(
+        billed_for_every_round(primary.billed, primary.breakdown, current.billed, current.breakdown)
+    )
     return _PricedPartial(
         current.event.model_copy(update={"response": billed}), _breakdown_of_both(primary, current), True
     )
+
+
+def _usage_cost_as_billed(billed: "ResponsesAPIResponse") -> "ResponsesAPIResponse":
+    hidden_params: Final = dict(get_hidden_params(billed) or {})
+    cost: Final = hidden_params.get("response_cost")
+    if billed.usage is None or not isinstance(cost, (int, float)):
+        return billed
+    stamped: Final = billed.model_copy(update={"usage": billed.usage.model_copy()})
+    set_hidden_params(stamped, hidden_params)
+    stamp_litellm_bill_on_usage(stamped, stamped.usage, float(cost))
+    return stamped
 
 
 def _params_sent_to_deployment(attempt: StreamAttempt, deployment_id: object) -> Mapping[str, object]:
