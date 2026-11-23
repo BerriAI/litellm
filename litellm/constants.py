@@ -39,6 +39,7 @@ GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
 USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
 SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+USAGE_ONLY_SETTLEMENT_KEY: Final = "litellm_usage_only_settlement"
 
 
 class ServerStreamingClassification(str, Enum):
@@ -496,6 +497,8 @@ REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v
 REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
 REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
 REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+TOOL_NAME_MAX_UTF8_BYTES: Final = 512
+POSTGRES_MAX_BIND_PARAMETERS: Final = 32_767
 GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"

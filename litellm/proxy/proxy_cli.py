@@ -2095,10 +2095,17 @@ def run_server(
                         "and an OS other than Windows, so only a single worker reloads.\033[0m"
                     )
                 uvicorn_args.update(worker_overrides)
-            uvicorn.run(
-                **uvicorn_args,
-                workers=num_workers,
-            )
+            if max_requests_before_restart is None:
+                uvicorn.run(**uvicorn_args, workers=num_workers)
+            else:
+                from litellm.proxy import dev_reload
+
+                dev_reload.run_uvicorn_with_recycling(
+                    dev_reload.RELOAD_OPTIONS.validate_python(
+                        {"reload": False, "reload_dirs": (), "reload_includes": (), **uvicorn_args}
+                    ),
+                    workers=TypeAdapter(int).validate_python(num_workers),
+                )
         elif run_gunicorn is True:
             from litellm.proxy.rust_forward.peer import wrap
 
