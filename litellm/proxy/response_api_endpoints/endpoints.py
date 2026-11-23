@@ -106,6 +106,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     add_guardrails_from_policy_engine,
     client_pricing_fields_stripped_for,
     is_chat_completions_body,
+    request_routing_metadata,
 )
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
     request_tags_from_request_data,
@@ -1612,6 +1613,8 @@ class _TokenCounter(Protocol):
         call_endpoint: bool,
         responses_request: Mapping[str, object] | None,
         litellm_call_id: str | None,
+        caller: UserAPIKeyAuth | None,
+        request_routing: Mapping[str, object],
     ) -> Awaitable[TokenCountResponse]: ...
 
 
@@ -1981,6 +1984,8 @@ async def _responses_input_tokens(
             call_endpoint=True,
             responses_request=responses_request,
             litellm_call_id=litellm_call_id,
+            caller=user_api_key_dict,
+            request_routing=request_routing_metadata(request, request_fields, user_api_key_dict),
         )
     except ProxyException as e:
         if e.type != _PROVIDER_COUNT_ERROR_TYPE:

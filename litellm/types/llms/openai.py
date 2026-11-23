@@ -133,6 +133,15 @@ class BinaryResponseSummary(TypedDict):
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
 
+class BatchInputFormat(str, Enum):
+    """Expected layout of batch input retrieved from a file reader."""
+
+    OPENAI = "openai"
+    VERTEX = "vertex"
+    BEDROCK = "bedrock"
+    UNKNOWN = "unknown"
+
+
 def _header_value(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name)
 
@@ -150,10 +159,17 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT, usage: "Usage | None" = None) -> None:
+    def __init__(
+        self,
+        response: _ResponseT,
+        usage: "Usage | None" = None,
+        *,
+        batch_input_format: BatchInputFormat = BatchInputFormat.UNKNOWN,
+    ) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
         self.usage = usage
+        self.batch_input_format = batch_input_format
 
     @property
     def content_type(self) -> str | None:

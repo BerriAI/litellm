@@ -164,8 +164,8 @@ class _CustomerMemberRow(_CustomerScopedRow, Protocol):
 
 
 _RowT = TypeVar("_RowT")
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
-_CustomerRowT: Final = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
+_CustomerRowT = TypeVar("_CustomerRowT", bound=_CustomerScopedRow)
 
 
 class CustomerScopeTable(Protocol[_RowT_co]):

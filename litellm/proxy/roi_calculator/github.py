@@ -18,7 +18,7 @@ from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.roi_calculator import ROIPullCommit, ROIPullEvidence, ROIPullFile, ROISettings
 from litellm.types.roi_observed import ObservedIssue
 
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 class SourceError(Exception):
