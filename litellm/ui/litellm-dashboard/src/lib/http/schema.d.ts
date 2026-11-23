@@ -9568,6 +9568,40 @@ export interface paths {
         patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
+    "/lens/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/login/": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Login */
+        get: operations["lens_login_lens_login__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/service": {
         parameters: {
             query?: never;
@@ -9575,8 +9609,42 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Service Connection */
-        get: operations["service_connection_lens_service_get"];
+        /** Lens Service */
+        get: operations["lens_service_lens_service_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui Entry */
+        get: operations["lens_ui_entry_lens_ui_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/lens/ui/{path}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Lens Ui */
+        get: operations["lens_ui_lens_ui__path__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -9678,6 +9746,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/login/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login Resume
+         * @description Send a browser that is signed in to the dashboard back to the return_to it asked for before sign-in
+         */
+        get: operations["login_resume_login_resume_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/app_budget_groups": {
         parameters: {
             query?: never;
@@ -9687,7 +9775,7 @@ export interface paths {
         };
         /**
          * Get App Budget Groups
-         * @description List reusable overall app budget groups and their revision, independently of app × customer organization groups. Proxy admins only.
+         * @description List reusable overall app budget groups, their new-app default and revision, independently of app × customer organization groups. Proxy admins only.
          */
         get: operations["get_app_budget_groups_management_v1_app_budget_groups_get"];
         put?: never;
@@ -9697,7 +9785,7 @@ export interface paths {
         head?: never;
         /**
          * Configure App Budget Groups
-         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template must be null. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         * @description Save the complete overall app budget group list with its expected_revision. default_budget_template names the group assigned to new apps that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
          */
         patch: operations["configure_app_budget_groups_management_v1_app_budget_groups_patch"];
         trace?: never;
@@ -9750,6 +9838,106 @@ export interface paths {
         patch: operations["configure_app_customer_organization_budget_groups_management_v1_app_customer_organization_budget_groups_patch"];
         trace?: never;
     };
+    "/management/v1/app_group_budget_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get App Group Budget Groups
+         * @description List reusable app group budget groups, their new-group default and revision, independently of app × customer organization groups. Proxy admins only.
+         */
+        get: operations["get_app_group_budget_groups_management_v1_app_group_budget_groups_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Configure App Group Budget Groups
+         * @description Save the complete app group budget group list with its expected_revision. default_budget_template names the group assigned to new app groups that omit budget and budget_id, or null for no default. Existing groups retain omitted settings and window reset dates. Stale revisions or referenced deletions return 409. Proxy admins only.
+         */
+        patch: operations["configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Groups */
+        get: operations["list_app_groups_management_v1_app_groups_get"];
+        put?: never;
+        /**
+         * Create App Group
+         * @description Create an app group from selected apps and an optional custom budget or app group budget preset.
+         *
+         *     Omit budget and budget_id to use the app group catalog default. Explicit null disables the shared cap.
+         *     Proxy admins only.
+         */
+        post: operations["create_app_group_management_v1_app_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get App Group */
+        get: operations["get_app_group_management_v1_app_groups__app_group_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Patch App Group */
+        patch: operations["patch_app_group_management_v1_app_groups__app_group_id__patch"];
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List App Group Organizations */
+        get: operations["list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/app_groups/{app_group_id}/customer_organizations/{customer_org_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Put App Group Organization */
+        put: operations["put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/apps": {
         parameters: {
             query?: never;
@@ -9762,7 +9950,7 @@ export interface paths {
         put?: never;
         /**
          * Create App
-         * @description Configure budget policy for an existing resource of the gateway app type. Proxy admins only.
+         * @description Configure budget policy for an existing resource of the gateway app type. Newly configured apps inherit the overall app catalog default when budget and budget_id are omitted. Explicit null disables the cap. Existing app bindings keep their settings. Proxy admins only.
          */
         post: operations["create_app_management_v1_apps_post"];
         delete?: never;
@@ -12988,6 +13176,7 @@ export interface paths {
          *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
          *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
          *     - max_budget: *Optional[float]* - Max budget for org
+         *     - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
          *     - tpm_limit: *Optional[int]* - Max tpm limit for org
          *     - rpm_limit: *Optional[int]* - Max rpm limit for org
          *     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -16790,6 +16979,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/skill-hub/skills/{name}/downloads/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Skill Downloads
+         * @description Export all recorded authenticated downloads. Anonymous downloads remain totals-only.
+         */
+        get: operations["export_skill_downloads_skill_hub_skills__name__downloads_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/skill-hub/skills/{name}/publish": {
         parameters: {
             query?: never;
@@ -18880,6 +19089,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -19110,6 +19320,7 @@ export interface paths {
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_rollover_max_budget: Optional[float] - Cap in USD for each member's base budget plus carried allowance. Requires a member reset period and must exceed the base member budget. Set to null to disable rollover on the team default.
          *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
@@ -20442,6 +20653,7 @@ export interface paths {
         /**
          * Ui View Users
          * @description Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+         *     Proxy admins and admin viewers can also search by alias and receive the alias in results.
          *
          *     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
          *     (stored in the ``litellm_uisettings`` table):
@@ -20562,6 +20774,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *     - max_budget: Optional[float] - Specify max budget for a given user.
+         *     - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus unused allowance carried forward. Requires a reset period and must exceed the base budget.
          *     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
          *     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -20701,6 +20914,7 @@ export interface paths {
          *         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
          *         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
          *         - max_budget: Optional[float] - Specify max budget for a given user.
+         *         - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
          *         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
          *         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
          *         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -22417,8 +22631,11 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_logs_post"];
+        /**
+         * Forward Otlp Logs
+         * @description The agent's log events carry what its spans leave out, such as each reply; they go to Lens the same way.
+         */
+        post: operations["forward_otlp_logs_v1_logs_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -24554,8 +24771,11 @@ export interface paths {
         /** List Agent Traces */
         get: operations["list_agent_traces_v1_traces_get"];
         put?: never;
-        /** Ingest Otlp Traces */
-        post: operations["ingest_otlp_traces_v1_traces_post"];
+        /**
+         * Forward Otlp Traces
+         * @description An agent that traces itself sends its spans here with its gateway key; they go to Lens as sent, filed under that key's owner.
+         */
+        post: operations["forward_otlp_traces_v1_traces_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -28457,6 +28677,8 @@ export interface components {
         App: {
             /** Alias */
             alias: string;
+            /** App Group Id */
+            app_group_id?: string | null;
             /** App Id */
             app_id: string;
             /**
@@ -28507,6 +28729,11 @@ export interface components {
         /** AppCreate */
         AppCreate: {
             /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
              * Auto Create Customers
              * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
              */
@@ -28514,7 +28741,7 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
-             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
              */
             budget_id?: string | null;
             /**
@@ -28552,6 +28779,127 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
+        };
+        /** AppGroup */
+        AppGroup: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Updated By */
+            updated_by: string;
+        };
+        /** AppGroupApp */
+        AppGroupApp: {
+            /** Resource Id */
+            resource_id: string;
+            resource_type: components["schemas"]["AppResourceType"];
+        };
+        /** AppGroupBudgetPut */
+        AppGroupBudgetPut: {
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+        };
+        /** AppGroupCreate */
+        AppGroupCreate: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name: string;
+        };
+        /** AppGroupOrganization */
+        AppGroupOrganization: {
+            /** App Group Id */
+            app_group_id: string;
+            budget?: components["schemas"]["Budget"] | null;
+            /** Budget Id */
+            budget_id?: string | null;
+            /**
+             * Budget Usage
+             * @default []
+             */
+            budget_usage: components["schemas"]["CustomerBudgetUsage"][];
+            /** Customer Org Id */
+            customer_org_id: string;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /** AppGroupPatch */
+        AppGroupPatch: {
+            /**
+             * Apps
+             * @description Apps selected by their gateway resource type and ID. When supplied, replaces membership. Omit to keep membership unchanged. An empty list removes all apps. Existing app budgets are preserved.
+             * @default []
+             */
+            apps: components["schemas"]["AppGroupApp"][];
+            budget?: components["schemas"]["Budget"] | null;
+            /**
+             * Budget Id
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             */
+            budget_id?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Name */
+            name?: string | null;
         };
         /** AppMember */
         AppMember: {
@@ -28654,6 +29002,11 @@ export interface components {
         /** AppPatch */
         AppPatch: {
             /**
+             * App Group Id
+             * @description Parent app group. Omit to preserve membership, or send null to ungroup the app.
+             */
+            app_group_id?: string | null;
+            /**
              * Auto Create Customers
              * @description Whether this app may register a customer organization or member the proxy has never seen. When false, a request from this app naming an unknown customer is refused with 403. Defaults to true.
              */
@@ -28661,7 +29014,7 @@ export interface components {
             budget?: components["schemas"]["Budget"] | null;
             /**
              * Budget Id
-             * @description Linked overall-app budget group. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
+             * @description Linked budget preset. Omit to keep the current assignment, or send null to remove it. Send budget instead to create a private custom budget, preserving the preset's untouched limits.
              */
             budget_id?: string | null;
             /**
@@ -30501,18 +30854,11 @@ export interface components {
             max_budget: number;
             /** Reset At */
             reset_at?: string | null;
-        };
-        /**
-         * BudgetLimitEntry
-         * @description A single budget window with its own limit and independent reset schedule.
-         */
-        BudgetLimitEntry: {
-            /** Budget Duration */
-            budget_duration: string;
-            /** Max Budget */
-            max_budget: number;
-            /** Reset At */
-            reset_at?: string | null;
+            /**
+             * Window Start
+             * @description Server-managed start of the current spend window.
+             */
+            window_start?: string | null;
         };
         /**
          * BudgetListItem
@@ -30713,7 +31059,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -30778,6 +31124,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -33082,6 +33430,12 @@ export interface components {
              */
             mcp_xff_num_trusted_hops?: number | null;
             /**
+             * Meter Webrtc Calls
+             * @description Bill Realtime and GPT-Live WebRTC calls by joining each call from the proxy over a WebSocket to the provider, and answer 503 when the proxy cannot join. Set to false when the proxy cannot open that WebSocket. Calls then start without it and are not billed or counted against budgets.
+             * @default true
+             */
+            meter_webrtc_calls: boolean;
+            /**
              * Missing Session Id
              * @description What to do with LLM API requests that carry no session id (x-litellm-session-id header, metadata.session_id, etc.). 'generate' stamps one id into litellm_session_id, litellm_trace_id and metadata.session_id so SpendLogs and logging callbacks agree; 'reject' returns 400; 'omit' leaves SpendLogs.session_id null, matching callbacks such as Langfuse that only record a client-established metadata.session_id. Unset keeps the legacy behavior where SpendLogs falls back to the trace id while callbacks get no session id.
              */
@@ -33164,6 +33518,12 @@ export interface components {
              * @description When set to True, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata.
              */
             reject_clientside_metadata_tags?: boolean | null;
+            /**
+             * Reject Unregistered Guardrails
+             * @description Return 400 for a request whose merged guardrails (request, key, team, project, policy and model level) name a guardrail that is not registered on the proxy, instead of serving it without that guardrail.
+             * @default false
+             */
+            reject_unregistered_guardrails: boolean;
             /**
              * Request Tag Mappings
              * @description Map W3C baggage values to request tags. Exact value/tag rules take precedence over tag_prefix fallbacks.
@@ -34101,6 +34461,8 @@ export interface components {
         };
         /** CurrentUserResponse */
         CurrentUserResponse: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email: string | null;
             /** User Id */
@@ -34350,7 +34712,7 @@ export interface components {
              * Key
              * @enum {string}
              */
-            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member";
+            key: "customer_org" | "customer_team" | "customer_member" | "app" | "app_customer_org" | "app_customer_member" | "app_group" | "app_group_customer_org";
             /** Max Budget */
             max_budget?: number | null;
             /** Model Rpm Limit */
@@ -35966,7 +36328,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -36130,7 +36492,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -37531,6 +37893,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -37578,6 +37942,8 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -37616,7 +37982,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39268,6 +39634,8 @@ export interface components {
             budget_id?: string | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -39305,7 +39673,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39441,7 +39809,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39489,6 +39857,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -39520,6 +39892,8 @@ export interface components {
         };
         /** LiteLLM_UserTableFiltered */
         LiteLLM_UserTableFiltered: {
+            /** User Alias */
+            user_alias?: string | null;
             /** User Email */
             user_email?: string | null;
             /** User Id */
@@ -39535,7 +39909,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -39588,6 +39962,10 @@ export interface components {
              * @default []
              */
             policies: string[];
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -42638,6 +43016,8 @@ export interface components {
             organization_alias: string;
             /** Organization Id */
             organization_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -42761,6 +43141,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id?: string | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -42864,7 +43246,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -42970,6 +43352,8 @@ export interface components {
             } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -43011,7 +43395,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -43076,6 +43460,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Send Invite Email */
@@ -43157,7 +43543,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -43249,6 +43635,8 @@ export interface components {
             project_id?: string | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
@@ -44454,7 +44842,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -44543,6 +44931,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -46172,7 +46562,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -49291,6 +49681,11 @@ export interface components {
         /** ServiceConnection */
         ServiceConnection: {
             /**
+             * Browser Url
+             * @default
+             */
+            browser_url: string;
+            /**
              * Configured
              * @default false
              */
@@ -51290,7 +51685,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             /** Created At */
@@ -51452,7 +51847,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
             caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
@@ -51716,10 +52111,14 @@ export interface components {
         TeamMemberInfoResponse: {
             /** Budget Id */
             budget_id?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role?: string | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -51748,10 +52147,14 @@ export interface components {
              * @enum {string}
              */
             budget_source: "team_default" | "custom" | "none";
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Litellm Budget Table */
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTableFull"] | components["schemas"]["LiteLLM_BudgetTable"] | null;
             /** Role */
             role: string;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
             /**
              * Spend
              * @default 0
@@ -53433,7 +53836,7 @@ export interface components {
             /** Budget Id */
             budget_id?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -53811,6 +54214,8 @@ export interface components {
             project_alias?: string | null;
             /** Project Id */
             project_id: string;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Soft Budget */
@@ -53969,7 +54374,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Default Estimated Output Tokens */
             default_estimated_output_tokens?: number | null;
             /** Default Estimated Output Tokens Per Model */
@@ -54058,6 +54463,8 @@ export interface components {
             team_member_model_max_budget?: {
                 [key: string]: components["schemas"]["BudgetConfig"];
             } | null;
+            /** Team Member Rollover Max Budget */
+            team_member_rollover_max_budget?: number | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -54107,7 +54514,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -54167,6 +54574,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -54213,7 +54622,7 @@ export interface components {
                 [key: string]: string[];
             } | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /**
              * Config
              * @default {}
@@ -54273,6 +54682,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Spend */
@@ -55045,7 +55456,7 @@ export interface components {
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Limits */
-            budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
+            budget_limits?: components["schemas"]["BudgetLimit"][] | null;
             /** Budget Limits Usage */
             budget_limits_usage?: {
                 [key: string]: {
@@ -55056,6 +55467,8 @@ export interface components {
             budget_reset_at?: string | null;
             /** Created At */
             created_at?: string | null;
+            /** Effective Max Budget */
+            effective_max_budget?: number | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Metadata */
@@ -55078,6 +55491,10 @@ export interface components {
              */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Rollover Credit */
+            rollover_credit?: number | null;
+            /** Rollover Max Budget */
+            rollover_max_budget?: number | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -64019,7 +64436,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -64063,6 +64480,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -70117,7 +70546,47 @@ export interface operations {
             };
         };
     };
-    service_connection_lens_service_get: {
+    lens_login_lens_login_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_login_lens_login__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_service_lens_service_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -70133,6 +70602,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceConnection"];
+                };
+            };
+        };
+    };
+    lens_ui_entry_lens_ui_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    lens_ui_lens_ui__path__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                path: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -70412,6 +70932,26 @@ export interface operations {
             };
         };
     };
+    login_resume_login_resume_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     get_app_budget_groups_management_v1_app_budget_groups_get: {
         parameters: {
             query?: never;
@@ -70558,6 +71098,260 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_budget_groups_management_v1_app_group_budget_groups_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+        };
+    };
+    configure_app_group_budget_groups_management_v1_app_group_budget_groups_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BudgetGroupsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BudgetGroups"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_groups_management_v1_app_groups_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_app_group_management_v1_app_groups_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_app_group_management_v1_app_groups__app_group_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_app_group_management_v1_app_groups__app_group_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_app_group_organizations_management_v1_app_groups__app_group_id__customer_organizations_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                app_group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_app_group_organization_management_v1_app_groups__app_group_id__customer_organizations__customer_org_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                app_group_id: string;
+                customer_org_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppGroupBudgetPut"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppGroupOrganization"];
                 };
             };
             /** @description Validation Error */
@@ -71224,6 +72018,8 @@ export interface operations {
                 exclude_customer_member_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71512,6 +72308,8 @@ export interface operations {
                 exclude_customer_org_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71554,6 +72352,8 @@ export interface operations {
                 api_key?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -71949,6 +72749,8 @@ export interface operations {
                 exclude_customer_team_ids?: string | null;
                 /** @description One app ID within the selected customer scope */
                 app_id?: string | null;
+                /** @description Group attributed when the request ran, including apps since moved */
+                app_group_id?: string | null;
             };
             header?: never;
             path?: never;
@@ -80500,6 +81302,37 @@ export interface operations {
             };
         };
     };
+    export_skill_downloads_skill_hub_skills__name__downloads_export_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authenticated download history as CSV */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     publish_skill_skill_hub_skills__name__publish_post: {
         parameters: {
             query?: never;
@@ -85760,7 +86593,7 @@ export interface operations {
                 user_id?: string | null;
                 /** @description User email in the request parameters */
                 user_email?: string | null;
-                /** @description Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive). */
+                /** @description Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers. */
                 search?: string | null;
                 /** @description Team ID — used when a team admin searches for users to add to their team */
                 team_id?: string | null;
@@ -87686,7 +88519,7 @@ export interface operations {
                     })[];
                     /**
                      * Input
-                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.
+                     * @description The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.
                      */
                     input: string | {
                         /** Content */
@@ -87730,6 +88563,18 @@ export interface operations {
                              * @constant
                              */
                             type: "input_image";
+                        } | {
+                            /** Data */
+                            data: {
+                                [key: string]: unknown;
+                            } | {
+                                [key: string]: unknown;
+                            }[];
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_json";
                         })[];
                         /**
                          * Role
@@ -88975,7 +89820,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_logs_post: {
+    forward_otlp_logs_v1_logs_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -92092,7 +92937,7 @@ export interface operations {
             };
         };
     };
-    ingest_otlp_traces_v1_traces_post: {
+    forward_otlp_traces_v1_traces_post: {
         parameters: {
             query?: never;
             header?: never;

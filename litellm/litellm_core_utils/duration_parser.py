@@ -104,15 +104,16 @@ def get_next_standardized_reset_time(
     current_time: datetime,
     timezone_str: str = "UTC",
     reset_time_of_day: time = time(0, 0),
+    *,
+    elapsed_anchor: datetime | None = None,
 ) -> datetime:
     """
     Get the next standardized reset time based on the duration.
 
     All durations will reset at predictable intervals, aligned from the current time:
     - Nd: If N=1, reset at the next `reset_time_of_day`; if N>1, reset every N days from now
-    - Nh: Every N hours, aligned to hour boundaries (e.g., 1:00, 2:00)
-    - Nm: Every N minutes, aligned to minute boundaries (e.g., 1:05, 1:10)
-    - Ns: Every N seconds, aligned to second boundaries
+    - Nh where N is a multiple of 24 (including `daily`): local midnight, N/24 days after today
+    - Other Nh/Nm/Ns: Fixed elapsed intervals, initially aligned to local day/hour/minute boundaries
 
     Parameters:
     - duration: Duration string (e.g. "30s", "30m", "30h", "30d")
@@ -121,6 +122,8 @@ def get_next_standardized_reset_time(
     - reset_time_of_day: Wall-clock time the reset lands on for day/week/month
       durations (defaults to midnight). Ignored for sub-day durations, where a
       time-of-day is meaningless.
+    - elapsed_anchor: Saved reset instant for an existing elapsed-time schedule.
+      Without one, retain the local alignment used when creating a budget.
 
     Returns:
     - Next reset time at a standardized interval in the specified timezone
@@ -147,11 +150,16 @@ def get_next_standardized_reset_time(
     elif unit == "w":
         return _handle_day_reset(current_time, base_midnight, value * 7, reset_time_of_day)
     elif unit == "h":
-        return _handle_hour_reset(current_time, base_midnight, value)
+        whole_days: Final = _whole_days_in_hours(value)
+        if whole_days is not None:
+            return _apply_time_of_day(base_midnight + timedelta(days=whole_days), time(0, 0))
+        return _next_elapsed_reset(current_time, timedelta(hours=value), elapsed_anchor or base_midnight)
     elif unit == "m":
-        return _handle_minute_reset(current_time, base_midnight, value)
+        hour_start: Final = current_time.replace(minute=0, second=0, microsecond=0)
+        return _next_elapsed_reset(current_time, timedelta(minutes=value), elapsed_anchor or hour_start)
     elif unit == "s":
-        return _handle_second_reset(current_time, base_midnight, value)
+        minute_start: Final = current_time.replace(second=0, microsecond=0)
+        return _next_elapsed_reset(current_time, timedelta(seconds=value), elapsed_anchor or minute_start)
     elif unit == "mo":
         return _handle_month_reset(current_time, base_midnight, value, reset_time_of_day)
     else:
@@ -175,40 +183,68 @@ def normalize_budget_window_start(moment: datetime) -> datetime:
     return moment.replace(microsecond=moment.microsecond // 1000 * 1000)
 
 
+def rolled_budget_window_start(scheduled_start: datetime, previous_reset: datetime) -> datetime:
+    return normalize_budget_window_start(
+        max(scheduled_start.astimezone(timezone.utc), previous_reset.astimezone(timezone.utc))
+    )
+
+
 def get_annual_budget_window_start(reset_at: datetime, timezone_str: str) -> datetime:
-    boundary: Final = _setup_timezone(normalize_budget_window_start(reset_at), timezone_str)[0]
-    return _shift_months(boundary, -12).astimezone(timezone.utc)
+    return get_budget_window_start("12mo", reset_at, timezone_str).astimezone(timezone.utc)
 
 
-def get_budget_window_start(duration: str, reset_at: datetime) -> datetime:
+def get_budget_window_start(
+    duration: str,
+    reset_at: datetime,
+    timezone_str: str | None = None,
+    reset_time_of_day: time | None = None,
+) -> datetime:
     """Start of the budget period that ends at `reset_at`, under the same rules
     `get_next_standardized_reset_time` used to pick it: `30d` and `Nmo` span calendar
     months and a duration it does not recognize resets at the next midnight."""
-    return _shift_budget_window(duration, reset_at, -1)
+    boundary: Final = _setup_timezone(reset_at, timezone_str)[0] if timezone_str is not None else reset_at
+    return _shift_budget_window(duration, boundary, -1, reset_time_of_day)
 
 
 def get_budget_window_end(
-    duration: str, start: datetime, timezone_str: str = "UTC", reset_at: datetime | None = None
+    duration: str,
+    start: datetime,
+    timezone_str: str = "UTC",
+    reset_at: datetime | None = None,
+    reset_time_of_day: time | None = None,
 ) -> datetime:
     boundary: Final = _setup_timezone(start, timezone_str)[0]
     configured: Final = _setup_timezone(reset_at, timezone_str)[0] if reset_at is not None else None
-    if configured is not None and get_budget_window_start(duration, configured) == boundary:
+    if configured is not None and get_budget_window_start(
+        duration, configured, reset_time_of_day=reset_time_of_day
+    ).astimezone(timezone.utc) == boundary.astimezone(timezone.utc):
         return configured.astimezone(timezone.utc)
-    return _shift_budget_window(duration, boundary, 1).astimezone(timezone.utc)
+    return _shift_budget_window(duration, boundary, 1, reset_time_of_day).astimezone(timezone.utc)
 
 
-def _shift_budget_window(duration: str, moment: datetime, direction: int) -> datetime:
-    boundary: Final = normalize_budget_window_start(moment)
+def _shift_budget_window(
+    duration: str, moment: datetime, direction: int, reset_time_of_day: time | None = None
+) -> datetime:
     value, unit = _parse_duration(normalize_duration(duration))
+    whole_days: Final = _whole_days_in_hours(value) if value is not None and unit == "h" else None
+    elapsed: Final = unit in ("h", "m", "s") and whole_days is None
+    boundary: Final = normalize_budget_window_start(
+        moment.astimezone(timezone.utc) if moment.tzinfo is not None and elapsed else moment
+    )
     if value is None:
         return boundary + timedelta(days=direction)
+    if whole_days is not None:
+        return _calendar_window_boundary(boundary, boundary + timedelta(days=direction * whole_days), time(0, 0))
     match unit:
         case "mo":
-            return _shift_months(boundary, direction * value)
+            return _calendar_window_boundary(boundary, _shift_months(boundary, direction * value), reset_time_of_day)
         case "d":
-            return _shift_months(boundary, direction) if value == 30 else boundary + timedelta(days=direction * value)
+            shifted: Final = (
+                _shift_months(boundary, direction) if value == 30 else boundary + timedelta(days=direction * value)
+            )
+            return _calendar_window_boundary(boundary, shifted, reset_time_of_day)
         case "w":
-            return boundary + timedelta(weeks=direction * value)
+            return _calendar_window_boundary(boundary, boundary + timedelta(weeks=direction * value), reset_time_of_day)
         case "h":
             return boundary + timedelta(hours=direction * value)
         case "m":
@@ -217,6 +253,17 @@ def _shift_budget_window(duration: str, moment: datetime, direction: int) -> dat
             return boundary + timedelta(seconds=direction * value)
         case _:
             return boundary + timedelta(days=direction)
+
+
+def _calendar_window_boundary(moment: datetime, shifted: datetime, reset_time_of_day: time | None) -> datetime:
+    wall_time: Final = reset_time_of_day if reset_time_of_day is not None else moment.time()
+    configured: Final = _apply_time_of_day(moment, wall_time)
+    matches: Final = (
+        configured == moment
+        if moment.tzinfo is None
+        else configured.astimezone(timezone.utc) == moment.astimezone(timezone.utc)
+    )
+    return _apply_time_of_day(shifted, wall_time if matches else moment.time())
 
 
 def _setup_timezone(current_time: datetime, timezone_str: str = "UTC") -> tuple[datetime, tzinfo]:
@@ -257,13 +304,15 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
 
 
 def _apply_time_of_day(dt: datetime, reset_time_of_day: time) -> datetime:
-    """Set the wall-clock time of `dt` to `reset_time_of_day`, keeping its date and tzinfo."""
-    return dt.replace(
+    """Resolve repeated times to their first occurrence and move missing times forward through the gap."""
+    candidate: Final = dt.replace(
         hour=reset_time_of_day.hour,
         minute=reset_time_of_day.minute,
         second=reset_time_of_day.second,
         microsecond=reset_time_of_day.microsecond,
+        fold=0,
     )
+    return candidate.astimezone(timezone.utc).astimezone(dt.tzinfo) if dt.tzinfo is not None else candidate
 
 
 def _next_occurrence(
@@ -275,8 +324,8 @@ def _next_occurrence(
     """Place the reset at `reset_time_of_day` on the boundary day, rolling forward one
     `period` if that instant has already passed (or is exactly now)."""
     candidate: Final = _apply_time_of_day(boundary_midnight, reset_time_of_day)
-    if candidate <= current_time:
-        return candidate + period
+    if candidate.astimezone(timezone.utc) <= current_time.astimezone(timezone.utc):
+        return _apply_time_of_day(boundary_midnight + period, reset_time_of_day)
     return candidate
 
 
@@ -310,97 +359,17 @@ def _handle_day_reset(
         return _apply_time_of_day(base_midnight + timedelta(days=value), reset_time_of_day)
 
 
-def _handle_hour_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
-    """Handle hour-based reset times."""
-    # Handle zero value - immediate expiration
-    if value == 0:
+def _whole_days_in_hours(hours: int) -> int | None:
+    return hours // 24 if hours > 0 and hours % 24 == 0 else None
+
+
+def _next_elapsed_reset(current_time: datetime, interval: timedelta, anchor: datetime) -> datetime:
+    """Keep one UTC schedule across resets, including local hour/day changes."""
+    if interval == timedelta(0):
         return current_time
-
-    current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
-
-    # Calculate next hour aligned with the value
-    if current_minute == 0 and current_second == 0 and current_microsecond == 0:
-        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
-    else:
-        next_hour = current_hour + value - (current_hour % value) if current_hour % value != 0 else current_hour + value
-
-    # Handle overnight case
-    if next_hour >= 24:
-        return base_midnight + timedelta(hours=next_hour)
-
-    return current_time.replace(hour=next_hour, minute=0, second=0, microsecond=0)
-
-
-def _handle_minute_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
-    """Handle minute-based reset times."""
-    # Handle zero value - immediate expiration
-    if value == 0:
-        return current_time
-
-    current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
-
-    # Calculate next minute aligned with the value
-    if current_second == 0 and current_microsecond == 0:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
-    else:
-        next_minute = (
-            current_minute + value - (current_minute % value) if current_minute % value != 0 else current_minute + value
-        )
-
-    # Handle hour rollover
-    next_hour = current_hour + (next_minute // 60)
-    next_minute = next_minute % 60
-
-    # Handle overnight case
-    if next_hour >= 24:
-        return base_midnight + timedelta(hours=next_hour, minutes=next_minute)
-
-    return current_time.replace(hour=next_hour, minute=next_minute, second=0, microsecond=0)
-
-
-def _handle_second_reset(current_time: datetime, base_midnight: datetime, value: int) -> datetime:
-    """Handle second-based reset times."""
-    # Handle zero value - immediate expiration
-    if value == 0:
-        return current_time
-
-    current_hour: Final = current_time.hour
-    current_minute: Final = current_time.minute
-    current_second: Final = current_time.second
-    current_microsecond: Final = current_time.microsecond
-
-    # Calculate next second aligned with the value
-    if current_microsecond == 0:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
-    else:
-        next_second = (
-            current_second + value - (current_second % value) if current_second % value != 0 else current_second + value
-        )
-
-    # Handle minute rollover
-    additional_minutes: Final = next_second // 60
-    next_second = next_second % 60
-    next_minute = current_minute + additional_minutes
-
-    # Handle hour rollover
-    next_hour = current_hour + (next_minute // 60)
-    next_minute = next_minute % 60
-
-    # Handle overnight case
-    if next_hour >= 24:
-        return base_midnight + timedelta(hours=next_hour, minutes=next_minute, seconds=next_second)
-
-    return current_time.replace(hour=next_hour, minute=next_minute, second=next_second, microsecond=0)
+    utc_anchor: Final = _setup_timezone(anchor, "UTC")[0]
+    periods: Final = (current_time.astimezone(timezone.utc) - utc_anchor) // interval + 1
+    return (utc_anchor + periods * interval).astimezone(current_time.tzinfo)
 
 
 def _handle_month_reset(
@@ -426,8 +395,8 @@ def _handle_month_reset(
         first_of_year: Final = base_midnight.replace(month=1, day=1)
         annual_candidate: Final = _apply_time_of_day(first_of_year, reset_time_of_day)
         return (
-            annual_candidate.replace(year=annual_candidate.year + 1)
-            if annual_candidate <= current_time
+            _apply_time_of_day(first_of_year.replace(year=first_of_year.year + 1), reset_time_of_day)
+            if annual_candidate.astimezone(timezone.utc) <= current_time.astimezone(timezone.utc)
             else annual_candidate
         )
     if value != 1:
@@ -435,6 +404,6 @@ def _handle_month_reset(
 
     first_of_this_month: Final = base_midnight.replace(day=1)
     candidate: Final = _apply_time_of_day(first_of_this_month, reset_time_of_day)
-    if candidate <= current_time:
+    if candidate.astimezone(timezone.utc) <= current_time.astimezone(timezone.utc):
         return _apply_time_of_day(_first_of_next_month(first_of_this_month), reset_time_of_day)
     return candidate

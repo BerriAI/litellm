@@ -7,7 +7,7 @@ from typing import Annotated, Final, Literal, TypeAlias
 
 from fastapi import APIRouter, Depends, Request, Response, Security
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 from starlette.datastructures import FormData, UploadFile
 
 from litellm.exceptions import BadRequestError
@@ -39,9 +39,9 @@ from litellm.types.decisions import (
 from litellm.types.extraction import ExtractionRequest, ExtractionRequestBody, ExtractionResponse
 
 router: Final = APIRouter()
-_REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
-_FORM_ASSETS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, object]]]] = TypeAdapter(
-    Mapping[str, Mapping[str, object]]
+_REQUEST_DATA_ADAPTER: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(dict[str, JsonValue])
+_FORM_ASSETS_ADAPTER: Final[TypeAdapter[Mapping[str, Mapping[str, JsonValue]]]] = TypeAdapter(
+    Mapping[str, Mapping[str, JsonValue]]
 )
 _DECISIONS_REQUEST_BODY_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
 _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBody]] = TypeAdapter(
@@ -151,13 +151,48 @@ def _fields_checked_before_routing(data: Mapping[str, object], route_type: _Rout
     )
 
 
-_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info"})
+_DEPLOYMENT_ONLY_FIELDS: Final = frozenset({"model_info", "use_litellm_proxy"})
+_FALLBACK_FIELDS: Final = frozenset({"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"})
 _FORM_REQUEST_PART: Final = "request"
+
+
+def _without_deployment_only_fields(params: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    return {
+        key: _routing_value_without_deployment_only_fields(key, value)
+        for key, value in params.items()
+        if key not in _DEPLOYMENT_ONLY_FIELDS
+    }
+
+
+def _routing_value_without_deployment_only_fields(key: str, value: JsonValue) -> JsonValue:
+    if key in _FALLBACK_FIELDS:
+        return _fallback_entries_without_deployment_only_fields(value)
+    if key == "router_settings_override" and isinstance(value, dict):
+        return dict(_without_deployment_only_fields(value))
+    return value
+
+
+def _fallback_entries_without_deployment_only_fields(entries: JsonValue) -> JsonValue:
+    if not isinstance(entries, list):
+        return entries
+    return [_fallback_entry_without_deployment_only_fields(entry) for entry in entries]
+
+
+def _fallback_entry_without_deployment_only_fields(entry: JsonValue) -> JsonValue:
+    if not isinstance(entry, dict):
+        return entry
+    if isinstance(entry.get("model"), str):
+        return dict(_without_deployment_only_fields(entry))
+    return {
+        group: _fallback_entries_without_deployment_only_fields(targets)
+        for group, targets in entry.items()
+        if group not in _DEPLOYMENT_ONLY_FIELDS
+    }
 
 
 @dataclass(frozen=True, slots=True)
 class _FormBody:
-    data: Mapping[str, object]
+    data: Mapping[str, JsonValue]
     files: Mapping[str, UploadFile]
 
 
@@ -175,19 +210,19 @@ async def _part_bytes(part: UploadFile | str) -> bytes:
     return await part.read()
 
 
-def _claimed_part(asset: Mapping[str, object]) -> str | None:
+def _claimed_part(asset: Mapping[str, JsonValue]) -> str | None:
     part: Final = asset.get("part")
     return part if isinstance(part, str) else None
 
 
-def _form_assets(assets: object) -> Mapping[str, Mapping[str, object]]:
+def _form_assets(assets: JsonValue) -> Mapping[str, Mapping[str, JsonValue]]:
     try:
         return _FORM_ASSETS_ADAPTER.validate_python(assets)
     except ValidationError:
         return {}
 
 
-async def _inline_asset(asset: Mapping[str, object], files: Mapping[str, UploadFile]) -> Mapping[str, object]:
+async def _inline_asset(asset: Mapping[str, JsonValue], files: Mapping[str, UploadFile]) -> Mapping[str, JsonValue]:
     part: Final = _claimed_part(asset)
     if part is None:
         return asset
@@ -200,18 +235,18 @@ async def _inline_asset(asset: Mapping[str, object], files: Mapping[str, UploadF
     }
 
 
-async def _inlined_form_data(form_body: _FormBody) -> Mapping[str, object]:
+async def _inlined_form_data(form_body: _FormBody) -> Mapping[str, JsonValue]:
     if len(form_body.files) == 0:
         return form_body.data
     assets: Final = _form_assets(form_body.data.get("assets"))
     return {
         **form_body.data,
-        "assets": {name: await _inline_asset(asset, form_body.files) for name, asset in assets.items()},
+        "assets": {name: dict(await _inline_asset(asset, form_body.files)) for name, asset in assets.items()},
     }
 
 
 def _paired_form_body(
-    body: Mapping[str, object], parts: tuple[tuple[str, UploadFile | str], ...]
+    body: Mapping[str, JsonValue], parts: tuple[tuple[str, UploadFile | str], ...]
 ) -> _FormBody | _InvalidFormBody:
     assets: Final = _form_assets(body.get("assets"))
     claimed: Final = tuple(part for asset in assets.values() if (part := _claimed_part(asset)) is not None)
@@ -258,7 +293,7 @@ async def _systemone_form_body(
 
 async def _json_request_data(
     request: Request, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
-) -> Mapping[str, object]:
+) -> Mapping[str, JsonValue]:
     if is_form_content_type(request.headers.get("content-type", "")):
         raise await _invalid_request(
             raw_data={}, error="the body must be JSON", user_api_key_dict=user_api_key_dict, api_name=api_name
@@ -271,7 +306,7 @@ async def _json_request_data(
 
 async def _request_body(
     request: Request, form_body: _SystemOneFormBody, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
-) -> Mapping[str, object]:
+) -> Mapping[str, JsonValue]:
     match form_body:
         case _FormBody():
             return await _inlined_form_data(form_body)
@@ -285,9 +320,8 @@ async def _request_body(
 
 async def _request_data(
     request: Request, form_body: _SystemOneFormBody, user_api_key_dict: UserAPIKeyAuth, api_name: _ApiName
-) -> dict[str, object]:
-    data: Final = await _request_body(request, form_body, user_api_key_dict, api_name)
-    return {key: value for key, value in data.items() if key not in _DEPLOYMENT_ONLY_FIELDS}
+) -> Mapping[str, JsonValue]:
+    return _without_deployment_only_fields(await _request_body(request, form_body, user_api_key_dict, api_name))
 
 
 async def _process_decisions(
@@ -332,7 +366,7 @@ async def _process_decisions(
     user_model: Final = _OPTIONAL_STRING_ADAPTER.validate_python(proxy_user_model)
     user_temperature: Final = _OPTIONAL_FLOAT_ADAPTER.validate_python(proxy_user_temperature)
     takes_generation_settings: Final = route_type != "aextraction"
-    processor: Final = ProxyBaseLLMRequestProcessing(data=data)
+    processor: Final = ProxyBaseLLMRequestProcessing(data=dict(data))
     try:
         return await processor.base_process_llm_request(
             request=request,
