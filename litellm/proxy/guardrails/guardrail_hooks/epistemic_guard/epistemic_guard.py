@@ -37,12 +37,11 @@ class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options forwarded untouched to CustomGuardrail."""
 
 
-def _import_epistemic_guard() -> tuple[Any, Any, Any]:
+def _import_epistemic_guard() -> tuple[Any, Any]:
     """Lazily import `epistemic_guard` helpers with an actionable install message."""
     try:
         from epistemic_guard import (
             ReceiptSupervisor,
-            extract_receipts_from_messages,
             verify_chat_turn,
         )
     except ImportError as exc:
@@ -50,7 +49,7 @@ def _import_epistemic_guard() -> tuple[Any, Any, Any]:
             "The epistemic_guard guardrail requires the optional `epistemic-guard` "
             "package. Install it with: pip install 'epistemic-guard>=0.6.5'"
         ) from exc
-    return ReceiptSupervisor, extract_receipts_from_messages, verify_chat_turn
+    return ReceiptSupervisor, verify_chat_turn
 
 
 class EpistemicGuardrail(CustomGuardrail):
@@ -67,6 +66,7 @@ class EpistemicGuardrail(CustomGuardrail):
         guardrail_name: str | None = None,
         on_fail: Literal["block", "rewrite", "log_only"] = "block",
         verify_output_values: bool = False,
+        allow_creative_context: bool = False,
         device: str | None = None,
         event_hook: Literal["post_call"] | list[str] | None = None,
         default_on: bool = False,
@@ -94,6 +94,7 @@ class EpistemicGuardrail(CustomGuardrail):
         )
         self.on_fail: Literal["block", "rewrite", "log_only"] = on_fail
         self.verify_output_values = verify_output_values
+        self.allow_creative_context = allow_creative_context
         self.device = device
         self._supervisor: Any = None
 
@@ -109,17 +110,16 @@ class EpistemicGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
         return [GuardrailEventHooks.post_call]
 
-    def _get_supervisor(self) -> tuple[Any, Any, Any]:
-        receipt_supervisor_cls, extract_receipts, verify_chat_turn = (
-            _import_epistemic_guard()
-        )
+    def _get_supervisor(self) -> tuple[Any, Any]:
+        receipt_supervisor_cls, verify_chat_turn = _import_epistemic_guard()
         if self._supervisor is None:
             self._supervisor = receipt_supervisor_cls(
                 device=self.device,
                 verify_output_values=self.verify_output_values,
+                allow_creative_context=self.allow_creative_context,
                 warn_on_missing=False,
             )
-        return self._supervisor, extract_receipts, verify_chat_turn
+        return self._supervisor, verify_chat_turn
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -142,7 +142,7 @@ class EpistemicGuardrail(CustomGuardrail):
             if not texts:
                 return inputs
 
-            supervisor, extract_receipts, verify_chat_turn = self._get_supervisor()
+            supervisor, verify_chat_turn = self._get_supervisor()
             raw_msgs = request_data.get("messages")
             messages = (
                 [m for m in raw_msgs if isinstance(m, Mapping)]
@@ -162,8 +162,6 @@ class EpistemicGuardrail(CustomGuardrail):
                     processed.append(text)
                     continue
 
-                receipts = extract_receipts(messages)
-                retry_hint = verdict.to_retry_prompt(receipts)
                 unsupported = list(verdict.unsupported_claims)
                 detections.append(
                     cast(
@@ -179,17 +177,24 @@ class EpistemicGuardrail(CustomGuardrail):
                     )
                 )
 
-                if self.on_fail == "block":
+                client_message = (
+                    "Response blocked: assistant made an ungrounded action claim "
+                    "not supported by verified tool execution receipts."
+                )
+                is_streaming = bool(request_data.get("stream", False))
+                if self.on_fail == "block" or (
+                    self.on_fail == "rewrite" and is_streaming
+                ):
                     raise HTTPException(
                         status_code=400,
                         detail={
-                            "error": retry_hint,
+                            "error": client_message,
                             "guardrail": self.guardrail_name,
-                            "unsupported_claims": unsupported,
+                            "unsupported_claim_count": len(unsupported),
                         },
                     )
                 if self.on_fail == "rewrite":
-                    processed.append(f"[UNGROUNDED CLAIM BLOCKED] {retry_hint}")
+                    processed.append(f"[UNGROUNDED CLAIM BLOCKED] {client_message}")
                 else:
                     processed.append(text)
 

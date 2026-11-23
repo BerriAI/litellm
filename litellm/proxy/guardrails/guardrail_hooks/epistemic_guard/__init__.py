@@ -49,6 +49,9 @@ def initialize_guardrail(
     verify_output_values: Final = bool(
         _get_param(litellm_params, guardrail, "verify_output_values", False)
     )
+    allow_creative_context: Final = bool(
+        _get_param(litellm_params, guardrail, "allow_creative_context", False)
+    )
     raw_device: Final = _get_param(litellm_params, guardrail, "device", None)
     device: Final[str | None] = str(raw_device) if raw_device is not None else None
     mode: Final = _get_param(litellm_params, guardrail, "mode")
@@ -61,6 +64,7 @@ def initialize_guardrail(
         guardrail_name=guardrail_name,
         on_fail=on_fail,
         verify_output_values=verify_output_values,
+        allow_creative_context=allow_creative_context,
         device=device,
         event_hook=event_hook,
         default_on=bool(_get_param(litellm_params, guardrail, "default_on", False)),

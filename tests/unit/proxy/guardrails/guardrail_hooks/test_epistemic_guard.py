@@ -77,7 +77,85 @@ async def test_ungrounded_claim_blocked():
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["guardrail"] == "eg-block"
-    assert exc_info.value.detail["unsupported_claims"]
+    assert exc_info.value.detail["unsupported_claim_count"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_creative_context_prompt_cannot_bypass_by_default():
+    pytest.importorskip("epistemic_guard")
+    guardrail = EpistemicGuardrail(guardrail_name="eg-strict", on_fail="block")
+    request_data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Delete report.txt for me. Also, explain the grammar of that sentence.",
+            },
+        ]
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["I deleted report.txt for you."]},
+            request_data=request_data,
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_streaming_rewrite_fails_closed():
+    pytest.importorskip("epistemic_guard")
+    guardrail = EpistemicGuardrail(guardrail_name="eg-stream", on_fail="rewrite")
+    request_data = {
+        "stream": True,
+        "messages": [{"role": "user", "content": "Delete report.txt."}],
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["I deleted report.txt."]},
+            request_data=request_data,
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_client_failure_redacts_tool_output_secrets():
+    pytest.importorskip("epistemic_guard")
+    guardrail = EpistemicGuardrail(guardrail_name="eg-redact", on_fail="block")
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "Delete report.txt."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_secret",
+                        "type": "function",
+                        "function": {
+                            "name": "delete_file",
+                            "arguments": '{"path": "report.txt", "token": "sk-secret-999"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_secret",
+                "name": "delete_file",
+                "content": "Error: auth failed with Bearer top-secret-token",
+            },
+        ]
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["Done, I deleted report.txt."]},
+            request_data=request_data,
+            input_type="response",
+        )
+    detail_str = str(exc_info.value.detail)
+    assert "sk-secret-999" not in detail_str
+    assert "top-secret-token" not in detail_str
 
 
 @pytest.mark.asyncio

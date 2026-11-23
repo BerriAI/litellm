@@ -38,6 +38,13 @@ class EpistemicGuardConfigModel(GuardrailConfigModel):
             "match the corresponding tool output receipts."
         ),
     )
+    allow_creative_context: bool = Field(
+        default=False,
+        description=(
+            "When True, exempts creative/grammar-explanation prompts with no tool receipts "
+            "from verification. Defaults to False so untrusted user text cannot disable enforcement."
+        ),
+    )
     device: str | None = Field(
         default=None,
         description=(
