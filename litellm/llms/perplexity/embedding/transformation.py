@@ -21,6 +21,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import provider_reported_usage_cost
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -31,6 +32,7 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -166,7 +168,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json: Final[object] = raw_response.json()
+            raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception:
             raise PerplexityEmbeddingError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -191,6 +193,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
                 usage_data.get("prompt_tokens", 0) or usage_data.get("total_tokens", 0) or 0
             ),
             total_tokens=_INT.validate_python(usage_data.get("total_tokens", 0) or 0),
+            cost=provider_reported_usage_cost(usage_data, "perplexity"),
         )
         model_response.usage = usage
         return model_response

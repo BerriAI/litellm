@@ -13,15 +13,17 @@ https://platform.openai.com/docs/api-reference/batch
 import asyncio
 import contextvars
 import os
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from openai.types.batch import BatchRequestCounts
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import float_of, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.batches.handler import AnthropicBatchesHandler
 from litellm.llms.azure.batches.handler import AzureBatchesAPI
@@ -60,13 +62,18 @@ azure_batches_instance: Final = AzureBatchesAPI()
 vertex_ai_batches_instance: Final = VertexAIBatchPrediction(gcs_bucket_name="")
 anthropic_batches_instance: Final = AnthropicBatchesHandler()
 xai_batches_instance: Final = XAIBatchesHandler()
+_EXTRA_BODY: Final = TypeAdapter(object)
 base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+class _PopsKeys(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
+
+
 def _resolve_timeout(
     optional_params: GenericLiteLLMParams,
-    kwargs: dict[str, Any],
+    kwargs: Mapping[str, object],
     custom_llm_provider: str,
     default_timeout: float = 600.0,
 ) -> float:
@@ -100,7 +107,7 @@ def _resolve_timeout(
         return float(default_timeout)
 
     # Handle numeric values (int, float, string representations)
-    return float(timeout)
+    return float_of(timeout)
 
 
 @client
@@ -127,7 +134,7 @@ async def acreate_batch(
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
     output_expires_after: FileExpiresAfter | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Creates and executes a batch from an uploaded file of request
@@ -358,6 +365,7 @@ def create_batch(
                 max_retries=optional_params.max_retries,
                 create_batch_data=_create_batch_request,
                 custom_endpoint=optional_params.get("custom_endpoint"),
+                litellm_params=litellm_params,
             )
         else:
             raise litellm.exceptions.BadRequestError(
@@ -384,7 +392,7 @@ async def aretrieve_batch(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> LiteLLMBatch:
     """
     Async: Retrieves a batch.
@@ -423,7 +431,7 @@ def _handle_retrieve_batch_providers_without_provider_config(
     batch_id: str,
     optional_params: GenericLiteLLMParams,
     timeout: float | httpx.Timeout,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal[
@@ -485,9 +493,9 @@ def _handle_retrieve_batch_providers_without_provider_config(
             or get_secret_str("AZURE_API_KEY")
         )
 
-        extra_body: Final = optional_params.get("extra_body", {})
+        extra_body: Final = _EXTRA_BODY.validate_python(optional_params.get("extra_body", {}))
         if extra_body is not None:
-            extra_body.pop("azure_ad_token", None)
+            require_attributes(extra_body, _PopsKeys, "pop").pop("azure_ad_token", None)
         else:
             get_secret_str("AZURE_AD_TOKEN")
 
@@ -706,7 +714,7 @@ async def alist_batches(
     metadata: dict[str, str] | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List your organization's batches.

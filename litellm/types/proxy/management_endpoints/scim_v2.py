@@ -1,4 +1,4 @@
-from typing import Any, Final, Literal, Optional, Union
+from typing import Final, Literal, Optional, TypeAlias, Union
 
 from fastapi import HTTPException
 from pydantic import (
@@ -11,6 +11,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.user_requests import NewUserRequest
@@ -19,6 +20,9 @@ SCIM_ENTERPRISE_USER_SCHEMA: Final = "urn:ietf:params:scim:schemas:extension:ent
 SCIM_ENTERPRISE_METADATA_KEY: Final = "scim_enterprise"
 SCIM_ENTITLEMENTS_METADATA_KEY: Final = "scim_entitlements"
 SCIM_ROLES_METADATA_KEY: Final = "scim_roles"
+SCIM_DIRECTORY_METADATA_KEYS: Final[frozenset[str]] = frozenset(
+    {SCIM_ENTERPRISE_METADATA_KEY, SCIM_ENTITLEMENTS_METADATA_KEY, SCIM_ROLES_METADATA_KEY}
+)
 
 SCIM_MANAGED_TEAM_METADATA_KEY: Final = "scim_managed"
 SCIM_TEAM_DATA_METADATA_KEY: Final = "scim_data"
@@ -165,6 +169,23 @@ class SCIMGroup(SCIMResource):
     members: list[SCIMMember] | None = None
 
 
+SCIM_ERROR_SCHEMA: Final = "urn:ietf:params:scim:api:messages:2.0:Error"
+ScimType: TypeAlias = Literal["uniqueness"]
+
+
+class ScimErrorDetail(TypedDict):
+    error: ReadOnly[str]
+
+
+class SCIMError(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    schemas: tuple[Literal["urn:ietf:params:scim:api:messages:2.0:Error"]] = (SCIM_ERROR_SCHEMA,)
+    status: str
+    detail: str
+    scimType: ScimType | None = None
+
+
 class SCIMPlaceholderMergeResult(LiteLLMBaseModel):
     placeholder_user_id: str
     merged_into_user_id: str
@@ -219,7 +240,7 @@ class SCIMServiceProviderConfig(LiteLLMBaseModel):
     sort: SCIMFeature = SCIMFeature(supported=False)
     etag: SCIMFeature = SCIMFeature(supported=False)
     authenticationSchemes: list[dict[str, object]] | None = None
-    meta: dict[str, Any] | None = None
+    meta: dict[str, object] | None = None
 
 
 # SCIM ResourceType Models (RFC 7643 Section 6)

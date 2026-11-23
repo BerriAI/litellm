@@ -15,6 +15,8 @@ from typing import Final
 import grpc
 from riva.client.proto import riva_asr_pb2, riva_asr_pb2_grpc
 
+from tests.integration._support.ports import allocate_port
+
 SAMPLE_RATE_HZ: Final = 16000
 OFFLINE_ONLY_REFUSAL: Final = (
     "Error: Unavailable model requested given these parameters: language_code=en-US; sample_rate=16000; type=online;"
@@ -139,7 +141,7 @@ def riva_server(
     options: Final = () if max_receive_bytes is None else (("grpc.max_receive_message_length", max_receive_bytes),)
     server: Final = grpc.server(futures.ThreadPoolExecutor(max_workers=8), options=options)
     riva_asr_pb2_grpc.add_RivaSpeechRecognitionServicer_to_server(_Asr(words, offline_only, stall, calls), server)
-    port: Final = server.add_insecure_port("127.0.0.1:0")
+    port: Final = server.add_insecure_port(f"127.0.0.1:{allocate_port()}")
     server.start()
     try:
         yield RivaServer(f"127.0.0.1:{port}", calls)

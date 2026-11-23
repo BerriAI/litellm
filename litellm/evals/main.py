@@ -52,7 +52,7 @@ async def acreate_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Create a new evaluation
@@ -237,7 +237,7 @@ async def alist_evals(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListEvalsResponse:
     """
     Async: List all evaluations
@@ -419,7 +419,7 @@ async def aget_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Get an evaluation by ID
@@ -572,7 +572,7 @@ async def aupdate_eval(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Eval:
     """
     Async: Update an evaluation
@@ -789,7 +789,7 @@ async def adelete_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteEvalResponse:
     """
     Async: Delete an evaluation
@@ -939,7 +939,7 @@ async def acancel_eval(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelEvalResponse:
     """
     Async: Cancel a running evaluation
@@ -1102,7 +1102,7 @@ async def acreate_run(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     """
     Async: Create a new run for an evaluation
@@ -1286,7 +1286,7 @@ async def alist_runs(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListRunsResponse:
     """
     Async: List all runs for an evaluation
@@ -1468,7 +1468,7 @@ async def aget_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     """
     Async: Get a specific run
@@ -1624,7 +1624,7 @@ async def acancel_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CancelRunResponse:
     """
     Async: Cancel a running run
@@ -1789,7 +1789,7 @@ async def adelete_run(
     extra_query: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> RunDeleteResponse:
     """
     Async: Delete a run

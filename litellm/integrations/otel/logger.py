@@ -7,7 +7,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from opentelemetry.context import Context, attach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
@@ -66,6 +66,7 @@ from litellm.integrations.otel.plumbing.context import (
     resolve_request_span_context,
     resolve_service_span_context,
     set_request_baggage,
+    set_request_metadata,
     set_request_root_span,
 )
 from litellm.integrations.otel.plumbing.events import GenAIEventRecorder
@@ -188,8 +189,16 @@ def _llm_call_parent_context(call: LLMCallEvent) -> Context:
     return resolve_internal_call_span_context() if call.purpose is not None else resolve_request_span_context()
 
 
+def _llm_attempt_key(call: LLMCallEvent) -> str | None:
+    if call.call_id is None or call.upstream_start_seconds is None:
+        return call.call_id
+    return f"{call.call_id}:{call.upstream_start_seconds}"
+
+
 class OpenTelemetryV2(CustomLogger):
     """The ``CustomLogger`` for OpenTelemetry."""
+
+    logs_every_failed_attempt: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -295,6 +304,10 @@ class OpenTelemetryV2(CustomLogger):
     #  closed here. See ``log_pre_api_call``.
     # ====================================================================== #
 
+    def _defer_llm_call(self, call_id: str, start_time_ns: int | None) -> None:
+        """Record only when the call started, leaving its span to be created by the close callback."""
+        self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+
     def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
         """Open the LLM-call span at the call boundary.
 
@@ -324,7 +337,7 @@ class OpenTelemetryV2(CustomLogger):
         # call id; keep the first span so its start time is the true one.
         if call_id in self._open_llm_calls:
             return
-        start_time_ns: Final = to_ns(datetime.now())
+        start_time_ns: Final = to_ns(call.upstream_start_seconds) or to_ns(datetime.now())
         # Parent to the request's anchored root span (stable across the request),
         # falling back to ambient on the SDK path. Open the span live only when
         # that resolves to a recordable parent; otherwise defer to the close
@@ -333,7 +346,7 @@ class OpenTelemetryV2(CustomLogger):
         # provider here would evict idle ones even though close re-routes.
         parent_context: Final = _llm_call_parent_context(call)
         if not is_recordable_span(get_current_span(parent_context)):
-            self._store_open_call(call_id, _LLMCallSpan(span=None, start_time_ns=start_time_ns))
+            self._defer_llm_call(call_id, start_time_ns)
             return
         # A detached route roots its own trace instead (linked to the request
         # trace) — see ``TenantRoute.detached``.
@@ -418,6 +431,14 @@ class OpenTelemetryV2(CustomLogger):
             return
         self._close_llm_call(kwargs, start_time, end_time)
         self._record_failure_metrics(kwargs, start_time, end_time)
+
+    async def async_log_failed_attempt(
+        self,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> None:
+        self._close_llm_call(kwargs, start_time, end_time)
 
     def _seed_identity_baggage(self, identity: RequestIdentity, model: str | None, context: Context) -> Context:
         """Seed authenticated request-identity Baggage onto ``context`` so the Baggage
@@ -573,6 +594,10 @@ class OpenTelemetryV2(CustomLogger):
         if carrier is not None:
             self._tenant_tracers.release(carrier.provider)
 
+    def _span_session(self, call: LLMCallEvent) -> str | None:
+        """The session a model call's span names."""
+        return call.session_id
+
     def _finish_carrier(
         self,
         carrier: "_LLMCallSpan | None",
@@ -581,7 +606,7 @@ class OpenTelemetryV2(CustomLogger):
         end_time: datetime | float | None,
     ) -> Span | None:
         payload: Final = call.payload
-        call_id: Final = call.call_id
+        call_id: Final = _llm_attempt_key(call)
         if payload is None:
             if carrier is not None and carrier.span is not None:
                 # Opened at the boundary but the payload never materialized — end
@@ -599,7 +624,7 @@ class OpenTelemetryV2(CustomLogger):
             request_route=request_root_http_route(),
             request_purpose=call.purpose,
             trace=call.trace,
-            session_id=call.session_id,
+            session_id=self._span_session(call),
             metadata_keys=tuple(self.config.baggage_metadata_keys),
             operation=call.operation,
         )
@@ -637,6 +662,7 @@ class OpenTelemetryV2(CustomLogger):
                 end_time_ns=end_time_ns,
                 tracer=route.tracer,
                 links=_request_trace_links(parent_ctx) if route.detached else None,
+                attempt_key=call_id,
             )
         finally:
             self._tenant_tracers.release(route.provider)
@@ -748,6 +774,7 @@ class OpenTelemetryV2(CustomLogger):
         """
         try:
             identity: Final = RequestIdentity.from_user_api_key_auth(user_api_key_dict, request_metadata)
+            set_request_metadata(identity.metadata)
             bag: Final = promoted_baggage(
                 identity,
                 model,

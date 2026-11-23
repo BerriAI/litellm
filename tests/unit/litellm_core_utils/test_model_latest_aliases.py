@@ -38,7 +38,7 @@ def test_latest_aliases_price_and_route_like_their_targets() -> None:
             alias_key: Final = prefixed if prefixed in litellm.model_cost else alias
             target_key: Final = f"{provider}/{target}" if f"{provider}/{target}" in litellm.model_cost else target
             entry: Final = litellm.model_cost[alias_key]
-            assert entry["mode"] in ("chat", "responses")
+            assert entry["mode"] in ("chat", "responses", "video_generation", "image_generation")
             assert entry == litellm.model_cost[target_key]
             assert resolve_model_latest_alias(alias, provider) == target
             if provider in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO:
