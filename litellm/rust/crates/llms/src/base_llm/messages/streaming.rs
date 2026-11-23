@@ -33,8 +33,9 @@ pub fn encode(event: &MessagesStreamEvent) -> Result<Bytes, Error> {
 #[cfg(test)]
 mod tests {
     use futures_util::{StreamExt, TryStreamExt, stream};
-    use litellm_llms_types::formats::messages::streaming::{
-        MessagesContentBlockDelta, MessagesStreamUsage,
+    use litellm_llms_types::{
+        formats::messages::streaming::{MessagesContentBlockDelta, MessagesStreamUsage},
+        recognized::Recognized,
     };
     use rstest::rstest;
     use serde_json::{Map, json};
@@ -54,7 +55,9 @@ mod tests {
             MessagesStreamEvent::Ping,
             MessagesStreamEvent::ContentBlockDelta {
                 index: 1,
-                delta: MessagesContentBlockDelta::TextDelta { text: "hi".into() },
+                delta: Recognized::Known(MessagesContentBlockDelta::TextDelta {
+                    text: "hi".into(),
+                }),
             },
             MessagesStreamEvent::ContentBlockStop { index: 1 },
             MessagesStreamEvent::MessageStop {
@@ -86,9 +89,9 @@ mod tests {
         let expected = vec![
             MessagesStreamEvent::ContentBlockDelta {
                 index: 0,
-                delta: MessagesContentBlockDelta::TextDelta {
+                delta: Recognized::Known(MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
-                },
+                }),
             },
             MessagesStreamEvent::MessageStop {
                 usage: None,
@@ -117,7 +120,7 @@ mod tests {
         assert!(matches!(
             events.as_slice(),
             [MessagesStreamEvent::ContentBlockDelta {
-                delta: MessagesContentBlockDelta::Citations { .. },
+                delta: Recognized::Known(MessagesContentBlockDelta::Citations { .. }),
                 ..
             }]
         ));
@@ -158,9 +161,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::unknown_event("{\"type\":\"future_event\",\"payload\":1}")]
+    #[case::unknown_delta(
+        "{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"future_delta\",\"payload\":1}}"
+    )]
+    fn an_event_this_crate_cannot_name_is_sent_on_under_its_own_type(#[case] data: &str) {
+        let name = data.split('"').nth(3).unwrap();
+        let wire = format!("event: {name}\ndata: {data}\n\n");
+
+        let [event] = decode(wire.as_bytes()).unwrap().try_into().unwrap();
+
+        assert_eq!(encode(&event).unwrap(), Bytes::from(wire));
+    }
+
+    #[rstest]
     #[case::json(b"data: {\n\n")]
-    #[case::unknown_event(b"data: {\"type\":\"future_event\"}\n\n")]
-    #[case::malformed_tool(b"data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":3}}\n\n")]
+    #[case::no_type(b"data: {\"index\":0}\n\n")]
     #[case::utf8(b"data: \xff\n\n")]
     #[case::done_is_not_an_anthropic_frame(b"data: [DONE]\n\n")]
     #[tokio::test]
@@ -183,7 +199,7 @@ mod tests {
         let [
             MessagesStreamEvent::ContentBlockStart { content_block, .. },
             MessagesStreamEvent::ContentBlockDelta {
-                delta: MessagesContentBlockDelta::InputJsonDelta { partial_json },
+                delta: Recognized::Known(MessagesContentBlockDelta::InputJsonDelta { partial_json }),
                 ..
             },
         ] = decoded.as_slice()

@@ -1,13 +1,13 @@
 import { getLocalStorageItem, setLocalStorageItem } from "@/utils/localStorageUtils";
 
+import { DEFAULT_LANGUAGE } from "./defaultLanguage";
+
 export type Messages = { readonly [key: string]: string | Messages };
 export type Locales = ReadonlyMap<string, () => Promise<Messages>>;
 export type LanguageStore = { readonly read: () => string | null; readonly write: (language: string) => void };
 
-export const DEFAULT_LANGUAGE = "en";
 export const LANGUAGE_STORAGE_KEY = "litellm_language";
 
-// 中文词库按官方语言入口懒加载，不改变默认语言或偏好存储。
 export const LOCALES: Locales = new Map([
   ["zh-CN", () => import("./locales/zh-CN.json").then((module) => module.default)],
 ]);

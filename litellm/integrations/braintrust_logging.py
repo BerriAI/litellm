@@ -72,7 +72,7 @@ class BraintrustLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys: Final[list[str]] = []
         if api_key is None and os.getenv("BRAINTRUST_API_KEY", None) is None:
             missing_keys.append("BRAINTRUST_API_KEY")
 
@@ -132,7 +132,7 @@ class BraintrustLogger(CustomLogger):
 
         self.default_project_id = _project_id(project)
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -168,7 +168,7 @@ class BraintrustLogger(CustomLogger):
                     self.create_sync_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -258,7 +258,7 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -272,7 +272,7 @@ class BraintrustLogger(CustomLogger):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
                 output = response_obj.choices[0].message.json()
-                choices = response_obj["choices"]
+                choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
@@ -293,7 +293,7 @@ class BraintrustLogger(CustomLogger):
                     await self.create_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -365,10 +365,7 @@ class BraintrustLogger(CustomLogger):
                 if value:
                     request_data[key] = value
 
-            if choices is not None:
-                request_data["output"] = [choice.dict() for choice in choices]
-            else:
-                request_data["output"] = output
+            request_data["output"] = [choice.dict() for choice in choices]
 
             if metrics is not None:
                 request_data["metrics"] = metrics
@@ -386,5 +383,5 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         return super().log_failure_event(kwargs, response_obj, start_time, end_time)

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -13,10 +14,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.reset_budget_job import _model_access_group_counter_key
-from litellm.proxy.common_utils.user_api_key_cache import (
-    UserApiKeyCache,
-    model_access_group_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.budget_reservation import (
     _get_model_access_group_budget_counters,
     estimate_request_max_cost,
@@ -83,7 +81,7 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
 ):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="end_user_id:customer-1",
+        key=AuthObject.end_user("customer-1"),
         value=LiteLLM_EndUserTable(
             user_id="customer-1",
             blocked=False,
@@ -92,14 +90,14 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:paid-tag",
+        key=AuthObject.tag("paid-tag"),
         value=LiteLLM_TagTable(
             tag_name="paid-tag",
             spend=7.0,
         ).model_dump(),
     )
     await key_cache.async_set_cache(
-        key="tag:other-tag",
+        key=AuthObject.tag("other-tag"),
         value=LiteLLM_TagTable(
             tag_name="other-tag",
             spend=2.0,
@@ -126,7 +124,7 @@ async def test_should_seed_and_update_end_user_and_tag_counters_without_reservat
 async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="org_id:org-counter-with-budget:with_budget",
+        key=AuthObject.org_with_budget("org-counter-with-budget"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-counter-with-budget",
             organization_alias="shared-org",
@@ -156,7 +154,7 @@ async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_stat
 async def test_should_seed_org_counter_from_plain_org_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(
-        key="org_id:org-counter-plain",
+        key=AuthObject.org("org-counter-plain"),
         value=LiteLLM_OrganizationTable(
             organization_id="org-counter-plain",
             organization_alias="shared-org",
@@ -362,7 +360,7 @@ async def test_should_skip_reservation_for_per_pixel_image_model(spend_counter_s
         spend=0.0,
         max_budget=1.0,
     )
-    await key_cache.async_set_cache(key="key-image-per-pixel", value=valid_token)
+    await key_cache.async_set_cache(key=AuthObject.virtual_key("key-image-per-pixel"), value=valid_token)
 
     request_body = {"model": "dall-e-2", "prompt": "a cat", "size": "256x256"}
 
@@ -453,7 +451,7 @@ async def test_model_access_group_with_a_budget_reserves_against_the_reset_jobs_
     assert len(counters) == 1
     counter = counters[0]
     assert counter.counter_key == _model_access_group_counter_key(SimpleNamespace(access_group_name="premium"))
-    assert counter.source_cache_key == model_access_group_cache_key("premium")
+    assert counter.source_cache_key == AuthObject.model_access_group("premium")
     assert counter.max_budget == 25.0
     assert counter.fallback_spend == 7.0
     assert counter.entity_type == "Model access group"
@@ -486,7 +484,7 @@ async def test_repeated_model_access_group_reserves_once(rust_auth_stores: RustA
 
 async def _cache_model_access_group_budget(key_cache, group, spend, max_budget=None):
     await key_cache.async_set_cache(
-        key=model_access_group_cache_key(group),
+        key=AuthObject.model_access_group(group),
         value=ModelAccessGroupBudget(access_group_name=group, spend=spend, max_budget=max_budget),
         model_type=ModelAccessGroupBudget,
     )

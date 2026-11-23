@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -99,6 +99,19 @@ describe("Budget Panel", () => {
     expect(paths()[0]).toBe("/management/v1/budgets");
     expect(queries()[0]).toEqual({ page: 1, page_size: 50, sort: "-created_at" });
     expect(await screen.findByText("ecc1869c-6231-4380-a56d-1a0be457477d")).toBeInTheDocument();
+  });
+
+  it("exposes budget creation separately from tab navigation", async () => {
+    renderPanel();
+
+    const controls = screen.getByRole("group", { name: "Page controls" });
+    expect(within(controls).getByRole("button", { name: "Create Budget" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("tablist")).queryByRole("button", { name: "Create Budget" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(within(controls).getByRole("button", { name: "Create Budget" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 
   it("asks the server to sort when a sortable header is clicked", async () => {

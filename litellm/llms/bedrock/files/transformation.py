@@ -62,6 +62,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.bedrock import AwsAuthParams, BedrockBatchRecordKind
 from litellm.types.llms.openai import (
     AllMessageValues,
+    BatchInputFormat,
     CreateFileRequest,
     FileContentRequest,
     FileTypes,
@@ -227,6 +228,13 @@ class _OpenAIBatchRecord(TypedDict, total=False):
     custom_id: ReadOnly[str]
     url: ReadOnly[str]
     body: ReadOnly[_OpenAIBatchRecordBody]
+
+
+class _OpenAIBatchRecordFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _BedrockBatchRecord(TypedDict):
@@ -445,9 +453,9 @@ def _decode_batch_input(content: str | bytes) -> str:
         raise _batch_line_error(content.count(b"\n", 0, e.start) + 1, f"is not valid UTF-8: {e.reason}") from e
 
 
-def _load_batch_line(line_number: int, line: str) -> _OpenAIBatchRecord:
+def _load_batch_line(line_number: int, line: str) -> object:
     try:
-        return json.loads(line)
+        return _DECODED_JSON.validate_python(json.loads(line))
     except json.JSONDecodeError as e:
         raise _batch_line_error(line_number, f"is not valid JSON: {e.msg} at column {e.colno}") from e
     except (ValueError, RecursionError) as e:
@@ -459,10 +467,10 @@ def _json_object(value: object) -> Mapping[str, object] | None:
 
 
 def _batch_json_object(line_number: int, line: str) -> _OpenAIBatchRecord:
-    record: Final = _load_batch_line(line_number, line)
-    if _json_object(record) is None:
+    record: Final = _json_object(_load_batch_line(line_number, line))
+    if record is None:
         raise _batch_line_error(line_number, "is not a JSON object")
-    return record
+    return _OpenAIBatchRecord(**_OpenAIBatchRecordFields(**record))
 
 
 def _batch_body_problem(record: Mapping[str, object]) -> str | None:
@@ -1866,7 +1874,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
                 headers=raw_response.headers,
                 response=raw_response,
             )
-        return HttpxBinaryResponseContent(response=raw_response)
+        return HttpxBinaryResponseContent(response=raw_response, batch_input_format=BatchInputFormat.BEDROCK)
 
 
 class BedrockJsonlFilesTransformation:

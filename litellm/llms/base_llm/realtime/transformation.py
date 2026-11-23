@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 import httpx
 
 from litellm._uuid import uuid
-from litellm.types.llms.openai import OpenAIRealtimeStreamSessionEvents
+from litellm.types.llms.openai import OpenAIRealtimeDoneEvent, OpenAIRealtimeStreamSessionEvents
 from litellm.types.realtime import (
     RealtimeInputAudioTranscriptionUsage,
     RealtimeResponseTransformInput,
@@ -118,12 +118,18 @@ class BaseRealtimeConfig(ABC):
     def builds_setup_from_session_update(self) -> bool:
         return False
 
+    def setup_must_complete_before_content(self, setup_message: Mapping[str, object]) -> bool:
+        return False
+
     def setup_session_update_rejection(
         self, model: str, session: Mapping[str, object], *, setup_sent: bool
     ) -> RealtimeSessionUpdateRejection | None:
         return None
 
     def unbilled_usage_on_session_close(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
+        return None
+
+    def unbilled_response_on_session_close(self, model: str) -> OpenAIRealtimeDoneEvent | None:
         return None
 
     def session_refusal(self) -> Exception | None:

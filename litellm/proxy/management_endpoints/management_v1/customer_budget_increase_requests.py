@@ -56,7 +56,7 @@ Caller: TypeAlias = Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)]
 Admin: TypeAlias = Annotated[str, Depends(customer_actor)]
 Cache: TypeAlias = Annotated[UserApiKeyCache, Depends(get_user_api_key_cache)]
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 _REQUEST: Final = TypeAdapter(BudgetIncreaseRequest)
 _REQUESTS: Final = TypeAdapter(tuple[BudgetIncreaseRequest, ...])
 

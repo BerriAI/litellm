@@ -392,6 +392,7 @@ impl LoggedCall {
         let member = |name: &str| text(metadata.get(name));
         TargetFacts {
             app_id: member("user_api_key_app_id"),
+            app_group_id: member("user_api_key_app_group_id"),
             user_api_key_hash: member("user_api_key_hash"),
             user_api_key_user_id: member("user_api_key_user_id"),
             user_api_key_team_id: member("user_api_key_team_id"),

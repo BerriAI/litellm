@@ -47,9 +47,9 @@ describe("MCPPermissionManagement", () => {
   it("shows only the oauth2 PKCE-delegation toggle for oauth2 servers", async () => {
     renderWithInitialValues({ allow_all_keys: false, auth_type: "oauth2" });
     await expandPanel();
-    expect(screen.getByText("Delegate auth to upstream (PKCE passthrough)")).toBeInTheDocument();
+    expect(screen.getByText("Delegate auth to upstream (PKCE Pass-Through)")).toBeInTheDocument();
     // The non-oauth2 pass-through toggle must NOT appear for oauth2 servers.
-    expect(screen.queryByText("OAuth pass-through")).not.toBeInTheDocument();
+    expect(screen.queryByText("OAuth Pass-Through")).not.toBeInTheDocument();
   });
 
   it("shows only the OAuth pass-through toggle for none-auth servers forwarding Authorization", async () => {
@@ -59,9 +59,9 @@ describe("MCPPermissionManagement", () => {
       extra_headers: ["Authorization"],
     });
     await expandPanel();
-    expect(screen.getByText("OAuth pass-through")).toBeInTheDocument();
+    expect(screen.getByText("OAuth Pass-Through")).toBeInTheDocument();
     // The oauth2-only PKCE delegation toggle must NOT appear here.
-    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delegate auth to upstream (PKCE Pass-Through)")).not.toBeInTheDocument();
   });
 
   it("hides both upstream-auth toggles for none-auth servers without an Authorization header", async () => {
@@ -71,8 +71,8 @@ describe("MCPPermissionManagement", () => {
       extra_headers: ["x-api-key"],
     });
     await expandPanel();
-    expect(screen.queryByText("OAuth pass-through")).not.toBeInTheDocument();
-    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
+    expect(screen.queryByText("OAuth Pass-Through")).not.toBeInTheDocument();
+    expect(screen.queryByText("Delegate auth to upstream (PKCE Pass-Through)")).not.toBeInTheDocument();
   });
 
   it("should reflect allow_all_keys when editing an existing server", async () => {

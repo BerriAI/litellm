@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
-_OffloadParams: Final = ParamSpec("_OffloadParams")
-_OffloadResult: Final = TypeVar("_OffloadResult")
+_OffloadParams = ParamSpec("_OffloadParams")
+_OffloadResult = TypeVar("_OffloadResult")
 
 
 @pytest.fixture

@@ -246,7 +246,10 @@ def test_diff_gate_selects_top_level_and_nested_python_files_only(tmp_path: Path
     (
         "tests/e2e_harness/top_level_module.py",
         "tests/e2e_harness/pkg/sub/nested_module.py",
+        "litellm/router.py",
+        "litellm/proxy-extras/litellm_proxy_extras/pkg/nested_module.py",
         "pyproject.toml",
+        "uv.lock",
     ),
 )
 def test_e2e_basedpyright_gate_also_fires_on_harness_python_and_pyrightconfig(tmp_path: Path, trigger: str) -> None:
@@ -525,7 +528,7 @@ def _ui_api_types_relevant(tmp_path: Path, changed: str) -> bool:
     (
         "litellm/proxy/proxy_server.py",
         "litellm/types/router.py",
-        "litellm/tracing/generated/models.py",
+        "litellm/integrations/lens/generated/models.py",
         "litellm/router_strategy/complexity_router/config.py",
         "litellm/models/credentials.py",
         "litellm/enterprise/litellm_enterprise/types/proxy/audit_logging_endpoints.py",
