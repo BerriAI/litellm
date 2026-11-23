@@ -370,6 +370,34 @@ describe("PlaygroundChat", () => {
     expect(screen.queryByText("late reply")).not.toBeInTheDocument();
   });
 
+  it("continues the session with only the new message and offers the answered turns for a resend", async () => {
+    const user = userEvent.setup();
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[1]("assistant", "You are Ada", args[2]);
+      });
+    preload({ endpointType: "responses", selectedModel: "gpt-fast", useApiSessionManagement: "true" });
+    renderChat();
+
+    await send(user, "I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await send(user, "Who am I?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(2));
+    const followUp = responsesRequest.mock.calls[1] as ResponsesArgs;
+    expect(followUp[14]).toBe("resp-first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
+    expect(followUp[29]?.()).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+    ]);
+  });
+
   it("keeps a stopped request's response id out of the next request", async () => {
     const user = userEvent.setup();
     const first = deferred();

@@ -64,10 +64,13 @@ vi.mock("@/contexts/ChatShellContext", () => ({
   },
 }));
 
-const ONE_TURN_ARG_COUNT = 29;
+const ONE_TURN_ARG_COUNT = 30;
 const ON_TIMING_DATA_INDEX = 7;
 const ON_USAGE_DATA_INDEX = 8;
+const PREVIOUS_RESPONSE_ID_INDEX = 14;
+const ON_RESPONSE_ID_INDEX = 15;
 const ON_TOTAL_LATENCY_INDEX = 24;
+const REPLAY_HISTORY_INDEX = 29;
 
 async function sendOneMessage(onUrlUpdate?: OnUrlUpdateFunction): Promise<void> {
   renderWithProviders(<ChatConversationPage />, { onUrlUpdate });
@@ -119,6 +122,32 @@ describe("/ui/chat request metrics", () => {
     expect(typeof call[ON_TIMING_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_USAGE_DATA_INDEX]).toBe("function");
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");
+  });
+
+  it("continues the session with only the new message and offers the whole conversation for a resend", async () => {
+    mockMakeOpenAIResponsesRequest
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        (args[1] as (role: string, delta: string) => void)("assistant", "About a cent.");
+        (args[ON_RESPONSE_ID_INDEX] as (id: string) => void)("resp_first");
+      })
+      .mockResolvedValueOnce(undefined);
+
+    await sendOneMessage();
+    expect(await screen.findByText("About a cent.")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText("Send a message..."), { target: { value: "And yesterday?" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const followUp = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    expect(followUp[PREVIOUS_RESPONSE_ID_INDEX]).toBe("resp_first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "And yesterday?" }]);
+    expect((followUp[REPLAY_HISTORY_INDEX] as () => unknown[])()).toEqual([
+      { role: "user", content: "How much did this cost?" },
+      { role: "assistant", content: "About a cent." },
+      { role: "user", content: "And yesterday?" },
+    ]);
   });
 
   it("puts the new conversation ID in the URL after the first message is sent", async () => {

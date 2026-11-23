@@ -26,12 +26,14 @@ const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
 
-function getPreviousMessages(
+function requestHistories(
   override: ReplayMessage[] | undefined,
   previousResponseId: string | null,
   conversation: { messages: ReplayMessage[] } | undefined | null,
-): ReplayMessage[] {
-  return override ?? (previousResponseId ? [] : conversation?.messages ?? []);
+  userMessage: ReplayMessage,
+): { fullHistory: ReplayMessage[]; history: ReplayMessage[] } {
+  const fullHistory = [...(override ?? conversation?.messages ?? []), userMessage];
+  return { fullHistory, history: previousResponseId ? [userMessage] : fullHistory };
 }
 
 function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
@@ -343,10 +345,12 @@ export default function ChatConversationPage() {
       // On the very first turn (no session yet), we send the full history.
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
-      const history: ReplayMessage[] = [
-        ...getPreviousMessages(historyOverride, previousResponseId, activeConversation),
+      const { fullHistory, history } = requestHistories(
+        historyOverride,
+        previousResponseId,
+        activeConversation,
         userMessage,
-      ];
+      );
       const requestController = abortControllerRef.current;
 
       const request = {
@@ -357,6 +361,7 @@ export default function ChatConversationPage() {
         signal: requestController.signal,
         messages: history,
         previousResponseId,
+        fullHistory,
         background: requestMode === "chat" && useBackground,
         research: doResearch,
         mcpServers: selectedMCPServers,

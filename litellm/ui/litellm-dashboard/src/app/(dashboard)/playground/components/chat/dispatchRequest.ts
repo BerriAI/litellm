@@ -161,6 +161,9 @@ export async function dispatchRequest(context: DispatchContext): Promise<void> {
         chat.updateTotalLatency,
         headers,
         onHeaders,
+        undefined,
+        undefined,
+        continuing ? () => [...textHistory(history), userMessage] as MessageType[] : undefined,
       );
     }
     case EndpointType.ANTHROPIC_MESSAGES:

@@ -20,6 +20,7 @@ interface ChatRequestOptions {
     "role" | "content" | "attachments" | "generatedImages" | "imageGeneration" | "mcpEvents"
   >[];
   previousResponseId?: string | null;
+  fullHistory?: ChatRequestOptions["messages"];
   background?: boolean;
   research?: boolean;
   mcpServers?: string[];
@@ -52,6 +53,7 @@ export async function runChatRequest(
     signal,
     messages,
     previousResponseId,
+    fullHistory,
     background = false,
     research = false,
     mcpServers,
@@ -120,6 +122,7 @@ export async function runChatRequest(
           }
         : undefined,
       research ? { instructions: RESEARCH_INSTRUCTIONS } : undefined,
+      fullHistory && (() => toResponsesMessages(fullHistory)),
     );
     signal.throwIfAborted();
   } catch (error: unknown) {

@@ -637,7 +637,8 @@ def previous_response_not_found(client_response_id: str, model: str, provider: s
     message: Final = (
         f"Previous response with id '{client_response_id}' not found. LiteLLM rebuilds this model's conversation "
         "from the LiteLLM proxy's spend logs, so the id must be a response this proxy served and already logged, "
-        "with a database, `disable_spend_logs` left off, and `store_prompts_in_spend_logs: true`."
+        "with a database, `disable_spend_logs` left off, and `store_prompts_in_spend_logs: true` in general_settings "
+        "and not turned off in the key's or team's metadata."
     )
     return BadRequestError(
         message=message,
