@@ -151,6 +151,46 @@ class _FailAfterScriptSyncBackend(httpcore.MockBackend):
         return _FailAfterScriptSyncStream(self._script, self._error)
 
 
+class _OneConnectionBackend(httpcore.AsyncMockBackend):
+    def __init__(self, script: Sequence[bytes]) -> None:
+        super().__init__(list(script), http2=True)
+        self._connected = False
+
+    @override
+    async def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.AsyncNetworkStream:
+        if self._connected:
+            raise httpcore.ConnectError("the search opened a second connection")
+        self._connected = True
+        return await super().connect_tcp(host, port, timeout, local_address, socket_options)
+
+
+class _OneConnectionSyncBackend(httpcore.MockBackend):
+    def __init__(self, script: Sequence[bytes]) -> None:
+        super().__init__(list(script), http2=True)
+        self._connected = False
+
+    @override
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        if self._connected:
+            raise httpcore.ConnectError("the search opened a second connection")
+        self._connected = True
+        return super().connect_tcp(host, port, timeout, local_address, socket_options)
+
+
 async def _async_search(
     script: Sequence[bytes], backend: httpcore.AsyncNetworkBackend | None = None, content: bytes = b"{}"
 ) -> bytes:
@@ -340,3 +380,15 @@ async def test_an_error_goaway_ends_the_stream_without_waiting_for_an_answer() -
         _ = await _async_search(_script(_goaway(1, ErrorCodes.INTERNAL_ERROR)))
 
     assert _terminated_by(error.value).error_code == ErrorCodes.INTERNAL_ERROR
+
+
+async def test_a_graceful_goaway_that_accepted_no_stream_fails_the_search_instead_of_reconnecting() -> None:
+    script: Final = _script(_goaway(0), answered=False)
+
+    with pytest.raises(httpcore.RemoteProtocolError) as async_error:
+        _ = await _async_search(script, _OneConnectionBackend(script))
+    with pytest.raises(httpcore.RemoteProtocolError) as sync_error:
+        _ = _sync_search(script, _OneConnectionSyncBackend(script))
+
+    assert _terminated_by(async_error.value).last_stream_id == 0
+    assert _terminated_by(sync_error.value).last_stream_id == 0

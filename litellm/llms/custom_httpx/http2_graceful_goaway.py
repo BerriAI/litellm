@@ -56,7 +56,7 @@ class DrainingH2Connection(H2Connection):
         reasons: Final[tuple[object, ...]] = error.args
         if goaway is None or not any(isinstance(reason, StreamReset) for reason in reasons):
             return error
-        if stream_id > goaway.last_stream_id:
+        if 0 < goaway.last_stream_id < stream_id:
             return httpcore.ConnectionNotAvailable()
         return httpcore.RemoteProtocolError(_terminated_by(goaway))
 
