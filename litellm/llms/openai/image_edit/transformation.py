@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -36,6 +37,10 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 class _ImageResponseFields(TypedDict, total=False, extra_items=object):
     pass
+
+
+def _upload_file_name(image: object) -> object:
+    return image.name if isinstance(image, BufferedReader) else "image.png"
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -77,23 +82,19 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
     def _add_image_to_files(
         self,
-        files_list: list[tuple[str, Any]],
+        files_list: list[tuple[str, object]],
         image: object,
         field_name: str,
     ) -> None:
         """Add an image to the files list with appropriate content type"""
         image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-
-        if isinstance(image, BufferedReader):
-            files_list.append((field_name, (image.name, image, image_content_type)))
-        else:
-            files_list.append((field_name, ("image.png", image, image_content_type)))
+        files_list.append((field_name, (_upload_file_name(image), image, image_content_type)))
 
     def transform_image_edit_request(
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,

@@ -1,7 +1,11 @@
 import asyncio
 import time
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import jwt
@@ -9,23 +13,34 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Request
 
+from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, RegisteredAgentFacts, key_facts
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.redis.stores.router_cooldowns import RouterCooldownStore
+from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
+from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
+from tests.unit.redis.stores.auth_cache_double import shared_cache
+from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
 
 JWKS_URL: Final = "https://idp.example/jwks"
 JWT_AUTH: Final = LiteLLM_JWTAuth(user_id_jwt_field="sub")
@@ -41,11 +56,13 @@ def _host(
     route: str = "/chat/completions",
     request_data: dict[str, object] | None = None,  # mutable-ok: the host takes the request body it rewrites
     cache: UserApiKeyCache | None = None,
+    jwks_cache: DualCache | None = None,
     http_handler: HTTPHandler | None = None,
     shared_fetches: SharedFetches | None = None,
     api_key: str | None = None,
     with_request: bool = True,
     agent_lookup: AgentLookup | None = None,
+    prisma_client: PrismaClient | None = None,
 ) -> PythonAuthHost:
     user_api_key_cache: Final = cache or UserApiKeyCache()
     return PythonAuthHost(
@@ -58,8 +75,9 @@ def _host(
         )
         if with_request
         else None,
-        prisma_client=None,
+        prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        jwks_cache=jwks_cache or DualCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
         llm_router=None,
         llm_model_list=None,
@@ -81,12 +99,47 @@ async def test_end_user_row_carries_the_id_it_was_asked_for_not_the_request_body
 
 
 @pytest.mark.asyncio
+async def test_a_role_change_is_stored_and_the_stored_user_is_cached_and_returned(
+    rust_auth_stores: RustAuthStores,
+) -> None:
+    rust_auth_stores.user.rows["u1"] = {
+        "user_id": "u1",
+        "user_role": "internal_user",
+        "user_email": "stored@example.com",
+    }
+    cache: Final = UserApiKeyCache()
+    stale: Final = LiteLLM_UserTable(user_id="u1", user_role="internal_user", user_email="stale@example.com")
+
+    updated: Final = await _host(cache=cache, prisma_client=MagicMock(spec=PrismaClient)).set_user_role(
+        stale, "proxy_admin"
+    )
+
+    cached: Final = await cache.async_get_cache(key=AuthObject.user("u1"), model_type=LiteLLM_UserTable)
+    assert rust_auth_stores.user.rows["u1"]["user_role"] == "proxy_admin"
+    assert (updated.user_role, updated.user_email) == ("proxy_admin", "stored@example.com")
+    assert cached == updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_role", ["proxy_admin", "internal_user"])
+async def test_a_session_token_carries_the_email_on_its_user_row(
+    rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch, user_role: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-session-email")
+    rust_auth_stores.user.rows["u1"] = {"user_id": "u1", "user_role": user_role, "user_email": "stored@example.com"}
+    minted: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=LiteLLM_UserTable(user_id="u1", user_role=user_role)
+    )
+
+    key: Final = await _host(prisma_client=MagicMock(spec=PrismaClient)).ui_key(minted)
+
+    assert key is not None
+    assert (key.user_id, key.user_role, key.user_email) == ("u1", user_role, "stored@example.com")
+
+
+@pytest.mark.asyncio
 async def test_an_end_user_id_is_kept_when_no_database_can_validate_it() -> None:
     assert await _host().validated_end_user_id("from-body") == "from-body"
-
-
-def test_key_facts_carry_the_keys_own_end_user() -> None:
-    assert key_facts(UserAPIKeyAuth(token="hashed", end_user_id="from-key")).end_user_id == "from-key"
 
 
 @pytest.mark.asyncio
@@ -104,6 +157,32 @@ async def test_newer_cached_team_values_replace_the_keys_copy() -> None:
     token: Final = await _host().with_team(key, team)
 
     assert (token.token, token.team_id, token.team_models, token.team_max_budget) == ("hashed", "t", ["new"], 5.0)
+
+
+def _host_whose_team_read_fails(monkeypatch: pytest.MonkeyPatch, error: Exception) -> PythonAuthHost:
+    install_rust_auth_stores(monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"team-a": error})))
+    return replace(_host(), prisma_client=SimpleNamespace())  # pyright: ignore[reportArgumentType]  # the team read goes through the repository
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_the_database_cannot_serve_raises_the_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outage: Final = httpx.ConnectError("connection refused")
+
+    with pytest.raises(httpx.ConnectError) as raised:
+        await _host_whose_team_read_fails(monkeypatch, outage).team("team-a", upsert=False)
+
+    assert raised.value is outage
+
+
+@pytest.mark.asyncio
+async def test_a_team_read_that_fails_for_another_reason_reads_as_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    read: Final = await _host_whose_team_read_fails(monkeypatch, ValueError("row does not validate")).team(
+        "team-a", upsert=False
+    )
+
+    assert read is TeamMissing.UNREADABLE
 
 
 @pytest.mark.asyncio
@@ -131,7 +210,12 @@ def _token(claims: dict[str, object]) -> str:
 
 
 async def _authorize(
-    token: str, route: str, cache: UserApiKeyCache, jwks: _Jwks, shared_fetches: SharedFetches | None = None
+    token: str,
+    route: str,
+    cache: UserApiKeyCache,
+    jwks: _Jwks,
+    shared_fetches: SharedFetches | None = None,
+    jwks_cache: DualCache | None = None,
 ):
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
@@ -141,6 +225,7 @@ async def _authorize(
     host: Final = _host(
         route=route,
         cache=cache,
+        jwks_cache=jwks_cache,
         http_handler=jwks,  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
         shared_fetches=shared_fetches,
         api_key=token,
@@ -176,10 +261,11 @@ async def test_admin_scope_authorizes_a_proxy_admin_from_the_fetched_jwks() -> N
 async def test_a_cached_jwks_is_not_fetched_again() -> None:
     jwks: Final = _Jwks()
     cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
     token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
 
-    _ = await _authorize(token, "/key/generate", cache, jwks)
-    _ = await _authorize(token, "/key/generate", cache, jwks)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
 
     assert jwks.fetches == 1
 
@@ -255,7 +341,7 @@ async def test_a_caller_sharing_a_cancelled_fetch_takes_it_over() -> None:
 async def test_a_user_token_takes_its_role_from_the_user_row_the_core_returns() -> None:
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="user-1",
+        key=AuthObject.user("user-1"),
         value=LiteLLM_UserTable(user_id="user-1", user_role="internal_user_viewer"),
         model_type=LiteLLM_UserTable,
     )
@@ -287,6 +373,32 @@ async def test_a_token_signed_by_another_key_is_denied_with_the_proxy_message() 
     assert outcome.denied
     with pytest.raises(Exception, match="Validation fails"):
         auth_denial.raise_denial(outcome)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("headers", "error_class", "message"),
+    [
+        ({"kid": "rotated-away"}, auth_denial.NoMatchingJWTPublicKeyError, "kid=rotated-away"),
+        (
+            {"kid": "k1", "typ": "oauth-id-jag+jwt"},
+            auth_denial.IdJagIsNotABearerTokenError,
+            "an ID-JAG is an authorization grant, not a bearer token",
+        ),
+    ],
+    ids=["unknown_kid", "id_jag_as_bearer"],
+)
+async def test_a_refused_jwt_is_raised_as_the_error_class_its_failure_row_records(
+    headers: dict[str, str], error_class: type[Exception], message: str
+) -> None:
+    token: Final = jwt.encode({"sub": "admin-1"}, SIGNING_KEY, algorithm="RS256", headers=headers)
+
+    outcome: Final = await _authorize(token, "/key/generate", UserApiKeyCache(), _Jwks())
+
+    assert outcome.denial is not None
+    error: Final = auth_denial.denial_error(outcome.denial)
+    assert type(error) is error_class
+    assert message in str(error)
 
 
 class _ScriptedHttp:
@@ -405,3 +517,93 @@ async def test_a_registered_agent_is_found_by_name_when_no_id_matches() -> None:
     )
     assert await host.registered_agent("someone-else") is None
     assert await _host().registered_agent("billing-bot") is None
+
+
+def _router_recording_cooldown_reads() -> tuple[Router, FakeCooldowns]:
+    handle: Final = FakeCooldowns(has_redis=True)
+    router: Final = Router(
+        model_list=[
+            {"model_name": "claude", "litellm_params": {"model": "anthropic/claude-x"}, "model_info": {"id": "dep-a"}},
+            {"model_name": "other", "litellm_params": {"model": "anthropic/other"}, "model_info": {"id": "dep-other"}},
+        ]
+    )
+    router.cooldown_cache = CooldownCache(store=RouterCooldownStore(handle), default_cooldown_time=60)
+    return router, handle
+
+
+async def _identity_prefetch(host: PythonAuthHost) -> None:
+    await host.prefetch_identity("sk-test", None)
+
+
+async def _auth_object_prefetch(host: PythonAuthHost) -> None:
+    await host.prefetch_auth_objects(
+        UserAPIKeyAuth(token="hashed-key", user_id="user-1"), EndUserRow(end_user_id=None, end_user=None, params={})
+    )
+
+
+_PREFETCHES: Final = pytest.mark.parametrize(
+    "prefetch", [_identity_prefetch, _auth_object_prefetch], ids=["identity", "auth_objects"]
+)
+
+
+async def _run(prefetch: Callable[[PythonAuthHost], Awaitable[None]], host: PythonAuthHost) -> None:
+    with request_redis_batch_scope(native_factory=FakeNatives(), native_send_factory=fake_send):  # pyright: ignore[reportArgumentType]  # test double
+        await prefetch(host)
+
+
+def _declared(handle: FakeCooldowns) -> list[frozenset[str]]:
+    return [frozenset(ids) for ids in handle.declared]
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+@pytest.mark.parametrize(
+    ("request_data", "reads"),
+    [
+        pytest.param({"model": "claude"}, [frozenset({"dep-a"})], id="requested_model"),
+        pytest.param({}, [frozenset({"dep-a", "dep-other"})], id="no_model"),
+        pytest.param({"model": []}, [frozenset({"dep-a", "dep-other"})], id="non_string_model"),
+    ],
+)
+async def test_the_auth_prefetch_reads_the_cooldowns_of_the_deployments_the_requested_model_may_route_to(
+    monkeypatch: pytest.MonkeyPatch,
+    prefetch: Callable[[PythonAuthHost], Awaitable[None]],
+    request_data: dict[str, object],  # mutable-ok: the host takes the request body it rewrites
+    reads: list[frozenset[str]],
+) -> None:
+    router, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, _host(request_data=request_data, cache=cache))
+
+    assert _declared(handle) == reads
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_no_cooldowns_without_a_proxy_router(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert _declared(handle) == []
+
+
+@pytest.mark.asyncio
+@_PREFETCHES
+async def test_the_auth_prefetch_reads_from_the_proxy_router_current_when_it_reads_not_the_one_the_host_captured(
+    monkeypatch: pytest.MonkeyPatch, prefetch: Callable[[PythonAuthHost], Awaitable[None]]
+) -> None:
+    captured, captured_handle = _router_recording_cooldown_reads()
+    current, current_handle = _router_recording_cooldown_reads()
+    monkeypatch.setattr(proxy_server, "llm_router", current)
+    cache, _ = shared_cache()
+
+    await _run(prefetch, replace(_host(request_data={"model": "claude"}, cache=cache), llm_router=captured))
+
+    assert (_declared(captured_handle), _declared(current_handle)) == ([], [frozenset({"dep-a"})])

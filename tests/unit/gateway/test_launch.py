@@ -188,6 +188,15 @@ class TestUvicornArgv:
         graceful: Final = GracefulShutdownManager.get_timeout() if flag is None else float(str(flag))
         assert python_server(argv).graceful_timeout_seconds == graceful
 
+    def test_rust_is_told_the_config_file_the_gateway_image_loads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config: Final = tmp_path / "config.yaml"
+        config.write_text("model_list: []\n")
+        monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+        monkeypatch.setenv("CONFIG_FILE_PATH", str(config))
+        assert python_server(()).config_path == str(config)
+
     @pytest.mark.parametrize(
         ("mode", "served"),
         [

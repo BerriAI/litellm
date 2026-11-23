@@ -1,9 +1,9 @@
-from contextlib import asynccontextmanager
 import asyncio
 import json
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from http import HTTPStatus
 from itertools import chain
 from types import MappingProxyType
@@ -15,9 +15,8 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
-from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -31,6 +30,7 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.scim.scim_v2 import (
     GroupMemberExtractionResult,
     SCIMRosterSyncError,
@@ -72,6 +72,7 @@ from litellm.proxy.management_helpers.team_roster_sync import (
     RosterTarget,
     TeamGone,
 )
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
     SCIM_MANAGED_TEAM_METADATA_KEY,
@@ -87,6 +88,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIMUserGroup,
     SCIMUserName,
 )
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 
 _SYNC_GROUP_ROSTER: Final = "litellm.proxy.management_endpoints.scim.scim_v2._sync_group_roster"
 
@@ -3206,7 +3208,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+        key=AuthObject.user("member-1"), value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
@@ -3214,7 +3216,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
-    assert await cache.async_get_cache(key="member-1") is None
+    assert await cache.async_get_cache(key=AuthObject.user("member-1")) is None
 
 
 @pytest.mark.asyncio
@@ -3958,8 +3960,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
-    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-1"), value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team_alias("Old"), value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
@@ -3971,8 +3973,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
     assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
-    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-1")) is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team_alias("Old")) is None
 
 
 @pytest.mark.asyncio
@@ -3985,7 +3987,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
     existing = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-2"), value={"team_id": "team-2"})
 
     result = await _apply_group_patch_updates(
         group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
@@ -3993,7 +3995,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
 
     assert result is existing
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-2")) is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):
@@ -7491,15 +7493,14 @@ async def test_a_server_error_a_handler_raises_on_purpose_keeps_its_reason(
 
 @pytest.mark.asyncio
 async def test_an_auth_check_during_a_database_outage_answers_503_with_its_retry_hint(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     outage: Final = ConnectError("All connection attempts failed")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(side_effect=outage)
-    prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
+    monkeypatch.setattr(rust_auth_stores.key, "find", AsyncMock(side_effect=outage))
 
     async with proxy_scim_client as client:
         response = await client.post(
@@ -7549,13 +7550,15 @@ async def test_a_create_with_a_body_the_schema_rejects_logs_the_user_name_it_was
 
 @pytest.mark.asyncio
 async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_for(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    proxy_scim_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    rust_auth_stores: RustAuthStores,
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
     unknown_key: Final = {"Authorization": "Bearer sk-not-a-real-key"}
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
@@ -7571,13 +7574,12 @@ async def test_only_a_create_refused_by_the_key_check_logs_the_user_name_it_was_
 
 @pytest.mark.asyncio
 async def test_a_key_the_proxy_does_not_know_answers_401_as_a_scim_error_with_the_auth_reason(
-    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+    proxy_scim_client: AsyncClient, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ):
     from litellm.proxy import proxy_server
 
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
-    prisma_client: Final = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
-    prisma_client.get_data = AsyncMock(return_value=None)
+    _ = _proxy_database(monkeypatch, users=MagicMock(), teams=MagicMock())
 
     async with proxy_scim_client as client:
         response = await client.post(

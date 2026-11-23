@@ -8,7 +8,7 @@ export const menuLabelToPage: Record<string, Page> = {
   "Virtual Keys": Page.ApiKeys,
   Playground: Page.LlmPlayground,
   Models: Page.Models,
-  "Models + Endpoints": Page.Models,
+  "Model Management": Page.Models,
   Usage: Page.NewUsage,
   Teams: Page.Teams,
   "Internal Users": Page.Users,

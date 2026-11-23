@@ -1,10 +1,13 @@
 import copy
 import functools
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Sequence
+from dataclasses import dataclass
 from typing import (
     Final,
     TypeAlias,
 )
+
+from litellm.proxy.guardrails._content_utils import distinct_keys
 
 MutableRequest: TypeAlias = dict[str, object]
 
@@ -156,6 +159,89 @@ def collect_json_leaves(node: object, slots: SlotSink, *, strict: bool = False) 
                     slots.append((value, functools.partial(entries.__setitem__, index)))
                 else:
                     pending.append((value, current_depth + 1))
+
+
+def collect_json_input(node: object, slots: SlotSink) -> None:
+    """Collects a decisions `input_json` payload: its strings, then its numbers, then its keys.
+
+    The payload is the caller's own data rather than a tool's arguments, so a number or a key
+    can be the personal detail itself. A number is written back only when the shield changed
+    it, so the rest keep their JSON type. Key renames come last because every value write
+    addresses its object by the original key.
+    """
+    collect_json_leaves(node, slots, strict=True)
+    containers: Final = tuple(_json_containers(node))
+    for container in containers:
+        slots.extend(_number_slots(container))
+    for container in containers:
+        target = as_object(container)
+        if target is not None:
+            slots.extend(_KeyRenames(target, tuple(target), list(target)).slots())
+
+
+def _json_containers(node: object) -> Iterator[MutableRequest | MutableSeq]:
+    pending: Final[list[tuple[object, int]]] = [(node, 0)]  # mutable-ok: local walk stack.
+    while pending:
+        current, depth = pending.pop()
+        target = as_object(current)
+        entries = as_array(current)
+        if depth > MAX_JSON_DEPTH:
+            continue
+        if target is not None:
+            yield target
+            pending.extend((value, depth + 1) for value in target.values())
+        elif entries is not None:
+            yield entries
+            pending.extend((value, depth + 1) for value in entries)
+
+
+def _number_text(value: object) -> str | None:
+    return str(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _number_slots(container: MutableRequest | MutableSeq) -> Iterator[Slot]:
+    if isinstance(container, dict):
+        for key, value in tuple(container.items()):
+            text = _number_text(value)
+            if text is not None:
+                yield text, functools.partial(_write_if_changed, text, functools.partial(container.__setitem__, key))
+        return
+    for index, value in enumerate(tuple(container)):
+        text = _number_text(value)
+        if text is not None:
+            yield text, functools.partial(_write_if_changed, text, functools.partial(container.__setitem__, index))
+
+
+def _write_if_changed(original: str, write: Callable[[str], None], replacement: str) -> None:
+    if replacement != original:
+        write(replacement)
+
+
+@dataclass(frozen=True, slots=True)
+class _KeyRenames:
+    """Renames one object's keys in place once the shield has answered for all of them.
+
+    Waiting for the last answer rebuilds the object once, in its original order, and
+    `distinct_keys` keeps two keys that redact to the same text from overwriting each other.
+    """
+
+    target: MutableRequest
+    originals: tuple[str, ...]
+    names: list[str]  # mutable-ok: the shield's answers, filled in slot order
+
+    def slots(self) -> tuple[Slot, ...]:
+        indexes: Final = tuple(index for index, name in enumerate(self.originals) if name)
+        return tuple(
+            (self.originals[index], functools.partial(self._write, index, index == indexes[-1])) for index in indexes
+        )
+
+    def _write(self, index: int, last: bool, replacement: str) -> None:
+        self.names[index] = replacement
+        if not last:
+            return
+        values: Final = tuple(self.target.values())
+        self.target.clear()
+        self.target.update(zip(distinct_keys(tuple(zip(self.originals, self.names))), values))
 
 
 def collect_response_item(item: object, slots: SlotSink) -> None:

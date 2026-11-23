@@ -1,4 +1,5 @@
 mod content;
+mod error;
 mod metadata;
 mod request;
 mod response;
@@ -7,6 +8,7 @@ mod tools;
 mod usage;
 
 pub use content::*;
+pub use error::*;
 pub use metadata::*;
 pub use request::*;
 pub use response::*;

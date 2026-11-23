@@ -25,11 +25,11 @@ from uuid import uuid4
 import httpx
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.integrations.clickhouse.spend_log_types import SpendLogRecord
+from litellm.integrations.lens.generated.types import AllQueryScope, Trace
+from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
+from litellm.integrations.lens.storage import LensTraceStorage
 from litellm.rust_bridge.clickhouse import spend_storage_config
-from litellm.tracing.generated.types import AllQueryScope, Trace
-from litellm.tracing.remote import LensConnection, RemoteTraceStore
-from litellm.tracing.storage import LensTraceStorage
-from litellm.tracing.types import SpendLogRecord
 
 if TYPE_CHECKING:
     from prisma import Prisma
@@ -546,7 +546,7 @@ def long_sessions(
 
 @asynccontextmanager
 async def ingestion_client(client: httpx.AsyncClient, timeout_seconds: float) -> AsyncIterator[httpx.AsyncClient]:
-    response: Final = await client.post("/lens/tracing/keys", json={"name": "Local fixture seed"})
+    response: Final = await client.post("/lens/admin/tracing/keys", json={"name": "Local fixture seed"})
     response.raise_for_status()
     created: Final = IngestionKeyCreated.model_validate_json(response.content)
     try:
@@ -559,7 +559,7 @@ async def ingestion_client(client: httpx.AsyncClient, timeout_seconds: float) ->
         ) as uploader:
             yield uploader
     finally:
-        (await client.delete(f"/lens/tracing/keys/{created.record.id}")).raise_for_status()
+        (await client.delete(f"/lens/admin/tracing/keys/{created.record.id}")).raise_for_status()
 
 
 async def seed(profile: str = "default", copies: int | None = None, timeout_seconds: float = 120) -> int:

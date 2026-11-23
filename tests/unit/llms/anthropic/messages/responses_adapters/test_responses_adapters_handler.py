@@ -25,6 +25,7 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.router import Router
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
 
@@ -50,6 +51,234 @@ CHAT_COMPLETIONS_SSE_BODY = (
     b'"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
     b"data: [DONE]\n\n"
 )
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
+    continuation: Final = {"conversation": "conv_prior"}
+    forwarded: Final = {"extra_body": continuation} if nested else continuation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs["instructions"] == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> None:
+    truncation: Final = {"truncation": "auto"}
+    forwarded: Final = {"extra_body": truncation} if nested else truncation
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", **forwarded},
+    )
+    assert kwargs.get("instructions") == "Be brief."
+    assert kwargs["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]}
+    ]
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+)
+@pytest.mark.parametrize("nested", [False, True])
+def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
+    request_params: dict[str, str], nested: bool
+) -> None:
+    caller: Final = {"instructions": "Caller instructions"}
+    forwarded: Final = {"extra_body": caller} if nested else caller
+    kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6.2-sol",
+        system="Be brief.",
+        extra_kwargs={"custom_llm_provider": "openai", "store": False, **forwarded, **request_params},
+    )
+    instructions: Final = kwargs["extra_body"]["instructions"] if nested else kwargs["instructions"]
+    assert instructions == ("Be brief.\nCaller instructions" if request_params else "Caller instructions")
+    assert kwargs["input"] == [
+        *(
+            []
+            if request_params
+            else [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Be brief."}]}]
+        ),
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params,wire_controls,preserve_instructions",
+    [
+        ({}, {}, False),
+        ({"store": False, "drop_params": True}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, False),
+        ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, False),
+        ({"extra_body": {"store": None}}, {"store": None}, False),
+        (
+            {"store": False, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
+        ),
+        ({"store": True}, {"store": True}, False),
+        ({"store": False}, {"store": False}, False),
+        ({"extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
+        ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
+        ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
+        (
+            {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
+            {"store": False},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
+            {"store": False},
+            False,
+        ),
+        ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
+        (
+            {"store": False, "truncation": "auto", "extra_body": {"truncation": "disabled"}},
+            {"store": False, "truncation": "disabled"},
+            False,
+        ),
+        (
+            {"store": False, "truncation": "disabled", "extra_body": {"truncation": "auto"}},
+            {"store": False, "truncation": "auto"},
+            True,
+        ),
+        (
+            {"store": False, "previous_response_id": "resp_prior", "extra_body": {"previous_response_id": None}},
+            {"store": False, "previous_response_id": None},
+            False,
+        ),
+        (
+            {"store": False, "conversation": "conv_prior", "extra_body": {"conversation": None}},
+            {"store": False, "conversation": None},
+            False,
+        ),
+        (
+            {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
+            {"store": False, "conversation": "conv_prior"},
+            True,
+        ),
+    ],
+)
+async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
+    request_params: dict[str, object],
+    wire_controls: dict[str, object],
+    preserve_instructions: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_body: Final = {
+        "id": "resp_wire",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": "completed",
+        "model": "gpt-6.2-sol",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_wire",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
+    }
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
+            return_value=httpx.Response(200, json=response_body)
+        )
+        counted: Final = router.post("https://api.openai.com/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 10})
+        )
+        await litellm.anthropic.messages.acreate(
+            model="openai/responses/gpt-6.2-sol",
+            max_tokens=16,
+            system="Stable prefix",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="sk-test",
+            cache={"no-cache": True},
+            **request_params,
+        )
+        await OpenAITokenCounter().count_tokens(
+            model_to_use="gpt-6.2-sol",
+            messages=[{"role": "user", "content": "hi"}],
+            contents=None,
+            system="Stable prefix",
+            messages_format="anthropic",
+            deployment={"litellm_params": {"api_key": "sk-test", **request_params}},
+        )
+    assert upstream.call_count == 1
+    request_body: Final = json.loads(upstream.calls[0].request.content)
+    count_body: Final = json.loads(counted.calls[0].request.content)
+    assert {key: count_body[key] for key in ("input", "instructions") if key in count_body} == {
+        key: request_body[key] for key in ("input", "instructions") if key in request_body
+    }
+    assert {
+        key: request_body[key]
+        for key in ("store", "conversation", "previous_response_id", "truncation")
+        if key in request_body
+    } == wire_controls
+    user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    if preserve_instructions:
+        assert request_body["instructions"] == "Stable prefix"
+        assert request_body["input"] == [user_input]
+    else:
+        assert "instructions" not in request_body
+        assert request_body["input"] == [
+            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            user_input,
+        ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
+)
+async def test_messages_rejects_previous_response_id_before_calling_the_provider(
+    request_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+            await litellm.anthropic.messages.acreate(
+                model="openai/responses/gpt-6.2-sol",
+                max_tokens=16,
+                system="Stable prefix",
+                messages=[{"role": "user", "content": "again"}],
+                api_key="sk-test",
+                cache={"no-cache": True},
+                **request_params,
+            )
+    assert not upstream.called
+    assert rejected.value.status_code == 400
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
