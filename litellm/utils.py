@@ -1275,7 +1275,14 @@ def _is_streaming_response_for_correlation(result: object) -> bool:
 
 
 def _returns_requested_stream(kwargs: dict[str, object], call_type: CallTypes | str, result: object) -> bool:
-    if call_type in (CallTypes.transcription, CallTypes.atranscription):
+    if call_type in (
+        CallTypes.transcription,
+        CallTypes.atranscription,
+        CallTypes.image_generation,
+        CallTypes.aimage_generation,
+        CallTypes.image_edit,
+        CallTypes.aimage_edit,
+    ):
         return isinstance(result, (openai.Stream, openai.AsyncStream))
     return _is_streaming_request(kwargs=kwargs, call_type=call_type)
 
@@ -2569,6 +2576,17 @@ def client(original_function):
                         result = wrap_transcription_stream(
                             result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
                         )
+                    elif call_type in (CallTypes.image_generation.value, CallTypes.image_edit.value) and isinstance(
+                        result, openai.Stream
+                    ):
+                        from litellm.litellm_core_utils.image_streaming import (
+                            litellm_exception_mapper,
+                            wrap_image_stream,
+                        )
+
+                        result = wrap_image_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
                     # RETURN RESULT
                     update_response_metadata: _ResponseMetadataUpdater = litellm_utils.update_response_metadata
                     update_response_metadata(
@@ -2890,6 +2908,17 @@ def client(original_function):
                         )
 
                         result = wrap_transcription_stream(
+                            result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
+                        )
+                    elif call_type in (CallTypes.aimage_generation.value, CallTypes.aimage_edit.value) and isinstance(
+                        result, openai.AsyncStream
+                    ):
+                        from litellm.litellm_core_utils.image_streaming import (
+                            litellm_exception_mapper,
+                            wrap_image_stream,
+                        )
+
+                        result = wrap_image_stream(
                             result, logging_obj, start_time, litellm_exception_mapper(logging_obj.model_call_details)
                         )
                     _update_response_metadata(

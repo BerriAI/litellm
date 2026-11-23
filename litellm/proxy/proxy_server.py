@@ -422,6 +422,10 @@ from litellm.litellm_core_utils.core_helpers import (
     without,
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+from litellm.litellm_core_utils.image_streaming import (
+    format_image_sse_event,
+    is_image_stream_response,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.realtime_errors import (
     close_after_upstream_handshake_refusal,
@@ -10614,9 +10618,12 @@ async def async_data_generator(
     stream_completed = False
     client_disconnected = False
     error_state: Final = ResponsesStreamErrorState() if responses_stream_errors else None
-    ends_with_openai_done: Final = not responses_stream_errors and not request_data.get(
-        "_litellm_skip_openai_stream_done"
+    ends_with_openai_done: Final = (
+        not responses_stream_errors
+        and not request_data.get("_litellm_skip_openai_stream_done")
+        and not is_image_stream_response(response)
     )
+    saw_image_stream_event = False
     needs_iterator_wrap: Final = proxy_logging_obj.needs_iterator_wrap()
     stream_iterator: Final = _object_stream(
         proxy_logging_obj.async_post_call_streaming_iterator_hook(
@@ -10749,7 +10756,11 @@ async def async_data_generator(
             if error_state is not None:
                 error_state.observe_chunk(chunk)
             raw_passthrough = False
-            if isinstance(chunk, BaseModel):
+            if (image_sse_frame := format_image_sse_event(chunk)) is not None:
+                saw_image_stream_event = True
+                yield image_sse_frame
+                raw_passthrough = True
+            elif isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
             elif isinstance(chunk, bytes):
                 chunk = chunk.decode("utf-8", errors="replace")
@@ -10819,7 +10830,7 @@ async def async_data_generator(
         if error_message is not None:
             yield error_message if error_state is None else error_state.format_error_message(error_message)
         # Chat Completions streams terminate with data: [DONE]; Responses and Google GenAI (?alt=sse) streams do not.
-        if ends_with_openai_done:
+        if ends_with_openai_done and not saw_image_stream_event:
             yield _OPENAI_STREAM_DONE_FRAME
     except (asyncio.CancelledError, GeneratorExit):
         # Client disconnected mid-stream. CancelledError / GeneratorExit are
@@ -10874,7 +10885,7 @@ async def async_data_generator(
         )
         stream_completed = True
         yield f"data: {error_returned}\n\n"
-        if ends_with_openai_done:
+        if ends_with_openai_done and not saw_image_stream_event:
             yield _OPENAI_STREAM_DONE_FRAME
     finally:
         await ProxyBaseLLMRequestProcessing.finalize_streaming_generator_cleanup(

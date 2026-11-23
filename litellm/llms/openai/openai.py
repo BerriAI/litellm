@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     run_chat_completion_agentic_hooks,
 )
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
+from litellm.litellm_core_utils.image_streaming import image_stream_requested
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import (
     speech_create_params,
@@ -1566,11 +1567,17 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 },
             )
 
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            request_data: Final[dict[str, object]] = {**data, "extra_headers": headers} if headers else dict(data)
+            is_streaming: Final = image_stream_requested(request_data.get("stream"))
+            if is_streaming:
+                request_data["stream"] = True
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
                 **request_data, timeout=timeout
             )
-            stringified_response: Final = raw_response.parse().model_dump()
+            parsed_response: Final = raw_response.parse()
+            if is_streaming:
+                return parsed_response
+            stringified_response: Final = parsed_response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,
@@ -1657,10 +1664,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             ## COMPLETION CALL
-            request_data: Final = {**data, "extra_headers": headers} if headers else data
+            request_data: Final[dict[str, object]] = {**data, "extra_headers": headers} if headers else dict(data)
+            is_streaming: Final = image_stream_requested(request_data.get("stream"))
+            if is_streaming:
+                request_data["stream"] = True
             raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
+            parsed_response: Final = raw_response.parse()
+            if is_streaming:
+                return parsed_response
 
-            response: Final = raw_response.parse().model_dump()
+            response: Final = parsed_response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=prompt,

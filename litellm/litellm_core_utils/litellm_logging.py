@@ -3975,10 +3975,22 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _with_client_facing_stream_model(
         self,
-        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response: ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse,
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse
+    ):
         model: Final = self.client_facing_stream_model
-        if model is None or response.model in (None, model):
+        if model is None or not hasattr(response, "model") or response.model in (None, model):
             return response
         return response.model_copy(update={"model": model})
 
@@ -4025,17 +4037,41 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _with_response_id(
         self,
-        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
+        response: ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse,
         response_id: str | None,
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
-        if response_id is None or response.id == response_id:
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse
+    ):
+        if response_id is None or not hasattr(response, "id") or response.id == response_id:
             return response
         return response.model_copy(update={"id": response_id})
 
     def _client_facing_streaming_response(
         self,
-        response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse,
-    ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | InteractionsAPIResponse:
+        response: ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse,
+    ) -> (
+        ModelResponse
+        | TextCompletionResponse
+        | ResponsesAPIResponse
+        | InteractionsAPIResponse
+        | TranscriptionResponse
+        | ImageResponse
+    ):
         continued_response_id: Final = self.model_call_details.get("continued_response_id")
         return self._with_response_id(
             self._with_response_id(
@@ -4458,6 +4494,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 | ResponsesAPIResponse
                 | InteractionsAPIResponse
                 | TranscriptionResponse
+                | ImageResponse
                 | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
@@ -6276,11 +6313,12 @@ class Logging(LiteLLMLoggingBaseClass):
         | ResponsesAPIResponse
         | InteractionsAPIResponse
         | TranscriptionResponse
+        | ImageResponse
         | None
     ):
         if self.stream is not True:
             return None
-        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse, ImageResponse)):
             return result
         elif isinstance(
             result,

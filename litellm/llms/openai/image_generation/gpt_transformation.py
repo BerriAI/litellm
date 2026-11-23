@@ -30,8 +30,10 @@ class GPTImageGenerationConfig(BaseImageGenerationConfig):
             "n",
             "output_compression",
             "output_format",
+            "partial_images",
             "quality",
             "size",
+            "stream",
             "user",
         ]
 

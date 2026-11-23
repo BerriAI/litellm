@@ -101,6 +101,11 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import get_provider_affinity_header
+from litellm.litellm_core_utils.image_streaming import (
+    AsyncImageSSEStream,
+    SyncImageSSEStream,
+    image_stream_requested,
+)
 from litellm.litellm_core_utils.llm_request_utils import serialize_multipart_form_fields
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.litellm_core_utils.realtime_errors import (
@@ -7663,19 +7668,23 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        is_streaming: Final = image_stream_requested(image_edit_optional_request_params.get("stream"))
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
         request_count: Final = image_edit_provider_config.get_request_count(
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
+        if is_streaming and not multipart and stream_body is None:
+            data = {**data, "stream": True}
 
-        def send() -> httpx.Response:
+        def send(stream: bool = False) -> httpx.Response:
             if stream_body is not None:
                 return sync_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
                     headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
                     content=_ImageEditContent(stream_body),
+                    stream=stream,
                     timeout=timeout,
                 )
             if multipart:
@@ -7684,14 +7693,25 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=data,
                     files=files,
+                    stream=stream,
                     timeout=timeout,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
                 json=data,
+                stream=stream,
                 timeout=timeout,
             )
+
+        if is_streaming and request_count == 1:
+            try:
+                streaming_response: Final = send(stream=True)
+            except Exception as exc:  # noqa: BLE001  # match non-streaming _handle_error mapping
+                raise self._handle_error(e=exc, provider_config=image_edit_provider_config)
+            sse_stream: Final = SyncImageSSEStream(streaming_response)
+            set_provider_response_headers_in_hidden_params(sse_stream, streaming_response.headers)
+            return sse_stream
 
         responses, failure = split_outcomes(run_concurrently(request_count, send))
         served: Final = [
@@ -7777,19 +7797,23 @@ class BaseLLMHTTPHandler:
             },
         )
 
+        is_streaming: Final = image_stream_requested(image_edit_optional_request_params.get("stream"))
+        multipart: Final = image_edit_provider_config.use_multipart_form_data()
         request_count: Final = image_edit_provider_config.get_request_count(
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
+        if is_streaming and not multipart and stream_body is None:
+            data = {**data, "stream": True}
 
-        async def send() -> httpx.Response:
+        async def send(stream: bool = False) -> httpx.Response:
             if stream_body is not None:
                 return await async_httpx_client.post(  # pyright: ignore[reportUnknownMemberType]  # legacy post signature has untyped parameters
                     url=api_base,
                     headers=_image_edit_stream_headers(headers, stream_body),  # pyright: ignore[reportUnknownArgumentType]  # legacy provider headers are untyped
                     content=_AsyncImageEditContent(stream_body),
+                    stream=stream,
                     timeout=timeout,
                 )
             if multipart:
@@ -7798,14 +7822,25 @@ class BaseLLMHTTPHandler:
                     headers=headers,
                     data=data,
                     files=files,
+                    stream=stream,
                     timeout=timeout,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
                 json=data,
+                stream=stream,
                 timeout=timeout,
             )
+
+        if is_streaming and request_count == 1:
+            try:
+                streaming_response: Final = await send(stream=True)
+            except Exception as exc:  # noqa: BLE001  # match non-streaming _handle_error mapping
+                raise self._handle_error(e=exc, provider_config=image_edit_provider_config)
+            sse_stream: Final = AsyncImageSSEStream(streaming_response)
+            set_provider_response_headers_in_hidden_params(sse_stream, streaming_response.headers)
+            return sse_stream
 
         responses, failure = split_outcomes(
             await asyncio.gather(*(send() for _ in range(request_count)), return_exceptions=True)
