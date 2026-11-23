@@ -550,17 +550,17 @@ async def test_the_periodic_sweep_sweeps_again_after_each_interval():
 
 
 @pytest.mark.asyncio
-async def test_a_fetch_the_provider_never_answers_is_retried_later_instead_of_holding_the_poll():
+async def test_a_fetch_the_provider_never_answers_is_retried_later_instead_of_holding_the_poll(socket_path):
     async def never_answer(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         await reader.read()
         writer.close()
 
-    server: Final = await asyncio.start_server(never_answer, "127.0.0.1", 0)
-    port: Final = server.sockets[0].getsockname()[1]
-    async with server, httpx.AsyncClient(timeout=None) as client:
+    server: Final = await asyncio.start_unix_server(never_answer, path=str(socket_path))
+    transport: Final = httpx.AsyncHTTPTransport(uds=str(socket_path))
+    async with server, httpx.AsyncClient(transport=transport, timeout=None) as client:
         fetch: Final = HttpxBackgroundResponseFetch(client=lambda: client, timeout_seconds=0.1)
         fetching: Final = asyncio.ensure_future(
-            fetch(BackgroundResponsePollRequest(url=f"http://127.0.0.1:{port}/v1/responses/{RESPONSE_ID}", headers=()))
+            fetch(BackgroundResponsePollRequest(url=f"http://provider/v1/responses/{RESPONSE_ID}", headers=()))
         )
         done, _ = await asyncio.wait({fetching}, timeout=2)
         fetching.cancel()
