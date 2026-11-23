@@ -15,6 +15,7 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
@@ -124,6 +125,10 @@ _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_S
 
 def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
+
+
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+    return _uses_inclusive_token_thresholds(custom_llm_provider)
 
 
 def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
@@ -768,7 +773,9 @@ def _get_token_base_cost(
     # For image generation models that don't have output_cost_per_token,
     # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
     if completion_base_cost == 0.0:
-        output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
+        output_image_cost: Final = get_cost_per_unit(
+            model_info, get_service_tier_cost_key("output_cost_per_image_token", service_tier), None
+        )
         if output_image_cost is not None:
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
@@ -1210,7 +1217,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,
@@ -2220,7 +2227,7 @@ def calculate_image_response_web_search_cost(
     if usage is None:
         return 0.0
 
-    web_search_requests: Final = getattr(usage, "web_search_requests", None)
+    web_search_requests: Final = attribute_or_none(usage, "web_search_requests")
     if not web_search_requests:
         return 0.0
 

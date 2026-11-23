@@ -2,7 +2,9 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+import json
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, TypeAlias, overload
@@ -30,9 +32,10 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionUserMessage,
     OpenAIMessageContentListBlock,
+    ResponsesAPIOptionalRequestParams,
 )
 
-from .json_loader import SimpleProviderConfig
+from .json_loader import AcceptedValue, SimpleProviderConfig
 
 _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _SCHEMA_MAP_KEYWORDS: Final = frozenset({"properties", "patternProperties", "$defs", "definitions", "dependentSchemas"})
@@ -78,10 +81,12 @@ def _raise_public(failure: _UnsupportedRequest) -> NoReturn:
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+    from litellm.types.llms.openai import ChatCompletionToolParam
 
 _PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
 _PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TOOL_USAGE_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(Mapping[str, int])
+_PARAM_NAMES_ADAPTER: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
 
 
 def web_search_requests_from_tool_usage(payload: object) -> int | None:
@@ -199,13 +204,134 @@ def _with_declared_reasoning_effort(
     return MappingProxyType({**params, "reasoning_effort": accepted})
 
 
+def _values_outside_accepted(
+    params: Mapping[str, object], accepted_values: Mapping[str, tuple[AcceptedValue, ...]]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            param: value
+            for param, value in params.items()
+            if param in accepted_values and value not in accepted_values[param]
+        }
+    )
+
+
+def _describe(params: Mapping[str, object]) -> str:
+    return ", ".join(f"{param}={json.dumps(value)}" for param, value in params.items())
+
+
+def _describe_accepted(accepted_values: Mapping[str, tuple[AcceptedValue, ...]]) -> str:
+    return ", ".join(
+        f"{param}={' or '.join(json.dumps(value) for value in values)}" for param, values in accepted_values.items()
+    )
+
+
+def _as_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _PAYLOAD_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _is_json_object_format(value: object) -> bool:
+    format_spec: Final = _as_mapping(value)
+    return format_spec is not None and format_spec.get("type") == "json_object"
+
+
+def _without_json_object_formats(params: Mapping[str, object]) -> Mapping[str, object]:
+    kept: Final = {
+        param: value
+        for param, value in params.items()
+        if not (param == "response_format" and _is_json_object_format(value))
+    }
+    text: Final = _as_mapping(kept.get("text"))
+    if text is None or not _is_json_object_format(text.get("format")):
+        return MappingProxyType(kept)
+    text_without_format: Final = {key: value for key, value in text.items() if key != "format"}
+    without_text: Final = {param: value for param, value in kept.items() if param != "text"}
+    return MappingProxyType({**without_text, "text": text_without_format} if text_without_format else without_text)
+
+
+def _params_the_provider_accepts(
+    params: Mapping[str, object],
+    provider: SimpleProviderConfig,
+    model: str,
+    drop_params: bool,
+    unsupported_params: frozenset[str] = frozenset(),
+    allowed_openai_params: Collection[str] = (),
+) -> Mapping[str, object]:
+    checked_params: Final = {param: value for param, value in params.items() if param not in allowed_openai_params}
+    accepted_values: Final = provider.accepted_values_for(model)
+    rejected_values: Final = _values_outside_accepted(checked_params, accepted_values)
+    rejected_params: Final = {param: value for param, value in checked_params.items() if param in unsupported_params}
+    if (rejected_values or rejected_params) and not drop_params:
+        accepted_note: Final = (
+            f"It only accepts {_describe_accepted({param: accepted_values[param] for param in rejected_values})}. "
+            if rejected_values
+            else ""
+        )
+        raise litellm.UnsupportedParamsError(
+            message=f"{provider.slug} does not support {_describe({**rejected_params, **rejected_values})}. "
+            f"{accepted_note}To drop unsupported openai params from the call, set `litellm.drop_params = True`",
+            llm_provider=provider.slug,
+            model=model,
+        )
+    kept: Final = MappingProxyType(
+        {
+            param: value
+            for param, value in params.items()
+            if param not in rejected_values and param not in rejected_params
+        }
+    )
+    if drop_params and provider.special_handling_for(model).get("rejects_json_object_response_format"):
+        return _without_json_object_formats(kept)
+    return kept
+
+
+def _model_info_reading_prompt_cache_breakpoints(model_info: object, provider_slug: str) -> Mapping[str, object]:
+    from litellm.integrations.anthropic_cache_control_hook import declared_prompt_cache_breakpoint, routed_model_info
+
+    declared: Final = routed_model_info(model_info) or MappingProxyType({})
+    if declared_prompt_cache_breakpoint(declared) is not None:
+        return declared
+    return MappingProxyType({"litellm_provider": provider_slug, **declared, "supports_prompt_cache_breakpoint": True})
+
+
+class MapsAllowedOpenAIParams(ABC):
+    @abstractmethod
+    def map_openai_params_allowing(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: same caller dicts map_openai_params takes
+        optional_params: dict[str, object],  # mutable-ok: filled in place like map_openai_params
+        model: str,
+        drop_params: bool,
+        allowed_openai_params: Collection[str],
+    ) -> dict[str, object]: ...  # mutable-ok: get_optional_params keeps building on the mapped params
+
+
+class MapsAllowedResponsesParams(ABC):
+    @abstractmethod
+    def map_openai_params_for_deployment(
+        self,
+        response_api_optional_params: ResponsesAPIOptionalRequestParams,
+        model: str,
+        drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None,
+        allowed_openai_params: Collection[str] = (),
+    ) -> Mapping[str, object]: ...
+
+    def adjust_mapped_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> Mapping[str, object]:
+        return params
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
     # Choose base class
     base_class: Final[type] = OpenAIGPTConfig if provider.base_class == "openai_gpt" else OpenAILikeChatConfig
 
-    class JSONProviderConfig(base_class):
+    class JSONProviderConfig(base_class, MapsAllowedOpenAIParams):
         def get_attribution_headers(self) -> Mapping[str, str]:
             return provider.get_attribution_headers()
 
@@ -270,6 +396,33 @@ def create_config_class(provider: SimpleProviderConfig):
                 "preserve_cache_control", False
             ) or super()._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
 
+        def _messages_and_tools_in_cache_mark_dialect(
+            self,
+            model: str,
+            messages: Sequence[AllMessageValues],
+            tools: Sequence["ChatCompletionToolParam"] | None,
+            prompt_cache_options: object,
+            litellm_params: Mapping[str, object],
+            request_params: Mapping[str, object],
+        ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+            return super()._messages_and_tools_in_cache_mark_dialect(
+                model,
+                messages,
+                tools,
+                prompt_cache_options,
+                MappingProxyType(
+                    {
+                        **litellm_params,
+                        "model_info": _model_info_reading_prompt_cache_breakpoints(
+                            litellm_params.get("model_info"), provider.slug
+                        ),
+                    }
+                )
+                if provider.special_handling_for(model).get("reads_prompt_cache_breakpoint")
+                else litellm_params,
+                request_params,
+            )
+
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
@@ -290,7 +443,7 @@ def create_config_class(provider: SimpleProviderConfig):
                 or (get_secret_str(provider.api_base_env) if provider.api_base_env else None)
                 or provider.default_base_url(model)
             )
-            resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
+            resolved_key: Final = api_key or provider.api_key_from(get_secret_str)
             return resolved_base, resolved_key
 
         def get_complete_url(
@@ -310,7 +463,13 @@ def create_config_class(provider: SimpleProviderConfig):
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
 
-            supported_params: Final = super().get_supported_openai_params(model=model)
+            inherited_params: Final = _PARAM_NAMES_ADAPTER.validate_python(
+                super().get_supported_openai_params(model=model)
+            )
+            supported_params: Final = [
+                *(param for param in inherited_params if param not in provider.unsupported_params),
+                *(param for param in provider.extra_supported_params if param not in inherited_params),
+            ]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
@@ -348,12 +507,25 @@ def create_config_class(provider: SimpleProviderConfig):
                 _raise_public(stripped)
             return stripped
 
+        def map_openai_params_allowing(
+            self,
+            non_default_params: dict[str, object],  # mutable-ok: same caller dicts map_openai_params takes
+            optional_params: dict[str, object],  # mutable-ok: filled in place like map_openai_params
+            model: str,
+            drop_params: bool,
+            allowed_openai_params: Collection[str],
+        ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+            return self.map_openai_params(
+                non_default_params, optional_params, model, drop_params, allowed_openai_params=allowed_openai_params
+            )
+
         def map_openai_params(
             self,
             non_default_params: dict,
             optional_params: dict,
             model: str,
             drop_params: bool,
+            allowed_openai_params: Collection[str] = (),
         ) -> dict:
             """Apply parameter mappings and constraints"""
 
@@ -369,9 +541,16 @@ def create_config_class(provider: SimpleProviderConfig):
                 if provider.special_handling_for(model).get("round_reasoning_effort_to_declared_levels")
                 else caller_params
             )
+            accepted_params: Final = _params_the_provider_accepts(
+                requested_params,
+                provider,
+                model,
+                drop_params or litellm.drop_params is True,
+                allowed_openai_params=allowed_openai_params,
+            )
 
             # Apply supported params
-            for param, value in requested_params.items():
+            for param, value in accepted_params.items():
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
@@ -444,13 +623,14 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
     if provider.slug in _responses_config_cache:
         return _responses_config_cache[provider.slug]
 
+    from litellm.integrations.anthropic_cache_control_hook import deployment_model_info
     from litellm.llms.openai_like.responses.transformation import (
         OpenAILikeResponsesConfig,
     )
     from litellm.types.llms.openai import ResponseInputParam
     from litellm.types.router import GenericLiteLLMParams
 
-    class JSONProviderResponsesConfig(OpenAILikeResponsesConfig):
+    class JSONProviderResponsesConfig(OpenAILikeResponsesConfig, MapsAllowedResponsesParams):
         @property
         def custom_llm_provider(self):
             return provider.slug
@@ -462,7 +642,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
             litellm_params = litellm_params or GenericLiteLLMParams()
-            api_key: Final = litellm_params.api_key or get_secret_str(provider.api_key_env)
+            api_key: Final = litellm_params.api_key or provider.api_key_from(get_secret_str)
             if api_key:
                 headers["Authorization"] = f"Bearer {api_key}"
             return headers
@@ -478,6 +658,54 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
                 or provider.base_url
             )
             return join_api_base(resolved_base, "responses")
+
+        def _reads_prompt_cache_breakpoints(
+            self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
+        ) -> bool:
+            return super()._reads_prompt_cache_breakpoints(
+                model,
+                litellm_params.model_copy(
+                    update={
+                        "model_info": dict(
+                            _model_info_reading_prompt_cache_breakpoints(
+                                deployment_model_info(litellm_params), provider.slug
+                            )
+                        )
+                    }
+                )
+                if provider.special_handling_for(model).get("reads_prompt_cache_breakpoint")
+                else litellm_params,
+                prompt_cache_options,
+            )
+
+        def map_openai_params_for_deployment(
+            self,
+            response_api_optional_params: ResponsesAPIOptionalRequestParams,
+            model: str,
+            drop_params: bool,
+            *,
+            declared_reasoning_efforts: Collection[str] | None,
+            allowed_openai_params: Collection[str] = (),
+        ) -> Mapping[str, object]:
+            return self.adjust_mapped_params(
+                {
+                    **_params_the_provider_accepts(
+                        super().map_openai_params_for_deployment(
+                            response_api_optional_params,
+                            model,
+                            drop_params,
+                            declared_reasoning_efforts=declared_reasoning_efforts,
+                        ),
+                        provider,
+                        model,
+                        drop_params or litellm.drop_params is True,
+                        provider.responses_unsupported_params,
+                        allowed_openai_params,
+                    )
+                },
+                model,
+                drop_params,
+            )
 
         def transform_responses_api_request(
             self,

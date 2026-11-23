@@ -1,6 +1,11 @@
+import sys
+from typing import Final
+
+from gunicorn.arbiter import Arbiter
 from uvicorn.workers import UvicornWorker
 
 from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE
+from litellm.proxy.shutdown.recycling_uvicorn_server import RecyclingUvicornServer
 
 
 def build_graceful_shutdown_uvicorn_worker(
@@ -17,5 +22,17 @@ def build_graceful_shutdown_uvicorn_worker(
                 ),
             }
             super().__init__(*args)
+
+        async def _serve(self) -> None:
+            if self.config.limit_max_requests in (None, sys.maxsize):
+                await super()._serve()
+                return
+
+            self.config.app = self.wsgi
+            server: Final = RecyclingUvicornServer(self.config)
+            self._install_sigquit_handler()
+            await server.serve(sockets=self.sockets)
+            if not server.started:
+                sys.exit(Arbiter.WORKER_BOOT_ERROR)
 
     return GracefulShutdownUvicornWorker

@@ -50,7 +50,7 @@ async def _refusal(
     app: Final = await store.create(AppCreate(resource_id="chat", auto_create_customers=app_may_create), "admin")
     assert not isinstance(app, AppFailure)
     connection: Final = cast("PrismaClient", SimpleNamespace(db=database))  # cast-ok: in-memory Prisma edge
-    return await registration_refusal(connection, authenticated)
+    return await registration_refusal(connection, authenticated, None, "")
 
 
 @pytest.mark.asyncio
@@ -78,7 +78,7 @@ async def test_a_request_may_register_customers_only_when_its_app_or_the_no_app_
 async def test_a_request_may_register_customers_when_no_app_definition_was_ever_chosen() -> None:
     connection: Final = cast("PrismaClient", SimpleNamespace(db=AppDatabase()))  # cast-ok: in-memory Prisma edge
 
-    assert await registration_refusal(connection, UserAPIKeyAuth(team_id="chat")) is None
+    assert await registration_refusal(connection, UserAPIKeyAuth(team_id="chat"), None, "") is None
 
 
 @pytest.mark.asyncio

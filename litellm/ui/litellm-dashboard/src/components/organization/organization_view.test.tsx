@@ -22,6 +22,7 @@ vi.mock("../networking", () => {
     organizationMemberAddCall: vi.fn(),
     organizationMemberUpdateCall: vi.fn(),
     organizationMemberDeleteCall: vi.fn(),
+    userFilterUICall: vi.fn().mockResolvedValue([]),
     serverRootPath: "",
   };
 });
@@ -52,10 +53,6 @@ vi.mock("../object_permissions_view", () => ({
   default: () => <div data-testid="object-permissions-view" />,
 }));
 vi.mock("../team/edit_membership", () => ({
-  __esModule: true,
-  default: () => null,
-}));
-vi.mock("../common_components/user_search_modal", () => ({
   __esModule: true,
   default: () => null,
 }));
@@ -181,6 +178,29 @@ test("should display empty state when organization has no members", async () => 
   await waitFor(() => {
     expect(screen.getByText("No members found")).toBeInTheDocument();
   });
+});
+
+test("shows the saved organization member role as a translated label", async () => {
+  mockUseOrganization.mockReturnValue({
+    data: { ...mockOrg, members: [{ user_id: "viewer-1", user_role: "internal_user_viewer" }] },
+    isLoading: false,
+  } as unknown as ReturnType<typeof useOrganization>);
+  renderWithProviders(renderOrgView(), { searchParams: "?org=org_123&org_tab=members" });
+
+  expect(screen.getByRole("cell", { name: "Internal User Viewer" })).toBeInTheDocument();
+});
+
+test("labels the default and available roles in Add Organization Member", async () => {
+  mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as ReturnType<typeof useOrganization>);
+  const user = userEvent.setup();
+  renderWithProviders(renderOrgView({ is_proxy_admin: true }), { searchParams: "?org=org_123&org_tab=members" });
+
+  await user.click(screen.getByRole("button", { name: /add member/i }));
+  const role = screen.getByRole("combobox", { name: "Member Role" });
+  expect(role).toHaveTextContent("Internal User");
+  await user.click(role);
+  expect(screen.getByRole("option", { name: /^Org Admin/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /^Internal User Viewer/ })).toBeInTheDocument();
 });
 
 test("keeps the members pager on its page when an admin opens a member's edit dialog", async () => {

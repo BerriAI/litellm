@@ -31,8 +31,11 @@
 --     maximum_spend_logs_retention_period: "30d"
 -- The spend-log cleanup job then verifies the table is partitioned and reclaims
 -- disk by dropping expired partitions instead of deleting rows. It also
--- pre-creates upcoming partitions on each run. To roll back, see
--- litellm/scripts/db/unpartition_spend_logs.sql.
+-- pre-creates upcoming partitions on each run, but its first run can be up to a
+-- day away, so this script creates the current and upcoming partitions itself.
+-- Set partition_interval and precreate_ahead in the DO block below to your
+-- SPEND_LOG_PARTITION_INTERVAL and SPEND_LOG_PARTITION_PRECREATE_AHEAD (default
+-- "day" and 7). To roll back, see litellm/scripts/db/unpartition_spend_logs.sql.
 
 BEGIN;
 
@@ -90,6 +93,39 @@ CREATE INDEX IF NOT EXISTS "LiteLLM_SpendLogs_api_key_startTime_idx"
 CREATE TABLE IF NOT EXISTS "LiteLLM_SpendLogs_pdefault"
     PARTITION OF "LiteLLM_SpendLogs" DEFAULT;
 
+-- Create the current period and the next precreate_ahead periods with the same
+-- names and bounds the cleanup job uses, so no write lands in DEFAULT. A row in
+-- DEFAULT blocks creating the partition that covers it, and every later
+-- partition creation scans DEFAULT while holding an ACCESS EXCLUSIVE lock on
+-- "LiteLLM_SpendLogs". To backfill, set oldest_day to the oldest "startTime"
+-- you will copy so those days get partitions too.
+DO $$
+DECLARE
+    partition_interval CONSTANT text := 'day';
+    precreate_ahead CONSTANT int := 7;
+    today CONSTANT date := (now() AT TIME ZONE 'UTC')::date;
+    oldest_day CONSTANT date := today;
+    step interval;
+    lower_bound date;
+    last_lower_bound date;
+BEGIN
+    IF partition_interval NOT IN ('day', 'week', 'month') THEN
+        RAISE EXCEPTION 'partition_interval must be day, week or month, got %', partition_interval;
+    END IF;
+    step := ('1 ' || partition_interval)::interval;
+    lower_bound := date_trunc(partition_interval, oldest_day::timestamp)::date;
+    last_lower_bound := (date_trunc(partition_interval, today::timestamp) + precreate_ahead * step)::date;
+    WHILE lower_bound <= last_lower_bound LOOP
+        EXECUTE format(
+            'CREATE TABLE IF NOT EXISTS %I PARTITION OF "LiteLLM_SpendLogs" FOR VALUES FROM (%L) TO (%L)',
+            'LiteLLM_SpendLogs_p' || to_char(lower_bound, 'YYYYMMDD'),
+            lower_bound,
+            (lower_bound + step)::date
+        );
+        lower_bound := (lower_bound + step)::date;
+    END LOOP;
+END $$;
+
 COMMIT;
 
 -- Backfill (optional). Rows route to the correct partition automatically.
@@ -97,12 +133,10 @@ COMMIT;
 -- window instead of one statement, or simply keep "LiteLLM_SpendLogs_legacy"
 -- read-only until its data ages past your retention, then DROP it.
 --
--- Backfilled rows land in the DEFAULT partition until explicit partitions
--- cover their dates. Postgres refuses to create a partition whose range
--- overlaps rows already in DEFAULT, so the cleanup job may log a warning when
--- pre-creating today's partition right after a backfill; it recovers on its
--- own once those dates age out, and future partitions are unaffected because
--- they are always created ahead of writes.
+-- Backfilled rows older than oldest_day land in the DEFAULT partition, where
+-- they stay until retention deletes them row by row, and every partition the
+-- cleanup job creates has to scan them first. Set oldest_day above before
+-- running the swap so every backfilled day has its own partition.
 --
 --   INSERT INTO "LiteLLM_SpendLogs"
 --   SELECT * FROM "LiteLLM_SpendLogs_legacy"

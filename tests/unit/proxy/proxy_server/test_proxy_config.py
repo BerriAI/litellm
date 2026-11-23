@@ -37,14 +37,12 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import turn_on_json
 from litellm.constants import DEFAULT_SSL_CIPHERS
+from litellm.integrations.lens.config import is_lens_tracing_enabled
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
-from litellm.router_api import ApplyResult, RouterSettings
-from litellm.types.router import Deployment, LiteLLM_Params
-from litellm.types.utils import CredentialItem
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -59,7 +57,9 @@ from litellm.proxy.proxy_server import (
     validate_deployment_max_agentic_loops,
 )
 from litellm.proxy.utils import evict_config_param
-from litellm.tracing.config import is_lens_tracing_enabled
+from litellm.router_api import ApplyResult, RouterSettings
+from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.utils import CredentialItem
 
 from .conftest import normalize
 
@@ -182,9 +182,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 ) -> None:
     import httpx
 
-    from litellm.proxy.tracing_runtime import manage_tracing
-    from litellm.tracing.exporter import LensExporter
-    from litellm.tracing.remote import LensConnection
+    from litellm.integrations.lens.exporter import LensExporter
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.remote import LensConnection
 
     monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
     monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", "test-service-token-with-32-characters")
@@ -222,7 +222,7 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
 async def test_tracing_logs_an_error_naming_the_store_when_lens_is_misconfigured(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    from litellm.proxy.tracing_runtime import manage_tracing
+    from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 
     monkeypatch.delenv("LITELLM_LENS_URL", raising=False)
     monkeypatch.delenv("LITELLM_LENS_SERVICE_TOKEN", raising=False)
@@ -5368,7 +5368,7 @@ async def test_ProxyConfig__update_general_settings_dispatches_every_side_effect
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch):
+async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_runtime_effect(monkeypatch, caplog):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5382,7 +5382,9 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     monkeypatch.setattr(pc, "_reschedule_spend_log_cleanup_job", reschedule)
 
-    await pc._update_general_settings({"unrelated": "value"})
+    await pc._update_general_settings({"unrelated": "value", "required_customer_headers": ["X-Tenant-ID"]})
+    assert "required_customer_headers" not in pc.settings
+    assert "proxy does not apply" in caplog.text
 
     initialize_endpoints.assert_not_awaited()
     reschedule.assert_not_awaited()
@@ -5392,7 +5394,7 @@ async def test_ProxyConfig__update_general_settings_unrelated_value_fires_no_run
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch):
+async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stores(monkeypatch, caplog):
     pc = ProxyConfig()
     config = {
         "general_settings": {
@@ -5407,6 +5409,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
     db_values = {
         "general_settings": {
             "max_file_size_mb": 9,
+            "required_customer_headers": ["X-Tenant-ID"],
             "max_parallel_requests": 11,
             "alerting": ["db"],
             "pass_through_endpoints": [{"path": "/db"}],
@@ -5424,6 +5427,7 @@ async def test_ProxyConfig__update_config_from_db_resolves_through_settings_stor
 
     resolved = await pc._update_config_from_db(MagicMock(), config, store_model_in_db=True)
 
+    assert "proxy does not apply" in caplog.text
     assert resolved["general_settings"] == {
         "max_file_size_mb": 7,
         "max_parallel_requests": 3,
@@ -6207,7 +6211,7 @@ async def test_ProxyStartupEvent_jwt_auth_resolves_agent_claims_against_live_reg
     signing_key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_jwk: Final = jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key(), as_dict=True)
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
-    proxy_server.user_api_key_cache.set_cache(
+    proxy_server.jwks_cache.set_cache(
         key=f"litellm_jwt_auth_keys_{jwks_url}", value=[{**public_jwk, "kid": "k1"}]
     )
     monkeypatch.setattr(proxy_server, "premium_user", True)

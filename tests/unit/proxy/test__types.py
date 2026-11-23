@@ -375,6 +375,22 @@ def test_an_audit_log_stores_a_list_of_changes_as_json_text_with_keys_masked(fie
 
 
 @pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_stores_a_double_encoded_value_as_an_object_with_keys_masked(field: str) -> None:
+    sent: Final = {"team_id": "team-1", "key": SECRET, "key_alias": None}
+
+    log: Final = _audit_log(**{field: json.dumps(json.dumps(sent))})
+
+    assert json.loads(getattr(log, field)) == {**sent, "key": SECRET_MASKED}
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
+def test_an_audit_log_keeps_a_plain_string_value(field: str) -> None:
+    log: Final = _audit_log(**{field: json.dumps("rotated by admin")})
+
+    assert json.loads(getattr(log, field)) == "rotated by admin"
+
+
+@pytest.mark.parametrize("field", ("before_value", "updated_values"))
 def test_an_audit_log_leaves_a_change_it_has_no_record_of_alone(field):
     assert getattr(_audit_log(**{field: None}), field) is None
 
@@ -461,6 +477,33 @@ def test_virtual_key_mapping_counts_as_configured_when_any_issuer_sets_the_claim
     )
 
     assert jwt_auth.is_virtual_key_mapping_configured() is is_configured
+
+
+@pytest.mark.parametrize("value", ["", None], ids=["empty", "null"])
+@pytest.mark.parametrize("field", ["audience", "public_key_url"])
+def test_litellm_jwtauth_refuses_an_empty_or_null_global_audience_or_jwks_url(field: str, value: str | None) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match=field):
+        _ = LiteLLM_JWTAuth(**{field: value})
+
+
+@pytest.mark.parametrize("public_key_url", [" ", ",", " , ", ",,", "\t,\n"])
+def test_litellm_jwtauth_refuses_a_jwks_url_list_that_names_no_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    with pytest.raises(ValidationError, match="public_key_url"):
+        _ = LiteLLM_JWTAuth(public_key_url=public_key_url)
+
+
+@pytest.mark.parametrize(
+    "public_key_url",
+    ["https://a.example/keys", "https://a.example/keys, https://b.example/keys", "https://a.example/keys, ,"],
+)
+def test_litellm_jwtauth_keeps_a_jwks_url_list_that_names_a_url(public_key_url: str) -> None:
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    assert LiteLLM_JWTAuth(public_key_url=public_key_url).public_key_url == public_key_url
 
 
 def test_new_user_request_loudly_rejects_a_password():

@@ -7,13 +7,16 @@ use std::{
 use axum::body::to_bytes;
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
-use http::{StatusCode, header::CONTENT_TYPE};
+use http::{
+    StatusCode,
+    header::{CACHE_CONTROL, CONTENT_TYPE},
+};
 use litellm_host::{
     call::{CallOutput, hosted_call},
     machine::MachineFault,
     protocol::Protocol,
 };
-use litellm_host_http::{Sse, serve};
+use litellm_host_http::{Sse, render, run, serve};
 use rstest::rstest;
 
 #[derive(Clone, Debug)]
@@ -43,7 +46,10 @@ impl Protocol for TestProtocol {
 #[case::complete(false)]
 #[case::failed(true)]
 #[tokio::test]
-async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case] fail: bool) {
+async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(
+    #[case] fail: bool,
+    #[values(false, true)] rendered_after_the_run: bool,
+) {
     let first = Bytes::from_static(b"event: custom\ndata: first\n\n");
     let last = Bytes::from_static(b"data: [DONE]\n\n");
     let machine =
@@ -65,9 +71,15 @@ async fn sse_preserves_encoded_chunks_and_uses_the_supplied_error_format(#[case]
         formatted_errors.fetch_add(1, Ordering::SeqCst);
         Bytes::from(format!("event: custom_error\ndata: {error:?}\n\n"))
     });
-    let response = serve(machine, (), (), adapter, None).await.unwrap();
+    let response = if rendered_after_the_run {
+        render(adapter, run(machine, (), (), None).await.unwrap()).unwrap()
+    } else {
+        serve(machine, (), (), adapter, None).await.unwrap()
+    };
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
+    assert_eq!(response.headers()[CACHE_CONTROL], "no-cache");
+    assert_eq!(response.headers()["x-accel-buffering"], "no");
     assert_eq!(errors.load(Ordering::SeqCst), 0);
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     assert_eq!(

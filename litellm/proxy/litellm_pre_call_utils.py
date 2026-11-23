@@ -14,6 +14,7 @@ from typing import (
     Any,
     Final,
     Literal,
+    Protocol,
     TypeAlias,
     cast,  # noqa: TID251  # narrows untyped deployment and credential payloads
 )
@@ -94,10 +95,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_utils import get_request_route, get_request_route_template
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.callback_config_validation import has_invalid_logging_callback_vars
 from litellm.proxy.common_utils.callback_utils import (
-    decrypt_callback_vars,
+    decrypted_callback_metadata,
     get_metadata_variable_name_from_kwargs,
     key_logging_entries,
+    stored_logging_entries,
     strip_callback_config,
 )
 from litellm.proxy.common_utils.customer_usage import (
@@ -117,6 +120,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
 )
 from litellm.proxy.spend_tracking.carried_budget_state import carried_budget_metadata
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
 from litellm.types.integrations.anthropic_cache_control_hook import GATEWAY_INJECTED_CACHE_METADATA_KEY
 from litellm.types.proxy.auth.customer_hierarchy import customer_budget_scopes_metadata
 
@@ -471,18 +475,27 @@ else:
     PolicyMatchContext = Any
 
 
-def parse_cache_control(cache_control):
-    cache_dict: Final = {}
-    directives: Final = cache_control.split(", ")
+def parse_cache_control(cache_control: str) -> Mapping[str, str | bool]:
+    directives: Final = (directive.partition("=") for directive in cache_control.split(","))
+    return MappingProxyType(
+        {
+            key.strip().lower(): value.strip() if separator else True
+            for key, separator, value in directives
+            if key.strip()
+        }
+    )
 
-    for directive in directives:
-        if "=" in directive:
-            key, value = directive.split("=")
-            cache_dict[key] = value
-        else:
-            cache_dict[directive] = True
 
-    return cache_dict
+def _header_cache_controls(
+    cache_dict: Mapping[str, str | bool], allowed_cache_controls: Sequence[object] | None
+) -> Mapping[str, bool]:
+    return MappingProxyType(
+        {
+            directive: True
+            for directive in ("no-cache", "no-store")
+            if cache_dict.get(directive) and (not allowed_cache_controls or directive in allowed_cache_controls)
+        }
+    )
 
 
 LITELLM_METADATA_ROUTES: Final = (
@@ -570,6 +583,8 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
+    "used_client_oauth_token",
+    "claude_subscription_usage",
     "disable_global_guardrails",
     "disable_global_guardrail",
     "opted_out_global_guardrails",
@@ -640,6 +655,8 @@ _CLIENT_PRICING_METADATA_FIELDS: Final = frozenset({"model_info"})
 ROUTER_RESERVED_METADATA_FIELDS: Final = frozenset(
     {
         "attempted_fallbacks",
+        "client_seen_attempt",
+        "failed_fallback_attempts",
         "original_model_group",
         "previous_models",
         "rate_limit_fallback",
@@ -1387,7 +1404,13 @@ class _CallbackModelFields(TypedDict, total=False, extra_items=object):
 
 def get_validated_callback_metadata(item: object, *, source: str) -> AddTeamCallback | None:
     if not isinstance(item, Mapping):
-        raise TypeError(f"{source} metadata.logging must be a list of objects, got an item of {type(item).__name__}")
+        verbose_proxy_logger.warning("Ignoring invalid %s callback metadata, expected an object", source)
+        return None
+    if has_invalid_logging_callback_vars(item):
+        verbose_proxy_logger.warning(
+            "Ignoring invalid %s callback metadata, expected callback_vars to be an object", source
+        )
+        return None
     try:
         return AddTeamCallback.model_validate(item)
     except (PydanticValidationError, ValueError) as e:
@@ -1416,7 +1439,8 @@ class KeyAndTeamLoggingSettings:
     @staticmethod
     def get_team_dynamic_logging_settings(user_api_key_dict: UserAPIKeyAuth) -> object:
         if user_api_key_dict.team_metadata is not None and "logging" in user_api_key_dict.team_metadata:
-            return decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata)).get("logging")
+            entries: Final = stored_logging_entries(user_api_key_dict.team_metadata)
+            return list(entries) if entries is not None else None
         return None
 
 
@@ -1465,7 +1489,7 @@ def get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata: Final = decoded_json_object(decrypt_callback_vars(user_api_key_dict.team_metadata))
+        team_metadata: Final = decoded_json_object(decrypted_callback_metadata(user_api_key_dict.team_metadata))
         callback_settings: Final = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(
             **_CallbackModelFields(**keyword_arguments(callback_settings, TeamCallbackMetadata))
@@ -1695,22 +1719,26 @@ def litellm_auth_header_name(headers: Headers) -> str:
 
 
 def forwarded_anthropic_oauth_token(headers: Headers) -> str | None:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header
 
     forwarded: Final = clean_headers(headers, authenticated_with_header=litellm_auth_header_name(headers))
     return next(
         (
-            value.removeprefix("Bearer ")
+            token
             for header, value in forwarded.items()
-            if header.lower() == "authorization" and is_anthropic_oauth_key(value)
+            if header.lower() == "authorization" and (token := anthropic_oauth_token_from_header(value)) is not None
         ),
         None,
     )
 
 
+class _SupportsLower(Protocol):
+    def lower(self) -> object: ...
+
+
 def clean_headers(
     headers: Headers,
-    litellm_key_header_name: str | None = None,
+    litellm_key_header_name: object = None,
     forward_llm_provider_auth_headers: bool = False,
     authenticated_with_header: str | None = None,
 ) -> dict[str, str]:
@@ -1731,7 +1759,11 @@ def clean_headers(
     from litellm.llms.chatgpt.common_utils import is_chatgpt_oauth_key
 
     clean_headers: Final = {}
-    litellm_key_lower: Final = litellm_key_header_name.lower() if litellm_key_header_name is not None else None
+    litellm_key_lower: Final = (
+        require_attributes(litellm_key_header_name, _SupportsLower, "lower").lower()
+        if litellm_key_header_name is not None
+        else None
+    )
     for header, value in headers.items():
         header_lower = header.lower()
 
@@ -1908,7 +1940,7 @@ class LiteLLMProxyRequestSetup:
 
         spend_logs_metadata_header: Final = headers.get("x-litellm-spend-logs-metadata", None)
         if spend_logs_metadata_header is not None:
-            return safe_json_loads(spend_logs_metadata_header)
+            return _DECODED_JSON.validate_python(safe_json_loads(spend_logs_metadata_header))
         return None
 
     @staticmethod
@@ -2294,6 +2326,11 @@ class LiteLLMProxyRequestSetup:
             **(
                 {
                     "user_api_key_app_id": customer.app_id,
+                    **(
+                        {"user_api_key_app_group_id": customer.app_group_id}
+                        if customer.app_group_id is not None
+                        else {}
+                    ),
                     "user_api_key_app_alias": customer.app_alias,
                 }
                 if customer is not None and customer.app_id is not None and customer.app_alias is not None
@@ -2362,12 +2399,15 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if any(key in data[_metadata_variable_name] for key in ("user_api_key_app_id", "user_api_key_app_alias")):
+        if any(
+            key in data[_metadata_variable_name]
+            for key in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
+        ):
             incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
             data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
                 key: value
                 for key, value in incoming_metadata.items()
-                if key not in ("user_api_key_app_id", "user_api_key_app_alias")
+                if key not in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
             }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
@@ -2909,7 +2949,7 @@ async def add_litellm_data_to_request(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth,
     proxy_config: ProxyConfig,
-    general_settings: dict[str, Any] | None = None,
+    general_settings: dict[str, object] | None = None,
     version: str | None = None,
     pricing_rates: ReferenceRateLookup = reference_rates,
 ):
@@ -3098,17 +3138,21 @@ async def add_litellm_data_to_request(
         data["api_version"] = dynamic_api_version
 
     ## Forward any LLM API Provider specific headers in extra_headers
-    data[_metadata_variable_name]["used_client_oauth_token"] = add_provider_specific_headers_to_request(
-        data=data, headers=_headers
-    )
+    used_client_oauth_token: Final = add_provider_specific_headers_to_request(data=data, headers=_headers)
     caller_fields: Final = _caller_credential_fields(_REQUEST_FIELDS.validate_python(data))
     data["proxy_server_request"]["caller_credential_fields"] = caller_fields  # rebind-ok: data is an out-param
 
     ## Cache Controls
-    cache_control_header: Final = _headers.get("Cache-Control", None)
+    cache_control_header: Final[str | None] = _headers.get("cache-control")
     if cache_control_header:
         cache_dict: Final = parse_cache_control(cache_control_header)
-        data["ttl"] = cache_dict.get("s-maxage")
+        header_cache_controls: Final = _header_cache_controls(cache_dict, user_api_key_dict.allowed_cache_controls)
+        if header_cache_controls:
+            request_cache: Final = data.get("cache")
+            data["cache"] = {  # rebind-ok: data is an out-param
+                **header_cache_controls,
+                **(request_cache if isinstance(request_cache, dict) else {}),
+            }
 
     # requester_metadata is snapshotted AFTER the strip below so
     # downstream consumers (e.g. PANW guardrail reading user_ip /
@@ -3138,6 +3182,8 @@ async def add_litellm_data_to_request(
             )
             for _k in [k for k in _user_meta if isinstance(k, str) and _is_proxy_owned_metadata_key(k)]:
                 _user_meta.pop(_k, None)
+
+    data[_metadata_variable_name]["used_client_oauth_token"] = used_client_oauth_token
 
     # Strip pricing overrides AFTER the litellm_metadata string-to-dict parse
     # above, for the same reason as the user_api_key_* strip — JSON-string
@@ -3216,8 +3262,7 @@ async def add_litellm_data_to_request(
     _customer_usage: Final = await resolve_customer_request_usage(
         _customer_metadata,
         user_api_key_dict,
-        ledger_enabled=general_settings_view is None
-        or general_settings_view.get("use_spend_logs_ledger", True) is not False,
+        ledger_enabled=general_settings_view is None or spend_logs_ledger_enabled(general_settings_view),
     )
     if _customer_usage is not None:
         data[_metadata_variable_name][CUSTOMER_USAGE_METADATA_KEY] = (  # rebind-ok: data is an out-param
@@ -4041,6 +4086,34 @@ def pre_call_served_model(model: str, user_api_key_dict: UserAPIKeyAuth, model_g
     return resolve_model_group_alias(model_group_alias, prepared) or prepared
 
 
+def _request_session_id(request: Request, body: Mapping[str, object]) -> str | None:
+    return (
+        get_chain_id_from_headers(dict(request.headers))
+        or _get_anthropic_session_id_from_metadata(body.get("metadata"))
+        or _caller_body_session_id(body, "litellm_metadata")
+        or _session_id_from_baggage(request.headers.get("baggage", ""))
+    )
+
+
+def request_routing_metadata(
+    request: Request, body: Mapping[str, object], caller: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    session_id: Final = _request_session_id(request, body)
+    metadata_buckets: Final = tuple(
+        bucket
+        for bucket in (as_str_mapping(body.get("metadata")), as_str_mapping(body.get("litellm_metadata")))
+        if bucket is not None
+    )
+    tags: Final = LiteLLMProxyRequestSetup.merged_request_tags(
+        request=request, metadata_buckets=metadata_buckets, body_tags=body.get("tags"), user_api_key_dict=caller
+    )
+    return {
+        "user_agent": request.headers.get("user-agent", ""),
+        **({"session_id": session_id} if session_id else {}),
+        **({"tags": list(tags)} if tags else {}),
+    }
+
+
 def request_served_model(
     model: str, user_api_key_dict: UserAPIKeyAuth, model_group_alias: object, llm_router: Router | None
 ) -> str:
@@ -4846,7 +4919,7 @@ def add_provider_specific_headers_to_request(
     data: dict,
     headers: Mapping[str, str],
 ) -> bool:
-    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+    from litellm.llms.anthropic.common_utils import anthropic_oauth_token_from_header, is_anthropic_oauth_key
     from litellm.llms.chatgpt.common_utils import select_chatgpt_client_credential_headers
 
     anthropic_api_headers: Final = {header: headers[header] for header in ANTHROPIC_API_HEADERS if header in headers}
@@ -4891,7 +4964,9 @@ def add_provider_specific_headers_to_request(
 
     if scoped_headers:
         data["provider_specific_header"] = scoped_headers[0] if len(scoped_headers) == 1 else scoped_headers
-    return bool(anthropic_oauth_credential_headers or chatgpt_oauth_credential_headers)
+    return any(
+        anthropic_oauth_token_from_header(value) is not None for value in anthropic_oauth_credential_headers.values()
+    )
 
 
 def _add_otel_traceparent_to_data(data: dict, request: Request):

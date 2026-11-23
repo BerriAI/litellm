@@ -1,9 +1,11 @@
 mod auth;
 mod config;
 pub mod constants;
+pub mod google;
 mod identity;
 #[cfg(feature = "google-sdk")]
 mod sdk;
+pub mod vertex;
 
 pub use auth::{VertexAuth, VertexEnvironment};
 pub use config::{

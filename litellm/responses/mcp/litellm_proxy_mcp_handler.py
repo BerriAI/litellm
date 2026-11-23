@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy.mcp_server.catalog import catalog_operation, global_manager
+from litellm.proxy.mcp_server.result_conversion import url_elicitation_as_error_result
 from litellm.proxy.mcp_server.utils import (
     iter_known_server_prefixes,
     iter_known_tool_name_spellings,
@@ -99,7 +100,7 @@ def _registry_serves(name: str, servers: Collection[MCPServer]) -> bool:
     )
 
 
-async def _toolset_exists(name: str) -> bool:
+async def read_saved_toolset(name: str) -> bool | Exception:
     try:
         from litellm.proxy.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
@@ -110,8 +111,15 @@ async def _toolset_exists(name: str) -> bool:
             return False
         return await global_mcp_server_manager.get_toolset_by_name_cached(prisma_client, name) is not None
     except Exception as e:
-        verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, e)
+        return e
+
+
+async def _toolset_exists(name: str) -> bool:
+    found: Final = await read_saved_toolset(name)
+    if isinstance(found, Exception):
+        verbose_logger.debug("Could not resolve '%s' as toolset: %s", name, found)
         return False
+    return found
 
 
 @catalog_operation(global_manager)
@@ -1048,23 +1056,25 @@ class LiteLLM_Proxy_MCP_Handler:
                     litellm_logging_obj.model = f"MCP: {tool_name}"
                     litellm_logging_obj.call_type = CallTypes.call_mcp_tool.value
 
-                result = await global_mcp_server_manager.call_tool(
-                    server_name=server_name,
-                    name=sanitized_tool_name,
-                    arguments=parsed_arguments,
-                    user_api_key_auth=typed_user_api_key_auth,
-                    mcp_auth_header=mcp_auth_header,
-                    mcp_server_auth_headers=mcp_server_auth_headers,
-                    oauth2_headers=oauth2_headers,
-                    raw_headers=raw_headers,
-                    proxy_logging_obj=proxy_logging_obj,
-                    litellm_logging_obj=litellm_logging_obj,
-                    guardrail_context=guardrail_context,
-                    listed_tool=(
-                        next((tool for tool in served_tools if tool.name == tool_name), None)
-                        if served_tools is not None
-                        else ...
-                    ),
+                result = await url_elicitation_as_error_result(
+                    global_mcp_server_manager.call_tool(
+                        server_name=server_name,
+                        name=sanitized_tool_name,
+                        arguments=parsed_arguments,
+                        user_api_key_auth=typed_user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        proxy_logging_obj=proxy_logging_obj,
+                        litellm_logging_obj=litellm_logging_obj,
+                        guardrail_context=guardrail_context,
+                        listed_tool=(
+                            next((tool for tool in served_tools if tool.name == tool_name), None)
+                            if served_tools is not None
+                            else ...
+                        ),
+                    )
                 )
 
                 if proxy_logging_obj:

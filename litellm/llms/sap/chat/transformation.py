@@ -8,11 +8,13 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -26,7 +28,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -44,6 +46,8 @@ from .models import (
     SAPUserMessage,
 )
 from .reasoning import normalize_reasoning_blocks
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -152,6 +156,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._request_authorization: str | None = None
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -183,25 +188,46 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
+    def _invalidate_rejected_token(self, authorization: str | None) -> None:
+        if self.token_creator is not None and authorization is not None:
+            self.token_creator.invalidate(authorization)
+
+    def _get_with_current_token(self, path: str) -> httpx.Response:
+        request_headers: Final = self.headers
+        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=request_headers)
+        if response.status_code == 401:
+            self._invalidate_rejected_token(request_headers["Authorization"])
+        return response
+
+    def _get_from_ai_core(self, path: str) -> httpx.Response:
+        first_try: Final = self._get_with_current_token(path)
+        response: Final = self._get_with_current_token(path) if first_try.status_code == 401 else first_try
+        if response.status_code == 401:
+            raise GenAIHubOrchestrationError(status_code=401, message=response.text)
+        return response
+
+    def _is_orchestration_configuration(self, configuration_id: str) -> bool:
+        configuration: Final = _DECODED_JSON.validate_python(
+            self._get_from_ai_core(f"lm/configurations/{configuration_id}").json()
+        )
+        return require_get(configuration).get("executableId") == "orchestration"
+
     @cached_property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client: Final = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments: Final[AICoreDeploymentList] = client.get(
-            join_api_base(self.base_url, "lm/deployments"), headers=self.headers
-        ).json()
-        valid: Final[list[tuple[str, str]]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg: AICoreConfiguration = client.get(
-                    join_api_base(self.base_url, f"lm/configurations/{dep['configurationId']}"),
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        deployments: Final[AICoreDeploymentList] = self._get_from_ai_core("lm/deployments").json()
+        orchestration_deployments: Final = tuple(
+            (dep["deploymentUrl"], dep["createdAt"])
+            for dep in deployments.get("resources", [])
+            if dep.get("scenarioId") == "orchestration" and self._is_orchestration_configuration(dep["configurationId"])
+        )
+        return sorted(orchestration_deployments, key=lambda x: x[1], reverse=True)[0][0]
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
+        if status_code == 401:
+            self._invalidate_rejected_token(self._request_authorization)
+        return super().get_error_class(error_message, status_code, headers)
 
     @classmethod
     def get_config(cls):
@@ -258,6 +284,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         if api_key:
             self.run_env_setup(api_key)
         return self.headers
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: BaseConfig.sign_request returns a dict
+        authorization: Final = self.headers["Authorization"]
+        self._request_authorization = authorization
+        return {**headers, "Authorization": authorization}, None
 
     def get_complete_url(
         self,

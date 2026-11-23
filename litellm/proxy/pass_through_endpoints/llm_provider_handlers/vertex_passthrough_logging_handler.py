@@ -541,7 +541,7 @@ class VertexPassthroughLoggingHandler:
         )
 
         model: Final = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
-        response_json: Final = httpx_response.json()
+        response_json: Final = _DECODED_JSON.validate_python(httpx_response.json())
         is_batch: Final = "batchEmbedContents" in url_route
 
         input_text: Final = VertexPassthroughLoggingHandler._extract_embed_content_input(
@@ -944,7 +944,7 @@ class VertexPassthroughLoggingHandler:
                 kwargs["batch_job_state"] = "JOB_STATE_PENDING"
 
                 logging_obj.model = model_name
-                logging_obj.model_call_details["model"] = logging_obj.model
+                logging_obj.model_call_details["model"] = model_name
                 logging_obj.model_call_details["response_cost"] = response_cost
                 logging_obj.model_call_details["batch_id"] = batch_id
 
