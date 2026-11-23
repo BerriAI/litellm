@@ -554,6 +554,7 @@ class HeadroomGuardrail(CustomGuardrail):
             default_on=default_on,
             supported_event_hooks=list(self.get_supported_event_hooks()),
         )
+        self._request_context_owner: Final = f"{self.guardrail_name}:{self.headroom_api_base}"
         self.timeout = self._resolve_timeout(timeout)
 
     def _should_bypass(self, request_data: dict) -> bool:
@@ -893,8 +894,9 @@ class HeadroomGuardrail(CustomGuardrail):
         if not hashes:
             return {**inputs, "structured_messages": compressed}  # pyright: ignore[reportReturnType]
 
+        expires_at: Final = time.monotonic() + _HASH_CACHE_TTL_SECONDS
         request_data[HEADROOM_REQUEST_CONTEXT_KEY] = HeadroomRequestContext(
-            frozenset(hashes), affinity, time.monotonic() + _HASH_CACHE_TTL_SECONDS
+            frozenset(hashes), affinity, expires_at, owner=self._request_context_owner
         )
 
         existing_tools: Final = inputs.get("tools")
@@ -923,6 +925,14 @@ class HeadroomGuardrail(CustomGuardrail):
             return base_result
         return as_converted_stream(effective, HEADROOM_INTERCEPTION_PREFIX)
 
+    def _owns_retrieve_context(self, kwargs: Mapping[str, object]) -> bool:
+        if not kwargs:
+            return True
+        context: Final = _REQUEST_DATA_ADAPTER.validate_python(kwargs).get(HEADROOM_REQUEST_CONTEXT_KEY)
+        if not isinstance(context, HeadroomRequestContext) or context.owner is None:
+            return True
+        return context.owner == self._request_context_owner
+
     async def async_should_run_agentic_loop(
         self,
         response: object,
@@ -938,6 +948,9 @@ class HeadroomGuardrail(CustomGuardrail):
 
         tool_calls: Final = _extract_headroom_tool_calls(response)
         if not tool_calls:
+            return False, {}
+
+        if not self._owns_retrieve_context(kwargs):
             return False, {}
 
         return True, {"tool_calls": tool_calls}

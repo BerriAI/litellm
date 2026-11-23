@@ -13,6 +13,7 @@ class HeadroomRequestContext:
     issued_hashes: frozenset[str]
     affinity: str | None
     expires_at: float
+    owner: str | None = None
 
 
 class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
