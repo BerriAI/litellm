@@ -130,6 +130,24 @@ describe("(dashboard) Layout", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Sidebar" })).not.toBeInTheDocument());
   });
 
+  it.each(["/app-groups", "/ui/app-groups/"])(
+    "selects Customer Management when opening %s directly",
+    async (pathname) => {
+      localStorage.setItem("litellm_plugin_mode", "ai-gateway");
+      vi.mocked(usePathname).mockReturnValue(pathname);
+      render(
+        <AuthProvider>
+          <Layout>
+            <p>App groups content</p>
+          </Layout>
+        </AuthProvider>,
+      );
+      pendingUiConfig.resolve();
+      await screen.findByText("App groups content");
+      await waitFor(() => expect(localStorage.getItem("litellm_plugin_mode")).toBe("customer-portal"));
+    },
+  );
+
   it("records one page view per route segment, not per query change", async () => {
     const dashboard = () => (
       <AuthProvider>
@@ -197,6 +215,27 @@ describe("(dashboard) Layout", () => {
     vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
     rerender(dashboard());
     expect(screen.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
+
+  it.each([
+    { segment: "caching", present: ["p-4", "sm:p-6"], absent: ["h-full", "overflow-hidden", "pb-0"] },
+    { segment: "api-keys", present: ["p-4", "sm:p-6", "h-full"], absent: ["overflow-hidden", "pb-0"] },
+    { segment: "playground", present: ["p-4", "sm:p-6", "h-full", "overflow-hidden", "pb-0", "sm:pb-0"], absent: [] },
+    { segment: "lens", present: [], absent: ["p-4", "sm:p-6", "h-full", "pb-0"] },
+  ])("wraps /ui/$segment in only the classes of its page frame variant", async ({ segment, present, absent }) => {
+    vi.mocked(usePathname).mockReturnValue(`/ui/${segment}`);
+    render(
+      <AuthProvider>
+        <Layout>
+          <p>Route content</p>
+        </Layout>
+      </AuthProvider>,
+    );
+    pendingUiConfig.resolve();
+
+    const wrapperClasses = [...((await screen.findByText("Route content")).parentElement?.classList ?? [])];
+    expect(wrapperClasses).toEqual(expect.arrayContaining(present));
+    expect(wrapperClasses.filter((name) => absent.includes(name))).toEqual([]);
   });
 
   it("does not mount route content until getUiConfig has resolved", async () => {

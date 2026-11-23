@@ -53,9 +53,9 @@ CHAT_COMPLETIONS_SSE_BODY = (
 )
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
 @pytest.mark.parametrize("nested", [False, True])
-def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, str], nested: bool) -> None:
+def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
+    continuation: Final = {"conversation": "conv_prior"}
     forwarded: Final = {"extra_body": continuation} if nested else continuation
     kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -89,7 +89,7 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> No
 
 @pytest.mark.parametrize(
     "request_params",
-    [{}, {"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+    [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
 )
 @pytest.mark.parametrize("nested", [False, True])
 def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
@@ -140,11 +140,6 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
         (
-            {"store": False, "previous_response_id": "resp_prior"},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
-        (
             {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
             {"store": False},
             False,
@@ -153,15 +148,6 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
             {"store": False},
             False,
-        ),
-        (
-            {
-                "store": False,
-                "extra_body": {"previous_response_id": "resp_prior"},
-                "additional_drop_params": ["previous_response_id"],
-            },
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
         (
@@ -185,18 +171,13 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             False,
         ),
         (
-            {"store": False, "previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
-        (
             {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
             {"store": False, "conversation": "conv_prior"},
             True,
         ),
     ],
 )
-async def test_messages_system_goes_in_input_unless_the_request_continues_a_chain(
+async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
@@ -269,62 +250,35 @@ async def test_messages_system_goes_in_input_unless_the_request_continues_a_chai
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stored_prefix", "sent_instructions"), [("Stable prefix", None), ("Older prefix", "Stable prefix")]
+    "request_params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
 )
-async def test_messages_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
-    stored_prefix: str, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+async def test_messages_rejects_previous_response_id_before_calling_the_provider(
+    request_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    response_body: Final = {
-        "id": "resp_wire",
-        "object": "response",
-        "created_at": 1789788253,
-        "status": "completed",
-        "model": "gpt-6.2-sol",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_wire",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
-            }
-        ],
-        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
-    }
-    stored_chain: Final = {
-        "object": "list",
-        "data": [
-            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": stored_prefix}]},
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]},
-        ],
-        "first_id": "msg_1",
-        "last_id": "msg_2",
-        "has_more": False,
-    }
-    with respx.mock(assert_all_called=True) as router:
-        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
-            return_value=httpx.Response(200, json=stored_chain)
-        )
-        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=response_body)
-        )
-        response: Final = await litellm.anthropic.messages.acreate(
-            model="openai/responses/gpt-6.2-sol",
-            max_tokens=16,
-            system="Stable prefix",
-            messages=[{"role": "user", "content": "again"}],
-            api_key="sk-test",
-            cache={"no-cache": True},
-            previous_response_id="resp_prior",
-        )
-    request_body: Final = json.loads(upstream.calls[0].request.content)
-    assert request_body.get("instructions") == sent_instructions
-    assert request_body["previous_response_id"] == "resp_prior"
-    assert request_body["input"] == [
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}
-    ]
-    assert response["content"] == [{"type": "text", "text": "ok"}]
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+            await litellm.anthropic.messages.acreate(
+                model="openai/responses/gpt-6.2-sol",
+                max_tokens=16,
+                system="Stable prefix",
+                messages=[{"role": "user", "content": "again"}],
+                api_key="sk-test",
+                cache={"no-cache": True},
+                **request_params,
+            )
+    assert not upstream.called
+    assert rejected.value.status_code == 400
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():

@@ -5,7 +5,7 @@ OpenAI Token Counter implementation using the Responses API /input_tokens endpoi
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import httpx
 import openai
@@ -180,7 +180,7 @@ class OpenAITokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, object]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: Mapping[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object = None,

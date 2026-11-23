@@ -11,13 +11,21 @@ import { Button } from "@/components/ui/button";
 import { TableCell, TableRow } from "@/components/ui/table";
 import { loadApps, loadOrganizationApp, organizationAppKey } from "./appApi";
 import { appBaseBudget, type App, type AppMember } from "./appForms";
-import CustomerBudgetCompactFields from "../../customers/_components/CustomerBudgetCompactFields";
 import { CustomerBudgetEditor } from "../../customers/_components/CustomerLimitsFields";
-import { CustomerBudgetDialog, CustomerBudgetForm } from "../../customers/_components/CustomerBudgetDialog";
+import { CustomerBudgetDialog, CustomerBudgetFormDialog } from "../../customers/_components/CustomerBudgetDialog";
 import { useCustomerBudgetForm } from "../../customers/_components/useCustomerBudgetForm";
 import { customerBudgetPatch, hasLegacyCustomerBudget } from "../../customers/_components/customerBudgetForm";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { AppBudgetRow, AppBudgetTable, type AppUsageContext } from "./AppBudgetCells";
+
+const MEMBER_APPS_TABLE = {
+  keyPrefix: "member_apps_",
+  sortFields: [],
+  defaultSort: { id: "", desc: false },
+  defaultPageSize: 5,
+  filterColumns: [],
+};
 
 const BUDGET_SOURCES = {
   member_budget: "apps.customBudget",
@@ -40,6 +48,9 @@ export default function CustomerMemberApps({
 }) {
   const { t } = useTranslation();
   const apps = useQuery({ queryKey: ["apps"], queryFn: () => loadApps() });
+  const { pagination, onPaginationChange } = useUrlTableState(MEMBER_APPS_TABLE);
+  const { pageSize, pageIndex } = pagination;
+  const page = Math.min(pageIndex, Math.max(0, Math.ceil((apps.data?.length ?? 0) / pageSize) - 1));
   return (
     <section className="space-y-4 border-t pt-6" aria-label={t("apps.memberTitle")}>
       <h2 className="text-base font-semibold">{t("apps.memberTitle")}</h2>
@@ -48,8 +59,22 @@ export default function CustomerMemberApps({
       {apps.isError && <p role="alert">{extractProxyErrorMessage(apps.error)}</p>}
       {apps.data?.length === 0 && <p>{t("apps.noMemberApps")}</p>}
       {apps.data && apps.data.length > 0 && (
-        <AppBudgetTable scope="member" usageLayout={Boolean(usageContext)}>
-          {apps.data.map((app) => (
+        <AppBudgetTable
+          scope="member"
+          usageLayout={Boolean(usageContext)}
+          footer={
+            <DataTablePagination
+              className="justify-end border-t px-4 py-3"
+              page={page}
+              pageSize={pageSize}
+              pageSizeOptions={[5, 10, 25]}
+              rowCount={apps.data.length}
+              onPageChange={(pageIndex) => onPaginationChange({ pageIndex, pageSize })}
+              onPageSizeChange={(pageSize) => onPaginationChange({ pageIndex: 0, pageSize })}
+            />
+          }
+        >
+          {apps.data.slice(page * pageSize, (page + 1) * pageSize).map((app) => (
             <MemberAppRow
               key={app.app_id}
               app={app}
@@ -149,8 +174,21 @@ function MemberBudgetLoader(props: {
     queryFn: () => loadOrganizationApp(props.app.app_id, props.organizationId),
     enabled: needsInherited,
   });
-  if (needsInherited && inherited.isPending) return <p role="status">{t("apps.loading")}</p>;
-  if (needsInherited && inherited.isError) return <ErrorState onRetry={() => void inherited.refetch()} />;
+  if (needsInherited && (inherited.isPending || inherited.isError))
+    return (
+      <CustomerBudgetDialog
+        title={t("apps.editMemberBudget", { alias: props.app.alias })}
+        description={t("apps.memberOverrideHint")}
+        pending={false}
+        onClose={props.onCancel}
+      >
+        {inherited.isPending ? (
+          <p role="status">{t("apps.loading")}</p>
+        ) : (
+          <ErrorState onRetry={() => void inherited.refetch()} />
+        )}
+      </CustomerBudgetDialog>
+    );
   const original = appBaseBudget(
     props.row,
     inherited.data?.effective_customer_member_budget ?? props.app.default_customer_member_budget,
@@ -192,39 +230,25 @@ function MemberBudgetForm({
   });
   const { fields, setFields, update, pending, error, save } = form;
   return (
-    <CustomerBudgetDialog
+    <CustomerBudgetFormDialog
       title={t("apps.editMemberBudget", { alias: app.alias })}
       description={t("apps.memberOverrideHint")}
       pending={pending}
       onClose={onCancel}
+      form={{ error, onSubmit: save, saveLabel: t("apps.saveMemberBudget") }}
     >
-      <CustomerBudgetForm
-        pending={pending}
-        error={error}
-        onSubmit={save}
-        onClose={onCancel}
-        saveLabel={t("apps.saveMemberBudget")}
-      >
-        <CustomerBudgetEditor
-          id={`app-member-${app.app_id}`}
-          source={{
-            profiles: [],
-            value: fields.budgetEnabled ? "custom" : "inherit",
-            title: t("apps.source"),
-            disabled: pending,
-            inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
-            onChange: (value) => update("budgetEnabled", value === "custom"),
-          }}
-        >
-          <CustomerBudgetCompactFields
-            id={`app-member-${app.app_id}`}
-            fields={fields}
-            original={original}
-            disabled={pending}
-            onChange={setFields}
-          />
-        </CustomerBudgetEditor>
-      </CustomerBudgetForm>
-    </CustomerBudgetDialog>
+      <CustomerBudgetEditor
+        id={`app-member-${app.app_id}`}
+        budget={{ modelScope: app, fields, disabled: pending, onChange: setFields }}
+        source={{
+          profiles: [],
+          value: fields.budgetEnabled ? "custom" : "inherit",
+          title: t("apps.source"),
+          disabled: pending,
+          inheritedOption: { label: t("apps.inheritedBudget"), summary: t("apps.inheritMemberHint") },
+          onChange: (value) => update("budgetEnabled", value === "custom"),
+        }}
+      />
+    </CustomerBudgetFormDialog>
   );
 }

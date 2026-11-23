@@ -18,7 +18,7 @@ SENSITIVE_DATA_MASKER: Final = SensitiveDataMasker()
 def remove_sensitive_info_from_deployment(
     deployment_dict: dict,
     excluded_keys: set[str] | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Removes sensitive information from a deployment dictionary.
 

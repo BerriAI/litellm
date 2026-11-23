@@ -95,7 +95,7 @@ input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-audit_log_callbacks: List[CALLBACK_TYPES] = []
+audit_log_callbacks: list[object] = []
 batch_line_item_callbacks: Sequence[CALLBACK_TYPES] = ()
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
@@ -216,6 +216,8 @@ bedrock_request_metadata_fields: Optional[Sequence[str]] = (
     None  # allow-list of `user_api_key_*` fields (+ `spend_logs_metadata`) sent as Bedrock `requestMetadata`
 )
 vertex_request_label_fields: Optional[Sequence[str]] = None
+bedrock_session_tag_fields: Optional[Sequence[str]] = None
+bedrock_session_name_fields: Optional[Sequence[str]] = None
 store_audit_logs: bool | None = None
 skip_system_message_in_guardrail: bool = False
 skip_tool_message_in_guardrail: bool = False
@@ -510,9 +512,13 @@ public_model_groups_links: dict[str, str | dict[str, object]] = {}
 priority_reservation: Optional[Dict[str, Union[float, "PriorityReservationDict"]]] = None
 if TYPE_CHECKING:
     from .harness.evaluation import (
+        AgentInput as AgentInput,
+        AgentOutput as AgentOutput,
         CheckResult as CheckResult,
         CommandCheck as CommandCheck,
+        EvalAgent as EvalAgent,
         EvalCheck as EvalCheck,
+        EvalOutput as EvalOutput,
         EvalRun as EvalRun,
         EvalScorecard as EvalScorecard,
         EvalStatus as EvalStatus,
@@ -522,10 +528,12 @@ if TYPE_CHECKING:
         JudgeCheck as JudgeCheck,
         PredicateCheck as PredicateCheck,
         aagent_eval as aagent_eval,
+        aagent_eval_attempt as aagent_eval_attempt,
         agent_eval as agent_eval,
     )
 
     priority_reservation_settings: Optional["PriorityReservationSettings"] = None
+    global_prompt_directory: str | None = None
 
 
 ######## Networking Settings ########
@@ -551,7 +559,7 @@ allowed_fails: int = 3
 allow_dynamic_callback_disabling: bool = True
 num_retries_per_request: Optional[int] = None  # for the request overall (incl. fallbacks + model retries)
 ####### SECRET MANAGERS #####################
-secret_manager_client: Optional[Any] = (
+secret_manager_client: object | None = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
@@ -677,6 +685,7 @@ nadir_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set = set()
 sambanova_models: Set = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
@@ -692,6 +701,7 @@ nebius_embedding_models: Set = set()
 aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
+gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
 dashscope_models: Set = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
@@ -701,6 +711,7 @@ darkbloom_models: Set = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
+resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set = set()
@@ -733,6 +744,7 @@ transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
 coralbricks_models: Set[str] = set()
+perplexity_orchestrator_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 aiand_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
@@ -947,6 +959,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "gnani":
+            gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -977,6 +991,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             deepgram_models.add(key)
         elif value.get("litellm_provider") == "elevenlabs":
             elevenlabs_models.add(key)
+        elif value.get("litellm_provider") == "gradium":
+            gradium_models.add(key)
         elif value.get("litellm_provider") == "heroku":
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
@@ -999,6 +1015,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             kyma_models.add(key)
         elif value.get("litellm_provider") == "streamlake":
             streamlake_models.add(key)
+        elif value.get("litellm_provider") == "resetdata":
+            resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
@@ -1059,6 +1077,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "perplexity_orchestrator":
+            perplexity_orchestrator_models.add(key)
         elif value.get("litellm_provider") == "aiand":
             if is_hidden_as_retired(value):
                 aiand_models.discard(key)
@@ -1161,6 +1181,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | gnani_models
     | soniox_models
     | sambanova_models
     | scaledown_models
@@ -1175,6 +1196,7 @@ model_list = list(
     | nscale_models
     | deepgram_models
     | elevenlabs_models
+    | gradium_models
     | dashscope_models
     | qwencloud_models
     | qwen_ai_platform_models
@@ -1184,6 +1206,7 @@ model_list = list(
     | openinfer_models
     | kyma_models
     | streamlake_models
+    | resetdata_models
     | wally_models
     | zerogpu_models
     | v0_models
@@ -1207,6 +1230,7 @@ model_list = list(
     | reducto_models
     | bedrock_mantle_models
     | coralbricks_models
+    | perplexity_orchestrator_models
     | aiand_models
     | set(clarifai_models)
 )
@@ -1291,6 +1315,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
+        "gnani": gnani_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
@@ -1306,6 +1331,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "featherless_ai": featherless_ai_models,
         "deepgram": deepgram_models,
         "elevenlabs": elevenlabs_models,
+        "gradium": gradium_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
         "qwencloud": qwencloud_models,
@@ -1317,6 +1343,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "openinfer": openinfer_models,
         "kyma": kyma_models,
         "streamlake": streamlake_models,
+        "resetdata": resetdata_models,
         "wally": wally_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
@@ -1346,6 +1373,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "perplexity_orchestrator": perplexity_orchestrator_models,
         "aiand": aiand_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,

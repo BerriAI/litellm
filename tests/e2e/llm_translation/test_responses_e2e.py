@@ -56,7 +56,7 @@ OPENAI_MINI_BACKEND: Final = "openai/gpt-6-luna"
 OPENAI_VISION_BACKEND: Final = "openai/gpt-6.1-sol"
 ANTHROPIC_BACKEND: Final = "anthropic/claude-haiku-4-5"
 BEDROCK_CONVERSE_BACKEND: Final = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
+VERTEX_BACKEND: Final = "vertex_ai/gemini-3.8-flash"
 GEMINI_BACKEND: Final = "gemini/gemini-3.8-flash"
 OPENAI_RESPONSES_BACKEND: Final = "openai/gpt-5.5"
 INSTRUCTIONS = "You are a helpful assistant"
@@ -128,7 +128,7 @@ def _vertex_params() -> LiteLLMParamsBody:
     return LiteLLMParamsBody(
         model=VERTEX_BACKEND,
         vertex_project="os.environ/VERTEXAI_PROJECT",
-        vertex_location="us-central1",
+        vertex_location="global",
     )
 
 
