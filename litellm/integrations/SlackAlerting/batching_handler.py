@@ -40,7 +40,7 @@ def squash_payloads(queue: Sequence[AlertQueueItem]) -> tuple[SquashedAlert, ...
     return tuple(SquashedAlert(item=first_item_by_key[key], count=count) for key, count in counts.items())
 
 
-def _print_alerting_payload_warning(payload: dict, slackAlertingInstance: SlackAlertingType):
+def _print_alerting_payload_warning(payload: object, slackAlertingInstance: SlackAlertingType):
     """
     Print the payload to the console when
     slackAlertingInstance.alerting_args.log_to_console is True

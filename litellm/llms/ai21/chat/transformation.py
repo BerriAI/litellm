@@ -4,7 +4,7 @@ AI21 Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
@@ -31,12 +31,12 @@ class AI21ChatConfig(OpenAILikeChatConfig):
 
     def __init__(
         self,
-        tools: list | None = None,
-        response_format: dict | None = None,
+        tools: Sequence[object] | None = None,
+        response_format: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         n: int | None = None,
         stream: bool | None = None,
         seed: int | None = None,
@@ -52,7 +52,7 @@ class AI21ChatConfig(OpenAILikeChatConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 

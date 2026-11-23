@@ -26,6 +26,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import (
     LlmProviders,
     ModelResponse,
+    ModelResponseStream,
     TextCompletionResponse,
 )
 
@@ -62,7 +63,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
             logging_obj=litellm_logging_obj,
             custom_llm_provider="cohere",
         )
-        all_openai_chunks: Final = []
+        all_openai_chunks: Final[list[ModelResponseStream]] = []
         for _chunk_str in all_chunks:
             try:
                 generic_chunk = cohere_model_response_iterator.convert_str_chunk_to_generic_chunk(chunk=_chunk_str)
