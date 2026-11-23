@@ -62,7 +62,7 @@ describe("MCPEventSubscriptionsTab", () => {
     networking.fetchMCPEventSubscriptions.mockResolvedValue({
       subscriptions: [{ ...SUBSCRIPTION, event_name: "deploy.done" }],
     });
-    renderTab();
+    renderTab(false);
     await userEvent.click(await screen.findByRole("button", { name: "Next page" }));
     expect(await screen.findByText("deploy.done")).toBeInTheDocument();
     expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 7, 1);
