@@ -32,7 +32,7 @@ _STR: Final = TypeAdapter(str)
 
 
 class JinaAIRerankConfig(BaseRerankConfig):
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "top_n",
@@ -42,7 +42,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         drop_params: bool,
         query: str,
@@ -54,7 +54,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         optional_params: Final = {}
         supported_params: Final = self.get_supported_cohere_rerank_params(model)
         for k, v in non_default_params.items():
@@ -70,7 +70,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         base_path: Final = "/v1/rerank"
 
@@ -85,10 +85,10 @@ class JinaAIRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         return {"model": model, **optional_rerank_params}
 
     def transform_rerank_response(
@@ -98,9 +98,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         if raw_response.status_code != 200:
             raise Exception(raw_response.text)
@@ -148,9 +148,9 @@ class JinaAIRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             raise ValueError("api_key is required. Set via `api_key` parameter or `JINA_API_KEY` environment variable.")
         return {
