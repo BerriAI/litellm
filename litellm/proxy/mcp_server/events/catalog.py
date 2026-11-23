@@ -65,9 +65,13 @@ def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None
 
 
 def offered_modes(
-    descriptor: EventType, settings: EventsSettings, context: OperationContext
+    descriptor: EventType, server: MCPServer, settings: EventsSettings, context: OperationContext
 ) -> tuple[DeliveryMode, ...]:
-    webhook_ready: Final = settings.public_base_url is not None and holds_webhooks(context.user_api_key_auth)
+    webhook_ready: Final = (
+        server.available_on_public_internet
+        and settings.public_base_url is not None
+        and holds_webhooks(context.user_api_key_auth)
+    )
     return tuple(mode for mode in descriptor.delivery if mode != "webhook" or webhook_ready)
 
 
@@ -82,7 +86,7 @@ def publishable(descriptor: EventType, config: MCPServerEventsConfig, grant: Eve
 def _published(
     descriptor: EventType, server: MCPServer, settings: EventsSettings, context: OperationContext
 ) -> EventType | None:
-    modes: Final = offered_modes(descriptor, settings, context)
+    modes: Final = offered_modes(descriptor, server, settings, context)
     if not modes:
         return None
     return descriptor.model_copy(update={"name": gateway_name(server, descriptor.name), "delivery": modes})
