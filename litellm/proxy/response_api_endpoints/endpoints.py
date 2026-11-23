@@ -2881,7 +2881,9 @@ async def _responses_websocket_session(
         verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
         with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
             await websocket.send_text(turn_refusal_frame(e))
-        if data.get("_parallel_request_slot_admitted", False):
+        if base_llm_response_processor.data.get("_parallel_request_slot_admitted", False) or data.get(
+            "_parallel_request_slot_admitted", False
+        ):
             await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
         await websocket.close(code=1008, reason="Rate limit exceeded")
         return
@@ -2894,7 +2896,9 @@ async def _responses_websocket_session(
             )
         except (WebSocketDisconnect, RuntimeError, OSError):
             pass
-        if data.get("_parallel_request_slot_admitted", False):
+        if base_llm_response_processor.data.get("_parallel_request_slot_admitted", False) or data.get(
+            "_parallel_request_slot_admitted", False
+        ):
             await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
         await websocket.close(code=1008, reason="Pre-call error")
         return
