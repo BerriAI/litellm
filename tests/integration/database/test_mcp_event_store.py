@@ -1,13 +1,16 @@
+import asyncio
 import base64
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
 
+from litellm.proxy.mcp_server.events.access import principal_of
+from litellm.proxy.mcp_server.events.webhooks.policy import callback_url, subscription_id
 from litellm.proxy.mcp_server.events.webhooks.settlement import SettlementOutcome
 from litellm.proxy.mcp_server.events.webhooks.store import (
     Activation,
@@ -16,7 +19,18 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
     SubscriptionQuery,
     SubscriptionRow,
 )
+from litellm.proxy.mcp_server.subscriptions import SubscriptionTarget
+from litellm.types.mcp_server.events import JsonObject
 from tests.integration._support.prisma_clients import connected_proxy_prisma
+from tests.unit.proxy.mcp_server.events.fakes import CALLER, SETTINGS, FakeUpstream, runtime, server
+from tests.unit.proxy.mcp_server.events.test_handlers import (  # pyright: ignore[reportPrivateUsage]  # reuse the stateless MCP wire harness
+    _call,
+    _server,
+)
+from tests.unit.proxy.mcp_server.events.webhooks.test_subscribe import (  # pyright: ignore[reportPrivateUsage]  # same subscribe request fixture
+    UPSTREAM_OK,
+    _params,
+)
 
 SECRET: Final = "whsec_" + base64.b64encode(bytes(range(32))).decode()
 ROTATED: Final = "whsec_" + base64.b64encode(bytes(range(1, 33))).decode()
@@ -510,3 +524,184 @@ async def test_refresh_retains_the_cursor_when_a_receiver_enqueues_before_activa
             assert refreshed is not None and refreshed.cursor == "c1"
         finally:
             await subscriber.delete(row.id)
+
+
+@asynccontextmanager
+async def _webhook_requests(
+    store: PrismaEventStore, peer: FakeUpstream, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[tuple[str, Callable[[str], Coroutine[object, object, dict[str, object]]]], None]:
+    probe = _row()
+    url = f"https://client.example/{probe.id}"
+    principal = principal_of(CALLER)
+    assert principal is not None
+    subscribed = _params(url=url)
+    sid = subscription_id(principal, url, subscribed.name, subscribed.arguments)
+    headers = {"Mcp-Name": subscribed.name, "Mcp-Param-Repo": "acme/web"}
+    gateway = _server(SETTINGS, runtime((server(),), upstream=peer))
+
+    async def call(method: str) -> dict[str, object]:
+        body = subscribed.model_dump(by_alias=True, exclude_none=True, mode="json")
+        if method == "unsubscribe":
+            body = {"name": subscribed.name, "arguments": subscribed.arguments, "delivery": {"url": url}}
+        status, frames = await _call(gateway, f"events/{method}", body, headers)
+        assert status == 200
+        return frames[0]
+
+    assert await store.reserve(probe.model_copy(update={"principal": principal, "client_url": url, "verified_at": NOW}))
+    await store.terminate(probe.id)
+    monkeypatch.setattr("litellm.proxy.mcp_server.events.webhooks.subscribe.default_store", lambda: store)
+    try:
+        yield sid, call
+    finally:
+        await store.delete(sid)
+        await store.delete(probe.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_at", ("quota", "quota_replaced", "reserve_response"))
+async def test_cancelled_creation_frees_the_slot_for_a_fresh_mcp_request(
+    cancel_at: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    async with _connected() as store, _webhook_requests(store, peer, monkeypatch) as (sid, call):
+        entered, release = asyncio.Event(), asyncio.Event()
+        reserve, count = store.reserve, store.count_live
+
+        async def after_reserve(row: SubscriptionRow) -> bool:
+            won = await reserve(row)
+            if cancel_at == "reserve_response" and not entered.is_set():
+                entered.set()
+                await release.wait()
+            return won
+
+        async def during_quota(principal: str) -> int:
+            if cancel_at.startswith("quota") and not entered.is_set() and await store.get(sid) is not None:
+                entered.set()
+                await release.wait()
+            return await count(principal)
+
+        monkeypatch.setattr(store, "reserve", after_reserve)
+        monkeypatch.setattr(store, "count_live", during_quota)
+        request = asyncio.create_task(call("subscribe"))
+        await asyncio.wait_for(entered.wait(), 5)
+        if cancel_at == "quota_replaced":
+            old = await store.get(sid)
+            assert old is not None and old.refresh_before is not None
+            assert await store.end_if_expired(sid, old.refresh_before)
+            assert "result" in await call("subscribe")
+        request.cancel()
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(request, 5)
+        if cancel_at == "quota_replaced":
+            current = await store.get(sid)
+            assert current is not None and (current.status, current.upstream_subscription_id) == ("active", "up_1")
+            assert [method for method, *_ in peer.calls] == ["events/subscribe"]
+        else:
+            assert await store.get(sid) is None and peer.calls == []
+            assert "result" in await call("subscribe")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("committed", (False, True))
+async def test_fresh_mcp_unsubscribe_resolves_an_interrupted_hold_write(
+    committed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    peer = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    async with _connected() as store, _webhook_requests(store, peer, monkeypatch) as (sid, call):
+        assert "result" in await call("subscribe")
+        entered = asyncio.Event()
+        hold = store.hold_for_unsubscribe
+
+        async def interrupted(identity: str, upstream_id: str | None, generation: str | None) -> bool:
+            if entered.is_set():
+                return await hold(identity, upstream_id, generation)
+            if committed:
+                assert await hold(identity, upstream_id, generation)
+            entered.set()
+            return await asyncio.Future[bool]()
+
+        monkeypatch.setattr(store, "hold_for_unsubscribe", interrupted)
+        request = asyncio.create_task(call("unsubscribe"))
+        await asyncio.wait_for(entered.wait(), 5)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(request, 5)
+        row = await store.get(sid)
+        assert row is not None and row.status == ("pending" if committed else "active")
+        assert [method for method, *_ in peer.calls] == ["events/subscribe"]
+        assert "result" in await call("unsubscribe")
+        assert await store.get(sid) is None
+        method, body, _ = peer.calls[-1]
+        assert (method, body) == (
+            "events/unsubscribe",
+            {
+                "name": row.event_name,
+                "arguments": row.arguments,
+                "delivery": {"url": callback_url(SETTINGS, sid, row.upstream_secret)},
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_stale_unsubscribe_ack_cannot_delete_a_new_hold_using_the_same_upstream_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class DelayedAck(FakeUpstream):
+        async def call(
+            self, target: SubscriptionTarget, method: str, params: JsonObject, headers: Mapping[str, str]
+        ) -> Mapping[str, object]:
+            if method == "events/unsubscribe" and not entered.is_set():
+                entered.set()
+                await release.wait()
+            return await super().call(target, method, params, headers)
+
+    peer = DelayedAck(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    async with _connected() as store, _webhook_requests(store, peer, monkeypatch) as (sid, call):
+        assert "result" in await call("subscribe")
+        original = asyncio.create_task(call("unsubscribe"))
+        await asyncio.wait_for(entered.wait(), 5)
+        held = await store.get(sid)
+        assert held is not None and held.refresh_before is not None
+        assert await store.end_if_expired(sid, held.refresh_before)
+        assert "result" in await call("subscribe")
+        replacement = await store.get(sid)
+        assert replacement is not None and replacement.upstream_subscription_id == held.upstream_subscription_id
+        assert replacement.generation != held.generation and replacement.upstream_secret != held.upstream_secret
+        assert await store.hold_for_unsubscribe(sid, replacement.upstream_subscription_id, replacement.generation)
+        release.set()
+        assert "result" in await asyncio.wait_for(original, 5)
+        current = await store.get(sid)
+        assert current is not None and (current.generation, current.status) == (replacement.generation, "pending")
+        assert "result" in await call("unsubscribe")
+        assert await store.get(sid) is None
+
+
+@pytest.mark.asyncio
+async def test_a_public_renewal_winning_the_hold_race_keeps_its_peer_and_deliveries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    peer = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK, "events/unsubscribe": {}})
+    async with _connected() as store, _webhook_requests(store, peer, monkeypatch) as (sid, call):
+        assert "result" in await call("subscribe")
+        entered, release = asyncio.Event(), asyncio.Event()
+        hold = store.hold_for_unsubscribe
+
+        async def after_renewal(identity: str, upstream_id: str | None, generation: str | None) -> bool:
+            entered.set()
+            await release.wait()
+            return await hold(identity, upstream_id, generation)
+
+        monkeypatch.setattr(store, "hold_for_unsubscribe", after_renewal)
+        request = asyncio.create_task(call("unsubscribe"))
+        await asyncio.wait_for(entered.wait(), 5)
+        assert "result" in await call("subscribe")
+        renewed = await store.get(sid)
+        assert renewed is not None and await store.enqueue_current(renewed, _delivery(sid))
+        release.set()
+        assert "error" in await asyncio.wait_for(request, 5)
+        assert [method for method, *_ in peer.calls] == ["events/subscribe", "events/subscribe"]
+        assert await store.get(sid) == renewed and await store.has_pending(sid)
+        assert "result" in await call("unsubscribe")

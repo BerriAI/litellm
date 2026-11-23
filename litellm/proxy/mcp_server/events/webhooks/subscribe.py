@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -212,7 +213,7 @@ async def _roll_back(
         if current.status == "pending" and current.generation != subscription.base.generation:
             return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
-    await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
+    await end_upstream(orphan, settings, runtime, prepared=subscription.prepared)
 
 
 async def activate_subscription(
@@ -335,11 +336,23 @@ async def reserve_subscription(
     if subscription.existing is not None and subscription.existing.status != "terminated":
         return Ok(subscription)
     store: Final = subscription.request.store
-    if not await store.reserve(subscription.base):
-        return Error(_BEING_CREATED)
-    if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
-        await store.discard_pending(subscription.base.id, subscription.base.generation)
-        return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    claiming: Final = asyncio.create_task(store.reserve(subscription.base))
+    try:
+        try:
+            if not await asyncio.shield(claiming):
+                return Error(_BEING_CREATED)
+        finally:
+            # Prisma can finish an insert after caller cancellation. Order the delete after its write outcome.
+            if not claiming.done():
+                with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+                    await claiming
+        if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+            return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    except BaseException:
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+        raise
     return Ok(replace(subscription, reserved=True))
 
 
@@ -401,20 +414,23 @@ async def unsubscribe(
     row: Final = await events_store.get(sid)
     if row is None or row.status == "terminated":
         return Error(subscription_not_found())
-    if row.status == "pending":
+    if row.status == "pending" and row.upstream_subscription_id is None:
         return Error(_BEING_CREATED)
     prepared: Final = await _same_server_event(context, params.name, row, runtime)
     if prepared is not None:
         mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)
         if mismatch is not None:
             return Error(mismatch)
-    if not await events_store.hold_for_unsubscribe(sid, row.upstream_subscription_id, row.generation):
+    if row.status != "pending" and not await events_store.hold_for_unsubscribe(
+        sid, row.upstream_subscription_id, row.generation
+    ):
         return Error(subscription_not_found())
-    if prepared is not None:
-        await _unsubscribe_upstream(row, prepared, settings, runtime)
-    else:
-        await end_upstream(row, settings, runtime)
-    await events_store.delete_held(sid, row.upstream_subscription_id, row.generation)
+    with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS) as deadline:
+        if not await end_upstream(row, settings, runtime, prepared=prepared):
+            return Error(internal_error("Upstream unsubscribe was not confirmed; retry"))
+        await events_store.delete_held(sid, row.upstream_subscription_id, row.generation)
+    if deadline.cancel_called:
+        return Error(internal_error("Upstream unsubscribe timed out; retry"))
     await runtime.record(
         EventActivity(
             call_type="mcp_event_subscribe",
@@ -440,23 +456,3 @@ async def _same_server_event(
     if isinstance(prepared, Error) or prepared.ok.resolved.target.server.server_id != row.server_id:
         return None
     return prepared.ok
-
-
-async def _unsubscribe_upstream(
-    row: SubscriptionRow, prepared: PreparedEvent, settings: EventsSettings, runtime: EventsRuntime
-) -> None:
-    if row.upstream_subscription_id is None:
-        return
-    try:
-        await runtime.call(
-            prepared.upstream,
-            "events/unsubscribe",
-            {
-                "name": row.event_name,
-                "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
-            },
-            routing_headers(row.event_name, row.arguments, prepared.descriptor),
-        )
-    except (MCPError, OSError, TimeoutError):
-        return

@@ -93,7 +93,7 @@ subscription = call(
 )
 ```
 
-Refresh before `refreshBefore` when it is set. Persist the latest safe cursor and include it on refresh. A gap means the client must reconcile events from its last usable position. To end delivery, call `events/unsubscribe` with the original event, arguments and delivery URL. The upstream sees only the gateway callback URL and its own signing secret.
+Refresh before `refreshBefore` when it is set. Persist the latest safe cursor and include it on refresh. A gap means the client must reconcile events from its last usable position. To end delivery, call `events/unsubscribe` with the original event, arguments and delivery URL. If the call times out or reports unconfirmed teardown, retry with the same event, arguments and delivery URL. The gateway holds delivery while it waits for the upstream acknowledgement. The upstream sees the gateway callback URL and its own signing secret.
 
 ```python
 call("events/unsubscribe", {"name": name, "arguments": {}, "delivery": {"url": callback}},
