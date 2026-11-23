@@ -141,7 +141,8 @@ def _password_login(environ: Mapping[str, str], name: str) -> bool:
 
 def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
     """A warning when DATABASE_URL or DATABASE_URL_READ_REPLICA logs in with a password: to Postgres when neither
-    RDS IAM nor Azure Entra token login is on, or to the in-container PgBouncer, which always takes a password. None
+    RDS IAM nor Azure Entra token login is on, or to the in-container PgBouncer, which always takes a password. Also
+    when DIRECT_URL, which the migrations log in with, carries a password, since token login never replaces it. None
     otherwise."""
     if database_url_is_pooled(environ) and _password_login(environ, "DATABASE_URL"):
         return (
@@ -150,18 +151,21 @@ def database_password_login_warning(environ: Mapping[str, str]) -> str | None:
             "and use client-certificate login: cert in pg_hba.conf, sslidentity and sslpassword in DATABASE_URL with "
             "no password, and PGSSLCERT and PGSSLKEY set to the same certificate and key."
         )
-    if _token_login(environ):
-        return None
-    url: Final = next(
-        (name for name in ("DATABASE_URL", "DATABASE_URL_READ_REPLICA") if _password_login(environ, name)), None
-    )
+    token_login: Final = _token_login(environ)
+    urls: Final = ("DIRECT_URL",) if token_login else ("DATABASE_URL", "DATABASE_URL_READ_REPLICA", "DIRECT_URL")
+    url: Final = next((name for name in urls if _password_login(environ, name)), None)
     if url is None:
         return None
     return (
         f"{_SETTING} is on but {url} logs in to Postgres with a password. The password login (SCRAM) is "
         "computed outside the FIPS module. Use client-certificate login instead: cert in pg_hba.conf, sslidentity "
         f"and sslpassword in {url} with no password, and PGSSLCERT and PGSSLKEY set to the same certificate "
-        "and key. RDS IAM (IAM_TOKEN_DB_AUTH) and Azure Entra (AZURE_POSTGRESQL_AUTH) token login also avoid it."
+        "and key. "
+        + (
+            "Or leave DIRECT_URL unset, so the migrations log in the way DATABASE_URL does."
+            if url == "DIRECT_URL"
+            else "RDS IAM (IAM_TOKEN_DB_AUTH) and Azure Entra (AZURE_POSTGRESQL_AUTH) token login also avoid it."
+        )
     )
 
 

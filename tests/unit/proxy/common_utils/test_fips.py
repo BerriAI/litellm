@@ -311,6 +311,8 @@ _CERT_DATABASE_URL: Final = "postgresql://litellm@db:5432/litellm?sslidentity=/c
             "DATABASE_URL_READ_REPLICA": _PASSWORD_DATABASE_URL,
             "IAM_TOKEN_DB_AUTH": "true",
         },
+        {"DATABASE_URL": _CERT_DATABASE_URL, "DIRECT_URL": _CERT_DATABASE_URL},
+        {"DATABASE_URL": _PASSWORD_DATABASE_URL, "DIRECT_URL": _CERT_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "true"},
     ],
     ids=[
         "client-certificate",
@@ -322,6 +324,8 @@ _CERT_DATABASE_URL: Final = "postgresql://litellm@db:5432/litellm?sslidentity=/c
         "unparseable-url",
         "client-certificate-replica",
         "rds-iam-token-replica",
+        "client-certificate-direct-url",
+        "rds-iam-token-client-certificate-direct-url",
     ],
 )
 def test_no_password_login_warning_without_a_database_password(environ: Mapping[str, str]) -> None:
@@ -358,8 +362,28 @@ def test_an_unreadable_token_flag_still_gets_the_password_login_warning() -> Non
             "DATABASE_URL_READ_REPLICA logs in",
         ),
         ({"DATABASE_URL_READ_REPLICA": _PASSWORD_DATABASE_URL}, "DATABASE_URL_READ_REPLICA logs in"),
+        ({"DATABASE_URL": _CERT_DATABASE_URL, "DIRECT_URL": _PASSWORD_DATABASE_URL}, "DIRECT_URL logs in"),
+        (
+            {"DATABASE_URL": _PASSWORD_DATABASE_URL, "DIRECT_URL": _PASSWORD_DATABASE_URL, "IAM_TOKEN_DB_AUTH": "true"},
+            "DIRECT_URL logs in",
+        ),
+        (
+            {
+                "DATABASE_URL": _PASSWORD_DATABASE_URL,
+                "DIRECT_URL": _PASSWORD_DATABASE_URL,
+                "AZURE_POSTGRESQL_AUTH": "true",
+            },
+            "DIRECT_URL logs in",
+        ),
     ],
-    ids=["writer", "replica-with-certificate-writer", "replica-only"],
+    ids=[
+        "writer",
+        "replica-with-certificate-writer",
+        "replica-only",
+        "direct-url-with-certificate-writer",
+        "direct-url-with-rds-iam-token",
+        "direct-url-with-azure-entra-token",
+    ],
 )
 def test_the_password_login_warning_names_the_url_but_not_the_password(environ: Mapping[str, str], named: str) -> None:
     warning: Final = database_password_login_warning(environ)
