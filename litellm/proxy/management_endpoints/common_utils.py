@@ -1,8 +1,8 @@
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Optional, Union
+from typing import TYPE_CHECKING, Final, Optional, Protocol, Union
 
 from fastapi import HTTPException, status
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -181,7 +181,7 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+_ROUTE_LIST: Final[TypeAdapter[list[str] | None]] = TypeAdapter(list[str] | None)
 
 
 def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
@@ -650,8 +650,50 @@ def _has_meaningful_budget_limit(budget_values: Mapping[str, object]) -> bool:
     return any(_is_set_budget_value(budget_values.get(field)) for field in _TEAM_MEMBER_BUDGET_LIMIT_FIELDS)
 
 
+class _BudgetRow(Protocol):
+    """Budget row surface `upsert_budget_and_membership` reads back."""
+
+    @property
+    def budget_id(self) -> str: ...
+
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _BudgetTable(Protocol):
+    """Budget table actions `upsert_budget_and_membership` issues."""
+
+    @property
+    def find_unique(self) -> Callable[..., Awaitable[_BudgetRow | None]]: ...
+
+    @property
+    def update(self) -> Callable[..., Awaitable[object]]: ...
+
+    @property
+    def create(self) -> Callable[..., Awaitable[_BudgetRow]]: ...
+
+
+class _MembershipTable(Protocol):
+    """Team membership table actions `upsert_budget_and_membership` issues."""
+
+    @property
+    def update(self) -> Callable[..., Awaitable[object]]: ...
+
+    @property
+    def upsert(self) -> Callable[..., Awaitable[object]]: ...
+
+
+class _BudgetMembershipTx(Protocol):
+    """Transaction surface `upsert_budget_and_membership` writes through."""
+
+    @property
+    def litellm_budgettable(self) -> _BudgetTable: ...
+
+    @property
+    def litellm_teammembership(self) -> _MembershipTable: ...
+
+
 async def upsert_budget_and_membership(
-    tx,
+    tx: _BudgetMembershipTx,
     *,
     team_id: str,
     user_id: str,
