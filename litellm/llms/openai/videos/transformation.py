@@ -109,7 +109,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
     def __init__(self):
         super().__init__()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the list of supported OpenAI parameters for video generation.
         """
@@ -256,9 +256,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         variant: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video content request for OpenAI API.
 
@@ -289,9 +289,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
         prompt: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video remix request for OpenAI API.
 
@@ -355,12 +355,12 @@ class OpenAIVideoConfig(BaseVideoConfig):
         self,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
         extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video list request for OpenAI API.
 
@@ -371,7 +371,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url: Final = api_base
 
         # Prepare query parameters
-        params: Final = {}
+        params: Final[dict[str, object]] = {}
         if after is not None:
             # Decode the wrapped video ID back to the original provider ID
             params["after"] = extract_original_video_id(after)
@@ -418,8 +418,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video delete request for OpenAI API.
 
@@ -455,8 +455,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the OpenAI video retrieve request.
         """
@@ -505,8 +505,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video: FileContent,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, list]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, list[tuple[str, FileTypes]]]:
         url: Final = join_api_base(api_base, "characters")
         files_list: Final[list[tuple[str, FileTypes]]] = [("name", (None, name))]
         self._add_video_to_files(files_list, video, "video")
@@ -524,8 +524,8 @@ class OpenAIVideoConfig(BaseVideoConfig):
         character_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         original_character_id: Final = extract_original_character_id(character_id)
         encoded_character_id: Final = encode_url_path_segment(original_character_id, field_name="character_id")
         url: Final = join_api_base(api_base, f"characters/{encoded_character_id}")
@@ -544,7 +544,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         video_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         video_file: FileContent | None = None,
         extra_body: dict[str, object] | None = None,
         prefetched_source_data: dict[str, object] | None = None,
@@ -571,7 +571,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
-        request_data: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
     ) -> VideoObject:
         video_obj: Final = VideoObject.model_validate(raw_response.json())
         if custom_llm_provider and video_obj.id:
@@ -585,9 +585,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
         seconds: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         original_video_id: Final = extract_original_video_id(video_id)
         url: Final = join_api_base(api_base, "extensions")
         data: Final[dict[str, object]] = {
