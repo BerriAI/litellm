@@ -90,6 +90,9 @@ class EventsClientSession(ClientSession):
         request_id: RequestId | None = None,
         timeout: float | None = None,
     ) -> Mapping[str, object]:
+        capabilities: Final = self.server_capabilities
+        if capabilities is None or EVENTS_EXTENSION not in (capabilities.extensions or {}):
+            raise MCPError(code=-32601, message="Upstream does not advertise Events")
         data: Final[dict[str, object]] = {"method": method, "params": dict(params)}  # mutable-ok: SDK stamp writes it
         opts: Final[CallOptions] = {"request_id": request_id} if request_id is not None else {}
         self._stamp(data, opts)  # pyright: ignore[reportPrivateUsage]  # same per-request envelope the SDK listen driver uses
@@ -149,7 +152,7 @@ async def _pages(
     )
     page: Final = ListEventsResult.model_validate(raw)
     events: Final = collected + page.events
-    if not page.next_cursor:
+    if page.next_cursor is None:
         return {"events": [item.model_dump(by_alias=True, mode="json") for item in events]}
     return await _pages(session, max_pages - 1, timeout, page.next_cursor, events)
 
