@@ -109,10 +109,14 @@ def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
     extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
         Mapping[str, object], raw_extra_body
     )
+    # extra_body is a standard OpenAI SDK parameter: everything in it reaches
+    # the provider, so every entry keys the cache. Keying only
+    # continuation_token/return_token_ids let two requests that differ only in
+    # extra_body (e.g. chat_template_kwargs.enable_thinking) share one entry.
     return "".join(
         f"extra_body.{param}: {extra_body[param]}"
-        for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
-        if extra_body.get(param)
+        for param in sorted(extra_body)
+        if extra_body.get(param) is not None
     )
 
 
