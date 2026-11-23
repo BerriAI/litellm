@@ -1,3 +1,5 @@
+import collections.abc
+import datetime
 from typing import Final
 
 from litellm.litellm_core_utils.core_helpers import iter_items, subscript
@@ -174,7 +176,14 @@ class WeightsBiasesLogger:
             raise Exception("\033[91m wandb not installed, try running 'pip install wandb' to fix this error\033[0m")
         self.resolver = OpenAIRequestResponseResolver()
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs: collections.abc.Mapping[str, object],
+        response_obj,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+        print_verbose: collections.abc.Callable[[object], object],
+    ):
         # Method definition
         import wandb
 

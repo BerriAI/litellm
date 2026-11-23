@@ -19,7 +19,7 @@ _ATTRIBUTE_VALUE: Final = TypeAdapter(object)
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     if litellm.set_verbose:
         print(print_statement)  # noqa
 
@@ -43,25 +43,25 @@ class MyCustomHandler(CustomLogger):
         except Exception:
             pass
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object):
         print_verbose("Pre-API Call")
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         print_verbose("Post-API Call")
 
-    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+    def log_stream_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         print_verbose("On Stream")
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         print_verbose("On Success!")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         print_verbose("On Async Success!")
         response_cost: Final = litellm.completion_cost(completion_response=response_obj)
         assert response_cost > 0.0
         return
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         try:
             print_verbose("On Async Failure !")
         except Exception as e:
