@@ -10242,6 +10242,25 @@ def test_validate_environment_api_base_dynamic():
 
 
 @mock.patch.dict(os.environ, {"OLLAMA_API_BASE": "foo"}, clear=True)
+@pytest.mark.parametrize(
+    ("model", "key_name"),
+    [
+        ("text-completion-openai/gpt-3.5-turbo-instruct", "OPENAI_API_KEY"),
+        ("cohere_chat/command-r", "COHERE_API_KEY"),
+    ],
+)
+def test_validate_environment_reports_the_missing_key_for_provider_aliases(
+    monkeypatch: pytest.MonkeyPatch, model: str, key_name: str
+) -> None:
+    monkeypatch.delenv(key_name, raising=False)
+    without_key: Final = validate_environment(model=model)
+    monkeypatch.setenv(key_name, "test-key")
+    with_key: Final = validate_environment(model=model)
+
+    assert without_key == {"keys_in_environment": False, "missing_keys": [key_name]}
+    assert with_key == {"keys_in_environment": True, "missing_keys": []}
+
+
 def test_validate_environment_ollama():
     for provider in ["ollama", "ollama_chat"]:
         kv = validate_environment(provider + "/mistral")
