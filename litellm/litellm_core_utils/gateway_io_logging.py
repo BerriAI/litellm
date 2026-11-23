@@ -325,6 +325,35 @@ def _get_active_ip_redactor(
     return None
 
 
+def _is_token_redaction_enabled() -> bool:
+    proxy_server = sys.modules.get("litellm.proxy.proxy_server")
+    if proxy_server is None:
+        return False
+    general_settings_view = getattr(proxy_server, "general_settings_view", None)
+    if callable(general_settings_view):
+        try:
+            settings = general_settings_view()
+            if isinstance(settings, Mapping):
+                return settings.get("redact_tokens_in_spend_logs") is True
+        except Exception:
+            pass
+    general_settings = getattr(proxy_server, "general_settings", None)
+    if isinstance(general_settings, Mapping):
+        return general_settings.get("redact_tokens_in_spend_logs") is True
+    return False
+
+
+def _apply_configured_token_redaction(value: str) -> str:
+    if not value or not _is_token_redaction_enabled():
+        return value
+    try:
+        from litellm.litellm_core_utils.secret_redaction import redact_tokens, strip_null_bytes
+
+        return redact_tokens(strip_null_bytes(value), MASKED_VALUE)
+    except Exception:
+        return value
+
+
 def _scrub_text(
     value: str,
     *,
@@ -360,6 +389,10 @@ def _scrub_text(
         if new_out != out:
             out = new_out
             changed = True
+    token_redacted = _apply_configured_token_redaction(out)
+    if token_redacted != out:
+        out = token_redacted
+        changed = True
     if ip_redactor is not None and out:
         redacted = ip_redactor(out)
         if redacted != out:
@@ -600,13 +633,23 @@ def _summarize_body(
     return params, process_body, raw_keys
 
 
-def _resolve_credential_info(litellm_params: Mapping[str, Any]) -> tuple[str | None, str]:
-    internal_meta = litellm_params.get("litellm_metadata")
-    if isinstance(internal_meta, Mapping):
-        override_name = internal_meta.get("_gateway_credential_name")
-        if isinstance(override_name, str) and override_name:
-            src = internal_meta.get("_gateway_credential_source")
-            return override_name, str(src) if isinstance(src, str) and src else "model_config"
+def _resolve_credential_info(
+    litellm_params: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
+) -> tuple[str | None, str]:
+    for metadata_bucket in (
+        litellm_params.get("litellm_metadata"),
+        litellm_params.get("metadata"),
+        metadata,
+    ):
+        if isinstance(metadata_bucket, Mapping):
+            override_name = metadata_bucket.get("_gateway_credential_name")
+            if isinstance(override_name, str) and override_name:
+                source_label = metadata_bucket.get("_gateway_credential_source")
+                return (
+                    override_name,
+                    str(source_label) if isinstance(source_label, str) and source_label else "model_config",
+                )
     deployment_credential = litellm_params.get("litellm_credential_name")
     if isinstance(deployment_credential, str) and deployment_credential:
         return deployment_credential, "deployment_default"
