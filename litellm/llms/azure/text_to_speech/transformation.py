@@ -4,14 +4,22 @@ Azure AVA (Cognitive Services) Text-to-Speech transformation
 Maps OpenAI TTS spec to Azure Cognitive Services TTS API
 """
 
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
+from litellm.llms.azure.text_to_speech.websocket_synthesis import (
+    SSE_STREAM_FORMAT,
+    async_synthesize_sse,
+    synthesis_messages,
+    synthesize_sse,
+    websocket_url,
+)
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -25,6 +33,23 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
+
+
+_OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+class _Credentials(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    api_base: str | None
+    api_key: str | None
+
+
+class _SsmlRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    ssml_body: str
+    headers: Mapping[str, str]
 
 
 class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
@@ -119,6 +144,26 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 "api_base": api_base,
             }
         )
+        sse_params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
+        if sse_params.get("stream_format") == SSE_STREAM_FORMAT:
+            return self._dispatch_sse(
+                model=model,
+                input=input,
+                voice=voice_str,
+                optional_params=sse_params,
+                credentials=_Credentials.model_validate(litellm_params_dict),
+                logging_obj=logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                aspeech=aspeech,
+                stream=stream,
+            )
+        if sse_params.get("viseme_enabled") is True:
+            raise litellm.BadRequestError(
+                message="viseme_enabled requires stream_format='sse', since an audio only response cannot carry visemes",
+                model=model,
+                llm_provider="azure",
+            )
         # Call the text_to_speech_handler
         response: Final = base_llm_http_handler.text_to_speech_handler(
             model=model,
@@ -137,6 +182,67 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         )
 
         return response
+
+    def _dispatch_sse(
+        self,
+        model: str,
+        input: str,
+        voice: str | None,
+        optional_params: Mapping[str, object],
+        credentials: "_Credentials",
+        logging_obj: "LiteLLMLoggingObj",
+        timeout: float | httpx.Timeout,
+        extra_headers: Mapping[str, object] | None,
+        aspeech: bool,
+        stream: bool,
+    ) -> Union[
+        "HttpxBinaryResponseContent",
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
+    ]:
+        headers: Final = self.validate_environment(
+            headers={name: str(value) for name, value in (extra_headers or {}).items()},
+            model=model,
+            api_key=credentials.api_key,
+            api_base=credentials.api_base,
+        )
+        url: Final = websocket_url(self.get_complete_url(model=model, api_base=credentials.api_base, litellm_params={}))
+        request: Final = _SsmlRequest.model_validate(
+            self.transform_text_to_speech_request(
+                model=model,
+                input=input,
+                voice=voice,
+                optional_params=dict(optional_params),
+                litellm_params={},
+                headers={},
+            )
+        )
+        output_format: Final = request.headers["X-Microsoft-OutputFormat"]
+        viseme_enabled: Final = optional_params.get("viseme_enabled") is True
+        logging_obj.pre_call(
+            input=input,
+            api_key="",
+            additional_args={
+                "complete_input_dict": {
+                    "ssml_body": request.ssml_body,
+                    "output_format": output_format,
+                    "viseme_enabled": viseme_enabled,
+                },
+                "api_base": url,
+                "headers": headers,
+            },
+        )
+        synthesize: Final = async_synthesize_sse if aspeech else synthesize_sse
+        return synthesize(
+            url=url,
+            headers=headers,
+            messages=synthesis_messages(
+                ssml=request.ssml_body,
+                output_format=output_format,
+                viseme_enabled=viseme_enabled,
+            ),
+            timeout=timeout,
+            stream=stream,
+        )
 
     def get_supported_openai_params(self, model: str) -> list:
         """
@@ -187,15 +293,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         if not (style or styledegree or role):
             return content
 
-        express_as_attrs: Final = []
-        if style:
-            express_as_attrs.append(f"style='{style}'")
-        if styledegree:
-            express_as_attrs.append(f"styledegree='{styledegree}'")
-        if role:
-            express_as_attrs.append(f"role='{role}'")
-
-        express_as_attrs_str: Final = " ".join(express_as_attrs)
+        express_as_attrs_str: Final = " ".join(
+            f"{name}='{value}'"
+            for name, value in (("style", style), ("styledegree", styledegree), ("role", role))
+            if value
+        )
         return f"<mstts:express-as {express_as_attrs_str}>{content}</mstts:express-as>"
 
     def _get_voice_language(
@@ -282,15 +384,21 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
         if "lang" in kwargs:
             mapped_params["lang"] = kwargs["lang"]
+
+        if "stream_format" in kwargs:
+            mapped_params["stream_format"] = kwargs["stream_format"]
+
+        if "viseme_enabled" in kwargs:
+            mapped_params["viseme_enabled"] = kwargs["viseme_enabled"]
         return mapped_voice, mapped_params
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate Azure environment and set up authentication headers
         """
@@ -319,7 +427,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Azure AVA TTS request

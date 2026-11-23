@@ -451,7 +451,7 @@ def _speech_media_type_for_response_format(response_format: str) -> str | None:
 
 def resolve_speech_media_type(upstream_content_type: str | None, response_format: str | None) -> str:
     upstream_media_type: Final = (upstream_content_type or "").split(";", 1)[0].strip().lower()
-    if upstream_media_type.startswith("audio/"):
+    if upstream_media_type.startswith("audio/") or upstream_media_type == "text/event-stream":
         return upstream_media_type
     requested_media_type: Final = (
         None if response_format is None else _speech_media_type_for_response_format(response_format)

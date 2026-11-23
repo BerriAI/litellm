@@ -427,6 +427,7 @@ class TestResolveSpeechMediaType:
             ("audio/wav", None, "audio/wav"),
             ("AUDIO/WAV", None, "audio/wav"),
             ("audio/flac; charset=binary", "mp3", "audio/flac"),
+            ("text/event-stream; charset=utf-8", "mp3", "text/event-stream"),
             ("application/json", "flac", "audio/flac"),
             ("application/octet-stream", "pcm", "audio/pcm"),
             (None, "wav", "audio/wav"),
