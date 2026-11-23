@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
@@ -658,7 +658,7 @@ def camel_to_snake(camel_str: str) -> str:
 _camel_to_snake = camel_to_snake
 
 
-def _get_equivalent_key(key: str, available_keys: set) -> str | None:
+def _get_equivalent_key(key: str, available_keys: Collection[object]) -> str | None:
     """
     Get the equivalent key from available keys, checking both camelCase and snake_case variants
     """
@@ -1282,7 +1282,7 @@ def gemini_convert_messages_with_history(
 _gemini_convert_messages_with_history = gemini_convert_messages_with_history
 
 # Keys that LiteLLM consumes internally and must never be forwarded to the
-_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
+_LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset[str]] = frozenset({"cache", "tags"})
 
 
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:

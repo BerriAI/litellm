@@ -460,6 +460,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/traces/query",
         "/v1/traces/query/help",
         "/v1/traces/{trace_id}",
+        "/v1/traces/{trace_id}/conversation",
         "/v1/traces/{trace_id}/spans/{span_id}",
         "/v1/traces/{trace_id}/spans/{span_id}/error",
     )
@@ -1573,6 +1574,14 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
 
 class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: str
+    preserve_explicit_oauth_settings: bool = Field(
+        default=False,
+        exclude=True,
+        description=(
+            "Keep explicitly supplied OAuth settings on upstream or auth changes, "
+            "even when their values match the saved settings."
+        ),
+    )
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None

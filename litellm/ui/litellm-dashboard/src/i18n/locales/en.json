@@ -1,4 +1,24 @@
 {
+  "lensControls": {
+    "title": "Lens",
+    "tracing": "Tracing",
+    "new": "New",
+    "description": "Tracing · Alerting · Evals",
+    "on": "On",
+    "off": "Off",
+    "open": "Open Lens",
+    "teamDefault": "Default for team keys",
+    "keyInherited": "Uses team setting",
+    "keyCustom": "Custom setting",
+    "useTeam": "Use team setting",
+    "saveFailed": "Lens logging setting could not be saved",
+    "loading": "Loading…",
+    "unknown": "Unknown",
+    "teamUnavailable": "Team Lens setting is unavailable",
+    "statusUnavailable": "Lens connection status is unavailable",
+    "notConfigured": "Configure the gateway’s Lens connection to record traces"
+  },
+
   "apps": {
     "editSettings": "Edit {{alias}}",
     "title": "Applications",
@@ -11911,6 +11931,9 @@
         },
         "airia": {
           "description": "Airia AI security and governance platform. Runtime guardrails for prompt injection, data leakage prevention, and responsible AI, enforced on every prompt and response."
+        },
+        "reco": {
+          "description": "Reco AI agent security. Checks every prompt against your Reco policies before the model call, blocking prompt injection and sensitive data leaks."
         }
       },
       "subcategories": {

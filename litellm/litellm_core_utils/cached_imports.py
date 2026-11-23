@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 # Global cache variables
 _LiteLLMLogging: type["Logging"] | None = None
 _coroutine_checker: Optional["CoroutineChecker"] = None
-_set_callbacks: Callable | None = None
+_set_callbacks: Callable[..., None] | None = None
 
 
 def get_litellm_logging_class() -> type["Logging"]:
@@ -41,7 +41,7 @@ def get_coroutine_checker() -> "CoroutineChecker":
     return _coroutine_checker
 
 
-def get_set_callbacks() -> Callable:
+def get_set_callbacks() -> Callable[..., None]:
     """Get the cached set_callbacks function, initializing if needed."""
     global _set_callbacks
     if _set_callbacks is not None:
