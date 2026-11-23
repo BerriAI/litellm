@@ -21,6 +21,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _resolve_team_allowed_mcp_servers,
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     prepare_object_permission_upsert,
+    reject_ambiguous_mcp_tool_permission_keys,
     reject_clearing_app_grants,
     set_object_permission,
     validate_key_mcp_servers_against_team,
@@ -146,6 +147,14 @@ def test_extract_requested_mcp_server_ids_from_mcp_servers():
 def test_extract_requested_mcp_server_ids_from_tool_permissions():
     obj_perm = {"mcp_tool_permissions": {"server-a": ["tool1"], "server-b": ["tool2"]}}
     assert _extract_requested_mcp_server_ids(obj_perm) == {"server-a", "server-b"}
+
+
+def test_event_permissions_narrow_events_and_grant_no_server() -> None:
+    obj_perm: Final[ObjectPermissionDict] = {
+        "mcp_servers": ["server-1"],
+        "mcp_event_permissions": {"server-events": ["build.*"]},
+    }
+    assert _extract_requested_mcp_server_ids(obj_perm) == {"server-1"}
 
 
 def test_extract_requested_mcp_server_ids_combined():
@@ -1648,3 +1657,22 @@ async def test_a_non_admin_cannot_unlink_an_object_permission_that_grants_apps()
     await reject_clearing_app_grants("perm-id", True, _stored_apps_prisma(("chat",)))
     await reject_clearing_app_grants("perm-id", False, _stored_apps_prisma(()))
     await reject_clearing_app_grants(None, False, _stored_apps_prisma(("chat",)))
+
+
+@pytest.mark.asyncio
+async def test_an_event_permission_keyed_by_a_shared_alias_is_refused() -> None:
+    prisma: Final = MagicMock()
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki-a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki-b"),
+        ]
+    )
+    with pytest.raises(HTTPException) as refused:
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions={"wiki": ["page.*"]},
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma,
+            field="mcp_event_permissions",
+        )
+    assert "Ambiguous mcp_event_permissions key" in str(refused.value.detail)

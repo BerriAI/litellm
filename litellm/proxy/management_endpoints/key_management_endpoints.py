@@ -181,6 +181,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: 
     invalidate_cached_object_permissions,
     prepare_object_permission_upsert,
     set_object_permission,
+    stored_key_scope_fields,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -1874,6 +1875,7 @@ async def _common_key_generation_helper(
     data_json = await set_object_permission(  # rebind-ok: pre-existing rebinding on a rename-only line
         data_json=data_json,
         prisma_client=prisma_client,
+        is_key=True,
     )
     written_object_permission_id: Final = data_json.get("object_permission_id")
     created_object_permission_id: Final = (
@@ -3018,6 +3020,7 @@ async def _apply_object_permission_update(
         new_object_permission=grants,
         existing_object_permission_id=existing_object_permission_id,
         prisma_client=prisma_client,
+        is_key=True,
     )
     row: Final = await table.upsert(
         where={"object_permission_id": upsert.object_permission_id},
@@ -3117,6 +3120,7 @@ async def _update_key_row_with_soft_budget(
     existing_key_row: LiteLLM_VerificationToken,
     changed_by: str,
     expect_unassigned_project: bool = False,
+    upsert: ObjectPermissionUpsert | None = None,
 ) -> _KeyUpdateResult:
     hashed_token: Final = hash_token_if_needed(key)
     key_where: Final[_KeyRowWhere] = {"token": hashed_token}
@@ -3132,7 +3136,9 @@ async def _update_key_row_with_soft_budget(
                 table=tx.litellm_objectpermissiontable,
             )
             if expect_unassigned_project
-            else non_default_values
+            else await _write_prepared_key_update_object_permission(
+                tx, hashed_token, existing_key_row, non_default_values, upsert
+            )
         )
         update_values: Final = await _apply_soft_budget_update(
             data=data,
@@ -3178,15 +3184,19 @@ async def _write_key_update(
     data: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
     include: Mapping[str, object] | None = None,
+    upsert: ObjectPermissionUpsert | None = None,
 ) -> "prisma_models.LiteLLM_VerificationToken | None":
-    if "budget_limits" not in data and "budget_duration" not in data:
+    if upsert is None and "budget_limits" not in data and "budget_duration" not in data:
         return await VerificationTokenRepository(prisma_client).table.update(
             where={"token": hashed_token}, data=data, include=include
         )
     async with prisma_client.tx() as tx_ctx:
         tx: Final = cast("_KeyUpdateTx", tx_ctx)  # cast-ok: transaction exposes the same table actions
+        linked: Final = await _write_prepared_key_update_object_permission(
+            tx, hashed_token, existing_key_row, data, upsert
+        )
         rebased: Final = await rebase_budget_limits_update(
-            tx, "LiteLLM_VerificationToken", hashed_token, existing_key_row.budget_limits, data
+            tx, "LiteLLM_VerificationToken", hashed_token, existing_key_row.budget_limits, linked
         )
         return await tx.litellm_verificationtoken.update(where={"token": hashed_token}, data=rebased, include=include)
 
@@ -3196,8 +3206,9 @@ async def _update_key_row(
     key: str,
     update_values: Mapping[str, object],
     existing_key_row: LiteLLM_VerificationToken,
+    upsert: ObjectPermissionUpsert | None = None,
 ) -> _KeyUpdateResult | None:
-    if "budget_limits" in update_values or "budget_duration" in update_values:
+    if upsert is not None or "budget_limits" in update_values or "budget_duration" in update_values:
         hashed_token: Final = hash_token_if_needed(key)
         updated: Final = await _write_key_update(
             prisma_client,
@@ -3205,6 +3216,7 @@ async def _update_key_row(
             with_settings_updated_at(prisma_client.jsonify_object({**update_values, "token": hashed_token})),
             existing_key_row,
             include={"object_permission": True},
+            upsert=upsert,
         )
         return {"token": hashed_token, "data": updated.model_dump() if updated is not None else {}}
     key_update_data: Final = MappingProxyType({**update_values, "token": key})
@@ -3376,22 +3388,33 @@ async def _prepare_key_update_object_permission(
         new_object_permission=permission_data,
         existing_object_permission_id=existing_key_row.object_permission_id,
         prisma_client=prisma_client,
+        is_key=True,
     )
 
 
 async def _write_prepared_key_update_object_permission(
+    tx: _KeyUpdateTx,
+    hashed_token: str,
+    existing_key_row: LiteLLM_VerificationToken,
     data_json: Mapping[str, object],
     upsert: ObjectPermissionUpsert | None,
-    prisma_client: PrismaClient,
 ) -> Mapping[str, object]:
     if upsert is None:
         return data_json
 
-    await ObjectPermissionRepository(prisma_client).table.upsert(
+    locked: Final = await tx.query_raw(
+        'SELECT 1 FROM "LiteLLM_VerificationToken" WHERE token = $1 '
+        "AND object_permission_id IS NOT DISTINCT FROM $2::text FOR UPDATE",
+        hashed_token,
+        existing_key_row.object_permission_id,
+    )
+    if not locked:
+        raise HTTPException(status_code=409, detail="Key permissions changed concurrently. Retry the update.")
+    await tx.litellm_objectpermissiontable.upsert(
         where={"object_permission_id": upsert.object_permission_id},
         data={"create": upsert.record, "update": upsert.record},
     )
-    return MappingProxyType({**data_json, "object_permission_id": upsert.object_permission_id})
+    return {**data_json, "object_permission_id": upsert.object_permission_id}
 
 
 def is_different_team(data: UpdateKeyRequest, existing_key_row: LiteLLM_VerificationToken) -> bool:
@@ -3703,31 +3726,28 @@ async def _process_single_key_update(
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
     )
+    update_fields: Final = cast("Mapping[str, object]", non_default_values)  # cast-ok: serialized key request fields
     key_update_values: Final = MappingProxyType(
-        {field: value for field, value in non_default_values.items() if field != "object_permission"}
+        {field: value for field, value in update_fields.items() if field != "object_permission"}
     )
     await _check_key_project_team_on_mutation(
         data=key_request,
         existing_key_row=existing_key_row,
         prisma_client=prisma_client,
     )
-    update_values: Final = await _write_prepared_key_update_object_permission(
-        data_json=key_update_values,
-        upsert=object_permission_upsert,
-        prisma_client=prisma_client,
-    )
     response: Final[Mapping[str, object] | None] = await _update_key_row(
         prisma_client,
         cast("str", key_request.key),  # cast-ok: bulk requests contain the key resolved for this row
-        update_values,
+        key_update_values,
         existing_key_row,
+        object_permission_upsert,
     )
 
     # Permission row first: a key-object miss between the two evictions would re-cache stale grants
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             existing_key_row.object_permission_id,
-            update_values.get("object_permission_id"),
+            object_permission_upsert.object_permission_id if object_permission_upsert is not None else None,
         ),
         user_api_key_cache=user_api_key_cache,
     )
@@ -3769,7 +3789,7 @@ async def _process_single_key_update(
 
     updated_key_info.pop("token", None)
 
-    return updated_key_info
+    return {**updated_key_info, **stored_key_scope_fields(updated_key_info)}
 
 
 async def _with_validated_object_permission(
@@ -4492,24 +4512,16 @@ async def update_key_fn(
             existing_key_row=existing_key_row,
             prisma_client=prisma_client,
         )
-        update_values: Final = (
-            update_fields
-            if is_project_assignment
-            else await _write_prepared_key_update_object_permission(
-                data_json=key_update_values,
-                upsert=object_permission_upsert,
-                prisma_client=prisma_client,
-            )
-        )
         changed_by: Final = user_api_key_dict.user_id or litellm_proxy_admin_name
         response: Final = (
             await _update_key_row_with_soft_budget(
                 prisma_client=prisma_client,
                 key=key,
                 data=data,
-                non_default_values=update_values,
+                non_default_values=update_fields if is_project_assignment else key_update_values,
                 existing_key_row=existing_key_row,
                 changed_by=changed_by,
+                upsert=object_permission_upsert,
                 expect_unassigned_project=is_project_assignment,
             )
             if "soft_budget" in data.model_fields_set
@@ -4523,8 +4535,9 @@ async def update_key_fn(
             else await _update_key_row(
                 prisma_client=prisma_client,
                 key=key,
-                update_values=update_values,
+                update_values=key_update_values,
                 existing_key_row=existing_key_row,
+                upsert=object_permission_upsert,
             )
         )
 
@@ -4533,7 +4546,11 @@ async def update_key_fn(
         await invalidate_cached_object_permissions(
             object_permission_ids=(
                 existing_key_row.object_permission_id,
-                update_values.get("object_permission_id"),
+                response["data"].get("object_permission_id")
+                if response is not None and is_project_assignment
+                else object_permission_upsert.object_permission_id
+                if object_permission_upsert is not None
+                else None,
             ),
             user_api_key_cache=user_api_key_cache,
         )
@@ -4580,7 +4597,7 @@ async def update_key_fn(
         if response is None:
             raise ValueError("Failed to update key got response = None")
 
-        return {"key": key, **response["data"]}
+        return {"key": key, **response["data"], **stored_key_scope_fields(response["data"])}
         # update based on remaining passed in values
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.update_key_fn(): Exception occured - %s", e)
@@ -6626,8 +6643,9 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         prisma_client=prisma_client,
     )
+    update_fields: Final = cast("Mapping[str, object]", non_default_values)  # cast-ok: serialized key request fields
     key_update_values: Final = MappingProxyType(
-        {field: value for field, value in non_default_values.items() if field != "object_permission"}
+        {field: value for field, value in update_fields.items() if field != "object_permission"}
     )
     if data is not None:
         project_team_id: Final = await _check_key_project_team_on_mutation(
@@ -6642,12 +6660,9 @@ async def _execute_virtual_key_regeneration(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
             )
-    update_values: Final = await _write_prepared_key_update_object_permission(
-        data_json=key_update_values,
-        upsert=object_permission_upsert,
-        prisma_client=prisma_client,
+    update_data: Final = MappingProxyType(
+        {"token": new_token_hash, "key_name": new_token_key_name, **key_update_values}
     )
-    update_data: Final = MappingProxyType({"token": new_token_hash, "key_name": new_token_key_name, **update_values})
 
     jsonified_update_data: Final[Mapping[str, object]] = prisma_client.jsonify_object(data=update_data)
 
@@ -6678,6 +6693,7 @@ async def _execute_virtual_key_regeneration(
         hashed_token=hashed_api_key,
         data=with_settings_updated_at(jsonified_update_data),
         existing_key_row=key_in_db,
+        upsert=object_permission_upsert,
     )
     updated_token_dict: Final[dict[str, object]] = dict(updated_token) if updated_token is not None else {}
     updated_token_dict["key"] = new_token
@@ -6686,7 +6702,7 @@ async def _execute_virtual_key_regeneration(
     await invalidate_cached_object_permissions(
         object_permission_ids=(
             key_in_db.object_permission_id,
-            update_values.get("object_permission_id"),
+            object_permission_upsert.object_permission_id if object_permission_upsert is not None else None,
         ),
         user_api_key_cache=user_api_key_cache,
     )
