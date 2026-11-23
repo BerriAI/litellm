@@ -1569,9 +1569,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
 
@@ -1622,7 +1622,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
