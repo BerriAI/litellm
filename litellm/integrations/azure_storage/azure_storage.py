@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import cache
-from typing import Final
+from typing import Final, Protocol
 from urllib.parse import unquote
 
 from litellm._logging import verbose_logger
@@ -47,6 +47,54 @@ def adls_safe_file_name(payload_id: str | None) -> str:
     if not name.startswith("resp_") and _DOT_OR_EMPTY_SEGMENTS.isdisjoint(unquote(name).split("/")):
         return f"{name}.json"
     return f"{name.translate(_ADLS_SAFE_NAME)}.json"
+
+
+class _DataLakeDownload(Protocol):
+    """The calls litellm makes on the Azure SDK's Data Lake download stream."""
+
+    async def readall(self) -> bytes: ...
+
+
+class _DataLakeFileClient(Protocol):
+    """The calls litellm makes on the Azure SDK's Data Lake file client."""
+
+    async def create_file(self) -> object: ...
+
+    async def append_data(self, *, data: bytes, offset: int, length: int) -> object: ...
+
+    async def flush_data(self, *, position: int, offset: int) -> object: ...
+
+    async def download_file(self) -> _DataLakeDownload: ...
+
+
+class _DataLakeDirectoryClient(Protocol):
+    """The calls litellm makes on the Azure SDK's Data Lake directory client."""
+
+    async def exists(self) -> bool: ...
+
+    async def create_directory(self) -> object: ...
+
+    def get_file_client(self, file: str, /) -> _DataLakeFileClient: ...
+
+
+class _DataLakeFileSystemClient(Protocol):
+    """The calls litellm makes on the Azure SDK's Data Lake file system client."""
+
+    async def exists(self) -> bool: ...
+
+    async def create_file_system(self) -> object: ...
+
+    def get_directory_client(self, directory: str, /) -> _DataLakeDirectoryClient: ...
+
+    def get_file_client(self, file_path: str, /) -> _DataLakeFileClient: ...
+
+
+class _DataLakeServiceClient(Protocol):
+    """The calls litellm makes on the Azure SDK's Data Lake service client."""
+
+    async def close(self) -> object: ...
+
+    def get_file_system_client(self, *, file_system: str) -> _DataLakeFileSystemClient: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +150,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
             )
             self._clock: Callable[[], float] = clock
-            self._service_client = None
+            self._service_client: _DataLakeServiceClient | None = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
 
@@ -380,7 +428,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 f"AzureBlobStorageLogger is only available for premium users. {CommonProxyErrors.not_premium_user}"
             )
 
-    async def get_service_client(self):
+    async def get_service_client(self) -> _DataLakeServiceClient:
         from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # expire old clients to recover from connection issues
@@ -388,10 +436,11 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             await self._service_client.close()
             self._service_client = None
         if not self._service_client:
-            self._service_client = DataLakeServiceClient(
+            service_client: Final[_DataLakeServiceClient] = DataLakeServiceClient(
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
+            self._service_client = service_client
             self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 

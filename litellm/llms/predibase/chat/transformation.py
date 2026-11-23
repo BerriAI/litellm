@@ -9,7 +9,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm.constants import DEFAULT_MAX_TOKENS
-from litellm.litellm_core_utils.core_helpers import json_contains, map_finish_reason, subscript
+from litellm.litellm_core_utils.core_helpers import int_of, json_contains, map_finish_reason, require_get, subscript
 from litellm.litellm_core_utils.prompt_templates.factory import (
     prompt_factory,
     render_custom_prompt_template,
@@ -109,11 +109,11 @@ class PredibaseConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -151,10 +151,10 @@ class PredibaseConfig(BaseConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -203,15 +203,15 @@ class PredibaseConfig(BaseConfig):
 
         effective_best_of = optional_params.get("best_of")
         if effective_best_of is None:
-            effective_best_of = request_data.get("parameters", {}).get("best_of", 0)
+            effective_best_of = require_get(request_data.get("parameters", {})).get("best_of", 0)
         try:
-            best_of_value = int(effective_best_of)
+            best_of_value = int_of(effective_best_of)
         except (TypeError, ValueError):
             best_of_value = 0
 
         if best_of_value > 1:
             if "details" in completion_response and "best_of_sequences" in completion_response["details"]:
-                choices_list: Final = []
+                choices_list: Final[list[Choices]] = []
                 for idx, item in enumerate(completion_response["details"]["best_of_sequences"]):
                     sum_logprob = 0
                     for token in item["tokens"]:
@@ -274,10 +274,10 @@ class PredibaseConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
@@ -325,8 +325,8 @@ class PredibaseConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         tenant_id: Final = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
@@ -349,19 +349,21 @@ class PredibaseConfig(BaseConfig):
             completion_url = join_api_base(completion_url, "generate")
         return completion_url
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return PredibaseError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError(
                 "Missing Predibase API Key - A call is being made to predibase but no key is set either in the environment variables or via params"
