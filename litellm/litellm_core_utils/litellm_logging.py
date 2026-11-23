@@ -12,7 +12,8 @@ import subprocess
 import sys
 import time
 import traceback
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime as dt_object
 from functools import lru_cache
 from types import MappingProxyType, TracebackType
@@ -1816,6 +1817,22 @@ class Logging(LiteLLMLoggingBaseClass):
         if start_seconds is None or end_seconds is None:
             return 0.0
         return (end_seconds - start_seconds) * 1000
+
+    @contextmanager
+    def pricing_left_unrecorded(self) -> Generator[None]:
+        previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        debug_key: Final = "response_cost_failure_debug_information"
+        previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
+        try:
+            yield
+        finally:
+            self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            if previous_failure_debug_info is None:
+                self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = previous_failure_debug_info
 
     def set_cost_breakdown(
         self,

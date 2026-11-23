@@ -274,6 +274,7 @@ jobs:
               tests/unit/llms/gigachat
               tests/unit/llms/google_pse
               tests/unit/llms/github_copilot
+              tests/unit/llms/gnani
               tests/unit/llms/gradient_ai
               tests/unit/llms/gradium
               tests/unit/llms/groq
