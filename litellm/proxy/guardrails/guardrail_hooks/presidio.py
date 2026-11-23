@@ -1620,6 +1620,22 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             },
                         }
 
+            additional_args: Final = kwargs.get("additional_args")
+            if isinstance(additional_args, dict):
+                complete_input_dict: Final = additional_args.get("complete_input_dict")
+                if isinstance(complete_input_dict, dict) and (
+                    "messages" in complete_input_dict or "system" in complete_input_dict
+                ):
+                    masked_complete_input: dict = {**complete_input_dict}
+                    if "messages" in masked_complete_input:
+                        masked_complete_input["messages"] = copy.deepcopy(messages)
+                    if "system" in masked_complete_input and "system" in kwargs:
+                        masked_complete_input["system"] = copy.deepcopy(kwargs["system"])
+                    kwargs["additional_args"] = {
+                        **additional_args,
+                        "complete_input_dict": masked_complete_input,
+                    }
+
             standard_logging_object: Final = kwargs.get("standard_logging_object")
             if isinstance(standard_logging_object, dict) and "messages" in standard_logging_object:
                 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
