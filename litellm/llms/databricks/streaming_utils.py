@@ -144,7 +144,12 @@ class ModelResponseIterator:
         raise StopAsyncIteration
 
 
+_SSE_NON_DATA_PREFIXES: Final = ("id:", "event:", "retry:", ":")
+
+
 def _sse_data(raw_chunk: str) -> str:
+    if raw_chunk.startswith(_SSE_NON_DATA_PREFIXES):
+        return ""
     return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
 
 

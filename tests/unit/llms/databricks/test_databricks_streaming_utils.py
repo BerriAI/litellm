@@ -138,6 +138,34 @@ def test_stream_usage_after_finish_chunk_reaches_the_caller(respx_mock: respx.Mo
     assert [(usage.prompt_tokens, usage.prompt_tokens_details.cached_tokens) for usage in usages] == [(340, 320)]
 
 
+@pytest.mark.respx(assert_all_called=True)
+def test_stream_usage_survives_sse_id_and_event_fields(respx_mock: respx.MockRouter) -> None:
+    chunk_header: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
+    events: Final = (
+        {**chunk_header, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+        {**chunk_header, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk_header, "choices": [], "usage": {"prompt_tokens": 74, "completion_tokens": 52, "total_tokens": 126}},
+    )
+    stream_body: Final = "".join(
+        f"id: {event_id}\nevent: message\ndata: {json.dumps(event)}\n\n" for event_id, event in enumerate(events, 1)
+    ).encode()
+    respx_mock.post("http://upstream.test/chat/completions").mock(
+        return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)
+    )
+
+    stream: Final = litellm.completion(
+        model="maritalk/sabia-3",
+        api_base="http://upstream.test",
+        api_key="sk-test",
+        messages=[{"role": "user", "content": "Reply with the single word: ok"}],
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None)]
+
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(74, 52)]
+
+
 def test_chunk_parser_keeps_usage_on_the_finish_chunk():
     iterator: Final = ModelResponseIterator(streaming_response=None, sync_stream=True)
 
