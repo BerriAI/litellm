@@ -55,7 +55,7 @@ from litellm.main import (
 
 ###########################################
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import ImageEditOptionalRequestParams, UnfoldableFormField
+from litellm.types.images.main import IMAGE_CONFIG_FIELDS, ImageEditOptionalRequestParams, UnsupportedImageParam
 from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -72,8 +72,6 @@ from litellm.utils import (
 )
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
-
-IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -913,12 +911,18 @@ def image_edit(
             image_edit_provider_config.get_supported_openai_params(model)
         )
         should_drop_params: Final = drops_unsupported_params(kwargs.get("drop_params"))
+        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
+        kept_params: Final = {
+            key: value
+            for key, value in non_default_params.items()
+            if key.split("[", 1)[0] not in additional_drop_params
+        }
         requested_params: Final = _get_ImageEditRequestUtils().fold_bracket_form_fields(
-            non_default_params,
+            kept_params,
             tuple(field for field in IMAGE_CONFIG_FIELDS if field in provider_supported_params),
             should_drop_params,
         )
-        if isinstance(requested_params, UnfoldableFormField):
+        if isinstance(requested_params, UnsupportedImageParam):
             raise litellm.UnsupportedParamsError(
                 model=model,
                 llm_provider=custom_llm_provider,
@@ -933,7 +937,6 @@ def image_edit(
             )
         )
         # Get optional parameters for the responses API
-        additional_drop_params: Final = _listed_drop_params(kwargs.get("additional_drop_params"))
         image_edit_request_params: Final[dict] = _get_ImageEditRequestUtils().get_optional_params_image_edit(
             model=model,
             image_edit_provider_config=image_edit_provider_config,
@@ -948,9 +951,15 @@ def image_edit(
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
             dropped_form_params: Final = header_auth_params(custom_llm_provider)
-            unsupported_edit_params: Final = _IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params
+            drops_for_upstream: Final = custom_llm_provider != LlmProviders.LITELLM_PROXY.value
+            unsupported_edit_params: Final[frozenset[str]] = (
+                _IMAGE_EDIT_OPENAI_PARAMS - provider_supported_params if drops_for_upstream else frozenset()
+            )
             dropped_edit_params: Final = (
-                dropped_form_params | _DROP_PARAM_KWARGS | unsupported_edit_params | frozenset(additional_drop_params)
+                dropped_form_params
+                | (_DROP_PARAM_KWARGS if drops_for_upstream else frozenset[str]())
+                | unsupported_edit_params
+                | frozenset(additional_drop_params)
             )
             dropped_form_field_roots: Final[frozenset[str]] = (
                 unsupported_edit_params if should_drop_params else frozenset()

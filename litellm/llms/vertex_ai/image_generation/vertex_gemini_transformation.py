@@ -17,14 +17,13 @@ from litellm.llms.gemini.image_usage_transformation import transform_gemini_imag
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, pop_vertex_request_labels
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.llms.vertex_ai.gemini_image_params import (
-    IMAGE_CONFIG_ALIASES,
-    UnsupportedImageParam,
     map_vertex_gemini_image_params,
     raise_unsupported_image_param,
     vertex_gemini_image_config,
 )
 from litellm.llms.vertex_ai.request_labels import caller_labels_header_names, vertex_request_label_fields
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.images.main import IMAGE_CONFIG_FIELDS, UnsupportedImageParam
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ImageObject,
@@ -68,7 +67,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         return [
             "n",
             "size",
-            *IMAGE_CONFIG_ALIASES,
+            *IMAGE_CONFIG_FIELDS,
             "aspectRatio",
             "aspect_ratio",
             "imageSize",

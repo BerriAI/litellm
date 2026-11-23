@@ -787,6 +787,16 @@ def _sent_gemini_edit_generation_config(**params: object) -> Mapping[str, object
             {"imageConfig[imageOutputOptions][mimeType]": "image/jpeg", "imageConfig[aspectRatio]": "9:16"},
             {"imageOutputOptions": {"mimeType": "image/jpeg"}, "aspectRatio": "9:16"},
         ),
+        ({"imageConfig": {"aspectRatio": "1:1"}, "imageConfig[aspect_ratio]": "9:16"}, {"aspectRatio": "9:16"}),
+        ({"imageConfig": {"aspect_ratio": "1:1"}, "imageConfig[aspectRatio]": "9:16"}, {"aspectRatio": "9:16"}),
+        (
+            {"imageConfig[aspectRatio]": "9:16", "image_config[image_size]": "2K"},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
+        (
+            {"imageConfig": {"aspectRatio": "9:16"}, "image_config": {"aspect_ratio": "1:1", "image_size": "2K"}},
+            {"aspectRatio": "9:16", "imageSize": "2K"},
+        ),
     ),
 )
 def test_vertex_gemini_edit_forwards_image_controls(
@@ -880,6 +890,9 @@ def test_vertex_gemini_edit_rejects_unfoldable_bracket_fields_unless_dropping_pa
         _sent_gemini_edit_request(**fields)
 
     assert _sent_gemini_edit_generation_config(**fields, drop_params=True) == generation_config_when_dropping
+    assert _sent_gemini_edit_generation_config(**fields, additional_drop_params=["imageConfig"]) == {
+        "responseModalities": ["IMAGE"]
+    }
 
 
 @pytest.mark.parametrize("value", (100, "100", 50))

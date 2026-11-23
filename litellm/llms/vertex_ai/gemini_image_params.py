@@ -1,25 +1,20 @@
 from collections.abc import Mapping
-from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import Final, NoReturn
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import camel_case_keys
 from litellm.llms.vertex_ai.common_utils import map_vertex_image_size
+from litellm.types.images.main import IMAGE_CONFIG_FIELDS, UnsupportedImageParam
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _FLAT_IMAGE_SETTINGS: Final = MappingProxyType(
     {"aspectRatio": ("aspectRatio", "aspect_ratio"), "imageSize": ("imageSize", "image_size")}
 )
-IMAGE_CONFIG_ALIASES: Final = ("imageConfig", "image_config")
-
-
-@dataclass(frozen=True, slots=True)
-class UnsupportedImageParam:
-    param: str
-    reason: str
 
 
 def raise_unsupported_image_param(rejection: UnsupportedImageParam, model: str) -> NoReturn:
@@ -31,18 +26,6 @@ def raise_unsupported_image_param(rejection: UnsupportedImageParam, model: str) 
     )
 
 
-def _camel_case(key: str) -> str:
-    head, *rest = key.split("_")
-    return head + "".join(part[:1].upper() + part[1:] for part in rest)
-
-
-def _camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
-    return {
-        **{_camel_case(key): value for key, value in config.items() if "_" in key},
-        **{key: value for key, value in config.items() if "_" not in key},
-    }
-
-
 def _image_config_object(value: object) -> Mapping[str, object] | None:
     try:
         config: Final = (
@@ -50,7 +33,7 @@ def _image_config_object(value: object) -> Mapping[str, object] | None:
         )
     except ValidationError:
         return None
-    return _camel_case_keys(config)
+    return camel_case_keys(config)
 
 
 def _size_image_config(size: object, model: str) -> Mapping[str, object] | None:
@@ -68,14 +51,19 @@ def _flat_image_settings(params: Mapping[str, object]) -> Mapping[str, object]:
 def map_vertex_gemini_image_params(
     params: Mapping[str, object], model: str, drop_params: bool
 ) -> Mapping[str, object] | UnsupportedImageParam:
-    image_config_alias: Final = next((alias for alias in IMAGE_CONFIG_ALIASES if alias in params), None)
-    image_config: Final = _EMPTY if image_config_alias is None else _image_config_object(params[image_config_alias])
+    image_configs: Final = tuple(
+        (alias, _image_config_object(params[alias])) for alias in IMAGE_CONFIG_FIELDS if alias in params
+    )
+    unmappable_alias: Final = next((alias for alias, config in image_configs if config is None), None)
     size_config: Final = _size_image_config(params["size"], model) if "size" in params else _EMPTY
-    if image_config is None and not drop_params:
-        return UnsupportedImageParam(image_config_alias or "imageConfig", "must be a JSON object")
+    if unmappable_alias is not None and not drop_params:
+        return UnsupportedImageParam(unmappable_alias, "must be a JSON object")
     if size_config is None and not drop_params:
         return UnsupportedImageParam("size", "must be 'auto' or '<width>x<height>'")
-    explicit_config: Final = image_config or _EMPTY
+    mapped_configs: Final = tuple(config for _, config in image_configs if config is not None)
+    explicit_config: Final[Mapping[str, object]] = dict(
+        chain.from_iterable(config.items() for config in reversed(mapped_configs))
+    )
     return {
         **{key: value for key, value in (size_config or _EMPTY).items() if key not in explicit_config},
         **_flat_image_settings(params),
