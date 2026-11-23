@@ -11113,7 +11113,7 @@
         "choiceOptionCount": "Choice criteria must contain between 1 and {{max}} options.",
         "noulNeedsInstructionsOrCriteria": "A yes / no question requires instructions or criteria.",
         "modelNonEmpty": "Model must be a non-empty string.",
-        "questionCount": "Questions must contain between 1 and 128 entries.",
+        "questionCount": "Questions must contain at least one entry.",
         "instructionsMissing": "Required property 'instructions' is missing.",
         "instructionsType": "Instructions must be a string.",
         "choiceDescriptionType": "Choice descriptions must be strings.",
