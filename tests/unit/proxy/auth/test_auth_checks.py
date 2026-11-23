@@ -1,54 +1,237 @@
 # What is this?
 ## Tests if 'get_end_user_object' works as expected
 
-import sys, os, asyncio, time, random, uuid
+import asyncio
 import hashlib
 import json
+import uuid
+
 import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from collections import UserDict
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
+from functools import reduce
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest, litellm
+import pytest
+from fastapi import HTTPException, Request, status
+
+import litellm
+from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.cache_invalidation_double import FakeChannel
+from litellm.redis.stores.cache_invalidation import CacheInvalidation
 import httpx
-from fastapi import Request, status
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
-from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_org_object, get_user_object
-from litellm.proxy.db.prisma_client import PrismaWrapper
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from tests.unit.proxy.rust_auth_stores import RustAuthStores
 from litellm.caching.caching import DualCache
+from litellm.types.mcp import MCPTransport
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy._types import (
-    LiteLLM_EndUserTable,
     LiteLLM_BudgetTable,
-    LiteLLM_UserTable,
-    LiteLLM_TeamTable,
+    LiteLLM_TeamMembership,
+    LiteLLM_ProjectTableCachedObj,
+    LiteLLM_EndUserTable,
     Litellm_EntityType,
+    LiteLLM_OrganizationTable,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyException,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.utils import PrismaClient
-import litellm.proxy.common_utils.auth_cache_invalidation_pubsub as pubsub_module
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.auth.auth_checks import (
+    _team_soft_budget_check,
     can_team_access_model,
+    check_opaque_inference_controls,
+    common_checks,
     delete_cache_key_objects,
+    get_end_user_object,
+    get_org_object,
+    get_user_object,
     is_model_cost_zero,
     virtual_key_soft_budget_check,
-    _team_soft_budget_check,
-    common_checks,
 )
-from litellm.proxy.utils import InternalUsageCache, ProxyLogging
-from litellm.proxy.utils import CallInfo
+from litellm.proxy.utils import CallInfo, InternalUsageCache, ProxyLogging
 from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+
+@pytest.mark.parametrize("container", ["mapping", "list"])
+@pytest.mark.parametrize("at_limit", [False, True])
+def test_opaque_controls_reject_unchecked_nesting(container: str, at_limit: bool) -> None:
+    from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+
+    def wrap(value: object, _: int) -> object:
+        return {"metadata": value} if container == "mapping" else [value]
+
+    depth: Final = DEFAULT_MAX_RECURSE_DEPTH if at_limit else DEFAULT_MAX_RECURSE_DEPTH - 1
+    controls: Final = reduce(wrap, range(depth), "unrestricted")
+    if not at_limit:
+        assert check_opaque_inference_controls(controls) is None
+        return
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls(controls)
+    assert denied.value.status_code == 403
+    assert "nesting" in denied.value.detail
+
+
+@pytest.mark.parametrize(
+    "control", [{"models": ["restricted-model"]}, {"guardrails": ["required-guardrail"]}, {"max_budget": 0}]
+)
+def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(control: dict[str, object]) -> None:
+    with pytest.raises(HTTPException) as denied:
+        check_opaque_inference_controls({"metadata": [{"budget": control}]})
+    assert denied.value.status_code == 403
+    assert "cannot enforce" in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scope,expected",
+    [("project", "model restrictions"), ("user", "model restrictions"), ("member", "model restrictions"),
+     ("missing-user", "owner"), ("missing-project", "inherited policies"), ("personal-key", "personal-key"),
+     ("member-model-budget", "model_max_budget")],
+)
+async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
+    monkeypatch: pytest.MonkeyPatch, scope: str, expected: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(litellm, "personal_key_model_access_from_teams", scope == "personal-key")
+    membership: Final = LiteLLM_TeamMembership(
+        user_id="opaque-user",
+        team_id="opaque-team",
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="opaque-budget", allowed_models=["scoped-model"]),
+    )
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="opaque-user", team_id="opaque-team"),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    request: Final = Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""})
+    project: Final = (
+        LiteLLM_ProjectTableCachedObj(project_id="opaque-project", models=["scoped-model"])
+        if scope == "project"
+        else None
+    )
+    user: Final = LiteLLM_UserTable(
+        user_id="opaque-user", models=["scoped-model"] if scope == "user" else [],
+        teams=["restricted-owner-team"] if scope == "personal-key" else [], user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    identity: Final = UserAPIKeyAuth(
+        user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None,
+        project_id="missing-project" if scope == "missing-project" else None,
+        team_member_model_max_budget={"restricted-model": {"max_budget": 10}}
+        if scope == "member-model-budget"
+        else None,
+    )
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="opaque-team") if scope == "member" else None,
+            user_object=None if scope == "missing-user" else user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            valid_token=identity,
+            request=request,
+            skip_budget_checks=True,
+            project_object=project,
+        )
+    assert denied.value.status_code == 403
+    assert expected in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [
+    "owner-budget", "customer-model", "customer-tokens", "customer-budget",
+    "customer_org_id", "customer_team_id", "customer_member_id", "resolved-customer-model",
+])
+async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: str) -> None:
+    from litellm.models.budget import BudgetLimit
+    from litellm.models.team import BudgetLimitEntry
+    from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
+
+    customer_scope: Final = CustomerScopeAuth(
+        key="customer_org", entity_id="restricted-customer",
+        allowed_models=("restricted-model",) if scope == "customer-model" else None,
+        tpm_limit=1000 if scope == "customer-tokens" else None,
+        budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),) if scope == "customer-budget" else (),
+    )
+    identity: Final = UserAPIKeyAuth(
+        customer_hierarchy=CustomerHierarchyAuth(customer_org_id="restricted-customer", scopes=(customer_scope,)),
+        metadata={scope: "bound-customer"} if scope.endswith("_id") else {},
+    ).with_customer_model_scopes((("restricted-model",),) if scope == "resolved-customer-model" else ())
+    user: Final = LiteLLM_UserTable(
+        user_id="restricted-owner", user_role=LitellmUserRoles.PROXY_ADMIN,
+        budget_limits=(BudgetLimitEntry(budget_duration="1d", max_budget=10),) if scope == "owner-budget" else None,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={}, team_object=None, user_object=user, end_user_object=None,
+            global_proxy_spend=None, general_settings={}, route=route, llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()), valid_token=identity,
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+            skip_budget_checks=True,
+        )
+    assert denied.value.status_code == 403
+    assert "cannot enforce" in denied.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("lookup_error", [False, True])
+async def test_opaque_member_budget_lookup_fails_closed_when_budget_checks_are_skipped(
+    monkeypatch: pytest.MonkeyPatch, lookup_error: bool
+) -> None:
+    from litellm.proxy import proxy_server
+
+    database: Final = MagicMock()
+    database.db.litellm_budgettable.find_unique = AsyncMock(
+        return_value=None, side_effect=ConnectionError("budget unavailable") if lookup_error else None
+    )
+    cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    await cache.async_set_cache(
+        key=AuthObject.team_membership_reservation(user_id="member", team_id="team"),
+        value=LiteLLM_TeamMembership(user_id="member", team_id="team"),
+        model_type=LiteLLM_TeamMembership,
+    )
+    route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
+    with pytest.raises(HTTPException) as denied:
+        await common_checks(
+            request_body={},
+            team_object=LiteLLM_TeamTable(team_id="team", metadata={"team_member_budget_id": "member-budget"}),
+            user_object=LiteLLM_UserTable(user_id="member", user_role=LitellmUserRoles.PROXY_ADMIN),
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
+            valid_token=UserAPIKeyAuth(user_id="member", team_id="team"),
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+            skip_budget_checks=True,
+        )
+    assert denied.value.status_code == 403
+    assert "member" in denied.value.detail
 
 
 async def _run_team_trace_id_check(
@@ -107,7 +290,7 @@ async def _run_team_trace_id_check(
 
 @pytest.mark.parametrize(
     "route",
-    ["/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
+    ["/chat/completions", "/queue/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
 )
 @pytest.mark.asyncio
 async def test_team_require_trace_id_rejects_llm_mcp_and_agent_requests(route: str) -> None:
@@ -160,12 +343,15 @@ async def test_team_require_trace_id_accepts_supported_trace_carriers(
 @pytest.mark.parametrize("route", ["/v1/traces", "/v1/logs", "/v1/traces/query"])
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_trace_telemetry_routes(route: str) -> None:
-    assert await _run_team_trace_id_check(
-        route=route,
-        method="POST",
-        request_body={},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route=route,
+            method="POST",
+            request_body={},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.asyncio
@@ -197,11 +383,14 @@ async def test_team_require_trace_id_rejects_overridden_body_metadata_on_chat() 
 async def test_team_require_trace_id_accepts_effective_metadata_on_responses_route(
     request_body: dict[str, object],
 ) -> None:
-    assert await _run_team_trace_id_check(
-        route="/v1/responses",
-        request_body=request_body,
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/v1/responses",
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -240,12 +429,15 @@ async def test_team_require_trace_id_rejects_fallback_carriers_when_litellm_trac
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_mcp_with_empty_body() -> None:
-    assert await _run_team_trace_id_check(
-        route="/mcp/",
-        request_body={},
-        headers={"x-litellm-trace-id": "trace-mcp-123"},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/mcp/",
+            request_body={},
+            headers={"x-litellm-trace-id": "trace-mcp-123"},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -278,12 +470,15 @@ async def test_team_require_trace_id_rejects_nonheader_carriers_on_pass_through_
 
 @pytest.mark.asyncio
 async def test_team_require_trace_id_accepts_header_on_pass_through_route() -> None:
-    assert await _run_team_trace_id_check(
-        route="/anthropic/v1/messages",
-        request_body={},
-        headers={"x-litellm-trace-id": "trace-provider-123"},
-        team_metadata={"require_trace_id": True},
-    ) is True
+    assert (
+        await _run_team_trace_id_check(
+            route="/anthropic/v1/messages",
+            request_body={},
+            headers={"x-litellm-trace-id": "trace-provider-123"},
+            team_metadata={"require_trace_id": True},
+        )
+        is True
+    )
 
 
 @pytest.mark.parametrize(
@@ -329,7 +524,9 @@ async def test_team_require_trace_id_rejects_nonheader_carriers_on_registered_pa
                 "jsonrpc": "2.0",
                 "id": "1",
                 "method": "message/send",
-                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+                "params": {
+                    "message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}
+                },
             },
         ),
     ],
@@ -370,7 +567,9 @@ async def test_team_require_trace_id_rejects_traceparent_on_mcp_and_agent_routes
                 "jsonrpc": "2.0",
                 "id": "1",
                 "method": "message/send",
-                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+                "params": {
+                    "message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}
+                },
                 "metadata": {"trace_id": "trace-body-123"},
             },
         ),
@@ -446,6 +645,50 @@ async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
     assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
 
 
+@pytest.mark.parametrize(
+    ("route", "registered_pass_through_endpoint"),
+    [("/anthropic/v1/messages", False), ("/configured-passthrough/infer", True)],
+    ids=["provider-pass-through", "registered-pass-through"],
+)
+@pytest.mark.parametrize("with_header", [False, True])
+@pytest.mark.asyncio
+async def test_team_required_customer_headers_apply_to_pass_through_routes(
+    route: str, registered_pass_through_endpoint: bool, with_header: bool
+) -> None:
+    run: Final = _run_team_trace_id_check(
+        route=route,
+        request_body={},
+        headers={"X-Tenant-ID": "tenant"} if with_header else {},
+        team_metadata={"required_customer_headers": ["X-Tenant-ID"]},
+        registered_pass_through_endpoint=registered_pass_through_endpoint,
+    )
+    if with_header:
+        assert await run is True
+        return
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await run
+    assert (exc_info.value.code, exc_info.value.param) == (str(status.HTTP_403_FORBIDDEN), "X-Tenant-ID")
+
+
+class _ReadCountingHeaders(UserDict[str, str]):
+    reads = 0
+
+    def __getitem__(self, key: str) -> str:
+        self.reads += 1
+        return super().__getitem__(key)
+
+
+def test_duplicate_required_customer_headers_do_not_multiply_header_reads_or_admit_a_blank_header() -> None:
+    from litellm.proxy.auth.auth_checks import _missing_customer_header
+
+    headers: Final = _ReadCountingHeaders(
+        {**{f"x-extra-{index}": "value" for index in range(100)}, "hOsT": "gateway", "X-Tenant-ID": " \t "}
+    )
+    assert _missing_customer_header(headers, (*("Host" for _ in range(1000)), "X-Tenant-ID")) == "X-Tenant-ID"
+    assert headers.reads <= len(headers)
+
+
 @pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))
 def test_lens_management_does_not_require_an_inference_user_parameter(route: str) -> None:
     from starlette.requests import Request
@@ -463,7 +706,7 @@ def test_lens_management_does_not_require_an_inference_user_parameter(route: str
 async def test_get_end_user_object(customer_spend, customer_budget):
     """
     Scenario 1: normal - get_end_user_object returns the cached user
-    Scenario 2: user over budget - NOTE: budget enforcement now happens in 
+    Scenario 2: user over budget - NOTE: budget enforcement now happens in
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
 
     This test verifies that get_end_user_object correctly retrieves the end user
@@ -480,9 +723,9 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     # UserApiKeyCache applies model_type on get/set; plain DualCache returns raw dicts
     # and breaks get_end_user_object's typed async_get_cache path.
     _cache = UserApiKeyCache()
-    _key = "end_user_id:{}".format(end_user_id)
+    _key = f"end_user_id:{end_user_id}"
     await _cache.async_set_cache(
-        key=_key,
+        key=AuthObject.end_user(end_user_id),
         value=end_user_obj,
         model_type=LiteLLM_EndUserTable,
     )
@@ -550,8 +793,8 @@ async def test_can_key_call_model(model, expect_to_work):
     """
     If wildcard model + specific model is used, choose the specific model settings
     """
+
     from litellm.proxy.auth.auth_checks import can_key_call_model
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -591,7 +834,7 @@ async def test_can_key_call_model(model, expect_to_work):
     if expect_to_work:
         await can_key_call_model(**args)
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(**args)
 
         print(e)
@@ -603,8 +846,8 @@ async def test_can_key_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_team_call_model(model, expect_to_work):
+
     from litellm.proxy.auth.auth_checks import model_in_access_group
-    from fastapi import HTTPException
 
     llm_model_list = [
         {
@@ -895,8 +1138,8 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
 
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
-    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
     from litellm import Router
+    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
 
     router = Router(
         model_list=[
@@ -908,16 +1151,12 @@ async def test_is_valid_fallback_model():
     )
 
     try:
-        await is_valid_fallback_model(
-            model="gpt-3.5-turbo", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-3.5-turbo", llm_router=router, user_model=None)
     except Exception as e:
         pytest.fail(f"Expected is_valid_fallback_model to work, got exception: {e}")
 
     with pytest.raises(Exception, match="Invalid") as exc_info:
-        await is_valid_fallback_model(
-            model="gpt-4o", llm_router=router, user_model=None
-        )
+        await is_valid_fallback_model(model="gpt-4o", llm_router=router, user_model=None)
     e = exc_info.value
     assert "Invalid" in str(e)
 
@@ -931,9 +1170,7 @@ async def test_is_valid_fallback_model():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_check(
-    token_spend, max_budget, expect_budget_error
-):
+async def test_virtual_key_max_budget_check(token_spend, max_budget, expect_budget_error):
     """
     Test if virtual key budget checks work as expected:
     1. Triggers budget alert for all cases
@@ -1048,13 +1285,11 @@ async def test_can_team_access_model(model, team_models, expect_to_work):
             team_model_aliases=None,
         )
         if not expect_to_work:
-            pytest.fail(
-                f"Expected model access check to fail for model={model}, team_models={team_models}"
-            )
+            pytest.fail(f"Expected model access check to fail for model={model}, team_models={team_models}")
     except Exception as e:
         if expect_to_work:
             pytest.fail(
-                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {str(e)}"
+                f"Expected model access check to work for model={model}, team_models={team_models}. Got error: {e!s}"
             )
 
 
@@ -1103,9 +1338,9 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1158,9 +1393,7 @@ async def test_virtual_key_soft_budget_check(spend, soft_budget, expect_alert):
     ],
 )
 @pytest.mark.asyncio
-async def test_team_soft_budget_check(
-    spend, soft_budget, expect_alert, metadata, expected_alert_emails
-):
+async def test_team_soft_budget_check(spend, soft_budget, expect_alert, metadata, expected_alert_emails):
     """
     Test cases for _team_soft_budget_check:
     1. Spend over soft budget, no alert_emails configured - should NOT trigger alert (alerts only sent when alert_emails configured)
@@ -1208,9 +1441,9 @@ async def test_team_soft_budget_check(
 
     await asyncio.sleep(0.1)  # Allow time for the alert task to complete
 
-    assert (
-        alert_triggered == expect_alert
-    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    assert alert_triggered == expect_alert, (
+        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+    )
 
     if expect_alert:
         assert captured_call_info is not None
@@ -1222,17 +1455,14 @@ async def test_team_soft_budget_check(
         if expected_alert_emails is not None:
             assert captured_call_info.alert_emails == expected_alert_emails
         else:
-            assert (
-                captured_call_info.alert_emails is None
-                or captured_call_info.alert_emails == []
-            )
+            assert captured_call_info.alert_emails is None or captured_call_info.alert_emails == []
 
 
 @pytest.mark.asyncio
 async def test_can_user_call_model():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException
     from litellm import Router
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     router = Router(
         model_list=[
@@ -1270,9 +1500,10 @@ async def test_can_user_call_model():
 
 @pytest.mark.asyncio
 async def test_can_user_call_model_with_no_default_models():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
-    from litellm.proxy._types import ProxyException, SpecialModelNames
     from unittest.mock import MagicMock
+
+    from litellm.proxy._types import ProxyException, SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_user_call_model
 
     args = {
         "model": "anthropic-claude",
@@ -1290,90 +1521,6 @@ async def test_can_user_call_model_with_no_default_models():
 
     with pytest.raises(ProxyException) as e:
         await can_user_call_model(**args)
-
-
-@pytest.mark.asyncio
-async def test_get_fuzzy_user_object():
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
-    from unittest.mock import AsyncMock, MagicMock
-
-    # Setup mock Prisma client
-    mock_prisma = MagicMock()
-    mock_prisma.db = MagicMock()
-    mock_prisma.db.litellm_usertable = MagicMock()
-
-    # Mock user data
-    test_user = LiteLLM_UserTable(
-        user_id="test_123",
-        sso_user_id="sso_123",
-        user_email="test@example.com",
-        organization_memberships=[],
-        max_budget=None,
-    )
-
-    # Test 1: Find user by SSO ID
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123", user_email="test@example.com"
-    )
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
-        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
-    )
-
-    # Test 2: SSO ID not found, find by email
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    mock_prisma.db.litellm_usertable.update = AsyncMock()
-
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma,
-        sso_user_id="new_sso_456",
-        user_email="test@example.com",
-    )
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
-        include={"organization_memberships": True},
-    )
-
-    # Test 3: Verify background SSO update task when user found by email
-    await asyncio.sleep(0.1)  # Allow time for background task
-    mock_prisma.db.litellm_usertable.update.assert_called_with(
-        where={"user_id": "test_123"}, data={"sso_user_id": "new_sso_456"}
-    )
-
-    # Test 4: User not found by either method
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma,
-        sso_user_id="unknown_sso",
-        user_email="unknown@example.com",
-    )
-    assert result is None
-
-    # Test 5: Only email provided (no SSO ID)
-    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, user_email="test@example.com"
-    )
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
-        include={"organization_memberships": True},
-    )
-
-    # Test 6: Only SSO ID provided (no email)
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=test_user)
-    result = await _get_fuzzy_user_object(
-        prisma_client=mock_prisma, sso_user_id="sso_123"
-    )
-    assert result == test_user
-    mock_prisma.db.litellm_usertable.find_unique.assert_called_with(
-        where={"sso_user_id": "sso_123"}, include={"organization_memberships": True}
-    )
 
 
 @pytest.mark.parametrize(
@@ -1416,7 +1563,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
             llm_router=router,
         )
     else:
-        with pytest.raises(Exception, match='is not available for this API key') as e:
+        with pytest.raises(Exception, match="is not available for this API key") as e:
             await can_key_call_model(
                 model=model,
                 llm_model_list=llm_model_list,
@@ -1433,10 +1580,10 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
 @pytest.mark.asyncio
 async def test_cache_access_object():
     """Test _cache_access_object stores access group in cache with correct key."""
-    from litellm.proxy.auth.auth_checks import cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import cache_access_object
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     ag_id = "ag-test-123"
     ag_table = LiteLLM_AccessGroupTable(
         access_group_id=ag_id,
@@ -1448,7 +1595,7 @@ async def test_cache_access_object():
         access_group_table=ag_table,
         user_api_key_cache=cache,
     )
-    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    cached = await cache.async_get_cache(key=AuthObject.access_group(ag_id))
     assert cached is not None
     if isinstance(cached, dict):
         assert cached.get("access_group_id") == ag_id
@@ -1461,18 +1608,18 @@ async def test_cache_access_object():
 @pytest.mark.asyncio
 async def test_delete_cache_access_object():
     """Test _delete_cache_access_object removes access group from in-memory cache."""
-    from litellm.proxy.auth.auth_checks import delete_cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
+    from litellm.proxy.auth.auth_checks import delete_cache_access_object
 
-    cache = DualCache()
+    cache = UserApiKeyCache()
     ag_id = "ag-delete-test"
     ag_table = LiteLLM_AccessGroupTable(
         access_group_id=ag_id,
         access_group_name="to-delete",
     )
-    await cache.async_set_cache(key=f"access_group_id:{ag_id}", value=ag_table, ttl=60)
+    await cache.async_set_cache(key=AuthObject.access_group(ag_id), value=ag_table, ttl=60)
     await delete_cache_access_object(access_group_id=ag_id, user_api_key_cache=cache)
-    cached = await cache.async_get_cache(key=f"access_group_id:{ag_id}")
+    cached = await cache.async_get_cache(key=AuthObject.access_group(ag_id))
     assert cached is None
 
 
@@ -1502,9 +1649,7 @@ async def test_delete_cache_access_object():
     ],
 )
 @pytest.mark.asyncio
-async def test_get_resources_from_access_groups(
-    resource_field, access_group_data, expected
-):
+async def test_get_resources_from_access_groups(resource_field, access_group_data, expected):
     """Test _get_resources_from_access_groups returns correct resource list from access groups."""
     from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1530,13 +1675,13 @@ async def test_get_resources_from_access_groups(
             result = await get_models_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
             )
         else:
             result = await get_agent_ids_from_access_groups(
                 access_group_ids=[access_group_data["access_group_id"]],
                 prisma_client=MagicMock(),
-                user_api_key_cache=DualCache(),
+                user_api_key_cache=UserApiKeyCache(),
             )
         assert sorted(result) == sorted(expected)
 
@@ -1587,8 +1732,8 @@ async def test_can_team_access_model_access_group_ids_denied():
     """Test can_team_access_model denies when neither team models nor access_group_ids grant access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_team_access_model
     from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.auth_checks import can_team_access_model
 
     team_object = LiteLLM_TeamTable(
         team_id="test-team",
@@ -1981,31 +2126,13 @@ async def _db_service_call_types(hook: AsyncMock) -> tuple[str, ...]:
     return tuple(call.kwargs["call_type"] for call in hook.await_args_list if call.kwargs["service"] == ServiceTypes.DB)
 
 
-def _prisma_client_serving(user_id: str) -> SimpleNamespace:
-    row: Final = {
-        "user_id": user_id,
-        "user_role": "internal_user",
-        "teams": [],
-        "spend": 0.0,
-        "models": [],
-        "metadata": "{}",
-        "allowed_cache_controls": [],
-        "policies": [],
-        "model_spend": "{}",
-        "model_max_budget": "{}",
-        "organization_memberships": [],
-    }
-    engine: Final = SimpleNamespace(query=AsyncMock(return_value={"data": {"result": row}}), stop=lambda: None)
-    generated_client: Final = Prisma()
-    generated_client._engine = engine
-    return SimpleNamespace(db=PrismaWrapper(original_prisma=generated_client, iam_token_db_auth=False))
-
-
 @pytest.mark.asyncio
 async def test_get_user_object_cache_hit_emits_no_postgres_service_event(db_success_hook: AsyncMock) -> None:
     user_id: Final = f"cached-user-{uuid.uuid4()}"
     cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(key=user_id, value=LiteLLM_UserTable(user_id=user_id, user_role="internal_user"))
+    await cache.async_set_cache(
+        key=AuthObject.user(user_id), value=LiteLLM_UserTable(user_id=user_id, user_role="internal_user")
+    )
 
     result: Final = await get_user_object(
         user_id=user_id,
@@ -2024,7 +2151,7 @@ async def test_get_org_object_cache_hit_emits_no_postgres_service_event(db_succe
     org_id: Final = f"cached-org-{uuid.uuid4()}"
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key=f"org_id:{org_id}",
+        key=AuthObject.org(org_id),
         value=LiteLLM_OrganizationTable(
             organization_id=org_id, budget_id="b", models=[], created_by="t", updated_by="t"
         ),
@@ -2042,23 +2169,23 @@ async def test_get_org_object_cache_hit_emits_no_postgres_service_event(db_succe
 
 
 @pytest.mark.asyncio
-async def test_get_user_object_cache_miss_emits_exactly_one_postgres_get_user_object_event(
-    db_success_hook: AsyncMock,
+async def test_get_user_object_cache_miss_reads_the_rust_store_which_reports_its_own_db_event(
+    db_success_hook: AsyncMock, rust_auth_stores: RustAuthStores
 ) -> None:
     user_id: Final = f"db-user-{uuid.uuid4()}"
-    prisma_client: Final = _prisma_client_serving(user_id)
+    rust_auth_stores.user.rows = {user_id: LiteLLM_UserTable(user_id=user_id, user_role="internal_user").model_dump()}
 
     result: Final = await get_user_object(
         user_id=user_id,
-        prisma_client=prisma_client,
+        prisma_client=MagicMock(),
         user_api_key_cache=UserApiKeyCache(),
         user_id_upsert=False,
         parent_otel_span="auth-span",
     )
 
     assert result is not None and result.user_id == user_id
-    assert await _db_service_call_types(db_success_hook) == ("get_user_object",)
-    assert db_success_hook.await_args_list[0].kwargs["parent_otel_span"] == "auth-span"
+    assert [sign_in["user_id"] for sign_in, _ in rust_auth_stores.user.sign_ins] == [user_id]
+    assert await _db_service_call_types(db_success_hook) == ()
 
 
 @pytest.mark.parametrize("entry_first", [True, False])
@@ -2094,7 +2221,9 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
         model_group_alias={"chain-entry": "local-free", "local-free": "paid-gpt"},
     )
     expected: Final = {"chain-entry": True, "local-free": False, "paid-gpt": False}
-    order: Final = ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    order: Final = (
+        ("chain-entry", "local-free", "paid-gpt") if entry_first else ("local-free", "paid-gpt", "chain-entry")
+    )
 
     verdicts: Final = {name: is_model_cost_zero(model=name, llm_router=router) for name in order}
 
@@ -2169,8 +2298,13 @@ async def test_mcp_jsonrpc_zero_spend_method_bypasses_team_budget(route, method)
     ],
 )
 @pytest.mark.asyncio
-async def test_mcp_tool_call_route_still_enforces_team_budget(route, request_body):
+async def test_mcp_tool_call_route_still_enforces_team_budget(monkeypatch, route, request_body):
     from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager, "config_mcp_servers", {_PAID_SERVER[0]: _mcp_server(*_PAID_SERVER)}
+    )
 
     team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
 
@@ -2221,6 +2355,298 @@ def test_is_mcp_discovery_request(route, request_body, expected):
     assert is_mcp_discovery_request(route=route, request_body=request_body) is expected
 
 
+def _mcp_server(
+    server_id: str, name: str, cost_info: dict[str, object] | None, display_names: dict[str, str] | None = None
+) -> MCPServer:
+    return MCPServer(
+        server_id=server_id,
+        name=name,
+        alias=name,
+        url="https://example.invalid/mcp",
+        transport=MCPTransport.http,
+        tool_name_to_display_name=display_names,
+        mcp_info=None if cost_info is None else {"server_name": name, "mcp_server_cost_info": cost_info},
+    )
+
+
+_UNPRICED_SERVER = ("unpriced-id", "unpriced_tools", None)
+_RENAMED_PAID_TOOL_SERVER = (
+    "renamed-id",
+    "renamed_tools",
+    {"default_cost_per_query": 0.0, "tool_name_to_cost_per_query": {"premium": 0.5, "other_premium": 0.5}},
+    {"premium": "friendly", "basic": "plain", "other_premium": "unpriced_tools-echo"},
+)
+_FREE_SERVER_SHOWING_A_TOOL_AS_PREMIUM = (
+    "shows-id",
+    "shows_tools",
+    None,
+    {"basic": "premium", "plain": "mcp_tool_call"},
+)
+_PAID_DEFAULT_FREE_RENAMED_TOOL_SERVER = (
+    "paid-default-id",
+    "paid_default_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
+    {"basic": "plain"},
+)
+_SERVER_SHOWING_A_FREE_TOOL_AS_A_PAID_ONE = (
+    "swap-id",
+    "swap_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
+    {"basic": "swap_tools-premium", "premium": "swap_tools-basic"},
+)
+_SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME = (
+    "bare-id",
+    "bare_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"basic": 0.0}},
+    {"basic": "friendly", "premium": "basic"},
+)
+_PAID_SERVER_SHOWING_A_TOOL_AS_AN_UNPRICED_SERVERS_PREFIXED_NAME = (
+    "cross-id",
+    "cross_tools",
+    {"default_cost_per_query": 0.5},
+    {"premium": "unpriced_tools-echo"},
+)
+_ZERO_PRICED_SERVER = ("zero-id", "zero_tools", {"default_cost_per_query": 0.0})
+_PAID_SERVER = (
+    "paid-id",
+    "paid_tools",
+    {"default_cost_per_query": 0.5, "tool_name_to_cost_per_query": {"gratis": 0.0}},
+)
+_FREE_DEFAULT_PAID_TOOL_SERVER = ("mixed-id", "mixed_tools", {"tool_name_to_cost_per_query": {"premium": 0.25}})
+
+
+@pytest.mark.parametrize(
+    "servers,route,request_body,expected",
+    [
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            True,
+            id="jsonrpc-call-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp",
+            {"method": "tools/call"},
+            True,
+            id="jsonrpc-call-without-a-readable-name-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _ZERO_PRICED_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "zero-id"},
+            True,
+            id="rest-call-when-no-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            True,
+            id="jsonrpc-call-prefixed-with-a-free-server",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "paid_tools-echo"}},
+            False,
+            id="jsonrpc-call-prefixed-with-a-paid-server",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "paid_tools-gratis"}},
+            True,
+            id="jsonrpc-call-to-a-zero-priced-tool-on-a-paid-server",
+        ),
+        pytest.param(
+            (_FREE_DEFAULT_PAID_TOOL_SERVER,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "mixed_tools-premium"}},
+            False,
+            id="jsonrpc-call-to-a-priced-tool-on-a-server-with-no-default-cost",
+        ),
+        pytest.param(
+            (_FREE_DEFAULT_PAID_TOOL_SERVER,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "mixed_tools-echo"}},
+            True,
+            id="jsonrpc-call-to-an-unpriced-tool-beside-a-priced-one",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "echo"}},
+            False,
+            id="jsonrpc-bare-name-is-not-trusted-when-a-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call"},
+            False,
+            id="jsonrpc-call-without-a-readable-name-when-a-server-charges",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "unpriced-id"},
+            True,
+            id="rest-bare-name-with-a-free-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "unpriced_tools"},
+            True,
+            id="rest-bare-name-with-a-free-server-name",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "echo", "server_id": "paid-id"},
+            False,
+            id="rest-bare-name-with-a-paid-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "unpriced_tools-echo", "server_id": "paid-id"},
+            False,
+            id="rest-free-prefix-with-a-paid-server-id",
+        ),
+        pytest.param(
+            (_RENAMED_PAID_TOOL_SERVER,),
+            "/mcp-rest/tools/call",
+            {"name": "friendly", "server_id": "renamed-id"},
+            False,
+            id="rest-call-by-the-display-name-of-a-paid-tool",
+        ),
+        pytest.param(
+            (_RENAMED_PAID_TOOL_SERVER,),
+            "/mcp-rest/tools/call",
+            {"name": "plain", "server_id": "renamed-id"},
+            False,
+            id="rest-call-by-a-display-name-stays-checked-even-when-its-tool-is-free",
+        ),
+        pytest.param(
+            (_RENAMED_PAID_TOOL_SERVER,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "plain"}},
+            False,
+            id="jsonrpc-call-by-a-bare-display-name-stays-checked",
+        ),
+        pytest.param(
+            (_FREE_SERVER_SHOWING_A_TOOL_AS_PREMIUM, _RENAMED_PAID_TOOL_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "premium"}},
+            False,
+            id="jsonrpc-call-by-a-free-display-name-that-is-a-paid-native-tool-elsewhere",
+        ),
+        pytest.param(
+            (_FREE_SERVER_SHOWING_A_TOOL_AS_PREMIUM, _RENAMED_PAID_TOOL_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "mcp_tool_call"}},
+            False,
+            id="jsonrpc-call-by-a-free-display-name-that-is-a-reserved-tool-name",
+        ),
+        pytest.param(
+            (_PAID_DEFAULT_FREE_RENAMED_TOOL_SERVER,),
+            "/mcp-rest/tools/call",
+            {"name": "plain", "server_id": "paid-default-id"},
+            False,
+            id="rest-call-by-a-display-name-on-a-server-with-a-paid-default-stays-checked",
+        ),
+        pytest.param(
+            (_SERVER_SHOWING_A_FREE_TOOL_AS_A_PAID_ONE,),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "swap_tools-premium"}},
+            False,
+            id="jsonrpc-call-by-a-display-name-that-resolves-on-to-a-paid-tool",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp-rest/tools/call",
+            {"name": "mcp_tool_call", "server_id": "unpriced-id"},
+            False,
+            id="rest-call-of-a-reserved-tool-name-with-a-free-server-id",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["paid_tools"]},
+            False,
+            id="jsonrpc-call-of-a-free-servers-prefixed-name-scoped-to-a-paid-server-that-would-run-it",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["unpriced_tools"]},
+            True,
+            id="jsonrpc-call-scoped-to-the-free-server-that-owns-the-name",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}, "mcp_servers": ["some-access-group"]},
+            False,
+            id="jsonrpc-call-scoped-to-a-name-that-is-not-one-server",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _PAID_SERVER_SHOWING_A_TOOL_AS_AN_UNPRICED_SERVERS_PREFIXED_NAME),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="prefixed-name-of-a-free-server-that-another-server-shows-a-tool-under-stays-checked",
+        ),
+        pytest.param(
+            (_SERVER_SHOWING_A_PAID_TOOL_AS_A_FREE_ONES_BARE_NAME,),
+            "/mcp-rest/tools/call",
+            {"name": "friendly", "server_id": "bare-id"},
+            False,
+            id="rest-call-on-a-server-with-display-names-stays-checked",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER, _RENAMED_PAID_TOOL_SERVER),
+            "/mcp",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="jsonrpc-call-whose-free-looking-name-is-the-display-name-of-a-paid-tool",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER,),
+            "/mcp",
+            {"method": "resources/read", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="other-jsonrpc-methods-stay-budget-checked",
+        ),
+        pytest.param(
+            (_UNPRICED_SERVER,),
+            "/v1/chat/completions",
+            {"method": "tools/call", "params": {"name": "unpriced_tools-echo"}},
+            False,
+            id="non-mcp-route-with-a-tool-call-shaped-body",
+        ),
+    ],
+)
+def test_request_skips_budget_checks_for_mcp_tool_calls_that_cost_nothing(
+    monkeypatch, servers, route, request_body, expected
+):
+    from litellm.proxy.auth.auth_checks import request_skips_budget_checks
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    monkeypatch.setattr(  # test-quality-ok: the registry is a module singleton read by the budget check; no injection seam
+        global_mcp_server_manager,
+        "config_mcp_servers",
+        {server[0]: _mcp_server(*server) for server in servers},
+    )
+
+    assert (
+        request_skips_budget_checks(route=route, model=None, llm_router=None, request_body=request_body) is expected
+    ), f"{route} {request_body}"
+
+
 @pytest.mark.asyncio
 async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
     from litellm.proxy._types import LiteLLM_AccessGroupTable
@@ -2249,121 +2675,80 @@ async def test_get_skill_names_from_access_groups_reads_cached_group_rows():
     ) == frozenset({"skill-a", "skill-b", "shared"})
 
 
-class _Pipeline:
-    def __init__(self, send: Callable[[Sequence[str]], Awaitable[None]]) -> None:
-        self._send = send
-        self._messages: list[str] = []
+class _GatedChannel(FakeChannel):
+    """Holds every bulk broadcast until ``release`` is set; ``sent`` is set once one went out."""
 
-    def publish(self, channel: str, message: str) -> "_Pipeline":
-        self._messages.append(message)
-        return self
+    release: asyncio.Event
+    sent: asyncio.Event
 
-    async def execute(self) -> None:
-        await self._send(tuple(self._messages))
-
-
-class _SlowPublishRedisClient:
-    def __init__(self) -> None:
-        self.published: list[str] = []
-
-    async def _send(self, messages: Sequence[str]) -> None:
-        await asyncio.sleep(0.001)
-        self.published.extend(messages)
-
-    async def publish(self, channel: str, message: str) -> int:
-        await self._send((message,))
-        return 1
-
-    def pipeline(self, transaction: bool = True) -> _Pipeline:
-        return _Pipeline(self._send)
-
-
-class _WedgedPublishRedisClient:
-    def __init__(self) -> None:
+    def __init__(self, released: bool = False) -> None:
+        super().__init__()
         self.release = asyncio.Event()
+        self.sent = asyncio.Event()
+        if released:
+            self.release.set()
 
-    async def _send(self, messages: Sequence[str]) -> None:
+    async def broadcast_evictions(self, cache_keys: Sequence[str]) -> None:
         await self.release.wait()
-
-    async def publish(self, channel: str, message: str) -> int:
-        await self._send((message,))
-        return 1
-
-    def pipeline(self, transaction: bool = True) -> _Pipeline:
-        return _Pipeline(self._send)
+        await super().broadcast_evictions(cache_keys)
+        self.sent.set()
 
 
-class _PubSubRedisCache:
-    namespace = None
+def _install_channel(monkeypatch: pytest.MonkeyPatch, handle: FakeChannel) -> None:
+    from litellm.proxy import proxy_server
 
-    def __init__(self, client: _SlowPublishRedisClient | _WedgedPublishRedisClient) -> None:
-        self._client = client
-
-    def init_pubsub_client(self) -> _SlowPublishRedisClient | _WedgedPublishRedisClient:
-        return self._client
-
-
-async def _drain_publishes() -> None:
-    await asyncio.gather(*pubsub_module._pending_publishes)  # pyright: ignore[reportPrivateUsage]  # drain module-level tasks
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", CacheInvalidation(handle))
 
 
 @pytest.mark.asyncio
-async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_every_one(
+async def test_evicting_more_keys_than_the_publisher_holds_pending_broadcasts_every_one_in_one_batch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client = _SlowPublishRedisClient()
-    hashed_tokens: Final = tuple(f"token-{index}" for index in range(pubsub_module._MAX_PENDING_PUBLISHES + 476))  # pyright: ignore[reportPrivateUsage]  # the cap under test
+    handle: Final = FakeChannel()
+    _install_channel(monkeypatch, handle)
+    hashed_tokens: Final = tuple(f"token-{index}" for index in range(1500))
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),
-    ):
-        await delete_cache_key_objects(
-            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=None
-        )
-        await _drain_publishes()
+    await delete_cache_key_objects(
+        hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=None
+    )
 
-    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+    assert handle.bulk == [
+        (*hashed_tokens, *(AuthObject.customer_app_key_resource(token).key for token in hashed_tokens))
+    ]
 
 
 @pytest.mark.asyncio
-async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_redis(
+async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_broadcast(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
-    client = _WedgedPublishRedisClient()
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
+    handle: Final = _GatedChannel()
+    _install_channel(monkeypatch, handle)
+    cache: Final = UserApiKeyCache(max_size_in_memory=2_000)
     hashed_tokens: Final = tuple(
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)
     )
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+        cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
     seeded: Final = tuple(
-        token for token in hashed_tokens if cache.in_memory_cache_for(token).get_cache(token) is not None
+        token for token in hashed_tokens if cache.get_local(AuthObject.virtual_key(token)) is not None
     )
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),
-    ):
-        eviction: Final = asyncio.create_task(
-            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
-        )
-        await asyncio.sleep(0.05)
-        still_cached: Final = tuple(
-            token for token in seeded if cache.in_memory_cache_for(token).get_cache(token) is not None
-        )
-        client.release.set()
-        await eviction
-        await _drain_publishes()
+    eviction: Final = asyncio.create_task(
+        delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+    )
+    await asyncio.sleep(0.05)
+    still_cached: Final = tuple(
+        token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None
+    )
+    handle.release.set()
+    await eviction
 
     assert seeded == hashed_tokens
     assert still_cached == ()
+    assert handle.bulk == [
+        (*hashed_tokens, *(AuthObject.customer_app_key_resource(token).key for token in hashed_tokens))
+    ]
 
 
 class _AuthRedisCache:
@@ -2396,45 +2781,30 @@ class _AuthRedisCache:
 async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_broadcast(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    monkeypatch.setattr(pubsub_module, "_BULK_EVICTION_WAIT_SECONDS", 0.5)
-    client = _WedgedPublishRedisClient()
+    handle: Final = _GatedChannel()
+    _install_channel(monkeypatch, handle)
     hashed_tokens: Final = tuple(
         hashlib.sha256(f"token-{index}".encode()).hexdigest()
         for index in range(600)
     )
-    redis = _AuthRedisCache({token: {"token": token} for token in hashed_tokens})
-    cache: Final = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2_000))
-    cache.attach_redis_cache(redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
+    cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
-        cache.in_memory_cache_for(hashed_token).set_cache(key=hashed_token, value={"token": hashed_token})
+        cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),
-    ):
-        eviction: Final = asyncio.create_task(
-            delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
-        )
-        await asyncio.sleep(0.05)
-        refilled: Final = [token for token in hashed_tokens if await cache.async_get_cache(key=token) is not None]
-        client.release.set()
-        await eviction
-        await _drain_publishes()
+    eviction: Final = asyncio.create_task(
+        delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
+    )
+    await asyncio.sleep(0.05)
+    refilled: Final = [
+        token
+        for token in hashed_tokens
+        if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
+    ]
+    handle.release.set()
+    await eviction
 
     assert refilled == []
-    assert redis.entries == {}
-
-
-class _SignallingPublishRedisClient(_SlowPublishRedisClient):
-    def __init__(self) -> None:
-        super().__init__()
-        self.sent = asyncio.Event()
-
-    async def _send(self, messages: Sequence[str]) -> None:
-        await super()._send(messages)
-        self.sent.set()
+    assert redis.redis == {}
 
 
 class _DeleteAfterBroadcastRedisCache(_AuthRedisCache):
@@ -2452,24 +2822,86 @@ class _DeleteAfterBroadcastRedisCache(_AuthRedisCache):
 async def test_bulk_eviction_broadcasts_while_the_usage_cache_redis_is_wedged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(pubsub_module, "_in_flight_publishes", asyncio.Semaphore(16))
-    monkeypatch.setattr(pubsub_module, "_pending_publishes", set())
-    client: Final = _SignallingPublishRedisClient()
-    usage_redis: Final = _DeleteAfterBroadcastRedisCache(broadcast_sent=client.sent)
+    handle: Final = _GatedChannel(released=True)
+    _install_channel(monkeypatch, handle)
+    usage_redis: Final = _DeleteAfterBroadcastRedisCache(broadcast_sent=handle.sent)
     proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=None)
     proxy_logging_obj.internal_usage_cache = InternalUsageCache(
         dual_cache=DualCache(redis_cache=usage_redis)  # pyright: ignore[reportArgumentType]  # a dict-backed fake of the Redis layer
     )
     hashed_tokens: Final = ("token-a", "token-b")
 
-    with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
-        return_value=_PubSubRedisCache(client),
-    ):
-        await delete_cache_key_objects(
-            hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=proxy_logging_obj
-        )
-        await _drain_publishes()
+    await delete_cache_key_objects(
+        hashed_tokens=hashed_tokens, user_api_key_cache=UserApiKeyCache(), proxy_logging_obj=proxy_logging_obj
+    )
 
     assert usage_redis.finished
-    assert {json.loads(message)["cache_key"] for message in client.published} == set(hashed_tokens)
+    assert handle.bulk == [
+        (*hashed_tokens, *(AuthObject.customer_app_key_resource(token).key for token in hashed_tokens))
+    ]
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_chat_routes_require_the_user_param_when_enforced(route: str) -> None:
+    from starlette.requests import Request
+
+    from litellm.proxy.auth.auth_checks import _enforce_user_param_check
+
+    request: Final = Request({"type": "http", "method": "POST", "path": route})
+    with pytest.raises(Exception, match="'user' param not passed"):
+        _enforce_user_param_check({"enforce_user_param": True}, request, {}, route)
+    _enforce_user_param_check({"enforce_user_param": True}, request, {"user": "u"}, route)
+
+
+@pytest.mark.parametrize("route", ("/v1/chat/completions", "/queue/chat/completions"))
+def test_spent_proxy_budget_refuses_chat_routes(monkeypatch: pytest.MonkeyPatch, route: str) -> None:
+    from litellm.proxy.auth.auth_checks import _global_proxy_budget_check
+
+    monkeypatch.setattr(litellm, "max_budget", 0.5)
+    _global_proxy_budget_check(global_proxy_spend=0.4, skip_budget_checks=False, route=route)
+    with pytest.raises(litellm.BudgetExceededError):
+        _global_proxy_budget_check(global_proxy_spend=1.0, skip_budget_checks=False, route=route)
+
+
+@pytest.mark.parametrize(
+    "authenticated_by_custom_auth, route, spend, expect_budget_error",
+    [
+        pytest.param(True, "/chat/completions", 15.0, True, id="custom-auth-over-budget-llm-route"),
+        pytest.param(True, "/queue/chat/completions", 15.0, True, id="custom-auth-over-budget-queued-route"),
+        pytest.param(True, "/chat/completions", 5.0, False, id="custom-auth-under-budget-llm-route"),
+        pytest.param(True, "/key/info", 15.0, False, id="custom-auth-over-budget-management-route"),
+        pytest.param(False, "/chat/completions", 15.0, False, id="virtual-key-path-checks-before-common-checks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
+    authenticated_by_custom_auth: bool, route: str, spend: float, expect_budget_error: bool
+) -> None:
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    max_budget: Final = 10.0
+    valid_token: Final = UserAPIKeyAuth(token="test-token", spend=spend, max_budget=max_budget).model_copy(
+        update={"authenticated_by_custom_auth": authenticated_by_custom_auth}
+    )
+
+    async def run() -> bool:
+        return await common_checks(
+            request_body={},
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=AsyncMock(),
+            valid_token=valid_token,
+            request=MagicMock(),
+        )
+
+    if expect_budget_error:
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await run()
+        assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
+    else:
+        assert await run() is True

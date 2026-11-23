@@ -414,7 +414,8 @@ class LakeraAIGuardrail(CustomGuardrail):
             verbose_proxy_logger.debug(
                 "Lakera AI v2 guard response: %s", _DECODED_JSON.validate_python(response.json())
             )
-            lakera_response = LakeraAIResponse(**response.json())
+            decoded_response: Final[LakeraAIResponse] = response.json()
+            lakera_response = LakeraAIResponse(**decoded_response)
             return lakera_response, masked_entity_count
         except Exception as e:
             status = "guardrail_failed_to_respond"

@@ -139,7 +139,7 @@ _DISTINCT_TAG_ROWS: Final = TypeAdapter(list[_DistinctTagRow])
 _ACTIVE_USERS_ROWS: Final = TypeAdapter(list[_ActiveUsersRow])
 _TAG_SUMMARY_ROWS: Final = TypeAdapter(list[_TagSummaryRow])
 
-_RowT_co: Final = TypeVar("_RowT_co", covariant=True)
+_RowT_co = TypeVar("_RowT_co", covariant=True)
 
 if TYPE_CHECKING:
 
@@ -158,7 +158,9 @@ def _typed_table(repo: DailyTagSpendRepository | VerificationTokenRepository | U
 
 
 async def _query_raw(prisma_client: "PrismaClient", sql_query: str, *params: object) -> object:
-    return await prisma_client.db.query_raw(sql_query, *params)
+    from litellm.proxy.utils import query_raw_rows
+
+    return await query_raw_rows(prisma_client.db, sql_query, *params)
 
 
 @router.get(

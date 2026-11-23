@@ -35,7 +35,7 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list[Any] | None = []
+    allowed_routes: list[object] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
@@ -118,7 +118,7 @@ class UpdateKeyRequest(KeyRequestBase):
 
     project_id: str | None = Field(
         default=None,
-        description="Omit to retain the project, or send null to detach. Assigning a different project is not supported.",
+        description="Omit to retain the project, send null to detach, or send a project id to assign an unassigned key to a project on the key's team. Moving a key between projects is not supported.",
     )
 
     @model_validator(mode="before")

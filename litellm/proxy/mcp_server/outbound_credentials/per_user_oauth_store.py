@@ -21,7 +21,6 @@ from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
-    AsyncCache,
     DualCacheTokenCacheBackend,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
@@ -61,7 +60,7 @@ async def _read_credential(user_id: str, server_id: str) -> Mapping[str, object]
 
     if prisma_client is None:
         raise TokenStoreUnavailable("Database not connected")
-    return await get_user_oauth_credential(prisma_client, user_id, server_id)
+    return await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
 
 
 async def _persist_credential(
@@ -73,7 +72,8 @@ async def _persist_credential(
     scopes: tuple[str, ...] | None,
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
-) -> None:
+    refreshed_from: str | None = None,
+) -> bool | None:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415
         store_user_oauth_credential,
     )
@@ -81,7 +81,7 @@ async def _persist_credential(
 
     if prisma_client is None:
         return
-    await store_user_oauth_credential(
+    return await store_user_oauth_credential(
         prisma_client=prisma_client,
         user_id=user_id,
         server_id=server_id,
@@ -92,6 +92,7 @@ async def _persist_credential(
         skip_byok_guard=True,
         identity_binding_proof=identity_binding_proof,
         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+        **({"refreshed_from": refreshed_from} if refreshed_from is not None else {}),
     )
 
 
@@ -121,7 +122,7 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
 def _redis_cache_is_available() -> bool:
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 
-    return user_api_key_cache.redis_cache is not None
+    return user_api_key_cache.has_redis
 
 
 def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, RefreshCoordinator | None, bool]:
@@ -132,7 +133,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         decrypt_value_helper,
         encrypt_value_helper,
     )
-    from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
+    from litellm.proxy.proxy_server import mcp_state_cache  # noqa: PLC0415
 
     coordinator: Final = runtime_refresh_coordinator()
     if coordinator is None:
@@ -141,10 +142,7 @@ def _runtime_backend_and_coordinator() -> tuple[TokenCacheBackend | None, Refres
         encrypt_value_helper,
         lambda blob: decrypt_value_helper(blob, "mcp_per_user_token", exception_type="debug"),
     )
-    # user_api_key_cache satisfies the AsyncCache slice (DualCache types ttl via **kwargs) - an
-    # untyped-boundary cast.
-    cache: Final[AsyncCache] = user_api_key_cache  # pyright: ignore
-    backend: Final = DualCacheTokenCacheBackend(cache, codec)
+    backend: Final = DualCacheTokenCacheBackend(mcp_state_cache, codec)
     return backend, coordinator, True
 
 

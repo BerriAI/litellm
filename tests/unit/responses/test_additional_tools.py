@@ -1,8 +1,9 @@
 from typing import Final
 
+import pytest
 from pydantic import JsonValue
 
-from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.responses.additional_tools import hoist_additional_tools, with_additional_tools_hoisted
 
 _EXEC_TOOL = {
     "type": "custom",
@@ -134,3 +135,10 @@ def test_tool_list_repeated_on_every_turn_is_sent_as_is_without_drop_params() ->
 
     assert hoisted.tools == (_TOP_LEVEL_TOOL, _function("exec", "old"), _function("exec", "new"))
     assert hoisted.input == [_USER_MESSAGE, _USER_MESSAGE]
+
+
+@pytest.mark.parametrize("tools", [7, "exec", {"type": "function"}], ids=["int", "str", "dict"])
+def test_request_whose_top_level_tools_is_not_a_list_stays_as_sent_for_the_provider_to_refuse(tools: object) -> None:
+    request: Final = {"input": [_tool_list(_function("exec")), _USER_MESSAGE], "tools": tools}
+
+    assert with_additional_tools_hoisted(request, drop_params=True) == request

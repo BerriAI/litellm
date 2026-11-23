@@ -1,0 +1,45 @@
+suite: test extraResources
+templates:
+  - extra-resources.yaml
+values:
+  - ./values/required.yaml
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders every entry as its own document and templates it against the release
+    set:
+      extraResources:
+        - apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: "{{ .Release.Name }}-extra"
+          data:
+            chart: "{{ .Chart.Name }}"
+        - apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: deny-all
+          spec:
+            podSelector: {}
+            policyTypes:
+              - Ingress
+    asserts:
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ConfigMap
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: RELEASE-NAME-extra
+        documentIndex: 0
+      - equal:
+          path: data.chart
+          value: litellm
+        documentIndex: 0
+      - isKind:
+          of: NetworkPolicy
+        documentIndex: 1
