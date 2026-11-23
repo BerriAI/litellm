@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
 from litellm.caching.caching import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
@@ -8608,28 +8609,44 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 
 
 @pytest.mark.parametrize(
-    ("aws_status", "log_level"),
-    [(400, logging.WARNING), (429, logging.WARNING), (500, logging.ERROR)],
+    ("aws_status", "log_level", "stream"),
+    [
+        (400, logging.WARNING, "stdout"),
+        (429, logging.WARNING, "stdout"),
+        (403, logging.ERROR, "stderr"),
+        (404, logging.ERROR, "stderr"),
+        (500, logging.ERROR, "stderr"),
+    ],
 )
 @pytest.mark.asyncio
-async def test_bedrock_native_count_tokens_logs_a_provider_4xx_as_a_warning_and_a_5xx_as_an_error(
+async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings_and_other_failures_as_errors(
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
     respx_mock: respx.MockRouter,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     aws_status: int,
     log_level: int,
+    stream: Literal["stdout", "stderr"],
 ) -> None:
     aws_reply: Final = httpx.Response(aws_status, json={"message": "The count failed."})
     with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
 
     assert exc_info.value.status_code == aws_status
-    assert [
-        record.levelno
+    alerts: Final = [
+        record
         for record in caplog.records
-        if record.name == "LiteLLM Proxy" and record.levelno >= logging.WARNING
-    ] == [log_level]
+        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
+    ]
+    assert [record.levelno for record in alerts] == [log_level]
+
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(alerts[0])
+    out, err = capsys.readouterr()
+    assert {"stdout": (out, err), "stderr": (err, out)}[stream] == (f"{alerts[0].getMessage()}\n", "")
 
 
 @pytest.mark.parametrize(

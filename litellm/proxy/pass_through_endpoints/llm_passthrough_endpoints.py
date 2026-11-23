@@ -33,7 +33,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import get_llm_provider
-from litellm._logging import redact_internal_details_from_client_message, verbose_proxy_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    verbose_proxy_logger,
+    verbose_proxy_stdout_logger,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
@@ -1428,6 +1432,9 @@ def is_bedrock_count_tokens_endpoint(endpoint: str) -> bool:
     return "count_tokens" in endpoint or "count-tokens" in endpoint
 
 
+_COUNT_TOKENS_CALLER_ERROR_STATUSES: Final = frozenset({400, 429})
+
+
 def extract_model_from_bedrock_endpoint(endpoint: str) -> str:
     """
     Extract model name from Bedrock endpoint path.
@@ -1759,8 +1766,9 @@ async def _bedrock_count_tokens(
 
     except BedrockError as e:
         # Convert BedrockError to HTTPException for FastAPI
-        verbose_proxy_logger.log(
-            logging.WARNING if e.status_code < 500 else logging.ERROR,
+        is_caller_error: Final = e.status_code in _COUNT_TOKENS_CALLER_ERROR_STATUSES
+        (verbose_proxy_stdout_logger if is_caller_error else verbose_proxy_logger).log(
+            logging.WARNING if is_caller_error else logging.ERROR,
             "BedrockError in handle_bedrock_count_tokens: %s",
             e,
         )
