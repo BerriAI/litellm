@@ -155,6 +155,7 @@ from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.resolvers import CredentialRef, Principal
 from litellm.proxy.auth.resolvers.store import IdentityStore
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.auth.team_grants import newer_team_row_update
 from litellm.proxy.auth.trusted_proxy_utils import get_trusted_proxy_cidrs
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
@@ -1811,18 +1812,6 @@ def _is_bodyless_get(request: Request) -> bool:
     )
 
 
-def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> Mapping[str, object]:
-    if team.last_refreshed_at is None or key.last_refreshed_at is None:
-        return MappingProxyType({})
-    if team.last_refreshed_at <= key.last_refreshed_at:
-        return MappingProxyType({})
-    key_fields: Final = type(key).model_fields
-    team_fields: Final[Mapping[str, object]] = MappingProxyType(team.__dict__)
-    return MappingProxyType(
-        {f"team_{name}": value for name, value in team_fields.items() if f"team_{name}" in key_fields}
-    )
-
-
 async def _cached_team_fields_for_key(
     key: UserAPIKeyAuth, user_api_key_cache: UserApiKeyCache, parent_otel_span: Span | None
 ) -> Mapping[str, object] | None:
@@ -1832,7 +1821,7 @@ async def _cached_team_fields_for_key(
         team: Final = await get_team_object_from_cache(
             key=AuthObject.team(key.team_id), user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
         )
-        return None if team is None else _team_fields_newer_than_key(key, team)
+        return None if team is None else newer_team_row_update(key, team)
     except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
         return None
 

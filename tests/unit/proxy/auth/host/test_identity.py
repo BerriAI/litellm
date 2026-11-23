@@ -84,19 +84,46 @@ async def test_keyless_team_permission_never_reaches_a_key_without_a_team(
 
 
 @pytest.mark.asyncio
-async def test_loaded_team_permission_and_metadata_replace_the_keys_copy(
+@pytest.mark.parametrize(
+    ("key_read_at", "team_read_at", "expected"),
+    [
+        pytest.param(100.0, 200.0, (9, "team's name"), id="a_team_read_after_the_key_replaces_the_keys_copy"),
+        pytest.param(200.0, 100.0, (1, "key's name"), id="a_team_read_before_the_key_leaves_the_keys_copy"),
+        pytest.param(None, 100.0, (1, "key's name"), id="a_key_with_no_read_time_keeps_its_copy"),
+    ],
+)
+async def test_loaded_team_values_reach_the_key_only_when_the_team_is_the_newer_read(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
+    key_read_at: float | None,
+    team_read_at: float,
+    expected: tuple[int, str],
 ) -> None:
     stale: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-stale")
     fresh: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-fresh")
-    key: Final = UserAPIKeyAuth(token="hashed", team_id="t", team_object_permission=stale, team_metadata={"v": 1})
-    team: Final = LiteLLM_TeamTableCachedObj(team_id="t", object_permission=fresh, metadata={"v": 2})
+    key: Final = UserAPIKeyAuth(
+        token="hashed",
+        team_id="t",
+        team_object_permission=stale,
+        team_metadata={"v": 1},
+        team_rpm_limit=1,
+        team_alias="key's name",
+        last_refreshed_at=key_read_at,
+    )
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="t",
+        object_permission=fresh,
+        metadata={"v": 2},
+        rpm_limit=9,
+        team_alias="team's name",
+        last_refreshed_at=team_read_at,
+    )
 
     token: Final = await project_outcome(
         RustIdentity.VirtualKey(context=_context(key, team=RustTeamGrant.Loaded(team=team)))
     )
 
     assert (token.team_object_permission, token.team_metadata) == (fresh, {"v": 2})
+    assert (token.team_rpm_limit, token.team_alias) == expected
 
 
 @pytest.mark.asyncio

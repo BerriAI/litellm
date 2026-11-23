@@ -14,7 +14,6 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.user import LiteLLM_UserTable
@@ -175,14 +174,6 @@ def with_end_user(token: UserAPIKeyAuth, params: EndUserParams) -> UserAPIKeyAut
             "end_user_id": params.get("end_user_id"),
         }
     )
-
-
-def with_team(
-    token: UserAPIKeyAuth,
-    object_permission: LiteLLM_ObjectPermissionTable | None,
-    metadata: Mapping[str, object] | None,
-) -> UserAPIKeyAuth:
-    return token.model_copy(update={"team_object_permission": object_permission, "team_metadata": metadata})
 
 
 def with_project(token: UserAPIKeyAuth, project: LiteLLM_ProjectTable | None) -> UserAPIKeyAuth:

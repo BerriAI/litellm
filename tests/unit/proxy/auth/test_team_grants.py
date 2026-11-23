@@ -10,7 +10,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.models.team import LiteLLM_ModelTable
-from litellm.proxy.auth.team_grants import team_grants, team_model_aliases
+from litellm.proxy.auth.team_grants import TeamGrants, team_grants, team_model_aliases, with_team_row
 
 TEAM_ID = "team-grants"
 USER_ID = "user-in-team"
@@ -124,6 +124,78 @@ def test_team_member_is_the_callers_row_only():
     )
     assert team_grants(team_object=team, team_membership=None, user_id="stranger")["team_member"] is None
     assert team_grants(team_object=team, team_membership=None, user_id=None)["team_member"] is None
+
+
+def test_a_user_listed_twice_gets_the_last_entry_as_the_key_read_does():
+    team = LiteLLM_TeamTable(
+        team_id=TEAM_ID,
+        members_with_roles=[Member(user_id=USER_ID, role="user"), Member(user_id=USER_ID, role="admin")],
+    )
+
+    grants = team_grants(team_object=team, team_membership=None, user_id=USER_ID)
+
+    assert grants["team_member"] == Member(user_id=USER_ID, role="admin")
+
+
+MEMBERSHIP_FIELDS = {"team_member_spend", "team_member_tpm_limit", "team_member_rpm_limit"}
+
+
+def test_a_key_refreshed_from_its_team_holds_what_a_key_built_from_that_team_holds():
+    stale = UserAPIKeyAuth(
+        token="hashed",
+        user_id=USER_ID,
+        team_id=TEAM_ID,
+        team_alias="renamed-since",
+        team_models=["dropped-since"],
+        team_model_aliases={"fast": "repointed-since"},
+        team_member=Member(user_id=USER_ID, role="user"),
+        team_member_spend=9.0,
+        team_member_tpm_limit=7,
+        team_member_rpm_limit=8,
+    )
+    built = UserAPIKeyAuth(**team_grants(_full_team(), _membership(), USER_ID))
+
+    refreshed = with_team_row(stale, _full_team())
+
+    row_fields = set(TeamGrants.__annotations__) - MEMBERSHIP_FIELDS
+    assert {name: getattr(refreshed, name) for name in row_fields} == {
+        name: getattr(built, name) for name in row_fields
+    }
+    assert (refreshed.team_member_spend, refreshed.team_member_tpm_limit, refreshed.team_member_rpm_limit) == (
+        9.0,
+        7,
+        8,
+    )
+    assert (refreshed.token, refreshed.user_id, refreshed.team_id) == ("hashed", USER_ID, TEAM_ID)
+
+
+def test_a_malformed_alias_table_does_not_drop_the_teams_metadata():
+    """Guardrails are configured in the metadata, so losing it with the aliases would switch them off."""
+    team = LiteLLM_TeamTable(
+        team_id=TEAM_ID,
+        metadata={"guardrails": ["pii"]},
+        model_id=7,
+        litellm_model_table=_alias_table({"fast": 123}),
+    )
+
+    grants = team_grants(team_object=team, team_membership=None, user_id=None)
+
+    assert (grants["team_metadata"], grants["team_model_aliases"]) == ({"guardrails": ["pii"]}, None)
+
+
+def test_a_team_cached_without_its_alias_table_leaves_the_keys_aliases():
+    """Several team writers cache the row with only ``object_permission`` loaded."""
+    key = UserAPIKeyAuth(token="hashed", team_id=TEAM_ID, team_model_aliases=ALIASES)
+    team = LiteLLM_TeamTable(team_id=TEAM_ID, model_id=7)
+
+    assert with_team_row(key, team).team_model_aliases == ALIASES
+
+
+def test_a_team_with_no_alias_table_clears_the_keys_aliases():
+    key = UserAPIKeyAuth(token="hashed", team_id=TEAM_ID, team_model_aliases=ALIASES)
+    team = LiteLLM_TeamTable(team_id=TEAM_ID)
+
+    assert with_team_row(key, team).team_model_aliases is None
 
 
 def test_membership_limits_absent_without_membership_row():

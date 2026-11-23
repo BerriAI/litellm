@@ -17,10 +17,10 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
-from litellm.models.team import LiteLLM_TeamTableCachedObj
+from litellm.models.team import LiteLLM_ModelTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable, Member
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
@@ -151,12 +151,37 @@ async def test_without_an_end_user_no_limits_are_stamped() -> None:
 
 @pytest.mark.asyncio
 async def test_newer_cached_team_values_replace_the_keys_copy() -> None:
-    key: Final = UserAPIKeyAuth(token="hashed", team_id="t", team_models=["old"], team_max_budget=1.0)
-    team: Final = LiteLLM_TeamTableCachedObj(team_id="t", models=["new"], max_budget=5.0)
+    key: Final = UserAPIKeyAuth(
+        token="hashed",
+        user_id="u",
+        team_id="t",
+        team_models=["old"],
+        team_max_budget=1.0,
+        team_alias="old name",
+        team_model_aliases={"fast": "old-model"},
+        team_member=Member(user_id="u", role="user"),
+        team_member_spend=2.0,
+    )
+    team: Final = LiteLLM_TeamTableCachedObj(
+        team_id="t",
+        models=["new"],
+        max_budget=5.0,
+        team_alias="new name",
+        litellm_model_table=LiteLLM_ModelTable(
+            model_aliases={"fast": "new-model"}, created_by="admin", updated_by="admin"
+        ),
+        members_with_roles=[Member(user_id="u", role="admin")],
+    )
 
     token: Final = await _host().with_team(key, team)
 
     assert (token.token, token.team_id, token.team_models, token.team_max_budget) == ("hashed", "t", ["new"], 5.0)
+    assert (token.team_alias, token.team_model_aliases, token.team_member) == (
+        "new name",
+        {"fast": "new-model"},
+        Member(user_id="u", role="admin"),
+    )
+    assert token.team_member_spend == 2.0
 
 
 def _host_whose_team_read_fails(monkeypatch: pytest.MonkeyPatch, error: Exception) -> PythonAuthHost:
