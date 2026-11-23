@@ -1702,6 +1702,7 @@ class RustEndpoints:
                 kwargs[  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
                     "client"
                 ] = client
+            self._refuse_disabled_pass_through(kwargs)
             return await self._ageneric(plan, kwargs, passthrough=True)
         return await self._ageneric(plan, kwargs)
 
@@ -1727,6 +1728,33 @@ class RustEndpoints:
             return await self._direct(plan.host_op, {"model": name, **sent})
 
         return await self._core.drive(plan, kwargs, passthrough=passthrough_call if passthrough else None)
+
+    def _refuse_disabled_pass_through(self, kwargs: Mapping[str, object]) -> None:
+        """Refuse a pass-through route naming a model whose deployments all leave
+        ``use_in_pass_through`` off. The pass-through pick would find no deployment
+        and the drive would forward the request with fallback credentials instead
+        of surfacing that, so the refusal the pick raises is raised here, before
+        the drive. A model with no deployments in this router is not refused:
+        forwarding it is what the pass-through endpoint is for."""
+        from litellm import exceptions as litellm_exceptions
+        from litellm.litellm_core_utils.routing_common_utils import get_request_team_id
+
+        model: Final = kwargs.get("model")
+        if not isinstance(model, str):
+            return
+        deployments: Final = self._core.registry().deployments(model, team_id=get_request_team_id(kwargs)) or ()
+        if not deployments or any(
+            bool(as_dict(as_dict(record).get("litellm_params")).get("use_in_pass_through")) for record in deployments
+        ):
+            return
+        raise litellm_exceptions.BadRequestError(
+            message=(
+                f"Model {model} has no deployments configured with use_in_pass_through=True. "
+                "Please add use_in_pass_through: true to the deployment configuration"
+            ),
+            model=model,
+            llm_provider="",
+        )
 
     def _sync_factory(self, name: str, plan: Plan) -> Callable[..., object]:
         is_vector_store: Final = name.startswith("vector_store_")

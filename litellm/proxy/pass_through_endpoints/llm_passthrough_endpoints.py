@@ -302,6 +302,19 @@ def _models_served_by_group(llm_router: litellm.Router, model_group: str) -> fro
     )
 
 
+def _pass_through_disabled_for_vertex_model(llm_router: litellm.Router, model_id: str) -> bool:
+    """Whether every deployment serving this Vertex model leaves ``use_in_pass_through``
+    off, so a pass-through call naming it must be refused instead of forwarded with
+    the caller's credentials. A model no deployment serves is not refused."""
+    named: Final = tuple(
+        row
+        for row in llm_router.registry().deployments() or ()
+        if row.get("model_name") == model_id or _deployment_model_name(row["litellm_params"]) == model_id
+    )
+    candidates: Final = named + tuple(llm_router.registry().deployments(model_id) or ())
+    return bool(candidates) and not any(row["litellm_params"].get("use_in_pass_through") is True for row in candidates)
+
+
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_PRICING_FIELDS: Final[frozenset[str]] = SERVER_DERIVED_PRICING_FIELDS | DEPLOYMENT_SCOPED_PRICING_FIELDS
 
@@ -3701,9 +3714,17 @@ async def _relay_vertex_call(
     )
 
     # Check if model is in router config - always do this to resolve custom model names
-    model_id: Final = get_vertex_model_id_from_url(endpoint)
+    model_id: Final = get_vertex_model_id_from_url(encoded_endpoint)
     if model_id:
         if llm_router:
+            if _pass_through_disabled_for_vertex_model(llm_router, model_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model {model_id} has no deployments configured with use_in_pass_through=True. "
+                        "Please add use_in_pass_through: true to the deployment configuration"
+                    ),
+                )
             # Resolve model configuration from router
             (
                 encoded_endpoint,
