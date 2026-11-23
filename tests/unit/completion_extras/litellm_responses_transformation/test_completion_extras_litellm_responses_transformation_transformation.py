@@ -4903,6 +4903,25 @@ def test_transform_response_incomplete_content_filter_maps_finish_reason():
     assert result.choices[0].message.content == ""
 
 
+def test_transform_response_completed_reasoning_only_returns_empty_stop_choice():
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_incomplete_responses_api_response(None, [_make_reasoning_only_output_item()], status="completed")
+
+    result = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.index == 0
+    assert choice.message.role == "assistant"
+    assert choice.message.content == ""
+    assert choice.message.tool_calls is None
+    assert [item["encrypted_content"] for item in choice.message.reasoning_items] == ["enc_abc"]
+    assert result.usage.prompt_tokens == 37
+    assert result.usage.completion_tokens == 16
+    assert result.usage.completion_tokens_details.reasoning_tokens == 16
+
+
 def test_transform_response_zero_choices_not_incomplete_still_raises():
     handler = LiteLLMResponsesTransformationHandler()
     raw_response = _make_empty_responses_api_response()
