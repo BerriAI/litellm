@@ -40,10 +40,9 @@ from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_events,
-    anthropic_sse_frames_as_read,
-    anthropic_sse_reads_alike,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
     is_sse_error_stream,
@@ -1722,7 +1721,6 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if is_raw_sse_stream(source_chunks) and _is_generate_content_stream_route(route):
             return self._generate_content_stream_to_deliver(source_chunks, self._returned_call_names(request_data))
         upstream_errors: Final = anthropic_sse_error_events(source_chunks)
-        forwardable: Final = not upstream_errors and anthropic_sse_reads_alike(source_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
             source_chunks, restore_identity=bool(upstream_errors), through_upstream_error=True
         )
@@ -1737,7 +1735,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 )
             return source_chunks
         return self._anthropic_stream_to_deliver(
-            anthropic_response, source_chunks, self._returned_call_names(request_data), forwardable=forwardable
+            anthropic_response, source_chunks, self._returned_call_names(request_data)
         )
 
     def _generate_content_stream_to_deliver(
@@ -1777,27 +1775,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         anthropic_response: ModelResponse,
         source_chunks: Sequence[object],
         judged_names: _JudgedCalls,
-        *,
-        forwardable: bool,
     ) -> Sequence[object]:
-        """The frames the client gets: the upstream's own only when ``forwardable``, else only what the check read.
-
-        A stream is forwardable when no upstream error cut it and every client reads it as assembly does.
-        Assembly reads past an upstream error, and a client can read a frame of a broken stream, or of a
-        stream whose framing, names, types or block order disagree, as another call than assembly does, so
-        forwarding those frames would pass a tool call nobody checked. With nothing denied, the events as
-        assembly read them go out instead when every client reads those alike, since they keep every field
-        the upstream sent and a response rebuilt from the assembly does not.
-        """
         denials: Final = self._check_assembled_stream(anthropic_response, judged_names)
-        if denials:
-            self._modify_response_with_permission_errors(anthropic_response, denials)
-            return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
-        if forwardable:
-            return source_chunks
-        frames_as_judged: Final = anthropic_sse_frames_as_read(source_chunks)
-        if not anthropic_sse_error_events(source_chunks) and anthropic_sse_reads_alike(frames_as_judged):
-            return frames_as_judged
+        if not denials:
+            return anthropic_sse_chunks_as_scanned(anthropic_response, source_chunks)
+        self._modify_response_with_permission_errors(anthropic_response, denials)
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(

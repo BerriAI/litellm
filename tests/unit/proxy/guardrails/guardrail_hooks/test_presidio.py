@@ -2536,6 +2536,48 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_masks_text_split_ac
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_sse_bytes_never_forward_text_on_a_line_the_scan_could_not_read():
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello."},
+    )
+    text_delta: Final = _anthropic_sse(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello."}},
+    )
+    byte_chunks: Final = (
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        text_delta,
+        text_delta.replace(b"\ndata:", b"\n data:").replace(b"Hello.", b" Mail john.smith@example.com"),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    )
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected: Final = [
+        chunk
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"), response=mock_stream(), request_data={}
+        )
+    ]
+
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "Hello."
+    assert b"john.smith@example.com" not in b"".join(collected)
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_anthropic_sse_bytes_cut_off_by_an_upstream_error_are_masked_and_keep_the_error():
     guardrail: Final = OPTIONAL_PresidioPIIMasking(
         mock_testing=True,

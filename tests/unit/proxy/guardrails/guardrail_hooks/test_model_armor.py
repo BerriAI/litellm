@@ -3994,6 +3994,33 @@ async def _drain_surface_hook(guardrail, chunks, request_data=None):
     ]
 
 
+_ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS: Final = (
+    b'event: content_block_delta\n data: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":" and 5500-0000-0000-0004"}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "visible_text_frames", (_ANTHROPIC_SSE_CHUNKS[2:3], ()), ids=("beside-visible-text", "as-the-only-text")
+)
+async def test_streaming_hook_never_forwards_text_on_a_line_the_scan_could_not_read(
+    visible_text_frames: tuple[bytes, ...],
+):
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *visible_text_frames,
+        _ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS,
+        *_ANTHROPIC_SSE_CHUNKS[3:],
+    )
+    guardrail: Final = _surface_guardrail()
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_CLEAN)):
+        delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    assert b"5500-0000-0000-0004" not in b"".join(delivered)
+
+
 @pytest.mark.asyncio
 async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     """A /v1/messages stream arrives as raw SSE bytes and must be assembled, then scanned.

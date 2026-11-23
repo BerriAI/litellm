@@ -188,6 +188,19 @@ def anthropic_sse_chunks_from_response(
         return _sse_chunks_of_events(error_events)
 
 
+def anthropic_sse_chunks_as_scanned(scanned: ModelResponse, source_chunks: Sequence[object]) -> Sequence[object]:
+    """What goes out for a stream a guardrail scanned and left as it was: the upstream's own frames when every
+    client reads them as the guardrail did, else only what the guardrail read."""
+    if anthropic_sse_error_events(source_chunks):
+        return anthropic_sse_chunks_from_response(scanned, source_chunks, keep_explanations=True)
+    if anthropic_sse_reads_alike(source_chunks):
+        return source_chunks
+    frames_as_scanned: Final = anthropic_sse_frames_as_read(source_chunks)
+    if anthropic_sse_reads_alike(frames_as_scanned):
+        return frames_as_scanned
+    return anthropic_sse_chunks_from_response(scanned, source_chunks, keep_explanations=True)
+
+
 def _rebuilt_sse_chunks(
     assembled: ModelResponse, source_chunks: Sequence[object], error_events: Sequence[str], keep_explanations: bool
 ) -> tuple[bytes, ...]:

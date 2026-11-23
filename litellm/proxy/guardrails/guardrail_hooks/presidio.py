@@ -57,6 +57,7 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
     has_unreadable_json_event,
@@ -1624,7 +1625,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         original_text: Final = model_response_text(assembled)
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         if model_response_text(assembled) == original_text:
-            return chunks
+            return tuple(anthropic_sse_chunks_as_scanned(assembled, chunks))
         return anthropic_sse_chunks_from_response(assembled, chunks)
 
     @staticmethod

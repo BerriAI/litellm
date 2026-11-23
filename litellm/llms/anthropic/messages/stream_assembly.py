@@ -1,6 +1,7 @@
 import codecs
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
@@ -545,11 +546,35 @@ def _client_events(named_data: Sequence[_NamedData]) -> tuple[Mapping[str, objec
 
 
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
-    """Every Anthropic event a client reads in the stream, whatever line breaks, comments or data lines it uses.
-
-    An event without a data ``type`` takes its SSE ``event:`` name, as the Anthropic SDK reads it.
-    """
+    """Every Anthropic event a client reads in the stream, an event with no data ``type`` taking its ``event:`` name."""
     return _client_events(_named_data(_client_frames(_sse_frames(sse_stream.removeprefix(_BYTE_ORDER_MARK)))))
+
+
+@dataclass(frozen=True, slots=True)
+class _UnappliedFrame:
+    text: str
+
+
+_StreamItem: TypeAlias = Mapping[str, object] | _UnappliedFrame
+
+
+def _is_one_line(text: str) -> bool:
+    return len(text.splitlines()) <= 1
+
+
+def _stream_item(name: str, data: str) -> _StreamItem | None:
+    """The frame's event, else the frame itself when no client applies it, like an unknown event or ``[DONE]``."""
+    event: Final = _client_event(name, loads_json_object(data))
+    if event is not None:
+        return event
+    if name in _ANTHROPIC_EVENT_TYPES or not _is_one_line(name + data):
+        return None
+    return _UnappliedFrame(f"event: {name}\ndata: {data}\n\n" if name else f"data: {data}\n\n")
+
+
+def _stream_items(sse_stream: str) -> tuple[_StreamItem, ...]:
+    frames: Final = _client_frames(_sse_frames(sse_stream.removeprefix(_BYTE_ORDER_MARK)))
+    return tuple(item for name, data in frames if (item := _stream_item(name, data)) is not None)
 
 
 def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
@@ -809,50 +834,67 @@ def _without_the_typescript_sdk_input_buffer(event: Mapping[str, object]) -> Map
 _BLOCK_CONTENT_EVENT_TYPES: Final = frozenset({"content_block_delta", "content_block_stop"})
 
 
-def _block_order_key(starts: Sequence[int], position: int, event: Mapping[str, object]) -> tuple[int, bool, int]:
-    """Sorts a delta or stop right after the start of the block both Anthropic SDKs apply it to.
+def _event_type(item: _StreamItem) -> object:
+    return item.get("type") if isinstance(item, Mapping) else None
 
-    The SDKs apply it to the block at its ``index`` in the order the blocks started, so an event for a block
-    not started before it, and every other event, keeps its own place.
-    """
-    index: Final = event.get("index") if event.get("type") in _BLOCK_CONTENT_EVENT_TYPES else None
+
+def _block_order_key(starts: Sequence[int], position: int, item: _StreamItem) -> tuple[int, bool, int]:
+    """Sorts a delta or stop right after the start of the block at its ``index``, as both Anthropic SDKs apply it."""
+    index: Final = (
+        item.get("index") if isinstance(item, Mapping) and _event_type(item) in _BLOCK_CONTENT_EVENT_TYPES else None
+    )
     block_start: Final = starts[index] if type(index) is int and 0 <= index < len(starts) else position
-    return min(block_start, position), event.get("type") == "content_block_stop", position
+    return min(block_start, position), _event_type(item) == "content_block_stop", position
 
 
-def _in_block_order(events: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
-    starts: Final = tuple(
-        position for position, event in enumerate(events) if event.get("type") == "content_block_start"
-    )
-    ordered: Final = sorted(enumerate(events), key=lambda positioned: _block_order_key(starts, *positioned))
-    return tuple(event for _, event in ordered)
+def _in_block_order(items: Sequence[_StreamItem]) -> tuple[_StreamItem, ...]:
+    starts: Final = tuple(position for position, item in enumerate(items) if _event_type(item) == "content_block_start")
+    ordered: Final = sorted(enumerate(items), key=lambda positioned: _block_order_key(starts, *positioned))
+    return tuple(item for _, item in ordered)
 
 
-def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
-    sdk_events: Final = tuple(
-        _without_the_typescript_sdk_input_buffer(_delta_as_its_type_reads(event)) for event in _in_block_order(events)
-    )
+def _with_every_block_stopped(events: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The events plus a stop for each unstopped block, since assembly records a hosted call only at its stop."""
+    return (*events, *({"type": "content_block_stop", "index": index} for index in _unfinished_blocks(events)))
+
+
+def _as_the_sdks_apply(item: _StreamItem) -> _StreamItem:
+    if isinstance(item, _UnappliedFrame):
+        return item
+    return _without_the_typescript_sdk_input_buffer(_delta_as_its_type_reads(item))
+
+
+def _with_its_input_as_delta(item: _StreamItem, streamed_input_indexes: frozenset[int]) -> tuple[_StreamItem, ...]:
+    return (item,) if isinstance(item, _UnappliedFrame) else _with_tool_input_as_delta(item, streamed_input_indexes)
+
+
+def _sse_frame_text(item: _StreamItem) -> str:
+    if isinstance(item, _UnappliedFrame):
+        return item.text
+    return f"event: {item.get('type')}\ndata: {json.dumps(item)}\n\n"
+
+
+def _canonical_sse_frames(items: Sequence[_StreamItem]) -> tuple[str, ...]:
+    sdk_items: Final = tuple(_as_the_sdks_apply(item) for item in _in_block_order(items))
     streamed_input_indexes: Final = frozenset(
-        index for event in sdk_events if (index := _streamed_input_index(event)) is not None
+        index for item in sdk_items if isinstance(item, Mapping) and (index := _streamed_input_index(item)) is not None
     )
-    canonical_events: Final = chain.from_iterable(
-        _with_tool_input_as_delta(event, streamed_input_indexes) for event in sdk_events
+    canonical_items: Final = chain.from_iterable(
+        _with_its_input_as_delta(item, streamed_input_indexes) for item in sdk_items
     )
-    return tuple(f"event: {event.get('type')}\ndata: {json.dumps(event)}\n\n" for event in canonical_events)
+    return tuple(_sse_frame_text(item) for item in canonical_items)
 
 
 def anthropic_sse_frames_as_read(all_chunks: Sequence[object]) -> tuple[bytes, ...]:
-    """The stream's events as assembly reads them, each as one ``event:`` line and one ``data:`` line.
+    """The stream as assembly reads it, one ``event:`` and one ``data:`` line a frame, each block's events together.
 
-    Each block's deltas and stop follow its start, as the Anthropic SDKs apply them by index. Every field the
-    upstream sent stays except the ``__json_buf`` the TypeScript SDK would read as tool input, so a caller that
-    cannot forward a stream some client reads differently than assembly does can deliver these frames instead of
-    a response rebuilt from the assembly.
+    Every field the upstream sent stays except a ``__json_buf`` the TypeScript SDK would read as tool input, and a
+    frame no client applies, like an unknown event or ``[DONE]``, stays as sent.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
     if sse_stream is None:
         return ()
-    return tuple(frame.encode() for frame in _canonical_sse_frames(_parsed_sse_events(sse_stream)))
+    return tuple(frame.encode() for frame in _canonical_sse_frames(_stream_items(sse_stream)))
 
 
 def assemble_anthropic_sse_stream(
@@ -883,7 +925,7 @@ def assemble_anthropic_sse_stream(
     )
     try:
         assembled: Final = build_complete_streaming_response(
-            all_chunks=_canonical_sse_frames(content_events),
+            all_chunks=_canonical_sse_frames(_with_every_block_stopped(content_events)),
             litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
             model=model if isinstance(model, str) else "",
         )
@@ -964,24 +1006,31 @@ def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool
     return message is not None and not message.get("content")
 
 
+def _is_plain(line: str) -> bool:
+    return not line[:1].isspace() and ("data:" not in line or line.startswith("data:"))
+
+
+def _has_only_plain_lines(sse_stream: str) -> bool:
+    """No bare CR, which an LF-only reader keeps inside a line, and no line a stripping or substring reader reads."""
+    return sse_stream.count("\r") == sse_stream.count("\r\n") and all(map(_is_plain, sse_stream.splitlines()))
+
+
+def _ends_at_its_first_message_stop(events: Sequence[Mapping[str, object]]) -> bool:
+    stops: Final = tuple(position for position, event in enumerate(events) if event.get("type") == "message_stop")
+    return stops[:1] in ((), (len(events) - 1,))
+
+
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     """Whether every client reads the stream's content as assembly does, so the stream can be forwarded as sent.
 
-    The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a client
-    puts a block delta on the block at that list position or index. Assembly reads every one of these the same way
-    only when the names and types agree, ``message_start`` comes first with no content, and each block starts at the
-    next index and takes its deltas before it stops or the next block starts. The SDKs apply a delta by its ``type``
-    and other clients by the field it carries, so each delta carries only its type's field. The TypeScript SDK
-    replaces a block's start ``input`` once an input delta arrives, even an empty one, and the Python SDK keeps it,
-    so a block that starts with its input takes no input delta. The TypeScript SDK also puts a start's
-    ``__json_buf`` in front of the block's input deltas, so no block starts with one. A frame named ``error`` may
-    carry any data, since the SDKs raise on it and other clients read its type. A leading byte order mark stays part
-    of the first field name, as the Python SDK reads it, so these rules refuse it wherever it changes what that SDK
-    reads. No client dispatches a frame the stream never ended, a client splitting lines with ``str.splitlines``
-    also breaks a line at a form feed or U+2028, and a client parsing each ``data:`` line on its own reads a frame
-    of several data lines as several events, so a stream with any of these reads differently too.
+    That holds only for plain lines and single-line data that a spec reader, ``str.splitlines`` and an LF-only
+    reader split alike, ``event:`` names that agree with data types, an empty ``message_start`` first and nothing
+    after ``message_stop``, and blocks that start at the next index and take only their own deltas, each carrying
+    only its type's field, an input delta never following a start with input or ``__json_buf``.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
+    if not _has_only_plain_lines(sse_stream):
+        return False
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
     sse_frames: Final = _sse_frames(sse_stream)
     widest_frames: Final = _frames_of_the_widest_reader(sse_stream)
@@ -994,7 +1043,11 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     if not all(_names_its_own_type(name, data) for name, data in named_data):
         return False
     events: Final = tuple(event for event in _client_events(named_data) if event.get("type") != "ping")
-    return _opens_with_an_empty_message(events) and reduce(_after_block_event, events, (0, False, False)) is not None
+    return (
+        _opens_with_an_empty_message(events)
+        and _ends_at_its_first_message_stop(events)
+        and reduce(_after_block_event, events, (0, False, False)) is not None
+    )
 
 
 def _is_error_payload(payload: str) -> bool:

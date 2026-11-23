@@ -4463,6 +4463,51 @@ _READ_AND_LS_OUT_OF_BLOCK_ORDER: Final = {
         )
     ),
 }
+_UNSTOPPED_WEB_SEARCH_BEFORE_A_TEXT_BLOCK: Final = (
+    _OPENING[0],
+    *(
+        _sse_frame(event)
+        for event in (
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "server_tool_use", "id": "srvtoolu_01Search", "name": "web_search", "input": {}},
+            },
+            _input_delta(0, json.dumps({"query": "weather in Paris"})),
+            {"type": "content_block_start", "index": 1, "content_block": {"type": "text", "text": ""}},
+            {"type": "content_block_delta", "index": 1, "delta": {"type": "text_delta", "text": "Searching."}},
+            _block_stop(1),
+        )
+    ),
+    *_CLOSING,
+)
+_RM_RF_CALLS_ONLY_A_LENIENT_CLIENT_READS: Final = {
+    "space-before-named-data-lines": _stream(*(frame.replace(b"\ndata:", b"\n data:") for frame in _RM_RF_CALL)),
+    "space-before-unnamed-data-lines": _stream(*(b" " + frame.split(b"\n", 1)[1] for frame in _RM_RF_CALL)),
+    "space-before-the-event-names-typing-the-data": _stream(
+        *(b" " + re.sub(rb'"type": "content_block_\w+", ', b"", frame, count=1) for frame in _RM_RF_CALL)
+    ),
+    "data-lines-in-comments": _stream(*(b": " + frame.split(b"\n", 1)[1] for frame in _RM_RF_CALL)),
+    "carriage-return-inside-unnamed-json": _stream(
+        *(frame.split(b"\n", 1)[1].replace(b", ", b",\r", 1) for frame in _RM_RF_CALL)
+    ),
+}
+_WRITE_SPELLED_ACROSS_THE_DATA_LINES_OF_ONE_FRAME: Final = _stream(
+    *(
+        b"data: " + json.dumps(event).encode() + f"\ndata: event: {event['type']}\n\n".encode()
+        for event in (_tool_start(1, "Write", {"file_path": "/etc/passwd"}), _block_stop(1))
+    )
+)
+_BASH_INPUT_FINISHED_AFTER_MESSAGE_STOP: Final = (
+    *_OPENING,
+    _sse_frame(_tool_start(1, "Bash")),
+    _sse_frame(_input_delta(1, '{"command": "rm -rf /"')),
+    *_CLOSING,
+    _sse_frame(_input_delta(1, ', "command": "ls"}')),
+    _sse_frame(_block_stop(1)),
+)
+_UNKNOWN_EVENT_FRAME: Final = b'event: content_block_metadata\ndata: {"type": "content_block_metadata"}\n\n'
+_DONE_FRAME: Final = b"data: [DONE]\n\n"
 _TOOL_ONLY_SHAPES_THE_CHECK_CANNOT_FORWARD: Final = {
     "byte-order-mark": (b"\xef\xbb\xbf" + _LS_ONLY_STREAM[0], *_LS_ONLY_STREAM[1:]),
     "typed-only-by-event-names": tuple(
@@ -4558,11 +4603,40 @@ def _partial_jsons(events: Sequence[dict[str, object]], index: object) -> list[s
     ]
 
 
-def _tool_inputs_read_line_by_line(chunks: Sequence[object]) -> list[object]:
-    lines: Final = httpx.Response(200, content=_body(chunks)).iter_lines()
-    events: Final = [event for line in lines if (event := _data_line_event(line)) is not None]
+def _tool_inputs_of(events: Sequence[dict[str, object]]) -> list[object]:
     tool_indexes: Final = [event.get("index") for event in events if _is_tool_use_start(event)]
     return [json.loads("".join(_partial_jsons(events, index)) or "{}") for index in tool_indexes]
+
+
+def _tool_inputs_read_line_by_line(chunks: Sequence[object]) -> list[object]:
+    lines: Final = httpx.Response(200, content=_body(chunks)).iter_lines()
+    return _tool_inputs_of([event for line in lines if (event := _data_line_event(line)) is not None])
+
+
+def _event_read_leniently(name: str, line: str) -> dict[str, object] | None:
+    _, data_field, payload = line.partition("data:")
+    event: Final = _data_line_event(data_field + payload)
+    return {"type": name, **event} if event is not None and name else event
+
+
+def _events_of_a_frame_read_leniently(frame: str) -> list[dict[str, object]]:
+    lines: Final = [line.strip() for line in frame.split("\n")]
+    names: Final = [line.removeprefix("event:").strip() for line in lines if line.startswith("event:")]
+    name: Final = names[-1] if names else ""
+    return [event for line in lines if (event := _event_read_leniently(name, line)) is not None]
+
+
+def _tool_inputs_read_leniently(chunks: Sequence[object]) -> list[object]:
+    frames: Final = _body(chunks).decode().split("\n\n")
+    return _tool_inputs_of(list(chain.from_iterable(map(_events_of_a_frame_read_leniently, frames))))
+
+
+def _tool_inputs_at_message_stop(chunks: Sequence[object]) -> list[object]:
+    with _sdk_client(chunks).messages.stream(
+        model="claude-sonnet-4-5", max_tokens=1, messages=[{"role": "user", "content": "hi"}]
+    ) as stream:
+        snapshots: Final = [event.message.model_copy(deep=True) for event in stream if event.type == "message_stop"]
+    return [block.input for block in snapshots[0].content if block.type == "tool_use"]
 
 
 class TestToolPermissionGuardrailAnthropicStreamShapes:
@@ -4664,11 +4738,50 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
         assert (shaped_id == upstream_id) == (plain_id == upstream_id)
 
     @pytest.mark.asyncio
+    async def test_check_denies_a_hosted_call_whose_block_the_next_block_starts_without_a_stop(self):
+        with pytest.raises(GuardrailRaisedException):
+            await self._drain(self._bash_ls_only("block"), _UNSTOPPED_WEB_SEARCH_BEFORE_A_TEXT_BLOCK)
+
+    @pytest.mark.asyncio
     async def test_check_judges_the_input_field_the_sdk_reads_when_a_delta_carries_another(self):
         with pytest.raises(GuardrailRaisedException):
             await self._drain(
                 self._bash_ls_only("block"), _DENIED_CALL_SHAPES["input-hidden-behind-a-text-field"]
             )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks", _RM_RF_CALLS_ONLY_A_LENIENT_CLIENT_READS.values(), ids=_RM_RF_CALLS_ONLY_A_LENIENT_CLIENT_READS
+    )
+    async def test_client_reading_any_line_that_holds_data_never_reads_a_call_the_check_could_not_see(
+        self, chunks: tuple[bytes, ...]
+    ):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), chunks)
+
+        assert _RM_RF not in _tool_inputs_read_leniently(out)
+
+    @pytest.mark.asyncio
+    async def test_client_never_reads_a_call_the_upstream_spelled_only_across_one_frames_data_lines(self):
+        out: Final = await self._drain(self._bash_ls_only("block"), _WRITE_SPELLED_ACROSS_THE_DATA_LINES_OF_ONE_FRAME)
+
+        assert _sdk_message(out) == _sdk_message(list(_stream()))
+
+    @pytest.mark.asyncio
+    async def test_client_reading_the_message_at_its_stop_reads_the_input_the_check_judged(self):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), _BASH_INPUT_FINISHED_AFTER_MESSAGE_STOP)
+
+        assert _RM_RF not in _tool_inputs_at_message_stop(out)
+
+    @pytest.mark.asyncio
+    async def test_allowed_stream_the_check_reframes_keeps_the_frames_no_client_applies_where_they_were(self):
+        reframed_calls: Final = _READ_AND_LS_OUT_OF_BLOCK_ORDER["block-stops-at-the-end"]
+        chunks: Final = (*reframed_calls[:1], _UNKNOWN_EVENT_FRAME, *reframed_calls[1:], _DONE_FRAME)
+
+        out: Final = await self._drain(self._bash_ls_only("block"), chunks)
+
+        assert _body(out).startswith(_body(reframed_calls[:1]) + _UNKNOWN_EVENT_FRAME)
+        assert _body(out).endswith(_CLOSING[-1] + _DONE_FRAME)
+        assert _sdk_message(out) == _sdk_message(list(_READ_AND_LS_IN_BLOCK_ORDER))
 
 
 _GENERATE_CONTENT_STREAM_ROUTE: Final = "/v1beta/models/gemini-3.8-flash:streamGenerateContent"
