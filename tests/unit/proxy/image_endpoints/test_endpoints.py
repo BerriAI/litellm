@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.image_endpoints import endpoints
 from litellm.proxy.proxy_server import PrismaClient, ProxyConfig
 from litellm.proxy.utils import ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
@@ -233,6 +234,20 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
 
     assert response.status_code == 200
     assert captured["n"] == "two"
+
+
+def test_image_edit_bracketed_image_config_fields_reach_the_provider_as_sent(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "gpt-image-1", "prompt": "add a hat", "imageConfig[aspectRatio]": "9:16"},
+    )
+
+    assert response.status_code == 200
+    assert captured["imageConfig[aspectRatio]"] == "9:16"
+    assert "imageConfig" not in captured
 
 
 @pytest.mark.parametrize(
@@ -470,7 +485,7 @@ def _image_generation_client(
         team_id: Final = user_api_key_dict.team_id
         assert team_id is not None
         cache.set_cache(
-            key=f"team_id:{team_id}",
+            key=AuthObject.team(team_id),
             value=LiteLLM_TeamTableCachedObj(team_id=team_id, router_settings=dict(team_settings)),
             local_only=True,
             model_type=LiteLLM_TeamTableCachedObj,

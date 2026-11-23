@@ -89,9 +89,9 @@ const MINIMUM_CUSTOM_KEY_LENGTH: usize = 16;
 /// A credentials file's path as LiteLLM logs it: quoted with secrets redacted, or only its
 /// length when it is too long to be a path.
 fn path_for_log(path: &str) -> String {
-    static REDACTOR: std::sync::LazyLock<litellm_tracing::SecretRedactor> =
+    static REDACTOR: std::sync::LazyLock<litellm_redaction::SecretRedactor> =
         std::sync::LazyLock::new(|| {
-            litellm_tracing::SecretRedactor::new(MINIMUM_CUSTOM_KEY_LENGTH)
+            litellm_redaction::SecretRedactor::new(MINIMUM_CUSTOM_KEY_LENGTH)
         });
     let length = path.chars().count();
     if length > MAX_LOGGED_PATH_LENGTH {

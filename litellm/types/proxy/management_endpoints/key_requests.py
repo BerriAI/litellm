@@ -35,7 +35,7 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list[Any] | None = []
+    allowed_routes: list[object] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None

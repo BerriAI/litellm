@@ -101,6 +101,7 @@ import {
   anotherUserScope,
   effectiveKeyOwner,
   isTeamMemberOwner,
+  keyOwnerOption,
   teamMemberOwnerOptions,
   teamMemberOwnerPlaceholder,
 } from "./createKeyOwnerAccess";
@@ -207,12 +208,6 @@ interface CreateKeyProps {
   addKey: (data: any) => void;
   autoOpenCreate?: boolean;
   prefillData?: CreateKeyPrefillData;
-}
-
-interface User {
-  user_id: string;
-  user_email: string | null;
-  role?: string;
 }
 
 export const fetchTeamModels = async (
@@ -690,13 +685,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       const response = await userFilterUICall(accessToken, params);
       if (!isLatestSearch()) return;
 
-      const data: User[] = response;
-      const options: SearchSelectOption[] = data.map((user) => ({
-        label: user.user_email ? `${user.user_email} (${user.user_id})` : user.user_id,
-        value: user.user_id,
-      }));
-
-      setUserOptions(options);
+      setUserOptions(response.map(keyOwnerOption));
     } catch (error) {
       console.error("Error fetching users:", error);
       if (isLatestSearch()) toast.fromError(t("createKey.toasts.userSearchFailed"));

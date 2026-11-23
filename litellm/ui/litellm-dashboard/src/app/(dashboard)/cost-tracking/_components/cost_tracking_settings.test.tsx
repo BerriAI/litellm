@@ -78,7 +78,7 @@ describe("CostTrackingSettings", () => {
 
   it("should render the page title", () => {
     renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
-    expect(screen.getByText("Cost Tracking Settings")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Cost Tracking" })).toBeInTheDocument();
   });
 
   it("should show the Provider Discounts accordion header for proxy_admin", () => {

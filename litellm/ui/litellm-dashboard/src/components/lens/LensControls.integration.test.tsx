@@ -9,6 +9,7 @@ import { LensControls } from "./LensControls";
 import type { LensPolicy } from "./lensPolicy";
 
 const service: components["schemas"]["ServiceConnection"] = {
+  browser_url: "",
   configured: true,
   connected: true,
   release: "test",

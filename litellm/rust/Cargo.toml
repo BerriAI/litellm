@@ -12,10 +12,10 @@ repository = "https://github.com/BerriAI/litellm"
 litellm-config = { path = "crates/config" }
 litellm-config-load = { path = "crates/config-load" }
 litellm-error = { path = "crates/error" }
-litellm-router = { path = "crates/router" }
 litellm-router-types = { path = "crates/router-types" }
 litellm-router-core = { path = "crates/router-core" }
 litellm-tracing = { path = "crates/tracing" }
+litellm-redaction = { path = "crates/redaction" }
 litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
 litellm-inference = { path = "crates/inference" }
@@ -30,6 +30,7 @@ litellm-gateway-forward = { path = "crates/gateway-forward" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-auth-core = { path = "crates/gateway-auth-core" }
+litellm-auth-store = { path = "crates/auth-store" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }
@@ -154,7 +155,7 @@ semver = "1"
 tar = "0.4"
 target-lexicon = "0.13.5"
 tempfile = "3"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 struct-field-names-as-array = "0.3.0"

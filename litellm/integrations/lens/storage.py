@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -25,7 +26,7 @@ _TRACE: Final[TypeAdapter[Trace | None]] = TypeAdapter(Trace | None)
 _SPAN_DETAIL: Final[TypeAdapter[SpanDetail | None]] = TypeAdapter(SpanDetail | None)
 _SPAN_ERROR_PAGE: Final[TypeAdapter[SpanErrorPage | None]] = TypeAdapter(SpanErrorPage | None)
 _CONVERSATION_PAGE: Final[TypeAdapter[TraceConversationPage | None]] = TypeAdapter(TraceConversationPage | None)
-_ResponseT: Final = TypeVar("_ResponseT")
+_ResponseT = TypeVar("_ResponseT")
 
 
 def _decode_query_response(adapter: TypeAdapter[_ResponseT], body: str) -> _ResponseT:
@@ -45,6 +46,9 @@ def _validate_query_response(adapter: TypeAdapter[_ResponseT], value: object) ->
 class LensTraceStorage:
     def __init__(self, remote: RemoteTraceStore) -> None:
         self._remote: Final = remote
+
+    async def forward(self, path: str, body: bytes, headers: Mapping[str, str]) -> tuple[int, bytes] | None:
+        return await self._remote.forward(path, body, headers)
 
     async def list_traces(
         self,

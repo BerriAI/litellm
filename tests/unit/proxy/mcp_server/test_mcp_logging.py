@@ -20,16 +20,12 @@ from mcp.server.session import ServerSession
 from mcp.shared.exceptions import MCPError
 from mcp.types import CallToolResult, EmptyResult, InitializeRequestParams, Request, RequestParams, TextContent
 from mcp.types import Tool as MCPTool
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from pydantic import ConfigDict, ValidationError
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.lens.exporter import LensExporter
-from litellm.integrations.lens.lens_trace_adapter import _LensTraceLogger
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
-from litellm.integrations.otel.plumbing.providers import build_tracer_provider
 from litellm.proxy._types import AlertType, LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
 from litellm.proxy.mcp_server.mcp_server_manager import (
     MCPServerManager,
@@ -160,9 +156,6 @@ async def test_sdk_rejection_obeys_lens_policy_without_disabling_audit_logging(
         metadata={"lens_enabled": key_value},
         team_metadata={"lens_enabled": team_value},
     )
-    config: Final = OpenTelemetryV2Config(exporter="in_memory")
-    spans: Final = InMemorySpanExporter()
-    lens: Final = _LensTraceLogger(config=config, tracer_provider=build_tracer_provider(config, exporter=spans))
     received: Final = SimpleQueue[httpx.Request]()
 
     def accept(request: httpx.Request) -> httpx.Response:
@@ -172,7 +165,7 @@ async def test_sdk_rejection_obeys_lens_policy_without_disabling_audit_logging(
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as http:
         exporter: Final = LensExporter(http)
         exporter.start()
-        with patch("litellm.callbacks", [sdk_rejection_logger, lens, exporter]):
+        with patch("litellm.callbacks", [sdk_rejection_logger, exporter]):
             await log_mcp_sdk_rejection(
                 method="tools/unknown",
                 request_id="lens-sdk-policy",
@@ -183,10 +176,8 @@ async def test_sdk_rejection_obeys_lens_policy_without_disabling_audit_logging(
         await exporter.aclose()
 
     assert received.qsize() == int(enabled)
-    assert len(spans.get_finished_spans()) == int(enabled)
     assert len(sdk_rejection_logger.failures) == 1
     assert sdk_rejection_logger.post_failures == 1
-    lens.tracer_provider.shutdown()
 
 
 @pytest.mark.asyncio

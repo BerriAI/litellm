@@ -10,6 +10,7 @@ import {
   waitFor,
   testQueryClient,
   chooseSelectOption,
+  within,
 } from "../../../../../tests/test-utils";
 import CustomerMemberApps from "./CustomerMemberApps";
 import { loadOrganizationApp, organizationAppKey } from "./appApi";
@@ -66,6 +67,64 @@ function serveMemberBudget(budget: Partial<AppMember>, apps: readonly App[] = [a
 }
 
 describe("customer member apps", () => {
+  it("paginates member app budgets in five-row pages and edits later apps without changing customer filters", async () => {
+    const apps = Array.from({ length: 6 }, (_, index) => ({
+      ...app,
+      app_id: `app-${index + 1}`,
+      alias: `App ${index + 1}`,
+    }));
+    fetchMock.mockImplementation(async (input) => {
+      const path = new URL((input as Request).url).pathname;
+      if (path.endsWith("/apps")) return json(apps);
+      const selected = apps.find((app) => path === `/management/v1/apps/${app.app_id}/customer_members/member-1`);
+      const memberBudget = {
+        app_id: selected?.app_id,
+        customer_member_id: "member-1",
+        spend: 0,
+        budget: { max_budget: 10, budget_duration: "1mo" },
+        effective_budget: { max_budget: 10, budget_duration: "1mo" },
+      };
+      return json(memberBudget);
+    });
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn();
+    render(<CustomerMemberApps organizationId="org-1" memberId="member-1" />, {
+      searchParams: "?org=org-1&team=team-1&member=member-1&from=2026-11-01&to=2026-11-18&memberPage=2",
+      onUrlUpdate,
+    });
+    const table = within(await screen.findByRole("table", { name: "Member app budgets" }));
+    await table.findByRole("button", { name: "Edit member budget for App 5" });
+    expect(table.getAllByRole("row")).toHaveLength(6);
+    expect(table.queryByText("App 6")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pagination-page-size")).toHaveTextContent("5");
+    await user.click(screen.getByRole("button", { name: "Go to next page" }));
+    await table.findByRole("button", { name: "Edit member budget for App 6" });
+    expect(table.getAllByRole("row")).toHaveLength(2);
+    expect(table.queryByText("App 1")).not.toBeInTheDocument();
+    await user.click(table.getByRole("button", { name: "Edit member budget for App 6" }));
+    fireEvent.change(await screen.findByRole("spinbutton", { name: "Max Budget (USD)" }), {
+      target: { value: "20" },
+    });
+    expect(await saveBudget(user)).toEqual({ budget: { max_budget: 20, budget_duration: "1mo" } });
+    expect(new URL(requests.find((request) => request.method === "PUT")!.url).pathname).toBe(
+      "/management/v1/apps/app-6/customer_members/member-1",
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await chooseSelectOption(user, screen.getByTestId("pagination-page-size"), "10");
+    expect(await table.findByText("App 1")).toBeInTheDocument();
+    expect(table.getAllByRole("row")).toHaveLength(7);
+    expect(screen.getByRole("button", { name: "Go to previous page" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Go to next page" })).toBeDisabled();
+    await waitFor(() =>
+      expect(onUrlUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          queryString:
+            "?org=org-1&team=team-1&member=member-1&from=2026-11-01&to=2026-11-18&memberPage=2&member_apps_page_size=10",
+        }),
+      ),
+    );
+  });
+
   it("shows scoped member app usage and opens it from the app name", async () => {
     const onAppSelect = vi.fn();
     fetchMock.mockImplementation(async (input, init) => {
