@@ -81,3 +81,18 @@ async def test_a_failed_listing_is_not_cached() -> None:
     with pytest.raises(ConnectionError):
         await cache.get(_target(), flaky)
     assert await cache.get(_target(), flaky) == (BUILD_FAILED,)
+
+
+@pytest.mark.asyncio
+async def test_stdio_descriptor_lookups_respect_the_resolved_workspace() -> None:
+    cache: Final = DescriptorCache()
+    upstream: Final = server().model_copy(update={"transport": "stdio"})
+
+    async def listing(target: SubscriptionTarget) -> tuple[EventType, ...]:
+        assert target.client.stdio_config is not None
+        return (EventType(name=target.client.stdio_config["env"]["WORKSPACE"], delivery=("poll",)),)
+
+    for workspace in ("one", "two"):
+        client: Final = MCPClient(stdio_config={"command": "example", "args": [], "env": {"WORKSPACE": workspace}})
+        target: Final = SubscriptionTarget(upstream, client, await client.subscription_auth_fingerprint())
+        assert tuple(event.name for event in await cache.get(target, listing)) == (workspace,)

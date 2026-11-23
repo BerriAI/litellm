@@ -272,7 +272,7 @@ class MemoryStore:
         if (
             row is None
             or row.generation != generation
-            or row.status not in ("active", "suspended")
+            or (outcome != "discarded" and row.status not in ("active", "suspended"))
             or delivery.claim_id is None
             or not self._holds(delivery)
         ):
