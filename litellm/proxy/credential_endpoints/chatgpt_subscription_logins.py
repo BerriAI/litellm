@@ -8,7 +8,7 @@ from datetime import timedelta
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
-from typing import Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -40,6 +40,9 @@ from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     RefreshCoordinator,
 )
 from litellm.types.utils import CredentialItem
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 _COORDINATOR_NAMESPACE: Final = "chatgpt_subscription"
 _IN_PROCESS_COORDINATOR: Final = InProcessRefreshCoordinator()
@@ -529,10 +532,18 @@ class CredentialInfoLookup(Protocol):
     async def has_info_value(self, info_key: str, value: str) -> bool: ...
 
 
-async def key_hash_owns_chatgpt_login(rows: CredentialInfoLookup | None, key_hash: str) -> bool:
-    if owned_chatgpt_subscription_logins(None, key_hash):
+def primary_credential_rows(prisma_client: "PrismaClient | None") -> CredentialInfoLookup | None:
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+    from litellm.repositories.credentials_repository import CredentialsRepository
+
+    return None if prisma_client is None else CredentialsRepository(WriterPinnedClient(prisma_client.db))
+
+
+async def owner_has_chatgpt_login(rows: CredentialInfoLookup | None, team_id: str | None, key_hash: str | None) -> bool:
+    if owned_chatgpt_subscription_logins(team_id, key_hash):
         return True
-    return rows is not None and await rows.has_info_value(CHATGPT_OWNER_KEY_HASH_KEY, key_hash)
+    condition: Final = _owner_condition((team_id, key_hash))
+    return rows is not None and condition is not None and await rows.has_info_value(*condition)
 
 
 class CredentialRepoints(Protocol):
