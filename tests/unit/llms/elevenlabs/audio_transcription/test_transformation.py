@@ -322,9 +322,9 @@ def _request_form_data(optional_params: dict[str, object]) -> dict[str, object]:
 def test_transform_audio_transcription_request_sends_list_fields_as_repeated_parts():
     """ElevenLabs reads a list such as keyterms as one multipart part per element;
     str(list) would ship the Python repr as a single term."""
-    form_data: Final = _request_form_data({"keyterms": ["DialogPro", "Sauvage"]})
+    form_data: Final = _request_form_data({"keyterms": ["DialogPro", "Dupont"]})
 
-    assert form_data["keyterms"] == ["DialogPro", "Sauvage"]
+    assert form_data["keyterms"] == ["DialogPro", "Dupont"]
 
 
 def test_transform_audio_transcription_request_sends_bool_fields_lowercase():
