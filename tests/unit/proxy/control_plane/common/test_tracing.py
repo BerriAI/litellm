@@ -355,6 +355,17 @@ def test_health_is_not_traced() -> None:
     assert exporter.get_finished_spans() == ()
 
 
+@pytest.mark.parametrize("asset", ("/scalar/reference.js", "/swagger/swagger-ui.css"))
+@pytest.mark.parametrize("root_path", ("", "/gateway"))
+def test_documentation_assets_are_not_traced(asset: str, root_path: str) -> None:
+    exporter: Final = InMemorySpanExporter()
+    client, _, _ = rig({}, build_provider(_settings(), exporter))
+    prefixed_client: Final = TestClient(client.app, root_path=root_path)
+
+    assert prefixed_client.get(f"{root_path}{asset}").status_code == 200
+    assert _by_kind(exporter.get_finished_spans(), SpanKind.SERVER) == []
+
+
 def test_server_exclusions_match_only_the_exact_url_path() -> None:
     exporter: Final = InMemorySpanExporter()
     docs_url: Final = "https://docs-prod.test/user/info"

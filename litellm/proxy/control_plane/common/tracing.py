@@ -50,6 +50,7 @@ UNTRACED_PATHS: Final = (
     "/healthz",
     "/readyz",
 )
+UNTRACED_ASSET_URLS: Final = r"^https?://[^/]+(?:/[^/]+)*/(?:scalar|swagger)(?:/|$)"
 OTEL_ENDPOINT_ENV_ALIASES: Final = _setting_aliases("endpoint") + _setting_aliases("traces_endpoint")
 DEFAULT_PORTS: Final = {"https": 443, "http": 80}
 PATH_ATTRIBUTES: Final = ("http.target", "url.path")
@@ -245,7 +246,8 @@ class Telemetry:
         from opentelemetry.instrumentation import fastapi  # pyright: ignore[reportMissingTypeStubs]  # untyped contrib
 
         paths: Final = (*UNTRACED_PATHS, app.docs_url, app.openapi_url, *documentation_paths)
-        excluded_urls: Final = ",".join(f"^https?://[^/]+{re.escape(path)}$" for path in paths if path is not None)
+        exact_urls: Final = tuple(f"^https?://[^/]+{re.escape(path)}$" for path in paths if path is not None)
+        excluded_urls: Final = ",".join((*exact_urls, UNTRACED_ASSET_URLS))
         fastapi.FastAPIInstrumentor.instrument_app(  # pyright: ignore[reportUnknownMemberType]  # untyped contrib
             app,
             tracer_provider=self.provider,
