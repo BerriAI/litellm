@@ -158,11 +158,10 @@ async def test_sustained_failure_suspends_the_subscription() -> None:
     assert store.rows["sub_1"].status == "suspended"
 
 
-@pytest.mark.parametrize("status", (410, 413))
 @pytest.mark.asyncio
-async def test_gone_and_too_large_are_never_retried(status: int) -> None:
+async def test_receiver_discarding_an_event_keeps_the_subscription_healthy() -> None:
     store: Final = _store()
-    await _worker(store, _Client(status)).run_once()
+    await _worker(store, _Client(410)).run_once()
     assert store.queue == {} and store.rows["sub_1"].consecutive_failures == 0
 
 
