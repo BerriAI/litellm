@@ -15,11 +15,13 @@ from typing_extensions import Buffer, ReadOnly
 import litellm
 from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
     select_tier_for_input,
     tier_rate,
 )
 from litellm.llms.fireworks_ai.cache_pricing import with_default_cache_read_rate
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
@@ -53,6 +55,7 @@ _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
 
 _DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
 _IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_IMAGE_TOKEN_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 
 _BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
 
@@ -112,6 +115,7 @@ _BATCH_RATE_PREFIXES: Final = (
     "input_cost_per_token",
     "output_cost_per_token",
     "cache_read_input_token_cost",
+    "cache_read_input_image_token_cost",
     "cache_creation_input_token_cost",
 )
 _BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
@@ -326,6 +330,7 @@ class BatchCostRates:
     cache_read: float | None
     cache_creation: float | None
     cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    cache_read_image: float | None = None
 
 
 def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
@@ -388,6 +393,7 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
                 if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
             }
         ),
+        cache_read_image=_batch_rate_for_prefix(model_info, "cache_read_input_image_token_cost", usage, inclusive),
     )
 
 
@@ -763,7 +769,9 @@ def _get_token_base_cost(
     # For image generation models that don't have output_cost_per_token,
     # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
     if completion_base_cost == 0.0:
-        output_image_cost: Final = get_cost_per_unit(model_info, "output_cost_per_image_token", None)
+        output_image_cost: Final = get_cost_per_unit(
+            model_info, get_service_tier_cost_key("output_cost_per_image_token", service_tier), None
+        )
         if output_image_cost is not None:
             completion_base_cost = output_image_cost
     cache_creation_cost = get_cost_per_unit(model_info, cache_creation_cost_key, default_value=None)
@@ -1205,7 +1213,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,
@@ -1426,7 +1434,7 @@ def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | 
     residency: Final = data_residency.lower()
     if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
-    multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    multiplier: Final[object] = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
     if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
@@ -2104,6 +2112,7 @@ def calculate_image_response_cost_from_usage(
     custom_llm_provider: str,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    service_tier: str | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -2138,10 +2147,21 @@ def calculate_image_response_cost_from_usage(
         # or an object; read it tolerantly like the output side below, so image
         # input tokens are priced at input_cost_per_image_token instead of
         # silently falling back to the text rate.
+        input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
+        input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        input_cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
+        cached_details: Final[object] = (
+            _IMAGE_TOKEN_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
+            if isinstance(input_tokens_details, dict)
+            else getattr(input_tokens_details, "cached_tokens_details", None)
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
-            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
-            cached_tokens=0,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
+            cached_tokens=input_cached_tokens,
+            cached_tokens_details=(
+                CachedTokensDetails.model_validate(cached_details) if cached_details is not None else None
+            ),
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)
@@ -2151,28 +2171,22 @@ def calculate_image_response_cost_from_usage(
         else completion_tokens_details_attr
     )
 
-    if output_tokens_details is None:
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        )
-    else:
-        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
-        image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
-        audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
-        reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
-        known_output_tokens: Final = text_tokens + image_tokens + audio_tokens + reasoning_tokens
-        if completion_tokens > known_output_tokens:
-            text_tokens += completion_tokens - known_output_tokens
-
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
-            reasoning_tokens=reasoning_tokens,
-            audio_tokens=audio_tokens,
-        )
+    text_tokens: Final = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+    image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+    audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+    reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+    has_output_modalities: Final = any(
+        _get_token_detail_value(output_tokens_details, modality) is not None
+        for modality in ("text_tokens", "image_tokens", "audio_tokens")
+    )
+    unitemized_tokens: Final = max(completion_tokens - text_tokens - image_tokens - audio_tokens - reasoning_tokens, 0)
+    unitemized_image_tokens: Final = unitemized_tokens if not has_output_modalities and image_response.data else 0
+    completion_tokens_details: Final = CompletionTokensDetailsWrapper(
+        text_tokens=text_tokens + unitemized_tokens - unitemized_image_tokens,
+        image_tokens=image_tokens + unitemized_image_tokens,
+        reasoning_tokens=reasoning_tokens,
+        audio_tokens=audio_tokens,
+    )
 
     normalized_usage: Final = Usage(
         prompt_tokens=prompt_tokens,
@@ -2188,6 +2202,7 @@ def calculate_image_response_cost_from_usage(
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
         vertex_location=vertex_location,
+        service_tier=service_tier,
     )
     return prompt_cost + completion_cost
 
@@ -2208,7 +2223,7 @@ def calculate_image_response_web_search_cost(
     if usage is None:
         return 0.0
 
-    web_search_requests: Final = getattr(usage, "web_search_requests", None)
+    web_search_requests: Final = attribute_or_none(usage, "web_search_requests")
     if not web_search_requests:
         return 0.0
 
@@ -2295,6 +2310,7 @@ class CostCalculatorUtils:
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
+        service_tier: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -2351,6 +2367,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     model_info=pricing,
                     vertex_location=vertex_location,
+                    service_tier=service_tier,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):

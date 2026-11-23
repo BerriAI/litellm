@@ -1,0 +1,138 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT o.organization_id,\n       o.organization_alias,\n       o.budget_id,\n       o.metadata AS \"metadata: RawJson\",\n       COALESCE(o.models, '{}') AS \"models!\",\n       o.spend,\n       o.model_spend AS \"model_spend: RawJson\",\n       o.object_permission_id,\n       o.created_by,\n       o.updated_by,\n       NULL::jsonb AS \"litellm_budget_table?: Json<Budget>\"\nFROM \"LiteLLM_OrganizationTable\" AS o\nWHERE o.organization_alias = $1\nORDER BY o.organization_id\nLIMIT 2\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "organization_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "organization_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "organization_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "organization_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "metadata: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "models!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "model_spend: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "model_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "litellm_budget_table?: Json<Budget>",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      null,
+      false,
+      false,
+      true,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "b9ec00f5fa45fc3131cfc7851a31e14234d43a3e3587eb6fe3d72d3f5abd0232"
+}

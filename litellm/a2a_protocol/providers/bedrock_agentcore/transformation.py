@@ -7,7 +7,7 @@ and signs requests via AmazonAgentCoreConfig (SigV4 or JWT).
 
 import json
 from collections.abc import AsyncIterator, Mapping
-from typing import Any, Final, Protocol
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.litellm_completion_bridge.handler import (
@@ -138,10 +138,10 @@ class BedrockAgentCoreA2ATransformation:
     def get_url_and_signed_request(
         request_id: str,
         params: Mapping[str, object],
-        litellm_params: dict[str, Any],
+        litellm_params: dict[str, object],
         method: str = "message/send",
         stream: bool = False,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> tuple[str, dict, bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
@@ -175,12 +175,18 @@ class BedrockAgentCoreA2ATransformation:
         # Build optional_params from litellm_params (everything except model and custom_llm_provider)
         optional_params: Final = {k: v for k, v in litellm_params.items() if k not in ("model", "custom_llm_provider")}
 
+        configured_api_base: Final = optional_params.get("api_base")
+        configured_api_key: Final = optional_params.get("api_key")
+        signing_api_key: Final = (
+            configured_api_key if configured_api_key is None or isinstance(configured_api_key, str) else ""
+        )
+
         agentcore_config: Final = AmazonAgentCoreConfig()
 
         # Derive URL from ARN
         url: Final = agentcore_config.get_complete_url(
-            api_base=optional_params.get("api_base"),
-            api_key=optional_params.get("api_key"),
+            api_base=configured_api_base if isinstance(configured_api_base, str) else None,
+            api_key=signing_api_key,
             model=agentcore_model,
             optional_params=optional_params,
             litellm_params=litellm_params,
@@ -221,7 +227,7 @@ class BedrockAgentCoreA2ATransformation:
             optional_params=optional_params,
             request_data=json_rpc_body,
             api_base=url,
-            api_key=optional_params.get("api_key"),
+            api_key=signing_api_key,
             model=agentcore_model,
             stream=stream,
         )

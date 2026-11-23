@@ -1,6 +1,7 @@
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import Final
 
+from litellm._logging import WarningLogger, verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -113,16 +114,20 @@ class ChatGPTConfig(OpenAIConfig):
         default_headers: Final = get_chatgpt_default_headers(resolved_api_key or "", account_id, session_id)
         return {**default_headers, **validated_headers}
 
-    def post_stream_processing(self, stream: Any) -> ChatGPTToolCallNormalizer:
+    def post_stream_processing(self, stream: object) -> ChatGPTToolCallNormalizer:
         return ChatGPTToolCallNormalizer(stream)
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        optional_params = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+        *,
+        reasoning_drop_logger: WarningLogger = verbose_logger,
+    ) -> dict[str, object]:
+        optional_params = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params, reasoning_drop_logger=reasoning_drop_logger
+        )
         optional_params.setdefault("stream", False)
         return optional_params
