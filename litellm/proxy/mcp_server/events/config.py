@@ -6,7 +6,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field
 
 from litellm.types.mcp_server.events import EVENTS_PROTOCOL_VERSION
-from litellm.types.mcp_server.mcp_server_manager import MCPServer, MCPServerEventsConfig
+from litellm.types.mcp_server.mcp_server_manager import MCPEventCallbackBase, MCPServer, MCPServerEventsConfig
 
 _SETTING_KEYS: Final = MappingProxyType(
     {
@@ -24,7 +24,7 @@ class EventsSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
-    public_base_url: str | None = None
+    public_base_url: MCPEventCallbackBase | None = None
     max_subscriptions_per_key: int = Field(default=50, ge=1)
     max_streams_per_caller: int = Field(default=50, ge=1)
     max_streams: int = Field(default=512, ge=1)
