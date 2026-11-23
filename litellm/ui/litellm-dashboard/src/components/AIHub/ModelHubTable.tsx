@@ -1,5 +1,5 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import i18n from "@/i18n/i18n";
 import { AgentHubData, getAgentHubTableColumns } from "@/components/AIHub/AgentHubTableColumns";
@@ -463,13 +463,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     return <PublicModelHub accessToken={accessToken} />;
   }
 
-  const HubPage = isChat ? "div" : Page;
   const HubContent = isChat ? React.Fragment : PageContent;
 
   return (
     <div data-slot="model-hub" className={isChat ? "chat-model-hub-catalog" : undefined}>
       {publicPage == false ? (
-        <HubPage className={isChat ? "chat-model-hub-content" : undefined}>
+        <div className={isChat ? "chat-model-hub-content" : undefined}>
           <HubContent>
             {!isChat && (
               <PageHeader>
@@ -742,7 +741,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
               </div>
             </Tabs>
           </HubContent>
-        </HubPage>
+        </div>
       ) : (
         <Card className="mx-auto max-w-xl mt-10 px-6">
           <p className="text-xl text-center mb-2 text-foreground">{t("aiHub.modelHubTable.publicNotEnabled.title")}</p>

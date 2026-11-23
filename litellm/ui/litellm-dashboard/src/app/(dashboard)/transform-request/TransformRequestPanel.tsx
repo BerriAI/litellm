@@ -127,7 +127,7 @@ ${formattedBody}
   };
 
   return (
-    <div className="p-2">
+    <div>
       <h1 className="text-lg font-medium text-foreground">{t("transformRequest.transformRequestPanel.title")}</h1>
       <p className="text-sm text-muted-foreground">{t("transformRequest.transformRequestPanel.description")}</p>
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">

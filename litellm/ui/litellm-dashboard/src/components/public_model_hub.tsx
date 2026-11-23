@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@/contexts/ThemeContext";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { ExternalLinkIcon, SearchIcon } from "@heroicons/react/outline";
 import { SortingState } from "@tanstack/react-table";
@@ -107,7 +107,6 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const portalClassName = isChat ? "chat-theme" : undefined;
   const dashboardRootClassName = isEmbedded ? "w-full" : "min-h-screen bg-card";
   const dashboardContentClassName = isEmbedded ? undefined : "w-full px-8 py-12";
-  const HubPage = isEmbedded && !isChat ? Page : "div";
   const HubContent = isEmbedded && !isChat ? PageContent : React.Fragment;
   const anchor = useComboboxAnchor();
   const [proxyConfigured, setProxyConfigured] = useState<boolean>(false);
@@ -353,7 +352,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
           {/* Navigation - only show when not embedded */}
           {!isChat && !isEmbedded && <Navbar accessToken={accessToken || null} isPublicPage={true} />}
 
-          <HubPage className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
+          <div className={isChat ? "chat-model-hub-content w-full" : dashboardContentClassName}>
             <HubContent>
               {/* Embedded Explainer - only shown when embedded in dashboard */}
               {!isChat && isEmbedded && (
@@ -828,7 +827,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                 </Tabs>
               </Card>
             </HubContent>
-          </HubPage>
+          </div>
 
           {/* Model Details Modal */}
           <Dialog open={isModalVisible} onOpenChange={(open) => !open && handleModalCancel()}>
