@@ -187,4 +187,52 @@ mod tests {
         assert!(!request.to_ascii_lowercase().contains("authorization"));
         assert!(!request.contains("provider-secret"));
     }
+
+    #[rstest::rstest]
+    #[case::refused(None)]
+    #[case::cut_mid_body(Some(&b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc"[..]))]
+    #[tokio::test]
+    async fn an_unreachable_document_is_a_client_error(#[case] answer: Option<&'static [u8]>) {
+        use tokio::{io::AsyncWriteExt, net::TcpListener};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = answer.map(|answer| {
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                socket.write_all(answer).await.unwrap();
+            })
+        });
+        let error = inline_remote_document(
+            &MediaFetcher::for_test(litellm_http::Client::for_test()),
+            document(&format!("http://{address}/document.pdf")),
+            &OcrConnection::default(),
+        )
+        .await
+        .unwrap_err();
+        if let Some(server) = server {
+            server.await.unwrap();
+        }
+
+        let (status, body, _) = error.upstream_response().expect("a client-facing status");
+        assert_eq!((status, body), (400, "OCR document download failed"));
+        assert_eq!(error.http_status_code(), Some(400));
+        assert!(litellm_error::find::<reqwest::Error>(&error).is_some());
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_provider_keeps_no_client_status() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = litellm_http::Client::for_test()
+            .get(format!("http://{address}/ocr"))
+            .send()
+            .await
+            .unwrap_err();
+        let error = Error::from(litellm_http::Error::from(error));
+
+        assert!(error.upstream_response().is_none());
+        assert_eq!(error.http_status_code(), None);
+    }
 }
