@@ -139,6 +139,9 @@ def _vllm_chat_response(content: str) -> litellm.ModelResponse:
                     "finish_reason": "stop",
                     "token_ids": [785, 6722, 315, 9625, 374, 12095, 13],
                     "message": {"role": "assistant", "content": content},
+                    "logprobs": {
+                        "content": [{"token": content, "logprob": -0.1, "bytes": None, "top_logprobs": []}]
+                    },
                 }
             ],
             "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
@@ -153,7 +156,15 @@ def _vllm_text_completion_response(text: str) -> litellm.TextCompletionResponse:
         object="text_completion",
         created=1,
         model="Qwen/Qwen3-0.6B",
-        choices=[{"index": 0, "text": text, "finish_reason": "length", "logprobs": None, "token_ids": [12095, 13]}],
+        choices=[
+            {
+                "index": 0,
+                "text": text,
+                "finish_reason": "length",
+                "logprobs": {"tokens": [text], "token_logprobs": [-0.1], "top_logprobs": None, "text_offset": [0]},
+                "token_ids": [12095, 13],
+            }
+        ],
         usage={"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7},
     )
 
@@ -197,7 +208,7 @@ def _text_token_ids(response: litellm.TextCompletionResponse) -> object:
     ],
     ids=["chat-masked", "chat-untouched", "completion-masked", "completion-untouched"],
 )
-async def test_post_call_success_hook_drops_token_ids_only_from_choices_a_guardrail_rewrote(
+async def test_post_call_success_hook_drops_token_data_only_from_choices_a_guardrail_rewrote(
     proxy_logging, make_user_api_key_auth, monkeypatch, response, data, token_ids_of, kept
 ):
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
@@ -219,3 +230,85 @@ async def test_post_call_success_hook_drops_token_ids_only_from_choices_a_guardr
 
     assert served is response
     assert token_ids_of(served) == kept
+    assert (getattr(served.choices[0], "logprobs", None) is None) is (kept is None)
+
+
+
+def _masked(content: str) -> str:
+    return content.replace("Paris", "[MASKED]")
+
+
+class _DictMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        dumped = response.model_dump()
+        choice = dumped["choices"][0]
+        message = {**choice["message"], "content": _masked(choice["message"]["content"])}
+        return {**dumped, "choices": [{**choice, "message": message}]}
+
+
+class _InPlaceDictMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        message = response["choices"][0]["message"]
+        message["content"] = _masked(message["content"])
+        return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("content", "kept"),
+    [
+        ("The capital of France is Paris.", None),
+        ("The capital of France is Lyon.", [785, 6722, 315, 9625, 374, 12095, 13]),
+    ],
+    ids=["masked", "untouched"],
+)
+@pytest.mark.parametrize(
+    ("callback", "as_dict"),
+    [(_DictMaskingLogger(), False), (_InPlaceDictMaskingLogger(), True)],
+    ids=["model-in-dict-out", "dict-rewritten-in-place"],
+)
+async def test_post_call_success_hook_drops_token_data_from_a_dict_choice_a_callback_rewrote(
+    proxy_logging, make_user_api_key_auth, monkeypatch, content, kept, callback, as_dict
+):
+    monkeypatch.setattr(litellm, "callbacks", [callback])
+    response = _vllm_chat_response(content)
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=response.model_dump() if as_dict else response,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert "Paris" not in choice["message"]["content"]
+    assert choice["provider_specific_fields"]["token_ids"] == kept
+    assert (choice["logprobs"] is None) is (kept is None)
+
+
+class _InPlaceToolArgumentsMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        function = response["choices"][0]["message"]["tool_calls"][0]["function"]
+        function["arguments"] = _masked(function["arguments"])
+        return response
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_drops_token_data_when_a_callback_rewrites_dict_tool_arguments_in_place(
+    proxy_logging, make_user_api_key_auth, monkeypatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceToolArgumentsMaskingLogger()])
+    response = _vllm_chat_response("").model_dump()
+    response["choices"][0]["message"]["tool_calls"] = [
+        {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": '{"city": "Paris"}'}}
+    ]
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert choice["message"]["tool_calls"][0]["function"]["arguments"] == '{"city": "[MASKED]"}'
+    assert choice["provider_specific_fields"]["token_ids"] is None
+    assert choice["logprobs"] is None

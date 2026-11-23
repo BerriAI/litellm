@@ -12,6 +12,7 @@ import copy
 import inspect
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
@@ -293,17 +294,67 @@ def _redact_provider_specific_fields(message: object) -> None:
         setattr(message, "provider_specific_fields", _redacted_provider_specific_fields(fields))  # noqa: B010  # typed as object
 
 
+def _set_field(holder: object, field: str, value: object) -> None:
+    if isinstance(holder, dict):
+        holder[field] = value  # rebind-ok: the served response is edited in place, like the setattr branch
+    else:
+        setattr(holder, field, value)
+
+
 def _drop_provider_specific_token_ids(holder: object) -> None:
-    fields: Final = _as_mapping(getattr(holder, "provider_specific_fields", None))
+    fields: Final = _as_mapping(stream_item_field(holder, "provider_specific_fields"))
     if fields is not None and fields.get("token_ids") is not None:
-        setattr(holder, "provider_specific_fields", {**fields, "token_ids": None})  # noqa: B010  # typed as object
+        _set_field(holder, "provider_specific_fields", {**fields, "token_ids": None})
 
 
 def drop_token_ids(choice: object) -> None:
-    if getattr(choice, "token_ids", None) is not None:
-        setattr(choice, "token_ids", None)  # noqa: B010  # pydantic extra, not a declared field
-    for holder in (choice, getattr(choice, "delta", None), getattr(choice, "message", None)):
+    if stream_item_field(choice, "token_ids") is not None:
+        _set_field(choice, "token_ids", None)
+    for holder in (choice, stream_item_field(choice, "delta"), stream_item_field(choice, "message")):
         _drop_provider_specific_token_ids(holder)
+
+
+def _comparable_message(message: object) -> object:
+    dumped: Final = message.model_dump() if isinstance(message, BaseModel) else copy.deepcopy(message)
+    fields: Final = _as_mapping(dumped)
+    return dumped if fields is None else {key: value for key, value in fields.items() if value is not None}
+
+
+def _choice_output(choice: object) -> tuple[object, object]:
+    return (_comparable_message(stream_item_field(choice, "message")), stream_item_field(choice, "text"))
+
+
+def _carries_token_data(choice: object) -> bool:
+    return (
+        stream_item_field(choice, "token_ids") is not None
+        or stream_item_field(choice, "logprobs") is not None
+        or any(
+            stream_item_field(stream_item_field(holder, "provider_specific_fields"), "token_ids") is not None
+            for holder in (choice, stream_item_field(choice, "message"))
+        )
+    )
+
+
+def token_data_choice_outputs(response: object) -> Mapping[int, tuple[object, object]]:
+    return MappingProxyType(
+        {
+            index: _choice_output(choice)
+            for index, choice in enumerate(stream_item_items(response, "choices"))
+            if _carries_token_data(choice)
+        }
+    )
+
+
+def _drop_token_data(choice: object) -> None:
+    drop_token_ids(choice)
+    if stream_item_field(choice, "logprobs") is not None:
+        _set_field(choice, "logprobs", None)
+
+
+def drop_token_data_of_rewritten_choices(response: object, outputs_before: Mapping[int, tuple[object, object]]) -> None:
+    for index, choice in enumerate(stream_item_items(response, "choices")):
+        if index in outputs_before and _choice_output(choice) != outputs_before[index]:
+            _drop_token_data(choice)
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:

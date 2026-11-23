@@ -158,6 +158,7 @@ def test_overlay_replaces_logged_choice_text_with_served_text():
 
 
 RAW_TOKEN_IDS: Final = [7, 8, 9]
+RAW_LOGPROBS: Final = {"content": [{"token": RAW, "logprob": -0.1, "bytes": None, "top_logprobs": []}]}
 
 
 def _choice_token_ids(choice: dict[str, object]) -> tuple[object, object, object]:
@@ -174,21 +175,31 @@ def _choice_token_ids(choice: dict[str, object]) -> tuple[object, object, object
 @pytest.mark.parametrize(
     "logged_choice",
     (
-        {"index": 0, "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS}, "message": {"content": RAW}},
-        {"index": 0, "message": {"content": RAW, "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS}}},
-        {"index": 0, "text": RAW, "token_ids": RAW_TOKEN_IDS},
+        {
+            "index": 0,
+            "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS},
+            "message": {"content": RAW},
+            "logprobs": RAW_LOGPROBS,
+        },
+        {
+            "index": 0,
+            "message": {"content": RAW, "provider_specific_fields": {"token_ids": RAW_TOKEN_IDS}},
+            "logprobs": RAW_LOGPROBS,
+        },
+        {"index": 0, "text": RAW, "token_ids": RAW_TOKEN_IDS, "logprobs": RAW_LOGPROBS},
     ),
     ids=("chat-choice-fields", "chat-message-fields", "text-completion"),
 )
-@pytest.mark.parametrize(("served", "keeps_token_ids"), ((MASKED, False), (RAW, True)), ids=("rewritten", "unchanged"))
-def test_overlay_drops_logged_token_ids_only_when_it_rewrites_the_choice_text(
-    logged_choice: dict[str, object], served: str, keeps_token_ids: bool
+@pytest.mark.parametrize(("served", "keeps_token_data"), ((MASKED, False), (RAW, True)), ids=("rewritten", "unchanged"))
+def test_overlay_drops_logged_token_data_only_when_it_rewrites_the_choice_text(
+    logged_choice: dict[str, object], served: str, keeps_token_data: bool
 ) -> None:
     overlaid: Final = overlay_served_output_texts({"id": "x", "choices": [logged_choice]}, (served,))
     assert isinstance(overlaid, dict)
     choices: Final = overlaid["choices"]
     assert isinstance(choices, list)
-    assert (RAW_TOKEN_IDS in _choice_token_ids(choices[0])) is keeps_token_ids
+    assert (RAW_TOKEN_IDS in _choice_token_ids(choices[0])) is keeps_token_data
+    assert (choices[0].get("logprobs") == RAW_LOGPROBS) is keeps_token_data
 
 
 def test_overlay_leaves_unreadable_inputs_untouched():

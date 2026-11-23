@@ -2059,6 +2059,26 @@ async def async_post_call_success_deployment_hook(
     """
     Allow modifying / reviewing the response just after it's received from the deployment.
     """
+    from litellm.litellm_core_utils.redact_messages import (
+        drop_token_data_of_rewritten_choices,
+        token_data_choice_outputs,
+    )
+
+    token_data_outputs: Final = token_data_choice_outputs(response)
+    hooked: Final = await _post_call_success_deployment_response(
+        request_data, response, call_type, include_v2=include_v2
+    )
+    drop_token_data_of_rewritten_choices(hooked, token_data_outputs)
+    return hooked
+
+
+async def _post_call_success_deployment_response(
+    request_data: dict[str, object],  # mutable-ok: the attempt's request dict the hooks receive
+    response: object,
+    call_type: CallTypes | None,
+    *,
+    include_v2: bool,
+) -> object:
     try:
         typed_call_type = CallTypes(call_type)
     except ValueError:

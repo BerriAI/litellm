@@ -6080,6 +6080,69 @@ async def test_success_deployment_hook_raising_keeps_earlier_hook_rewrite(monkey
     assert trailing_hook.seen_responses == (result,)
 
 
+_VLLM_PARIS_TOKEN_IDS: Final = [785, 6722, 315, 9625, 374, 12095, 13]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "served_answer", "served_token_ids"),
+    [
+        ("The capital of France is Paris.", "The capital of France is [KEYWORD_REDACTED].", None),
+        ("The capital of France is Lyon.", "The capital of France is Lyon.", _VLLM_PARIS_TOKEN_IDS),
+    ],
+    ids=["masked", "untouched"],
+)
+@respx.mock
+async def test_model_level_masking_guardrail_drops_vllm_token_data_of_the_answer_it_rewrote(
+    monkeypatch: pytest.MonkeyPatch, answer: str, served_answer: str, served_token_ids: object
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    mask_paris: Final = ContentFilterGuardrail(
+        guardrail_name="mask-paris",
+        blocked_words=[BlockedWord(keyword="Paris", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [mask_paris])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("http://vllm.invalid/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-vllm",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "Qwen/Qwen3-0.6B",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "token_ids": _VLLM_PARIS_TOKEN_IDS,
+                    "message": {"role": "assistant", "content": answer},
+                    "logprobs": {"content": [{"token": answer, "logprob": -0.1, "bytes": None, "top_logprobs": []}]},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        }
+    )
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        guardrails=["mask-paris"],
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == served_answer
+    assert response.choices[0].provider_specific_fields["token_ids"] == served_token_ids
+    assert (getattr(response.choices[0], "logprobs", None) is None) is (served_token_ids is None)
+
+
 class _GuardrailBlocked(Exception):
     pass
 

@@ -191,9 +191,12 @@ def overlay_served_output_texts(
     }
 
 
-def _without_token_ids(holder: Mapping[str, object]) -> Mapping[str, object]:
+def _without_token_data(holder: Mapping[str, object]) -> Mapping[str, object]:
     fields: Final = _as_json_object(holder.get("provider_specific_fields"))
-    dropped: Final = {**holder, "token_ids": None} if holder.get("token_ids") is not None else holder
+    dropped: Final = {
+        **holder,
+        **{key: None for key in ("token_ids", "logprobs") if holder.get(key) is not None},
+    }
     if fields is None or fields.get("token_ids") is None:
         return dropped
     return {**dropped, "provider_specific_fields": {**fields, "token_ids": None}}
@@ -207,7 +210,7 @@ def _choice_with_text(choice: object, text: str | None) -> object:
     if message is not None:
         if message.get("content") == text:
             return choice
-        return _without_token_ids({**choice_obj, "message": _without_token_ids({**message, "content": text})})
+        return _without_token_data({**choice_obj, "message": _without_token_data({**message, "content": text})})
     if isinstance(choice_obj.get("text"), str):
-        return choice if choice_obj.get("text") == text else _without_token_ids({**choice_obj, "text": text})
+        return choice if choice_obj.get("text") == text else _without_token_data({**choice_obj, "text": text})
     return choice
