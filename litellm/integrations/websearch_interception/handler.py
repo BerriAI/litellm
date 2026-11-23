@@ -1450,7 +1450,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         patch_kwargs: Final = dict[str, object](request_patch.kwargs)
         response: AnthropicMessagesResponse | AsyncIterator[object] = await anthropic_messages.acreate(
             max_tokens=max_tokens,
-            messages=request_patch.messages,
+            messages=[dict(message) for message in request_patch.messages],
             model=request_patch.model or model,
             **_NO_ACREATE_NAMED,
             **optional_params,

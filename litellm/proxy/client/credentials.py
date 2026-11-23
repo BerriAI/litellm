@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final
+from typing import Any, Final
 from urllib.parse import quote
 
 import requests
@@ -10,7 +10,6 @@ from litellm.models.credentials import UserConnectionPollResponse, UserConnectio
 from .exceptions import UnauthorizedError
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
 class CredentialsManagementClient:
@@ -42,7 +41,7 @@ class CredentialsManagementClient:
     def list(
         self,
         return_request: bool = False,
-    ) -> Mapping[str, object] | requests.Request:
+    ) -> dict[str, Any] | requests.Request:
         """
         List all credentials.
 
@@ -68,7 +67,7 @@ class CredentialsManagementClient:
         try:
             response: Final = session.send(request.prepare(), timeout=self._timeout)
             response.raise_for_status()
-            return _JSON_OBJECT.validate_python(response.json())
+            return response.json()
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 401:
                 raise UnauthorizedError(e)

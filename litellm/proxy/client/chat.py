@@ -1,14 +1,13 @@
 import json
 from collections.abc import Iterator
-from typing import Final
+from typing import Any, Final
 
 import requests
-from pydantic import ConfigDict, JsonValue, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from .exceptions import StreamError, UnauthorizedError
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_STREAM_CHUNK: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 _SSE_LINE: Final[TypeAdapter[bytes | bytearray]] = TypeAdapter(
     bytes | bytearray, config=ConfigDict(arbitrary_types_allowed=True, strict=True, hide_input_in_errors=True)
@@ -134,7 +133,7 @@ class ChatClient:
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
         user: str | None = None,
-    ) -> Iterator[JsonValue]:
+    ) -> Iterator[dict[str, Any]]:
         """
         Create a streaming chat completion.
 
@@ -196,7 +195,7 @@ class ChatClient:
                         if data_str.strip() == "[DONE]":
                             break
                         try:
-                            chunk = _STREAM_CHUNK.validate_python(json.loads(data_str))
+                            chunk = json.loads(data_str)
                         except json.JSONDecodeError:
                             continue
                         _raise_if_error_frame(chunk)

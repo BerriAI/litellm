@@ -392,6 +392,32 @@ async def test_dispatcher_runs_followup_with_incremented_depth_and_patched_messa
 
 
 @pytest.mark.asyncio
+async def test_dispatcher_sends_a_tuple_of_patched_messages_as_a_list():
+    plan: Final = AgenticLoopPlan(
+        run_agentic_loop=True,
+        request_patch=AgenticLoopRequestPatch(messages=tuple(_patched_messages())),
+    )
+    logger: Final = _GateOnlyLogger(plan=plan, tool_calls={"tool_calls": [{"id": "call_abc"}]})
+
+    acompletion_mock: Final = AsyncMock(return_value=_plain_model_response("done"))
+    with patch.object(litellm, "callbacks", [logger]), patch.object(litellm, "acompletion", acompletion_mock):
+        await maybe_run_chat_completion_agentic_loop(
+            response=_tool_call_model_response(),
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "what is 6*7?"}],
+            optional_params={},
+            kwargs={"_code_interpreter_interception_active": True},
+            logging_obj=_LoggingStub(),
+            custom_llm_provider="openai",
+            stream=False,
+        )
+
+    sent_messages: Final = acompletion_mock.await_args.kwargs["messages"]
+    assert isinstance(sent_messages, list)
+    assert sent_messages == _patched_messages()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model,custom_llm_provider,routed_model",
     [

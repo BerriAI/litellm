@@ -1,7 +1,6 @@
 """Teams management client for LiteLLM proxy."""
 
 import builtins
-from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 import requests
@@ -10,7 +9,6 @@ from pydantic import TypeAdapter
 from .exceptions import UnauthorizedError
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_TEAM_ROWS: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
 class TeamsManagementClient:
@@ -132,7 +130,7 @@ class TeamsManagementClient:
         response.raise_for_status()
         return _DECODED_JSON.validate_python(response.json())
 
-    def get_available(self) -> Sequence[Mapping[str, object]]:
+    def get_available(self) -> builtins.list[dict[str, Any]]:
         """
         Get list of available teams that the user can join.
 
@@ -151,4 +149,4 @@ class TeamsManagementClient:
             raise UnauthorizedError("Authentication failed. Check your API key.")
 
         response.raise_for_status()
-        return _TEAM_ROWS.validate_python(response.json())
+        return response.json()

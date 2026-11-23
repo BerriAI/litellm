@@ -1,18 +1,13 @@
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Final
+from collections.abc import Iterable, Mapping
+from typing import Any, Final
 
 import requests
 from pydantic import ConfigDict, TypeAdapter
-
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
 
 from .exceptions import NotFoundError, UnauthorizedError
 
 _JSON_VALUE: Final = TypeAdapter(object, config=ConfigDict(strict=True, hide_input_in_errors=True))
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
-_USER_LISTING: Final[TypeAdapter[Sequence[Mapping[str, object]] | Mapping[str, object]]] = TypeAdapter(
-    Sequence[Mapping[str, object]] | Mapping[str, object], config=ConfigDict(hide_input_in_errors=True)
-)
 
 
 class UsersManagementClient:
@@ -29,15 +24,14 @@ class UsersManagementClient:
 
     def list_users(
         self, params: Mapping[str, str | bytes | int | float | Iterable[str | bytes | int | float] | None] | None = None
-    ) -> Sequence[Mapping[str, object]] | Mapping[str, object]:
+    ) -> list[dict[str, Any]]:
         """List users (GET /user/list)"""
         url: Final = f"{self.base_url}/user/list"
         response: Final = requests.get(url, headers=self._get_headers(), params=params, timeout=self.timeout)
         if response.status_code == 401:
             raise UnauthorizedError(response.text)
         response.raise_for_status()
-        listing: Final = decoded_json_object(_JSON_VALUE.validate_python(response.json()))
-        return _USER_LISTING.validate_python(listing.get("users", listing))
+        return response.json().get("users", response.json())
 
     def get_user(self, user_id: str | None = None) -> dict[str, object]:
         """Get user info (GET /user/info)"""
