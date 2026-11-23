@@ -20,6 +20,7 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS, OTEL_SERVICE_NAME_METADATA_KEYS
+from litellm.integrations.lens.policy import LENS_ENABLED_METADATA_KEY
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
@@ -97,6 +98,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "spend_logs_metadata",
         "model_config",
         "callback_settings",
+        LENS_ENABLED_METADATA_KEY,
         "priority",
         "zguard_policy_id",
         "allowed_tools",
