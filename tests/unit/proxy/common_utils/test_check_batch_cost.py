@@ -2297,11 +2297,15 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
         return job
 
     async def _run(self, job: MagicMock) -> str:
+        output_file_id, _ = await self._run_capturing(job, self._RAW_OUTPUT_FILE_ID)
+        return output_file_id
+
+    async def _run_capturing(self, job: MagicMock, raw_output_file_id: str) -> tuple[str, Mapping[str, object]]:
         from litellm_enterprise.proxy.common_utils.check_batch_cost import (
             CheckBatchCost,
         )
+        from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
-        from enterprise.litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
         from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
         from litellm.types.utils import LiteLLMBatch
 
@@ -2342,7 +2346,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
             object="batch",
             status="completed",
         )
-        response.output_file_id = self._RAW_OUTPUT_FILE_ID
+        response.output_file_id = raw_output_file_id
 
         file_content = MagicMock()
         file_content.content = b'{"id":"req-1"}'
@@ -2352,7 +2356,7 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 "litellm.files.main.afile_content",
                 new_callable=AsyncMock,
                 return_value=file_content,
-            ),
+            ) as provider_file_content,
             patch(
                 "litellm.batches.batch_utils.get_file_content_as_dictionary",
                 return_value=[{"id": "req-1"}],
@@ -2376,7 +2380,17 @@ class TestManagedOutputFileIdEncodesPublicModelGroup:
                 prom_logger=None,
             )
 
-        return response.output_file_id
+        return response.output_file_id, provider_file_content.call_args.kwargs
+
+    @pytest.mark.asyncio
+    async def test_output_written_to_a_team_bucket_is_billed_from_that_bucket(self):
+        team_output: Final = "s3://team-a-bucket/litellm-batch-outputs/job-1/input.jsonl.out"
+
+        _, download = await self._run_capturing(
+            self._job(self._managed_input_file_id(self._PUBLIC_MODEL_GROUP)), team_output
+        )
+
+        assert (download["file_id"], download["stored_s3_bucket_name"]) == (team_output, "team-a-bucket")
 
     @pytest.mark.asyncio
     async def test_target_model_names_comes_from_input_file_not_provider_model(self):
@@ -3479,8 +3493,10 @@ class TestMultiPodBatchCostClaim:
         ),
     )
     @pytest.mark.parametrize("failure_envelope", (None, 1, "invalid", [1]))
+    @pytest.mark.parametrize("with_creator_context", (True, False))
     async def test_batch_accounting_preserves_models_and_mixed_results(
-        self, deployment_model: str, successes: int, failures: int, expected_model: str, failure_envelope: object
+        self, deployment_model: str, successes: int, failures: int, expected_model: str, failure_envelope: object,
+        with_creator_context: bool,
     ) -> None:
         import base64
         from datetime import datetime
@@ -3523,16 +3539,34 @@ class TestMultiPodBatchCostClaim:
             def __init__(self) -> None:
                 super().__init__()
                 self.calls: tuple[dict[str, object], ...] = ()
+                self.started_at: tuple[datetime, ...] = ()
 
             async def async_log_success_event(
                 self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
             ) -> None:
                 if kwargs["call_type"] == "aretrieve_batch":
                     self.calls += (kwargs,)
+                    self.started_at += (start_time,)
 
         callback: Final = BatchSpendRecorder()
         litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
         row: Final = _FakeManagedObjectRow()
+        admitted_at: Final = datetime(2025, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+        scope: Final = {
+            "key": "app_customer_org",
+            "entity_id": "app-created:customer-created",
+            "budget_limits": [{"budget_duration": "1mo", "max_budget": 20, "reset_at": "2026-01-01T00:00:00Z"}],
+        }
+        row.creator_billing_context = {
+            "hierarchy": {
+                "app_id": "app-created",
+                "app_alias": "Created app",
+                "customer_org_id": "customer-created",
+                "customer_member_id": "member-created",
+                "scopes": [scope],
+            },
+            "started_at": admitted_at.isoformat(),
+        } if with_creator_context else None
         row.unified_object_id = (
             base64.urlsafe_b64encode(
                 SpecialEnums.LITELLM_MANAGED_BATCH_COMPLETE_STR.value.format("model-123", "batch-456").encode()
@@ -3583,6 +3617,20 @@ class TestMultiPodBatchCostClaim:
         assert payload["hidden_params"]["batch_models"] == (
             ["batch-test-model"] if deployment_model == "openai/batch-test-model" else ["batch-test-model"] * successes
         )
+
+        metadata: Final = payload["metadata"]
+        if with_creator_context:
+            assert callback.started_at == (admitted_at,)
+            assert metadata["user_api_key_app_id"] == "app-created"
+            assert metadata["user_api_key_customer_org_id"] == "customer-created"
+            assert metadata["user_api_key_customer_member_id"] == "member-created"
+            assert json.loads(metadata["user_api_key_customer_budget_scopes"]) == [
+                {**scope, "soft_budget_duration": None}
+            ]
+        else:
+            assert metadata.get("user_api_key_app_id") is None
+            assert metadata.get("user_api_key_customer_org_id") is None
+            assert metadata.get("user_api_key_customer_budget_scopes") is None
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("error_source", ("batch", "output"))

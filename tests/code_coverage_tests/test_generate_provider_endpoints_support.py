@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue
 
-from scripts.generate_provider_endpoints_support import (
+from litellm.scripts.generate_provider_endpoints_support import (
     generate_provider_endpoints_support,
     main,
 )
@@ -155,7 +155,7 @@ def test_check_reports_stale_output_without_writing(tmp_path: Path, capsys: pyte
     assert not (tmp_path / "litellm/provider_endpoints_support_backup.json").exists()
     error_output: Final = capsys.readouterr().err
     assert "provider endpoint support is stale" in error_output
-    assert "scripts/generate_provider_endpoints_support.py" in error_output
+    assert "litellm/scripts/generate_provider_endpoints_support.py" in error_output
 
 
 def test_check_reports_stale_backup_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

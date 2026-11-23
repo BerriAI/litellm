@@ -166,6 +166,7 @@ def _cheapest_together_chat_model(registry: Mapping[str, CostMapEntry], needs: _
     def qualifies(name: str, entry: CostMapEntry) -> bool:
         return (
             name.startswith("together_ai/")
+            and not name.endswith("-latest")
             and entry.litellm_provider == "together_ai"
             and entry.mode == "chat"
             and (entry.deprecation_date is None or entry.deprecation_date > today)

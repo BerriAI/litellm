@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # moved UserAPIKeyAuth fields and the Span alias are typed Any
@@ -6,14 +7,16 @@ from typing import (
     TypeAlias,
 )
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import ConfigDict, Field, PrivateAttr, TypeAdapter, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the before-validator input without copying it
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.team import Member
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.types.agents import AgentCaller, AgentResponse
+from litellm.types.integrations.custom_logger_v2 import BudgetPlan
 from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.carried_budget_state import (
     CommittedBudgetSpend,
@@ -29,6 +32,9 @@ if TYPE_CHECKING:
     Span: TypeAlias = _Span | Any
 else:
     Span: TypeAlias = Any
+
+
+_BILLING_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_jwt(token: str | None) -> bool:
@@ -87,6 +93,9 @@ class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     end_user_tpd_limit: int | None = None
     end_user_max_budget: float | None = None
     end_user_model_max_budget: _UntypedDict | None = None
+    end_user_model_tpm_limit: Mapping[str, int] | None = None
+    end_user_model_rpm_limit: Mapping[str, int] | None = None
+    customer_hierarchy: CustomerHierarchyAuth | None = None
 
     # Organization Params
     organization_alias: str | None = None
@@ -134,6 +143,49 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
 
     api_key: str | None = None
     _access_group_rule_grants: frozenset[str] = PrivateAttr(default=frozenset())
+    _dashboard_session_origin: "UserAPIKeyAuth | None" = PrivateAttr(default=None)
+    _dashboard_session_billing_team_id: str | None = PrivateAttr(default=None)
+    _dashboard_session_model: str | None = PrivateAttr(default=None)
+
+    @property
+    def dashboard_session_origin(self) -> "UserAPIKeyAuth | None":
+        return self._dashboard_session_origin
+
+    @property
+    def dashboard_session_billing_team_id(self) -> str | None:
+        return self._dashboard_session_billing_team_id
+
+    @property
+    def dashboard_session_model(self) -> str | None:
+        return self._dashboard_session_model
+
+    def bind_dashboard_session(self, origin: "UserAPIKeyAuth", *, model: str | None = None) -> None:
+        self._dashboard_session_origin = origin
+        self._dashboard_session_billing_team_id = self.team_id
+        self._dashboard_session_model = model
+
+    def dashboard_model_access_auth(self) -> "UserAPIKeyAuth":
+        if self._dashboard_session_origin is None:
+            return self
+        origin: Final = self._dashboard_session_origin
+        fields: Final = frozenset(
+            name
+            for name in UserAPIKeyAuth.model_fields
+            if name.startswith(("team_", "organization_")) or name == "org_id"
+        )
+        values: Final = _BILLING_FIELDS_ADAPTER.validate_python(origin.model_dump(include=set(fields)))
+        return self.model_copy(update=values)
+
+    _customer_model_scopes: tuple[tuple[str, ...], ...] = PrivateAttr(default=())
+
+    @property
+    def customer_model_scopes(self) -> tuple[tuple[str, ...], ...]:
+        return self._customer_model_scopes
+
+    def with_customer_model_scopes(self, scopes: tuple[tuple[str, ...], ...]) -> "UserAPIKeyAuth":
+        scoped: Final = self.model_copy()
+        scoped._customer_model_scopes = scopes
+        return scoped
 
     @property
     def access_group_rule_grants(self) -> frozenset[str]:
@@ -187,6 +239,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     mcp_forwards_caller_authorization: bool = Field(default=False, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
+    impersonated_by: str | None = Field(default=None, exclude=True)
     via_virtual_key: bool = Field(
         default=False,
         exclude=True,
@@ -214,7 +267,9 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
             "narrow the agent's access."
         ),
     )
+    customer_hierarchy_started_at: datetime | None = Field(default=None, exclude=True)
     budget_reservation: dict[str, object] | None = Field(default=None, exclude=True)
+    budget_plan: BudgetPlan | None = Field(default=None, exclude=True)
     team_budget_snapshot: TeamBudgetSnapshot | None = Field(default=None, exclude=True)
     user_budget_snapshot: UserBudgetSnapshot | None = Field(default=None, exclude=True)
     org_budget_snapshot: OrgBudgetSnapshot | None = Field(default=None, exclude=True)
@@ -244,6 +299,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         # kwargs, model_validate, a JWT/key claim splat) so it can never be forged from caller data.
         values.pop("mcp_admitted_user_subject", None)
         values.pop("requires_fresh_policy", None)
+        values.pop("customer_hierarchy_started_at", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
         values.pop("mcp_session_resource_server_ids", None)
@@ -251,6 +307,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)
+        values.pop("impersonated_by", None)
         values.pop("agent_caller", None)
         values.pop("managed_agent_context", None)
         values.pop("managed_agent_policy", None)

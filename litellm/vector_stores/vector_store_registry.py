@@ -1,6 +1,6 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
-import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import fields, replace
 from datetime import datetime, timezone
 from itertools import chain
 from typing import (
@@ -8,23 +8,21 @@ from typing import (
     Any,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
     Final,
     cast,  # noqa: TID251  # untyped non_default_params dict is the only source of the unknown key type
-    get_args,
 )
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, remove_items_at_indices
 from litellm.repositories.table_repositories import (
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
 )
 from litellm.types.vector_stores import (
-    VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
     LiteLLM_ManagedVectorStoreIndex,
     LiteLLM_ManagedVectorStoreListResponse,
-    LiteLLM_VectorStoreConfig,
     VectorStoreToolParams,
 )
 
@@ -37,6 +35,14 @@ _DB_ROW: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True
 _ITEMS: Final = TypeAdapter(Sequence[object], config=ConfigDict(strict=True))
 _TOOL: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(strict=True))
 _STORE_ID_ITEMS: Final = TypeAdapter(list[object] | tuple[object, ...], config=ConfigDict(strict=True))
+
+
+class _ManagedVectorStoreRowFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+def _row_fields(row: Iterable[tuple[str, object]]) -> Mapping[str, object]:
+    return dict(row)
 
 
 def _named_store_ids(store_ids: object) -> tuple[str, ...]:
@@ -141,19 +147,15 @@ class VectorStoreRegistry:
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
     def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
-        """
-        Extract supported parameters from a tool definition.
-
-        Dynamically extracts all parameters defined in VECTOR_STORE_OPENAI_PARAMS.
-        """
-        # Get the list of supported param names from the Literal type
-        declared_params: Final[tuple[object, ...]] = get_args(VECTOR_STORE_OPENAI_PARAMS)
-        supported_params: Final = tuple(param for param in declared_params if isinstance(param, str))
-
-        # Extract only the params that exist in the tool
-        kwargs: Final = {param: tool.get(param) for param in supported_params if param in tool}
-
-        return VectorStoreToolParams(**kwargs)
+        tool_fields: Final = decoded_json_object(tool)
+        return replace(
+            VectorStoreToolParams(),
+            **{
+                field.name: tool_fields[field.name]
+                for field in fields(VectorStoreToolParams)
+                if field.name in tool_fields
+            },
+        )
 
     def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
         """
@@ -429,44 +431,15 @@ class VectorStoreRegistry:
             return vector_store_ids
         return [*vector_store_ids, *chain.from_iterable(vector_store_ids_in_tool(tool) for tool in validated_tools)]
 
-    def load_vector_stores_from_config(self, vector_stores_config: list[dict]):
-        """
-        Loads vector stores from the litellm proxy config.yaml
-        """
-        for vector_store_config in vector_stores_config:
-            # cast to VectorStoreConfig
-            litellm_vector_store_config = LiteLLM_VectorStoreConfig(**vector_store_config)
-            vector_store_name = litellm_vector_store_config.get("vector_store_name")
-            vector_store_litellm_params = litellm_vector_store_config.get("litellm_params") or {}
-
-            vector_store_id = vector_store_litellm_params.get("vector_store_id")
-            if vector_store_id is None:
-                raise ValueError(
-                    f"vector_store_id is required for initializing vector store, got vector_store_id={vector_store_id}"
-                )
-            custom_llm_provider = vector_store_litellm_params.get("custom_llm_provider")
-            if custom_llm_provider is None:
-                raise ValueError(
-                    f"custom_llm_provider is required for initializing vector store, got custom_llm_provider={custom_llm_provider}"
-                )
-
-            litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
-                vector_store_id=vector_store_id,
-                custom_llm_provider=custom_llm_provider,
-                litellm_params=vector_store_litellm_params,
-                vector_store_name=vector_store_name,
-                vector_store_description=vector_store_litellm_params.get("vector_store_description"),
-                vector_store_metadata=vector_store_litellm_params.get("vector_store_metadata"),
-                created_at=datetime.now(timezone.utc),
-                updated_at=datetime.now(timezone.utc),
-                is_config=True,
-            )
-            self.vector_stores.append(litellm_managed_vector_store)
-
-        verbose_logger.debug(
-            "all loaded vector stores = %s",
-            json.dumps(self.vector_stores, indent=4, default=str),
+    def load_vector_stores_from_config(self, vector_stores_config: Sequence[Mapping[str, object]]) -> None:
+        loaded: Final = tuple(_configured_vector_store(config) for config in vector_stores_config)
+        replaced: Final = frozenset(store.get("vector_store_id") for store in loaded)
+        snapshot: Final = (
+            *tuple(store for store in self.vector_stores if store.get("vector_store_id") not in replaced),
+            *loaded,
         )
+        validate_vector_store_fallbacks(loaded)
+        self.vector_stores = list(snapshot)
 
     def list_all_vector_stores(self) -> LiteLLM_ManagedVectorStoreListResponse:
         """
@@ -538,8 +511,10 @@ class VectorStoreRegistry:
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
-                _dict_vector_store = dict(vector_store)
-                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
+                _dict_vector_store = _row_fields(vector_store)
+                _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(
+                    **_ManagedVectorStoreRowFields(**_dict_vector_store)
+                )
                 vector_stores_from_db.append(_litellm_managed_vector_store)
         return vector_stores_from_db
 
@@ -559,3 +534,60 @@ class VectorStoreRegistry:
                 if credentials:
                     return CredentialAccessor.get_credential_values(credentials)
         return {}
+
+
+def _configured_vector_store(config: Mapping[str, object]) -> LiteLLM_ManagedVectorStore:
+    params: Final = _DB_ROW.validate_python(config.get("litellm_params") or {})
+    store_id: Final = params.get("vector_store_id")
+    provider: Final = params.get("custom_llm_provider")
+    if not isinstance(store_id, str) or not store_id:
+        raise ValueError("vector_store_id is required for initializing vector store")
+    if not isinstance(provider, str) or not provider:
+        raise ValueError("custom_llm_provider is required for initializing vector store")
+    return LiteLLM_ManagedVectorStore(
+        **_ManagedVectorStoreRowFields(
+            vector_store_id=store_id,
+            custom_llm_provider=provider,
+            litellm_params=dict(params),
+            vector_store_name=config.get("vector_store_name"),
+            vector_store_description=params.get("vector_store_description"),
+            vector_store_metadata=params.get("vector_store_metadata"),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+            is_config=True,
+        )
+    )
+
+
+def validate_vector_store_fallbacks(stores: Sequence[LiteLLM_ManagedVectorStore]) -> None:
+    from litellm.vector_stores.fallbacks import fallback_ids, targets_for_store
+
+    normalized: Final = tuple(_normalized_fallback_store(store) for store in stores)
+    for store in normalized:
+        if fallback_ids(store.get("litellm_params") or {}):
+            for target in targets_for_store(store, normalized):
+                _validate_search_provider(target.provider)
+
+
+def _validate_search_provider(name: str) -> None:
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    provider_name, separator, api_type = name.partition("/")
+    try:
+        provider: Final = LlmProviders(provider_name)
+    except ValueError as error:
+        raise ValueError("Vector store fallback provider is not supported") from error
+    if (
+        ProviderConfigManager.get_provider_vector_stores_config(
+            provider=provider, api_type=api_type if separator else None
+        )
+        is None
+    ):
+        raise ValueError("Vector store fallback provider does not support search")
+
+
+def _normalized_fallback_store(store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
+    raw: Final = store.get("litellm_params")
+    params: Final = _DB_ROW.validate_json(raw) if isinstance(raw, str) else _DB_ROW.validate_python(raw or {})
+    return LiteLLM_ManagedVectorStore(**_ManagedVectorStoreRowFields(**{**store, "litellm_params": dict(params)}))

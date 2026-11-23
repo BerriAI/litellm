@@ -8,7 +8,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import (
     ClassVar,
@@ -29,6 +29,7 @@ from typing_extensions import ReadOnly, Required
 from yaml.events import AliasEvent, ScalarEvent
 from yaml.nodes import MappingNode, Node, ScalarNode
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
@@ -242,6 +243,17 @@ def _scalar_text(node: ScalarNode) -> str:
             raise ValueError("Invalid YAML OpenAPI spec")
 
 
+class _NodePairs(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _mapping_keys(node: MappingNode) -> Iterator[object]:
+    for pair in iter_items(require_attributes(node, _NodePairs, "value").value):
+        key, _ = iter_items(pair)
+        yield key
+
+
 class _OpenAPISafeLoader(yaml.SafeLoader):
     yaml_implicit_resolvers: ClassVar[Mapping[str | None, Sequence[tuple[str, re.Pattern[str]]]]] = {  # pyright: ignore[reportIncompatibleVariableOverride]  # PyYAML resolver tables are class state
         None: list(_YAML_SCALARS.items())
@@ -279,10 +291,10 @@ class _OpenAPISafeLoader(yaml.SafeLoader):
             node.tag == "tag:yaml.org,2002:str" and not isinstance(node, ScalarNode)
         ):
             raise ValueError("Invalid YAML OpenAPI spec")
-        if isinstance(node, MappingNode):
-            pairs: Final[Sequence[tuple[Node, Node]]] = node.value
-            if any(not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" for key, _ in pairs):
-                raise ValueError("Invalid YAML OpenAPI spec")
+        if isinstance(node, MappingNode) and any(
+            not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" for key in _mapping_keys(node)
+        ):
+            raise ValueError("Invalid YAML OpenAPI spec")
         return super().construct_object(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # incomplete PyYAML stubs
             node, deep
         )
@@ -760,7 +772,7 @@ def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
                 # by sanitized characters (e.g. "foo/list" and "foo.list")
                 # would both become "foo_list". Append _2, _3, … to keep
                 # every tool reachable, mirroring the Anthropic-side logic
-                # in _build_anthropic_tool_name_maps.
+                # in build_anthropic_tool_name_maps.
                 unique = tool_name
                 n = 1
                 while unique in used_names:

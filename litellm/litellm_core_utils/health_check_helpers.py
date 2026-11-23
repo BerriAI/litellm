@@ -9,6 +9,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
+from pydantic import TypeAdapter
+
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
@@ -190,7 +192,10 @@ class HealthCheckHelpers:
         from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
         _metadata_variable_name: Final = "litellm_metadata"
-        litellm_metadata: Final = HealthCheckHelpers._get_metadata_for_health_check_call()
+        litellm_metadata: Final[Mapping[str, object]] = {
+            **HealthCheckHelpers._get_metadata_for_health_check_call(),
+            "model_info": TypeAdapter(dict[str, object]).validate_python(model_params).get("model_info") or {},
+        }
         model_params[_metadata_variable_name] = litellm_metadata
         model_params = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
             data=model_params,
@@ -323,8 +328,9 @@ class HealthCheckHelpers:
             ),
             "audio_speech": lambda: litellm.aspeech(
                 **{
+                    "voice": "alloy",
                     **_filter_model_params(model_params=model_params),
-                    **({"voice": "alloy"} if "voice" not in _filter_model_params(model_params=model_params) else {}),
+                    "stream": False,
                 },
                 input=prompt or "test",
             ),

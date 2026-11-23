@@ -19,12 +19,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import chain, groupby
+from types import MappingProxyType, TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import LiteralString
 
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL, rollup_lock_timeout_setting
@@ -45,7 +48,18 @@ class ToolUsageTransaction:
     total_tokens: int
 
 
-def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
+_NO_FULL_TOOL_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+def logged_full_tool_names(call_kwargs: object) -> Mapping[str, str]:
+    fields: Final = as_str_mapping(call_kwargs)
+    logged: Final = None if fields is None else fields.get(BRIDGED_TOOL_NAMES_KWARG)
+    return logged.as_mapping() if isinstance(logged, BridgedToolNames) else _NO_FULL_TOOL_NAMES
+
+
+def response_tool_call_names(
+    completion_response: object, full_names: Mapping[str, str] = _NO_FULL_TOOL_NAMES
+) -> tuple[str, ...]:
     """Tool names invoked in a completion response, in call order, for any response
     surface get_tool_calls_from_response understands (chat completions, Responses
     API output items, Anthropic Messages tool_use blocks), plus the MCP tools an
@@ -62,7 +76,7 @@ def response_tool_call_names(completion_response: object) -> tuple[str, ...]:
         for tool_call in get_tool_calls_from_response(completion_response, include_all_choices=True)
     )
     return tuple(
-        stripped
+        full_names.get(stripped, stripped)
         for name in chain(
             _server_tool_call_names(completion_response),
             called_names,
@@ -138,6 +152,7 @@ def build_tool_usage_transaction(
     total_tokens: int,
     completion_response: object,
     realtime_tool_calls: object = None,
+    full_names: Mapping[str, str] = _NO_FULL_TOOL_NAMES,
 ) -> ToolUsageTransaction | None:
     """None when the request invoked no tools. Realtime sessions carry invoked
     tools in kwargs["realtime_tool_calls"] (OpenAI tool_calls shape) rather than
@@ -153,7 +168,9 @@ def build_tool_usage_transaction(
         if realtime_tool_calls
         else ()
     )
-    tool_names: Final = tuple(dict.fromkeys(mcp_names + response_tool_call_names(completion_response) + realtime_names))
+    tool_names: Final = tuple(
+        dict.fromkeys(mcp_names + response_tool_call_names(completion_response, full_names) + realtime_names)
+    )
     if not tool_names:
         return None
     try:
@@ -175,7 +192,8 @@ class _ToolRollupTable(Protocol):
 
 
 class _ToolRollupBatch(Protocol):
-    litellm_dailytoolspend: _ToolRollupTable
+    @property
+    def litellm_dailytoolspend(self) -> _ToolRollupTable: ...
 
     def execute_raw(self, query: LiteralString, *args: object) -> None: ...
 
@@ -183,7 +201,13 @@ class _ToolRollupBatch(Protocol):
 class _ToolRollupBatchManager(Protocol):
     async def __aenter__(self) -> _ToolRollupBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 def _tool_rollup_batch(prisma_client: PrismaClient) -> _ToolRollupBatchManager:

@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 
-_ParsedT: Final = TypeVar("_ParsedT")
+_ParsedT = TypeVar("_ParsedT")
 
 
 class VolcEngineVideoError(BaseLLMException):
@@ -874,7 +874,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
             **(extra_query or {}),
         }
 
-    def transform_video_list_response(  # pyright: ignore[reportIncompatibleMethodOverride]  # base declares dict[str, str] but the payload is a heterogeneous list body
+    def transform_video_list_response(
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",

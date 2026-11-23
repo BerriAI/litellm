@@ -354,17 +354,19 @@ def test_plugin_session_claim_opens_under_the_documented_hmac_plugin_key(monkeyp
 def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_urandom_or_hmac_new(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    salt_key: Final = "sk-" + bytes(range(32)).hex()
+
     def outside_the_fips_provider(*_: object) -> NoReturn:
         raise AssertionError("fips_mode must not draw on os.urandom or hmac.new")
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     monkeypatch.setattr(os, "urandom", outside_the_fips_provider)
     monkeypatch.setattr(hmac, "new", outside_the_fips_provider)
     monkeypatch.setattr(time, "time", lambda: 1_800_000_000.0)
     fixed_input: Final = (
         (1).to_bytes(4, "big") + b"litellm-plugin:session-claim:" + b"\x00" + b"chat-ui" + (256).to_bytes(4, "big")
     )
-    plugin_key: Final = base64.urlsafe_b64encode(hmac.digest(bytes(range(32)), fixed_input, "sha256"))
+    plugin_key: Final = base64.urlsafe_b64encode(hmac.digest(salt_key.encode(), fixed_input, "sha256"))
     token: Final = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
 
     claim: Final[dict[str, object]] = json.loads(Fernet(plugin_key).decrypt(token))
@@ -374,10 +376,10 @@ def test_fips_mode_plugin_session_claim_opens_under_the_kbkdf_key_without_os_ura
 
 
 @pytest.mark.usefixtures("fips_mode")
-def test_fips_mode_refuses_a_plugin_session_claim_under_a_salt_key_that_is_not_hex(
+def test_fips_mode_refuses_a_plugin_session_claim_under_a_salt_key_under_112_bits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt")
 
-    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be at least 32 bytes of hex"):
+    with pytest.raises(ValueError, match=r"LITELLM_SALT_KEY must be set and at least 112 bits \(14 bytes\)"):
         issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")

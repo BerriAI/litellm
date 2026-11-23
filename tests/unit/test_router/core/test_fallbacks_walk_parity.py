@@ -5,18 +5,21 @@ raise, dict targets naming no group, weighted failover past an affinity pin, and
 reasoning a fallback hop strips.
 """
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
 import pytest
 
 import litellm
+from litellm.router_core import RouterCore
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
 from litellm.types.router import RoutingContext as PluginContext
 from tests.unit.test_router.core.fallbacks_helpers import (
+    MESSAGES,
     MakeCore,
     build,
     complete,
+    fails_once_then_answers,
     headers,
     show_router_debug,
 )
@@ -29,6 +32,14 @@ from tests.unit.test_router.core.scripted_host import (
 )
 
 TEAM_METADATA: Final = {"user_api_key_team_id": "T1"}
+T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "tp"}
+INTERLEAVED_TEAM_TIERS: Final = [
+    deployment("t1-first", "t1-first", order=1, model_info=T1_PUBLIC),
+    deployment("t2-first", "t2-first", order=2, model_info=T2_PUBLIC),
+    deployment("t1-second", "t1-second", order=3, model_info=T1_PUBLIC),
+    deployment("t2-second", "t2-second", order=4, model_info=T2_PUBLIC),
+]
 
 # --- order levels behind a name -------------------------------------------------------------------
 
@@ -64,20 +75,115 @@ async def test_order_levels_walk_through_an_alias(make_core: MakeCore, host: Scr
 
 
 @pytest.mark.asyncio
-async def test_order_levels_walk_through_a_team_public_name(make_core: MakeCore, host: ScriptedHost) -> None:
-    public: Final = {"team_id": "T1", "team_public_model_name": "tp"}
+@pytest.mark.parametrize(
+    ("buckets", "expected"),
+    [
+        ({"metadata": {"user_api_key_team_id": "T1"}}, ["t1-first", "t1-second"]),
+        ({"litellm_metadata": {"user_api_key_team_id": "T1"}}, ["t1-first", "t1-second"]),
+        ({"metadata": {}, "litellm_metadata": {"user_api_key_team_id": "T1"}}, ["t1-first", "t1-second"]),
+        (
+            {"metadata": {"user_api_key_team_id": None}, "litellm_metadata": {"user_api_key_team_id": "T1"}},
+            ["t1-first", "t1-second"],
+        ),
+        (
+            {"metadata": {"user_api_key_team_id": ""}, "litellm_metadata": {"user_api_key_team_id": "T1"}},
+            ["t1-first", "t1-second"],
+        ),
+        (
+            {"metadata": {"user_api_key_team_id": 7}, "litellm_metadata": {"user_api_key_team_id": "T1"}},
+            ["t1-first", "t1-second"],
+        ),
+        (
+            {"metadata": {"user_api_key_team_id": "T2"}, "litellm_metadata": {"user_api_key_team_id": "T1"}},
+            ["t2-first", "t2-second"],
+        ),
+    ],
+    ids=[
+        "metadata",
+        "litellm-metadata",
+        "empty-metadata-beside-litellm-metadata",
+        "teamless-metadata-beside-litellm-metadata",
+        "empty-string-metadata-team-beside-litellm-metadata",
+        "numeric-metadata-team-beside-litellm-metadata",
+        "metadata-team-wins-over-litellm-metadata-team",
+    ],
+)
+async def test_order_levels_walk_through_a_team_public_name_within_the_callers_team(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    buckets: Mapping[str, Mapping[str, object]],
+    expected: list[str],
+) -> None:
+    core: Final = build(make_core, model_list=INTERLEAVED_TEAM_TIERS)
+    host.answer("openai/t1-first", rate_limit())
+    host.answer("openai/t2-first", rate_limit())
+
+    await complete(core, "tp", **{name: dict(bucket) for name, bucket in buckets.items()})
+
+    assert host.deployments_called("acompletion") == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("buckets", "expected"),
+    [
+        ({"metadata": {"user_api_key_team_id": ""}}, ["shared-first", "shared-third"]),
+        (
+            {"metadata": {"user_api_key_team_id": ""}, "litellm_metadata": {"user_api_key_team_id": "T1"}},
+            ["shared-first", "t1-owned-second"],
+        ),
+    ],
+    ids=["empty-metadata-team-alone-skips-team-owned-tiers", "litellm-metadata-team-walks-its-owned-tier"],
+)
+async def test_order_levels_of_a_shared_group_name_follow_the_listing_team(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    buckets: Mapping[str, Mapping[str, object]],
+    expected: list[str],
+) -> None:
     core: Final = build(
         make_core,
         model_list=[
-            deployment("t1a", "ta1", order=1, model_info=public),
-            deployment("t1b", "ta2", order=2, model_info=public),
+            deployment("g", "shared-first", order=1),
+            deployment("g", "t1-owned-second", order=2, model_info={"team_id": "T1"}),
+            deployment("g", "shared-third", order=3),
         ],
     )
-    host.answer("openai/ta1", rate_limit())
+    host.answer("openai/shared-first", rate_limit())
 
-    await complete(core, "tp", metadata=dict(TEAM_METADATA))
+    await complete(core, "g", **{name: dict(bucket) for name, bucket in buckets.items()})
 
-    assert host.deployments_called("acompletion") == ["ta1", "ta2"]
+    assert host.deployments_called("acompletion") == expected
+
+
+async def _responses(core: RouterCore, litellm_metadata: Mapping[str, object]) -> object:
+    return await core.aresponses(model="tp", input="hi", litellm_metadata=litellm_metadata)  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+
+
+async def _anthropic_messages(core: RouterCore, litellm_metadata: Mapping[str, object]) -> object:
+    return await core.aanthropic_messages(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="tp", messages=MESSAGES, max_tokens=5, litellm_metadata=litellm_metadata
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("op", "call"),
+    [("aresponses", _responses), ("anthropic_messages", _anthropic_messages)],
+    ids=["responses", "anthropic-messages"],
+)
+async def test_order_levels_walk_through_a_team_public_name_on_litellm_metadata_endpoints(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    op: str,
+    call: Callable[[RouterCore, Mapping[str, object]], Awaitable[object]],
+) -> None:
+    core: Final = build(make_core, model_list=INTERLEAVED_TEAM_TIERS)
+    host.answer("openai/t1-first", rate_limit())
+
+    await call(core, dict(TEAM_METADATA))
+
+    assert host.deployments_called(op) == ["t1-first", "t1-second"]
 
 
 # --- a team wildcard ------------------------------------------------------------------------------
@@ -252,6 +358,29 @@ async def test_a_chain_ending_on_a_non_string_model_notes_the_hops_error(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+async def test_weighted_failover_moves_to_a_sibling_of_the_callers_team_only(
+    make_core: MakeCore, host: ScriptedHost, bucket: str
+) -> None:
+    core: Final = build(
+        make_core,
+        model_list=[
+            deployment("t1-a", "t1-a", model_info=T1_PUBLIC),
+            deployment("t1-b", "t1-b", model_info=T1_PUBLIC),
+            deployment("t2-a", "t2-a", model_info=T2_PUBLIC),
+        ],
+        enable_weighted_failover=True,
+    )
+    first_call_fails: Final = fails_once_then_answers(rate_limit())
+    for deployment_id in ("t1-a", "t1-b", "t2-a"):
+        host.answer(f"openai/{deployment_id}", first_call_fails)
+
+    await complete(core, "tp", **{bucket: dict(TEAM_METADATA)})
+
+    assert sorted(host.deployments_called("acompletion")) == ["t1-a", "t1-b"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("repin", [True, False])
 async def test_weighted_failover_skips_an_affinity_pin_on_the_failed_deployment(
     make_core: MakeCore, host: ScriptedHost, repin: bool
@@ -269,7 +398,7 @@ async def test_weighted_failover_skips_an_affinity_pin_on_the_failed_deployment(
         if isinstance(callback, DeploymentAffinityCheck)
     )
     key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("g", "s", "c")
-    await check.cache.async_set_cache(key, {"model_id": "a"})  # pyright: ignore[reportUnknownMemberType]
+    await check.pins.set(key, {"model_id": "a"}, 3600)
     host.answer("openai/a", server_error())
 
     response: Final = await complete(core, "g", metadata={"session_id": "s", "user_api_key_hash": "c"})

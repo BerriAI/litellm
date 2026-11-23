@@ -25,6 +25,7 @@ from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlStats,
 )
 from litellm.proxy.middleware.per_request_root_path_middleware import PerRequestRootPathMiddleware
+from litellm.redis.stores.auth_cache import AuthObject
 
 
 class KeyRequest(BaseModel):
@@ -543,7 +544,7 @@ async def test_oauth2_proxy_auth_preserves_native_identity_and_peer_trust(
 
     cache: Final = UserApiKeyCache()
     for user_id, user in users.items():
-        cache.set_cache(user_id, user)
+        cache.set_cache(AuthObject.user(user_id), user)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     monkeypatch.setattr(proxy_server, "prisma_client", UserInfoDatabase())
     monkeypatch.setattr(proxy_server, "general_settings", {
@@ -741,3 +742,16 @@ async def test_user_info_explains_missing_admin_mcp_dependency(
             mcp_path=None,
         )
     assert exc.value.code == "503"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+def test_gateway_serves_every_operation_id_the_connector_pins() -> None:
+    from litellm_admin_mcp.catalog import OPERATIONS
+
+    paths: Final = proxy_server.app.openapi()["paths"]
+    served: Final = {
+        operation.name: paths.get(operation.path, {}).get(operation.method.lower(), {}).get("operationId")
+        for operation in OPERATIONS
+    }
+
+    assert served == {operation.name: operation.operation_id for operation in OPERATIONS}

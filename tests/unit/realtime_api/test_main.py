@@ -5,7 +5,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from types import TracebackType
+from types import MappingProxyType, TracebackType
 from typing import ClassVar, Final, Literal, Protocol
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, RealTimeStreaming
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openai.live.handler import LiveAttach, LiveUpstream
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -303,6 +304,141 @@ async def test_arealtime_live_session_dispatches_to_openai_live_handler(monkeypa
     assert captured.values["session_start"] == start_frame
     assert captured.values["api_base"] == "https://live-gateway.example/v1"
     assert captured.values["api_key"] == "resolved-key"
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai"])
+@pytest.mark.asyncio
+async def test_arealtime_live_session_on_azure_connects_to_the_resource_live_route_with_the_api_key(
+    monkeypatch: pytest.MonkeyPatch, provider: str
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "gpt-live-1", provider, "azure-key", "https://my-resource.openai.azure.com/openai/v1"
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+    start_frame: Final[dict[str, object]] = {"type": "session.start", "session": {"model": "live-alias"}}
+
+    await realtime_main._arealtime.__wrapped__(
+        model="live-alias",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        live_session_start=start_frame,
+    )
+
+    assert captured.values is not None
+    assert captured.values["model"] == "gpt-live-1"
+    assert captured.values["session_start"] == start_frame
+    upstream: Final = captured.values["upstream"]
+    assert isinstance(upstream, LiveUpstream)
+    assert upstream.url == "wss://my-resource.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "azure-key"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_live_session_on_azure_falls_back_to_the_azure_openai_api_key_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "gpt-live-1", "azure", None, "https://my-resource.openai.azure.com"
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "env-azure-key")
+
+    await realtime_main._arealtime.__wrapped__(
+        model="live-alias",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        live_session_start={"type": "session.start", "session": {"model": "live-alias"}},
+    )
+
+    assert captured.values is not None
+    upstream: Final = captured.values["upstream"]
+    assert isinstance(upstream, LiveUpstream)
+    assert dict(upstream.headers) == {"api-key": "env-azure-key"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_live_session_on_azure_without_a_key_authenticates_with_the_entra_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: Final = _CallCapture()
+
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "gpt-live-1", "azure", None, "https://my-resource.openai.azure.com"
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.setattr(realtime_main.litellm, "azure_key", None)
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+
+    await realtime_main._arealtime.__wrapped__(
+        model="live-alias",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        live_session_start={"type": "session.start", "session": {"model": "live-alias"}},
+        azure_ad_token="entra-token",
+    )
+
+    assert captured.values is not None
+    upstream: Final = captured.values["upstream"]
+    assert isinstance(upstream, LiveUpstream)
+    assert dict(upstream.headers) == {"Authorization": "Bearer entra-token"}
+
+
+@pytest.mark.asyncio
+async def test_arealtime_live_session_refuses_a_provider_without_a_live_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def mock_get_llm_provider(
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str | None = None,
+    ) -> tuple[str, str, str | None, str | None]:
+        return "grok-voice", "xai", "xai-key", None
+
+    monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
+
+    with pytest.raises(ValueError, match="Live sessions require the openai or azure provider, got xai"):
+        await realtime_main._arealtime.__wrapped__(
+            model="live-alias",
+            websocket=MagicMock(),
+            litellm_logging_obj=FakeLogging(),
+            live_session_start={"type": "session.start", "session": {"model": "live-alias"}},
+        )
 
 
 @pytest.mark.asyncio
@@ -1135,6 +1271,93 @@ async def test_realtime_session_requests_forward_an_explicit_null_upstream(
     assert [key for key, value in session_fields.items() if value is None] == []
 
 
+def _create_translation_client_secret(expires_after: object, gateway: _GatewayThatRecordsTheBody) -> Awaitable[object]:
+    return realtime_main.acreate_realtime_translation_client_secret.__wrapped__(
+        model="gpt-realtime-translate",
+        expires_after=expires_after,
+        custom_llm_provider="openai",
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=_realtime_http_logging("translation_client_secrets"),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_after",
+    [
+        pytest.param({"anchor": "created_at", "seconds": 600}, id="dict"),
+        pytest.param(MappingProxyType({"anchor": "created_at", "seconds": 600}), id="read-only-mapping"),
+    ],
+)
+async def test_translation_client_secret_forwards_a_mapping_expires_after(expires_after: Mapping[str, object]) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    await _create_translation_client_secret(expires_after, gateway)
+
+    assert gateway.body["expires_after"] == {"anchor": "created_at", "seconds": 600}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "expires_after",
+    [
+        pytest.param([("anchor", "created_at"), ("seconds", 600)], id="list-of-pairs"),
+        pytest.param("seconds=600", id="string"),
+    ],
+)
+async def test_translation_client_secret_rejects_an_expires_after_that_is_not_a_mapping(expires_after: object) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    with pytest.raises(TypeError, match=r"realtime\.RealtimeExpiresAfter\(\) argument after \*\* must be a mapping"):
+        await _create_translation_client_secret(expires_after, gateway)
+
+    assert gateway.body is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "transcription_session",
+    [
+        pytest.param([("input_audio_format", "pcm16")], id="list-of-pairs"),
+        pytest.param("input_audio_format=pcm16", id="string"),
+    ],
+)
+async def test_transcription_session_rejects_a_session_that_is_not_a_mapping(transcription_session: object) -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    with pytest.raises(
+        TypeError, match=r"realtime\.RealtimeTranscriptionSessionRequest\(\) argument after \*\* must be a mapping"
+    ):
+        await realtime_main.acreate_realtime_transcription_session.__wrapped__(
+            model="openai/gpt-transcribe",
+            transcription_session=transcription_session,
+            api_base="https://realtime-gateway.example/v1",
+            api_key="fake-key",
+            litellm_logging_obj=FakeLogging(),
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+        )
+
+    assert gateway.body is None
+
+
+@pytest.mark.asyncio
+async def test_transcription_session_accepts_a_read_only_mapping() -> None:
+    gateway: Final = _GatewayThatRecordsTheBody()
+
+    await realtime_main.acreate_realtime_transcription_session.__wrapped__(
+        model="openai/gpt-transcribe",
+        transcription_session=MappingProxyType({"input_audio_format": "pcm16"}),
+        api_base="https://realtime-gateway.example/v1",
+        api_key="fake-key",
+        litellm_logging_obj=FakeLogging(),
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(gateway)),
+    )
+
+    assert gateway.body["input_audio_format"] == "pcm16"
+
+
 @pytest.mark.asyncio
 async def test_transcription_client_secret_sends_the_deployment_model_as_the_session_model() -> None:
     gateway: Final = _GatewayThatRecordsTheSession()
@@ -1199,6 +1422,20 @@ def test_azure_realtime_protocol_configured_by_the_operator_wins(
     )
 
     assert protocol.name == "beta"
+
+
+def test_a_sideband_joining_a_webrtc_call_uses_ga_on_a_deployment_configured_for_beta(local_model_cost_map) -> None:
+    from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
+
+    protocol: Final = azure_realtime_protocol_for_client(
+        "beta",
+        model="my-realtime-deployment",
+        realtime_mode="realtime",
+        query_params={"call_id": "rtc_123"},
+        websocket=_GA_CLIENT,
+    )
+
+    assert protocol.name == "GA"
 
 
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
@@ -2548,3 +2785,98 @@ async def test_soniox_realtime_health_check_fails_when_soniox_closes_without_fin
             await realtime_main.realtime_health_check(
                 model="stt-rt-v5", custom_llm_provider="soniox", api_key="soniox-key", api_base=f"ws://127.0.0.1:{port}"
             )
+
+
+def test_session_metadata_keeps_the_proxy_caller_identity_for_bedrock_session_tags() -> None:
+    request_data: Final = {
+        "metadata": {
+            "user_api_key_alias": "realtime-caller",
+            "user_api_key_team_alias": "team-a",
+            "user_api_key_metadata": {"disable_global_guardrails": True},
+            "other": "dropped",
+        },
+        "litellm_metadata": {"user_api_key_alias": "internal"},
+    }
+    assert realtime_main._build_litellm_metadata(request_data) == {
+        "user_api_key_alias": "internal",
+        "user_api_key_team_alias": "team-a",
+    }
+
+
+@pytest.mark.asyncio
+async def test_arealtime_live_attach_reaches_the_live_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final = _CallCapture()
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+    attach: Final = LiveAttach(session_id="live_abc", metered=True)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="openai/gpt-live-1",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key="sk-live-test",
+        live_session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        live_attach=attach,
+    )
+
+    assert captured.values is not None
+    assert captured.values["attach"] is attach
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_resolves_an_openai_deployment() -> None:
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "openai/gpt-live-1", "api_key": "sk-live-test", "api_base": "https://api.openai.com/v1"}
+    )
+
+    assert resolved is not None
+    model, upstream = resolved
+    assert model == "gpt-live-1"
+    assert upstream.url == "wss://api.openai.com/v1/live/sessions"
+    assert dict(upstream.headers) == {"Authorization": "Bearer sk-live-test"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_resolves_an_azure_deployment() -> None:
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "azure/gpt-live-1", "api_key": "azure-key", "api_base": "https://my-resource.openai.azure.com"}
+    )
+
+    assert resolved is not None
+    model, upstream = resolved
+    assert model == "gpt-live-1"
+    assert upstream.url == "wss://my-resource.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "azure-key"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_uses_the_deployment_stored_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-live",
+                credential_values={"api_key": "key-from-credential", "api_base": "https://stored.openai.azure.com"},
+                credential_info={},
+            )
+        ],
+    )
+
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "azure/gpt-live-1", "litellm_credential_name": "azure-live"}
+    )
+
+    assert resolved is not None
+    _, upstream = resolved
+    assert upstream.url == "wss://stored.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "key-from-credential"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_is_none_for_a_provider_without_a_live_api() -> None:
+    assert await realtime_main.live_session_upstream({"model": "xai/grok-voice", "api_key": "xai-key"}) is None

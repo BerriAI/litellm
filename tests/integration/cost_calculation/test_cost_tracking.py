@@ -28,7 +28,11 @@ from integration.cost_calculation.conftest import (
     read_rows_now,
     register_scenario_deployment,
 )
-from integration.cost_calculation.catalog import STANDALONE_CASES, data_errors
+from integration.cost_calculation.catalog import (
+    BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    STANDALONE_CASES,
+    data_errors,
+)
 from integration.cost_calculation.stream_parity.runner import flush_spend_logs
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
@@ -55,7 +59,12 @@ def _marks(case: CostTrackingTestCase) -> tuple[pytest.MarkDecorator, ...]:
     bug: Final = (
         (pytest.mark.xfail(strict=True, reason=f"BUG: {case.known_bug}"),) if case.known_bug is not None else ()
     )
-    return (pytest.mark.covers(case.covers), *bug)
+    billed: Final = (
+        (pytest.mark.billed_against_real_provider_by_cost_tracking_reconciliation_automation,)
+        if case.name in BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION
+        else ()
+    )
+    return (pytest.mark.covers(case.covers), *bug, *billed)
 
 
 _CASES: Final = tuple(pytest.param(case, marks=_marks(case), id=case.name) for case in STANDALONE_CASES)
@@ -70,6 +79,19 @@ def _wav_bytes(seconds: float) -> bytes:
         wav.setframerate(16000)
         wav.writeframes(b"\x00\x00" * frame_count)
     return output.getvalue()
+
+
+def _unsized_flac_bytes() -> bytes:
+    """A FLAC whose STREAMINFO total-samples field is 0 (unknown), as an encoder writing to a pipe leaves it."""
+    sample_rate: Final = 16000
+    bits_per_sample: Final = 16
+    streaminfo: Final = (
+        struct.pack(">HH", 4096, 4096)
+        + bytes(6)
+        + ((sample_rate << 44) | ((bits_per_sample - 1) << 36)).to_bytes(8, "big")
+        + bytes(16)
+    )
+    return b"fLaC" + b"\x80" + len(streaminfo).to_bytes(3, "big") + streaminfo
 
 
 def _png_bytes() -> bytes:
@@ -97,6 +119,8 @@ def _multipart_request(gateway: Gateway, case: CostTrackingTestCase, model_name:
     }
     if case.upload.kind == "wav":
         files: Final = {"file": ("audio.wav", _wav_bytes(case.upload.seconds), "audio/wav")}
+    elif case.upload.kind == "unsized_flac":
+        files = {"file": ("audio.flac", _unsized_flac_bytes(), "audio/flac")}
     else:
         files = {"image": ("image.png", _png_bytes(), "image/png")}
     return gateway.request_multipart(case.endpoint, fields, files, key=key)

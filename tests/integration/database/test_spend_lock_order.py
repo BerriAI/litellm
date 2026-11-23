@@ -54,7 +54,7 @@ _SEED: Final = (
 def schema_sql() -> str:
     return subprocess.run(
         [sys.executable, "-I", "-m", "prisma", "migrate", "diff", "--from-empty", "--to-schema-datamodel",
-         str(_ROOT / "schema.prisma"), "--script"],
+         str(_ROOT / "litellm/schema.prisma"), "--script"],
         check=True,
         capture_output=True,
         text=True,
