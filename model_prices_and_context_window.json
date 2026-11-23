@@ -126108,5 +126108,21 @@
         "supports_web_search": true,
         "supports_xhigh_reasoning_effort": true,
         "web_search_billing_unit": "per_query"
+    },
+    "together_ai/deepseek-ai/DeepSeek-V4.1-Flash-1017-fast": {
+        "cache_read_input_token_cost": 1.2e-08,
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "together_ai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 2.4e-06,
+        "source": "https://api.together.ai/v1/models",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
     }
 }
