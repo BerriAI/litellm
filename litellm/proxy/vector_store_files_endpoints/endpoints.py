@@ -453,7 +453,7 @@ async def _update_request_data_with_managed_file_id(
     return data, None
 
 
-def _replace_file_id_in_response(response, original_file_id: str):
+def _replace_file_id_in_response(response, original_file_id: str) -> object:
     """
     Replace the provider file ID in the response with the original managed file ID.
 
