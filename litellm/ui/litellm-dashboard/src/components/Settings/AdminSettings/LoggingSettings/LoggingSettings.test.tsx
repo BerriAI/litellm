@@ -642,6 +642,79 @@ describe("LoggingSettings", () => {
     });
     expect(clearedFieldNames()).toContain("maximum_spend_logs_cleanup_run_budget");
   });
+  it("should save the guardrail outcomes that are checked", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<LoggingSettings />);
+
+    await user.click(screen.getByRole("checkbox", { name: "Masked" }));
+    await user.click(screen.getByRole("checkbox", { name: "Blocked" }));
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toEqual({
+      store_prompts_in_spend_logs: false,
+      guardrail_log_outcomes: ["blocked", "masked"],
+    });
+    expect(mockDeleteField).not.toHaveBeenCalled();
+  });
+
+  it("should clear the stored guardrail outcomes when every box is unchecked", async () => {
+    const user = userEvent.setup();
+    mockDeleteField.mockImplementation((_request, options) => options?.onSettled?.());
+    mockUseProxyConfig.mockReturnValue({
+      data: [
+        {
+          field_name: "guardrail_log_outcomes",
+          field_type: "List",
+          field_description: "Outcomes kept",
+          field_value: ["blocked", "flagged"],
+          stored_in_db: true,
+        },
+      ],
+      isLoading: false,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useProxyConfig>);
+    renderWithProviders(<LoggingSettings />);
+
+    expect(screen.getByRole("checkbox", { name: "Blocked" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Flagged" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Passed" })).not.toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "Blocked" }));
+    await user.click(screen.getByRole("checkbox", { name: "Flagged" }));
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(clearedFieldNames()).toEqual(["guardrail_log_outcomes"]);
+    expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
+  });
+
+  it.each([
+    { stored: ["blocked", "flagged"], case: "a stored list" },
+    { stored: [], case: "a stored empty list" },
+  ])("should leave $case of guardrail outcomes alone when the admin did not change it", async ({ stored }) => {
+    const user = userEvent.setup();
+    mockUseProxyConfig.mockReturnValue({
+      data: [
+        {
+          field_name: "guardrail_log_outcomes",
+          field_type: "List",
+          field_description: "Outcomes kept",
+          field_value: stored,
+          stored_in_db: true,
+        },
+      ],
+      isLoading: false,
+      refetch: mockRefetch,
+    } as unknown as ReturnType<typeof useProxyConfig>);
+    renderWithProviders(<LoggingSettings />);
+
+    await user.click(screen.getByRole("button", { name: "Save Settings" }));
+
+    await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
+    expect(mockMutate.mock.calls[0][0]).toEqual({ store_prompts_in_spend_logs: false });
+    expect(mockDeleteField).not.toHaveBeenCalled();
+  });
+
   describe("numeric coercion parity", () => {
     it("should round a fractional batch size to a whole number, in the input and in the payload", async () => {
       const user = userEvent.setup();

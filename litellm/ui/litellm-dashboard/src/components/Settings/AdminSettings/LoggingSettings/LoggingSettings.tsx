@@ -15,6 +15,7 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Switch } from "@/components/ui/switch";
@@ -76,6 +77,16 @@ const OPTIONAL_FIELDS: readonly OptionalField[] = [
   },
 ];
 
+const GUARDRAIL_LOG_OUTCOMES_FIELD_NAME = GeneralSettingsFieldName.GUARDRAIL_LOG_OUTCOMES;
+
+const GUARDRAIL_LOG_OUTCOMES: readonly { readonly value: string; readonly label: ParseKeys }[] = [
+  { value: "blocked", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.blocked" },
+  { value: "flagged", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.flagged" },
+  { value: "masked", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.masked" },
+  { value: "passed", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.passed" },
+  { value: "not_run", label: "adminPanel.loggingSettings.fields.guardrailLogOutcomes.outcomes.notRun" },
+];
+
 const MINIMUM_COUNT = 1;
 
 interface LoggingSettingsFormValues {
@@ -85,6 +96,7 @@ interface LoggingSettingsFormValues {
   maximum_spend_logs_cleanup_max_batches: string;
   maximum_spend_logs_cleanup_run_budget: string;
   maximum_spend_logs_cleanup_batch_timeout: string;
+  guardrail_log_outcomes: string[];
 }
 
 const duration = (value: string): string | undefined => (value.trim() === "" ? undefined : value);
@@ -105,7 +117,13 @@ const countDisplay = (raw: string): string => {
   return normalized === undefined ? "" : String(normalized);
 };
 
-const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestInSpendLogsParams => {
+const sameOutcomes = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((outcome) => right.includes(outcome));
+
+const buildUpdateParams = (
+  formValues: LoggingSettingsFormValues,
+  outcomesChanged: boolean,
+): StoreRequestInSpendLogsParams => {
   const retentionPeriod = duration(formValues.maximum_spend_logs_retention_period);
   const batchSize = count(formValues.maximum_spend_logs_cleanup_batch_size);
   const maxBatches = count(formValues.maximum_spend_logs_cleanup_max_batches);
@@ -119,6 +137,10 @@ const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestI
     ...(maxBatches !== undefined && { maximum_spend_logs_cleanup_max_batches: maxBatches }),
     ...(runBudget !== undefined && { maximum_spend_logs_cleanup_run_budget: runBudget }),
     ...(batchTimeout !== undefined && { maximum_spend_logs_cleanup_batch_timeout: batchTimeout }),
+    ...(outcomesChanged &&
+      formValues.guardrail_log_outcomes.length > 0 && {
+        guardrail_log_outcomes: formValues.guardrail_log_outcomes,
+      }),
   };
 };
 
@@ -130,8 +152,12 @@ const buildUpdateParams = (formValues: LoggingSettingsFormValues): StoreRequestI
 const omittedFieldNames = (
   updateParams: StoreRequestInSpendLogsParams,
   isStored: (name: GeneralSettingsFieldName) => boolean,
+  outcomesChanged: boolean,
 ): readonly GeneralSettingsFieldName[] =>
-  OPTIONAL_FIELDS.map((field) => field.name).filter((name) => !(name in updateParams) && isStored(name));
+  [
+    ...OPTIONAL_FIELDS.map((field) => field.name),
+    ...(outcomesChanged ? [GUARDRAIL_LOG_OUTCOMES_FIELD_NAME] : []),
+  ].filter((name) => !(name in updateParams) && isStored(name));
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -213,6 +239,41 @@ const LoggingSettingsForm: React.FC<LoggingSettingsFormProps> = ({
               }
             </FormField>
           ))}
+
+          <FormField
+            control={form.control}
+            name={GUARDRAIL_LOG_OUTCOMES_FIELD_NAME}
+            label={labelWithHint(
+              t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.label"),
+              describeField(
+                GUARDRAIL_LOG_OUTCOMES_FIELD_NAME,
+                t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.hint"),
+              ),
+            )}
+            description={t("adminPanel.loggingSettings.fields.guardrailLogOutcomes.description")}
+          >
+            {({ value, onChange }) => (
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                {GUARDRAIL_LOG_OUTCOMES.map((outcome) => (
+                  <label key={outcome.value} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={value.includes(outcome.value)}
+                      onCheckedChange={(checked) =>
+                        onChange(
+                          checked
+                            ? GUARDRAIL_LOG_OUTCOMES.map((known) => known.value).filter(
+                                (known) => known === outcome.value || value.includes(known),
+                              )
+                            : value.filter((kept) => kept !== outcome.value),
+                        )
+                      }
+                    />
+                    {t(outcome.label)}
+                  </label>
+                ))}
+              </div>
+            )}
+          </FormField>
         </FieldGroup>
 
         <Button type="submit" className="mt-6" disabled={isSaving}>
@@ -259,6 +320,9 @@ const LoggingSettings: React.FC = () => {
             return [field.name, stored === null || stored === undefined ? "" : String(stored)];
           }),
         ),
+        guardrail_log_outcomes: Array.isArray(storedValue(GUARDRAIL_LOG_OUTCOMES_FIELD_NAME))
+          ? storedValue(GUARDRAIL_LOG_OUTCOMES_FIELD_NAME)
+          : [],
       }) as LoggingSettingsFormValues,
     [storedValue],
   );
@@ -295,7 +359,10 @@ const LoggingSettings: React.FC = () => {
   };
 
   const handleFormSubmit = (formValues: LoggingSettingsFormValues) => {
-    const updateParams = buildUpdateParams(formValues);
+    // Outcomes travel only when the admin changed them, so saving another field never rewrites a stored
+    // empty list or a value the config file owns.
+    const outcomesChanged = !sameOutcomes(formValues.guardrail_log_outcomes, initialValues.guardrail_log_outcomes);
+    const updateParams = buildUpdateParams(formValues, outcomesChanged);
     const submitUpdate = () =>
       mutate(updateParams, {
         onSuccess: () => toast.success(t("adminPanel.loggingSettings.toasts.updated")),
@@ -303,7 +370,7 @@ const LoggingSettings: React.FC = () => {
           toast.fromError(t("adminPanel.loggingSettings.toasts.saveFailed", { error: parseErrorMessage(error) })),
       });
 
-    const fieldsToClear = omittedFieldNames(updateParams, isStored);
+    const fieldsToClear = omittedFieldNames(updateParams, isStored, outcomesChanged);
     if (fieldsToClear.length === 0) {
       submitUpdate();
       return;

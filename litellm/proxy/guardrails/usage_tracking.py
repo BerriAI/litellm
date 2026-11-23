@@ -8,7 +8,7 @@ import json
 from collections import defaultdict
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
-from functools import partial
+from functools import lru_cache, partial
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar
@@ -18,7 +18,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.litellm_core_utils.core_helpers import require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, require_attributes
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
@@ -217,6 +217,51 @@ def guardrail_status_to_action(status: object) -> str:
     return "passed"
 
 
+GUARDRAIL_LOG_OUTCOMES: Final[frozenset[str]] = frozenset({"passed", "masked", "blocked", "flagged", "not_run"})
+
+
+def guardrail_log_outcome(entry: Mapping[str, object]) -> str:
+    """The outcome `guardrail_log_outcomes` matches a run against: its action, with a passed run that
+    masked at least one entity reported as masked."""
+    action: Final = guardrail_status_to_action(entry.get("guardrail_status"))
+    if action != "passed":
+        return action
+    counts: Final = as_str_mapping(entry.get("masked_entity_count"))
+    if counts is None:
+        return action
+    masked: Final = any(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in counts.values())
+    return "masked" if masked else action
+
+
+@lru_cache(maxsize=16)
+def _warn_once(message: str) -> None:
+    verbose_proxy_logger.warning(message)
+
+
+def configured_guardrail_log_outcomes(general_settings: Mapping[str, object]) -> frozenset[str] | None:
+    """The outcomes `general_settings.guardrail_log_outcomes` keeps index rows for, or None when every
+    run keeps its row."""
+    configured: Final = general_settings.get("guardrail_log_outcomes")
+    if configured is None:
+        return None
+    outcomes: Final = as_object_list(configured)
+    if outcomes is None:
+        _warn_once(
+            "general_settings.guardrail_log_outcomes must be a list of outcomes, "
+            f"got {type(configured).__name__}; keeping every guardrail run"
+        )
+        return None
+    unknown: Final = tuple(
+        repr(outcome) for outcome in outcomes if not (isinstance(outcome, str) and outcome in GUARDRAIL_LOG_OUTCOMES)
+    )
+    if unknown:
+        _warn_once(
+            f"general_settings.guardrail_log_outcomes ignores unknown outcomes {', '.join(unknown)}; "
+            f"valid outcomes are {', '.join(sorted(GUARDRAIL_LOG_OUTCOMES))}"
+        )
+    return frozenset(outcome for outcome in outcomes if isinstance(outcome, str)) & GUARDRAIL_LOG_OUTCOMES
+
+
 def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
@@ -400,6 +445,10 @@ async def _record_guardrail_usage(
         }
     )
     index_rows_by_key: Final[dict[tuple[str, str], dict[str, object]]] = {}
+    from litellm.proxy.proxy_server import current_general_settings
+
+    kept_outcomes: Final = configured_guardrail_log_outcomes(current_general_settings())
+    kept_index_keys: Final[set[tuple[str, str]]] = set()  # mutable-ok: filled by the pass that builds index_rows_by_key
 
     for payload in (row for row in logs_to_process if row.get("accounting_log_disabled") is not True):
         request_id = payload.get("request_id")
@@ -432,6 +481,8 @@ async def _record_guardrail_usage(
                     daily_guardrail[key]["blocked_count"] += 1
                 else:
                     daily_guardrail[key]["flagged_count"] += 1
+            if kept_outcomes is None or guardrail_log_outcome(entry) in kept_outcomes:
+                kept_index_keys.add((request_id, guardrail_id))
             policy_id = entry.get("policy_id")
             prior = index_rows_by_key.get((request_id, guardrail_id))
             if prior is None or (prior["policy_id"] is None and policy_id is not None):
@@ -441,7 +492,7 @@ async def _record_guardrail_usage(
                     "policy_id": policy_id,
                     "start_time": start_time,
                 }
-    index_rows: Final = tuple(index_rows_by_key.values())
+    index_rows: Final = tuple(row for key, row in index_rows_by_key.items() if key in kept_index_keys)
 
     async with pending.lock:
         pending_metrics: Final = pending.metrics

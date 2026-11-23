@@ -21,6 +21,7 @@ export enum GeneralSettingsFieldName {
   MAXIMUM_SPEND_LOGS_CLEANUP_MAX_BATCHES = "maximum_spend_logs_cleanup_max_batches",
   MAXIMUM_SPEND_LOGS_CLEANUP_RUN_BUDGET = "maximum_spend_logs_cleanup_run_budget",
   MAXIMUM_SPEND_LOGS_CLEANUP_BATCH_TIMEOUT = "maximum_spend_logs_cleanup_batch_timeout",
+  GUARDRAIL_LOG_OUTCOMES = "guardrail_log_outcomes",
   // Add more field names here as needed
 }
 

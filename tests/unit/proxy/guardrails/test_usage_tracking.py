@@ -687,3 +687,102 @@ async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
     prisma.db.litellm_dailyguardrailmetrics.upsert.assert_not_awaited()
     prisma.db.litellm_spendlogguardrailindex.create_many.assert_not_awaited()
     prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()
+
+
+def _entries_payload(request_id: str, entries: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = _payload(request_id)
+    payload["metadata"] = json.dumps({"guardrail_information": entries})
+    return payload
+
+
+def _indexed(prisma: MagicMock) -> list[tuple[str, str, Any]]:
+    return sorted(
+        (row["request_id"], row["guardrail_id"], row["policy_id"])
+        for call in prisma.db.litellm_spendlogguardrailindex.create_many.call_args_list
+        for row in call.kwargs["data"]
+    )
+
+
+def _log_outcomes(monkeypatch: pytest.MonkeyPatch, outcomes: object) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "guardrail_log_outcomes", outcomes)
+
+
+_ONE_RUN_PER_OUTCOME = [
+    _entries_payload("passed", [{"guardrail_id": "g", "guardrail_status": "success"}]),
+    _entries_payload(
+        "masked", [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"EMAIL": 0, "SSN": 2}}]
+    ),
+    _entries_payload("blocked", [{"guardrail_id": "g", "guardrail_status": "guardrail_intervened"}]),
+    _entries_payload("flagged", [{"guardrail_id": "g", "guardrail_status": "guardrail_flagged"}]),
+    _entries_payload("not_run", [{"guardrail_id": "g", "guardrail_status": "not_run"}]),
+    _entries_payload(
+        "passed-empty-counts",
+        [{"guardrail_id": "g", "guardrail_status": "success", "masked_entity_count": {"SSN": 0, "EMAIL": True}}],
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcomes", "kept"),
+    [
+        (["blocked", "flagged", "masked"], ["blocked", "flagged", "masked"]),
+        (["masked"], ["masked"]),
+        (["passed"], ["passed", "passed-empty-counts"]),
+        (["not_run"], ["not_run"]),
+        ([], []),
+        (["blocked", "no-such-outcome", 7], ["blocked"]),
+        (None, ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]),
+        ("blocked", ["blocked", "flagged", "masked", "not_run", "passed", "passed-empty-counts"]),
+    ],
+)
+async def test_guardrail_log_outcomes_keeps_index_rows_only_for_listed_outcomes(monkeypatch, outcomes, kept):
+    _log_outcomes(monkeypatch, outcomes)
+    prisma = _prisma()
+
+    await process_spend_logs_guardrail_usage(prisma, _ONE_RUN_PER_OUTCOME)
+
+    assert [request_id for request_id, _, _ in _indexed(prisma)] == kept
+    metrics_create = prisma.db.litellm_dailyguardrailmetrics.upsert.call_args.kwargs["data"]["create"]
+    assert metrics_create == {
+        "guardrail_id": "g",
+        "date": "2026-08-17",
+        "requests_evaluated": 5,
+        "passed_count": 3,
+        "blocked_count": 1,
+        "flagged_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_guardrail_log_outcomes_keeps_the_row_when_any_run_of_the_guardrail_is_listed(monkeypatch):
+    _log_outcomes(monkeypatch, ["blocked"])
+    prisma = _prisma()
+    logs = [
+        _entries_payload(
+            "r1",
+            [
+                {
+                    "guardrail_name": "cf",
+                    "guardrail_id": "cf-uuid",
+                    "policy_id": "pol-1",
+                    "guardrail_status": "success",
+                },
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "guardrail_intervened"},
+                {"guardrail_name": "other", "guardrail_id": "other-uuid", "guardrail_status": "success"},
+            ],
+        ),
+        _entries_payload(
+            "r2",
+            [
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+                {"guardrail_name": "cf", "guardrail_id": "cf-uuid", "guardrail_status": "success"},
+            ],
+        ),
+    ]
+
+    await process_spend_logs_guardrail_usage(prisma, logs)
+
+    assert _indexed(prisma) == [("r1", "cf-uuid", "pol-1")]
