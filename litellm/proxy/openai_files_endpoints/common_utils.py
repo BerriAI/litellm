@@ -519,18 +519,6 @@ async def get_authorized_credentials_for_model(
     )
 
 
-def deployment_drop_params(
-    llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
-) -> Mapping[str, bool | str]:
-    deployment: Final = (
-        llm_router.get_credential_deployment(model_id=model_id)
-        if llm_router is not None and "drop_params" not in request
-        else None
-    )
-    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
-    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
-
-
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
