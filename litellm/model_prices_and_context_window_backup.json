@@ -106194,13 +106194,13 @@
         "supports_vision": true
     },
     "nagaai/deepseek/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 1.68e-09,
-        "input_cost_per_token": 5.6e-08,
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 9.75e-08,
         "litellm_provider": "nagaai",
         "max_input_tokens": 1048576,
         "max_output_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.68e-07,
+        "output_cost_per_token": 3.825e-07,
         "reasoning_effort_levels": [
             "none",
             "minimal",
