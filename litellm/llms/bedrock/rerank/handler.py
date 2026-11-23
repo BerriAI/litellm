@@ -170,10 +170,16 @@ class BedrockRerankHandler(BaseAWSLLM):
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = join_api_base(proxy_endpoint_url, "rerank")
 
+        rerank_config: Final = (data.get("rerankingConfiguration") or {}) if isinstance(data, dict) else {}
+        bedrock_config: Final = (
+            (rerank_config.get("bedrockRerankingConfiguration") or {})
+            if isinstance(rerank_config, dict)
+            else {}
+        )
         model_config: Final = (
-            data.get("rerankingConfiguration", {})
-            .get("bedrockRerankingConfiguration", {})
-            .get("modelConfiguration")
+            bedrock_config.get("modelConfiguration")
+            if isinstance(bedrock_config, dict)
+            else None
         )
         if isinstance(model_config, dict):
             current_arn: Final = model_config.get("modelArn")

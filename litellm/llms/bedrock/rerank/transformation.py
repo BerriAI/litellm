@@ -63,6 +63,7 @@ class BedrockRerankConfig(BaseRerankConfig):
         model: str,
         optional_params: dict | None = None,
     ) -> str:
+        # Bedrock builds and signs runtime endpoints dynamically in BedrockRerankHandler
         return api_base or ""
 
     def get_supported_cohere_rerank_params(self, model: str) -> list[str]:

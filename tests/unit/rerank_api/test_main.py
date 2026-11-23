@@ -508,6 +508,23 @@ def test_bedrock_rerank_filters_unsupported_credentials_params():
     assert "unsupported_extra" not in mapped
 
 
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_rerank_prepare_request_handles_none_config(monkeypatch):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    handler: Final = litellm.llms.bedrock.rerank.handler.BedrockRerankHandler()
+    data_with_none: Final = {
+        "rerankingConfiguration": None,
+    }
+    prepared: Final = handler._prepare_request(
+        model="amazon.rerank-v1:0",
+        api_base=None,
+        extra_headers=None,
+        data=data_with_none,
+        optional_params={},
+    )
+    assert "us-west-2" in prepared["endpoint_url"]
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])
