@@ -25,6 +25,7 @@ from litellm.constants import (
     SLACK_DAILY_REPORT_LOCK_ID,
     SLACK_MODEL_DEPRECATION_LOCK_ID,
 )
+from litellm.cost_calculator import base_model_for_pricing
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
 from litellm.integrations.SlackAlerting.hanging_request_check import (
@@ -1070,7 +1071,7 @@ class SlackAlerting(CustomBatchLogger):
         model_info = {}
         base_model = ""
         if base_model_from_user is not None:
-            model_info = litellm.model_cost.get(base_model_from_user, {})
+            model_info = litellm.model_cost.get(base_model_for_pricing(base_model_from_user) or litellm_model_name, {})
             base_model = f"Base Model: `{base_model_from_user}`\n"
         else:
             model_info = litellm.model_cost.get(litellm_model_name, {})

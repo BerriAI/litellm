@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, Mock, patch
 import httpx
 import pytest
 import respx
+from google.oauth2.credentials import Credentials
 from pydantic import BaseModel, TypeAdapter
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES, VertexAIError
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.main import vertex_chat_completion
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
@@ -2562,6 +2564,7 @@ GEMINI_FINAL_IMAGE: Final = {
     "image_url": {"url": "data:image/png;base64,ZmluYWw=", "detail": "auto"},
     "index": 0,
     "type": "image_url",
+    "provider_specific_fields": {"thought_signature": "c2ln"},
 }
 GEMINI_TRUNCATED_THOUGHT_IMAGE_PARTS: Final = [
     {"text": "Sketching the layout first", "thought": True},
@@ -7796,7 +7799,6 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     v = VertexGeminiConfig()
 
-    # Test pass-through
     optional_params = {}
     non_default_params = {"service_tier": "FLEX"}
 
@@ -7809,7 +7811,18 @@ def test_vertex_ai_service_tier_in_map_openai_params():
 
     assert result["service_tier"] == "flex"
 
-    # Test auto -> priority
+    optional_params_prefixed = {}
+    non_default_params_prefixed = {"service_tier": "SERVICE_TIER_PRIORITY"}
+
+    result_prefixed = v.map_openai_params(
+        non_default_params=non_default_params_prefixed,
+        optional_params=optional_params_prefixed,
+        model="gemini-3-pro-preview",
+        drop_params=True,
+    )
+
+    assert result_prefixed["service_tier"] == "priority"
+
     optional_params_auto = {}
     non_default_params_auto = {"service_tier": "auto"}
 
@@ -7820,9 +7833,8 @@ def test_vertex_ai_service_tier_in_map_openai_params():
         drop_params=True,
     )
 
-    assert result_auto["service_tier"] == "priority"
+    assert "service_tier" not in result_auto
 
-    # Test AUTO (uppercase) -> priority
     optional_params_auto_upper = {}
     non_default_params_auto_upper = {"service_tier": "AUTO"}
 
@@ -7833,7 +7845,251 @@ def test_vertex_ai_service_tier_in_map_openai_params():
         drop_params=True,
     )
 
-    assert result_auto_upper["service_tier"] == "priority"
+    assert "service_tier" not in result_auto_upper
+
+
+@pytest.mark.parametrize("config", [VertexGeminiConfig(), GoogleAIStudioGeminiConfig()])
+@pytest.mark.parametrize("service_tier", ["turbo", "scale"])
+def test_vertex_ai_unknown_service_tier_answers_400(config: VertexGeminiConfig, service_tier: str) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"Invalid `service_tier`: '{service_tier}'") as raised:
+        config.map_openai_params(
+            non_default_params={"service_tier": service_tier},
+            optional_params={},
+            model="gemini-2.5-flash",
+            drop_params=False,
+        )
+
+    assert "'standard_only'" in str(raised.value)
+
+
+@pytest.mark.parametrize(("global_drop_params", "drop_params"), [(False, True), (True, False)])
+def test_vertex_ai_unknown_service_tier_is_dropped_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, drop_params: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    mapped: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"service_tier": "turbo"},
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=drop_params,
+    )
+
+    assert "service_tier" not in mapped
+
+
+_GENERATE_CONTENT_RESPONSE: Final = {
+    "candidates": [{"content": {"role": "model", "parts": [{"text": "Hi"}]}, "finishReason": "STOP"}],
+    "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+}
+
+
+@pytest.fixture
+def _cached_vertex_credentials(monkeypatch: pytest.MonkeyPatch) -> str:
+    credential_key: Final = "test-vertex-service-tier-credentials"
+    monkeypatch.setitem(
+        vertex_chat_completion._credentials_project_mapping,
+        (credential_key, "test-project"),
+        (Credentials(token="test-vertex-token"), "test-project"),
+    )
+    return credential_key
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("model", "service_tier", "shared_request_type", "body_service_tier"),
+    [
+        ("vertex_ai/gemini-2.5-flash", "priority", "priority", None),
+        ("vertex_ai/gemini-2.5-flash", "FLEX", "flex", None),
+        ("vertex_ai/gemini-2.5-flash", "SERVICE_TIER_PRIORITY", "priority", None),
+        ("vertex_ai/gemini-2.5-flash", "standard", None, None),
+        ("vertex_ai/gemini-2.5-flash", "default", None, None),
+        ("vertex_ai/gemini-2.5-flash", "auto", None, None),
+        ("vertex_ai/gemini-2.5-flash", "standard_only", None, None),
+        ("vertex_ai_beta/gemini-2.5-flash", "flex", "flex", None),
+        ("gemini/gemini-2.5-flash", "PRIORITY", None, "priority"),
+        ("gemini/gemini-2.5-flash", "standard", None, "standard"),
+        ("gemini/gemini-2.5-flash", "auto", None, "priority"),
+        ("gemini/gemini-2.5-flash", "default", None, "standard"),
+        ("gemini/gemini-2.5-flash", "unspecified", None, None),
+        ("gemini/gemini-2.5-flash", "SERVICE_TIER_STANDARD_ONLY", None, "standard"),
+    ],
+)
+def test_service_tier_reaches_vertex_as_headers_and_ai_studio_as_body(
+    respx_mock: respx.MockRouter,
+    _cached_vertex_credentials: str,
+    model: str,
+    service_tier: str,
+    shared_request_type: str | None,
+    body_service_tier: str | None,
+) -> None:
+    route: Final = respx_mock.post(
+        url__regex=r"https://(aiplatform|generativelanguage)\.googleapis\.com/.*:generateContent.*"
+    ).mock(return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE))
+
+    is_ai_studio: Final = model.startswith("gemini/")
+    completion(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier=service_tier,
+        api_key="test-api-key" if is_ai_studio else None,
+        vertex_credentials=None if is_ai_studio else _cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = route.calls.last.request
+    assert json.loads(sent.content).get("serviceTier") == body_service_tier
+    assert sent.headers.get("X-Vertex-AI-LLM-Shared-Request-Type") == shared_request_type
+    assert sent.headers.get("X-Vertex-AI-LLM-Request-Type") is None
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    "caller_header_name", ["x-vertex-ai-llm-shared-request-type", "X-VERTEX-AI-LLM-SHARED-REQUEST-TYPE"]
+)
+def test_caller_tier_header_in_any_case_replaces_the_service_tier_header(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, caller_header_name: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
+    )
+
+    completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="flex",
+        extra_headers={caller_header_name: "priority"},
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = route.calls.last.request
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_caller_request_type_header_rides_along_with_the_service_tier_header(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_GENERATE_CONTENT_RESPONSE)
+    )
+
+    completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="priority",
+        extra_headers={"X-Vertex-AI-LLM-Request-Type": "shared"},
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    sent: Final = route.calls.last.request
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Request-Type") == ["shared"]
+    assert sent.headers.get_list("X-Vertex-AI-LLM-Shared-Request-Type") == ["priority"]
+
+
+def _vertex_response_with_traffic_type(traffic_type: str) -> dict[str, object]:
+    return {
+        **_GENERATE_CONTENT_RESPONSE,
+        "usageMetadata": {
+            "promptTokenCount": 1,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 2,
+            "trafficType": traffic_type,
+        },
+    }
+
+
+_SERVED_TIER_BY_TRAFFIC_TYPE: Final = pytest.mark.parametrize(
+    ("traffic_type", "served_tier"),
+    [
+        ("ON_DEMAND", "default"),
+        ("ON_DEMAND_PRIORITY", "priority"),
+        ("ON_DEMAND_FLEX", "flex"),
+        ("FLEX", "flex"),
+        ("BATCH", "flex"),
+        ("PROVISIONED_THROUGHPUT", "default"),
+    ],
+)
+
+
+@pytest.mark.respx(assert_all_called=True)
+@_SERVED_TIER_BY_TRAFFIC_TYPE
+def test_vertex_response_reports_the_served_tier_from_traffic_type(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, traffic_type: str, served_tier: str | None
+) -> None:
+    respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:generateContent.*").mock(
+        return_value=httpx.Response(200, json=_vertex_response_with_traffic_type(traffic_type))
+    )
+
+    response: Final = completion(
+        model="vertex_ai/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="priority",
+        vertex_credentials=_cached_vertex_credentials,
+        vertex_project="test-project",
+        vertex_location="global",
+        client=HTTPHandler(),
+    )
+
+    assert getattr(response, "service_tier", None) == served_tier
+
+
+@pytest.mark.respx(assert_all_called=True)
+@_SERVED_TIER_BY_TRAFFIC_TYPE
+def test_vertex_stream_reports_the_served_tier_from_traffic_type(
+    respx_mock: respx.MockRouter, _cached_vertex_credentials: str, traffic_type: str, served_tier: str | None
+) -> None:
+    respx_mock.post(url__regex=r"https://aiplatform\.googleapis\.com/.*:streamGenerateContent.*").mock(
+        return_value=_gemini_sse(_vertex_response_with_traffic_type(traffic_type))
+    )
+
+    chunks: Final = list(
+        completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            service_tier="priority",
+            stream=True,
+            stream_options={"include_usage": True},
+            vertex_credentials=_cached_vertex_credentials,
+            vertex_project="test-project",
+            vertex_location="global",
+            client=HTTPHandler(),
+        )
+    )
+
+    assert getattr(chunks[-1], "service_tier", None) == served_tier
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(("header_tier", "served_tier"), [("priority", "priority"), ("STANDARD", "default")])
+def test_ai_studio_service_tier_header_outranks_traffic_type(
+    respx_mock: respx.MockRouter, header_tier: str, served_tier: str
+) -> None:
+    respx_mock.post(f"{GEMINI_MODELS_URL}/gemini-2.5-flash:generateContent").mock(
+        return_value=httpx.Response(
+            200,
+            json=_vertex_response_with_traffic_type("ON_DEMAND_FLEX"),
+            headers={"x-gemini-service-tier": header_tier},
+        )
+    )
+
+    response: Final = completion(
+        model="gemini/gemini-2.5-flash",
+        messages=[{"role": "user", "content": "Hello"}],
+        service_tier="auto",
+        api_key="test-api-key",
+        client=HTTPHandler(),
+    )
+
+    assert getattr(response, "service_tier", None) == served_tier
 
 
 def test_vertex_ai_usage_metadata_with_video_tokens_in_prompt():
@@ -13087,6 +13343,124 @@ def test_grounding_support_preserves_every_web_source(chunk_indices: list[int]) 
             },
         }
         for index, start, end in expected_sources
+    ]
+
+
+GEMINI_FLASH_IMAGE_URL: Final = r"https://generativelanguage\.googleapis\.com/v1\w+/models/gemini-3\.1-flash-image"
+
+
+def _gemini_image_turn(*parts: dict[str, object]) -> dict[str, object]:
+    return {
+        "candidates": [{"content": {"role": "model", "parts": list(parts)}, "finishReason": "STOP", "index": 0}],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 1290, "totalTokenCount": 1300},
+        "modelVersion": "gemini-3.1-flash-image",
+    }
+
+
+def _replayed_model_parts(request: httpx.Request) -> list[list[tuple[str, str | None]]]:
+    return [
+        [(part.get("text") or part["inline_data"]["data"], part.get("thoughtSignature")) for part in content["parts"]]
+        for content in json.loads(request.content)["contents"]
+        if content["role"] == "model"
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_image_edits_replay_every_image_with_its_own_signature(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:generateContent").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_gemini_image_turn(
+                    {"text": "A cat on a red chair.", "thoughtSignature": "sig-text-1"},
+                    {"inlineData": {"mimeType": "image/png", "data": "Y2F0LXJlZA=="}, "thoughtSignature": "sig-img-1"},
+                ),
+            ),
+            httpx.Response(
+                200,
+                json=_gemini_image_turn(
+                    {"inlineData": {"mimeType": "image/png", "data": "Y2F0LWJsdWU="}, "thoughtSignature": "sig-img-2"}
+                ),
+            ),
+            httpx.Response(200, json=_gemini_image_turn({"text": "Done."})),
+        ]
+    )
+    prompts: Final = ("Draw a cat on a chair", "Make the chair blue", "Make the cat orange")
+
+    first: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": prompts[0]}],
+        api_key="test-api-key",
+    )
+    second: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[
+            {"role": "user", "content": prompts[0]},
+            first.choices[0].message,
+            {"role": "user", "content": prompts[1]},
+        ],
+        api_key="test-api-key",
+    )
+    await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[
+            {"role": "user", "content": prompts[0]},
+            first.choices[0].message,
+            {"role": "user", "content": prompts[1]},
+            json.loads(second.choices[0].message.model_dump_json()),
+            {"role": "user", "content": prompts[2]},
+        ],
+        api_key="test-api-key",
+    )
+
+    assert _replayed_model_parts(route.calls[2].request) == [
+        [("A cat on a red chair.", "sig-text-1"), ("Y2F0LXJlZA==", "sig-img-1")],
+        [("Y2F0LWJsdWU=", "sig-img-2")],
+    ]
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_gemini_streamed_image_keeps_its_signature_through_the_rebuilt_message(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:streamGenerateContent\?alt=sse").mock(
+        return_value=_gemini_sse(
+            _gemini_image_turn({"text": "A cat on a red chair.", "thoughtSignature": "sig-text"}),
+            _gemini_image_turn(
+                {"inlineData": {"mimeType": "image/png", "data": "Y2F0LXJlZA=="}, "thoughtSignature": "sig-img"}
+            ),
+        )
+    )
+    replay: Final = respx_mock.post(url__regex=rf"{GEMINI_FLASH_IMAGE_URL}:generateContent").mock(
+        return_value=httpx.Response(200, json=_gemini_image_turn({"text": "Done."}))
+    )
+
+    stream: Final = await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[{"role": "user", "content": "Draw a cat on a chair"}],
+        stream=True,
+        api_key="test-api-key",
+    )
+    chunks: Final = [chunk async for chunk in stream]
+    streamed_images: Final = tuple(
+        chain.from_iterable(getattr(chunk.choices[0].delta, "images", None) or () for chunk in chunks if chunk.choices)
+    )
+    rebuilt: Final = litellm.stream_chunk_builder(chunks)
+    await litellm.acompletion(
+        model="gemini/gemini-3.1-flash-image",
+        messages=[
+            {"role": "user", "content": "Draw a cat on a chair"},
+            json.loads(rebuilt.choices[0].message.model_dump_json()),
+            {"role": "user", "content": "Make the chair blue"},
+        ],
+        api_key="test-api-key",
+    )
+
+    assert [image.get("provider_specific_fields") for image in streamed_images] == [{"thought_signature": "sig-img"}]
+    assert _replayed_model_parts(replay.calls.last.request) == [
+        [("A cat on a red chair.", "sig-text"), ("Y2F0LXJlZA==", "sig-img")]
     ]
 
 
