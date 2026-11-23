@@ -3495,6 +3495,20 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
 AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
+def masked_audit_log_value(value: object) -> object:
+    from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
+
+    def decoded() -> object:
+        if not isinstance(value, str):
+            return value
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
+
+    return mask_credentials_in_payload(decoded(), SensitiveDataMasker(sensitive_patterns={"key"}))
+
+
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
     id: str
     updated_at: datetime
@@ -3515,14 +3529,10 @@ class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="after")
     def mask_api_keys(self):
-        from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker, mask_credentials_in_payload
-
-        masker: Final = SensitiveDataMasker(sensitive_patterns={"key"})
-
         if self.before_value is not None:
-            self.before_value = json.dumps(mask_credentials_in_payload(self.before_value, masker), default=str)
+            self.before_value = json.dumps(masked_audit_log_value(self.before_value), default=str)
         if self.updated_values is not None:
-            self.updated_values = json.dumps(mask_credentials_in_payload(self.updated_values, masker), default=str)
+            self.updated_values = json.dumps(masked_audit_log_value(self.updated_values), default=str)
 
         return self
 
