@@ -296,6 +296,7 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         drop_params: _,
         json_logs: _,
         set_verbose: _,
+        enable_redis_auth_cache: _,
         use_chat_completions_url_for_anthropic_messages: _,
         route_all_chat_openai_to_responses: _,
         gemini_live_defer_setup: _,

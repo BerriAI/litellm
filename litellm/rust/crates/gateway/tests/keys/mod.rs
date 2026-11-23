@@ -16,6 +16,7 @@ use litellm_auth_store::KeyDatabase;
 use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::Token;
+use litellm_redis_store::auth_cache::{AuthCache, Settings};
 use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
 use litellm_secret_value::SecretValue;
 use serde_json::{Value, json};
@@ -102,7 +103,7 @@ impl Held {
         connected(self.postgres.url(), self.reads.clone())
     }
 
-    /// The key read the gateway makes with no shared cache.
+    /// The key read the gateway makes behind its auth cache.
     pub fn database(&self) -> KeyDatabase {
         key_database(self.repositories())
     }
@@ -111,6 +112,11 @@ impl Held {
     pub fn key_reads(&self) -> usize {
         self.reads.0.load(Ordering::SeqCst)
     }
+}
+
+/// The auth cache of a gateway with no coordination Redis: this process's memory alone.
+pub fn memory_cache() -> Arc<AuthCache> {
+    Arc::new(AuthCache::new(None, Settings::default()))
 }
 
 /// A database nothing listens on, whose every read fails.
