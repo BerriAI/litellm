@@ -891,6 +891,7 @@ def image_edit(
     prompt: str | None = None,
     model: str | None = None,
     mask: str | None = None,
+    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -969,6 +970,7 @@ def image_edit(
             custom_optional_params: Final = _custom_handler_edit_params(
                 _OBJECT_DICT_ADAPTER.validate_python(kwargs),
                 {
+                    "markup": markup,
                     "mask": mask,
                     "n": n,
                     "quality": quality,
@@ -1174,6 +1176,7 @@ async def aimage_edit(
     model: str,
     prompt: str,
     mask: str | None = None,
+    markup: FileTypes | None = None,
     n: int | None = None,
     quality: str | ImageGenerationRequestQuality | None = None,
     response_format: str | None = None,
@@ -1217,6 +1220,7 @@ async def aimage_edit(
             image=images,
             prompt=prompt,
             mask=mask,
+            markup=markup,
             model=model,
             n=n,
             quality=quality,
