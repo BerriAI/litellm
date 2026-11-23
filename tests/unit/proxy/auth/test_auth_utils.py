@@ -2020,6 +2020,8 @@ def _azure_route_router_with_an_openai_group_named_like_a_path_segment():
         ("/azure/openai/deployments/private-azure/chat/completions", {"model": "openai"}, "private-azure"),
         ("/azure/openai/v1/responses", {"model": "private-azure"}, "private-azure"),
         ("/azure/openai/v1/responses", {"model": "openai"}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {"model": "private-azure"}, "openai"),
     ],
 )
 def test_get_model_from_request_azure_routes_authorize_the_group_the_request_is_relayed_to(
