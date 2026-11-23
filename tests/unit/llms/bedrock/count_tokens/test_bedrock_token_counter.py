@@ -230,7 +230,7 @@ def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 @pytest.mark.parametrize(
     ("credentials", "environment", "fix"),
     (
-        ({}, {}, "Set aws_access_key_id and aws_secret_access_key"),
+        ({}, {}, "On EC2, check that the instance has a role"),
         ({"aws_profile_name": "litellm-test-missing-profile"}, {}, "set aws_profile_name to one that exists"),
         ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}, "Set aws_access_key_id and aws_secret_access_key"),
         ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}, "Run `aws sso login`"),

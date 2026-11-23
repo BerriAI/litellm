@@ -59,7 +59,8 @@ def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsErro
             return _missing_aws_credentials(
                 error,
                 "Set aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
-                "deployment, or AWS credentials in the proxy environment.",
+                "deployment, or AWS credentials in the proxy environment. On EC2, check that the instance has a role "
+                "and its instance metadata service answers.",
             )
         case _:
             return None

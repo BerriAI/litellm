@@ -5,8 +5,9 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from botocore.credentials import RefreshableCredentials
-from botocore.exceptions import TokenRetrievalError, UnauthorizedSSOTokenError
+from botocore.exceptions import CredentialRetrievalError, TokenRetrievalError, UnauthorizedSSOTokenError
 
+from litellm.llms.bedrock.base_aws_llm import AwsAuthError
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
@@ -123,7 +124,7 @@ async def test_handle_count_tokens_request_answers_400_for_a_malformed_body_with
     client.post.assert_not_awaited()
 
 
-class _ExpiredSsoSessionCountTokensHandler(BedrockCountTokensHandler):
+class _FailingCredentialsCountTokensHandler(BedrockCountTokensHandler):
     def __init__(self, error: Exception) -> None:
         super().__init__()
         self._error = error
@@ -151,7 +152,7 @@ async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_sessio
     client: Final = AsyncMock(spec=AsyncHTTPHandler)
 
     with pytest.raises(BedrockError) as exc_info:
-        await _ExpiredSsoSessionCountTokensHandler(error).handle_count_tokens_request(
+        await _FailingCredentialsCountTokensHandler(error).handle_count_tokens_request(
             request_data={"model": _COUNTED_MODEL, "messages": [{"role": "user", "content": "hi"}]},
             litellm_params={"aws_region_name": "us-east-1"},
             resolved_model=_COUNTED_MODEL,
@@ -161,6 +162,42 @@ async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_sessio
     assert exc_info.value.status_code == 401
     assert exc_info.value.message.startswith("No usable AWS credentials are set, so Bedrock can't count tokens")
     assert "aws sso login" in exc_info.value.message
+    client.post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status_code", "message"),
+    (
+        (
+            CredentialRetrievalError(provider="custom-process", error_msg="credential helper timed out"),
+            500,
+            "CountTokens processing error: Error when retrieving credentials from custom-process: "
+            "credential helper timed out",
+        ),
+        (
+            AwsAuthError(400, "aws_web_identity_token must reference a secret"),
+            400,
+            "aws_web_identity_token must reference a secret",
+        ),
+    ),
+    ids=("credential-source-failed", "bad-web-identity-token-reference"),
+)
+async def test_handle_count_tokens_request_keeps_the_status_of_credential_errors_that_are_not_missing_credentials(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, status_code: int, message: str
+) -> None:
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    client: Final = AsyncMock(spec=AsyncHTTPHandler)
+
+    with pytest.raises(BedrockError) as exc_info:
+        await _FailingCredentialsCountTokensHandler(error).handle_count_tokens_request(
+            request_data={"model": _COUNTED_MODEL, "messages": [{"role": "user", "content": "hi"}]},
+            litellm_params={"aws_region_name": "us-east-1"},
+            resolved_model=_COUNTED_MODEL,
+            client=client,
+        )
+
+    assert (exc_info.value.status_code, exc_info.value.message) == (status_code, message)
     client.post.assert_not_awaited()
 
 
