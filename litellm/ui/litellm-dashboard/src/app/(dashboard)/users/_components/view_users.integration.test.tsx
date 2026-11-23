@@ -125,6 +125,7 @@ describe("ViewUserDashboard", () => {
   it("should render the ViewUserDashboard component", async () => {
     renderDashboard();
 
+    expect(screen.getByRole("heading", { level: 1, name: "Internal Users" })).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByText("Users")).toBeInTheDocument();
     });

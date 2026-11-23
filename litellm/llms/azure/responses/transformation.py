@@ -50,6 +50,10 @@ def _predates_responses_api(api_version: str | None) -> bool:
     )
 
 
+def _query_param(params: Mapping[str, str], name: str) -> str | None:
+    return params.get(name)
+
+
 def _str_param(litellm_params: Mapping[str, object], key: str) -> str | None:
     value: Final = litellm_params.get(key)
     return value if isinstance(value, str) and value else None
@@ -239,7 +243,7 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             str(parsed_url.copy_with(params=parsed_url.params.remove("api-version")))
             if parsed_url is not None
             and (
-                _predates_responses_api(parsed_url.params.get("api-version"))
+                _predates_responses_api(_query_param(parsed_url.params, "api-version"))
                 or _str_param(litellm_params, "responses_api_version") is not None
             )
             else base

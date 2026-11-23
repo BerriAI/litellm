@@ -85,15 +85,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
-dependencies = [
- "derive_arbitrary",
-]
-
-[[package]]
 name = "arc-swap"
 version = "1.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1393,6 +1384,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "core-foundation"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1803,17 +1803,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "serde_core",
-]
-
-[[package]]
-name = "derive_arbitrary"
-version = "1.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
 ]
 
 [[package]]
@@ -3233,6 +3222,7 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb",
+ "jiff-tzdb-platform",
  "log",
  "portable-atomic",
  "portable-atomic-util",
@@ -3267,6 +3257,15 @@ name = "jiff-tzdb"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fa8377070c6bae868759445e5a77f66d84f0b72f3a054bfb00e6d038b8282da7"
+
+[[package]]
+name = "jiff-tzdb-platform"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "875a5a69ac2bab1a891711cf5eccbec1ce0341ea805560dcd90b7a2e925132e8"
+dependencies = [
+ "jiff-tzdb",
+]
 
 [[package]]
 name = "jni"
@@ -3547,6 +3546,7 @@ dependencies = [
  "litellm-error",
  "litellm-http",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-secret-value",
  "litellm-tracing",
  "moka",
@@ -3569,6 +3569,28 @@ dependencies = [
  "tracing",
  "url",
  "veil",
+]
+
+[[package]]
+name = "litellm-auth-store"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "jiff",
+ "litellm-db",
+ "litellm-db-testing",
+ "litellm-error",
+ "litellm-gateway-auth-core",
+ "litellm-python-compat",
+ "litellm-redis-store",
+ "litellm-repositories",
+ "litellm-secret-value",
+ "rstest",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3755,14 +3777,22 @@ dependencies = [
 name = "litellm-callbacks-budgets"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-callbacks",
+ "litellm-circuit-breaker",
  "litellm-coroutine",
  "litellm-python-compat",
+ "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
+ "litellm-secret-value",
  "litellm-tracing",
  "rstest",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
+ "strum",
+ "thiserror 2.0.21",
  "tokio",
  "tracing",
 ]
@@ -3871,6 +3901,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-callbacks-spend-log"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "fancy-regex 0.19.2",
+ "litellm-python-compat",
+ "litellm-redaction",
+ "num-traits",
+ "regex",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.21",
+ "veil",
+]
+
+[[package]]
+name = "litellm-callbacks-spend-logger"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "litellm-callbacks",
+ "litellm-callbacks-budgets",
+ "litellm-callbacks-spend-log",
+ "litellm-coroutine",
+ "litellm-db",
+ "litellm-python-compat",
+ "litellm-redaction",
+ "litellm-redis-store",
+ "litellm-repositories",
+ "litellm-spend-log-writer",
+ "rstest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "veil",
+]
+
+[[package]]
 name = "litellm-circuit-breaker"
 version = "0.1.0"
 dependencies = [
@@ -3929,7 +4002,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "litellm-error",
  "litellm-llms-types",
- "litellm-tracing",
+ "litellm-redaction",
  "rstest",
  "serde",
  "serde_json",
@@ -3953,10 +4026,12 @@ name = "litellm-cost"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "litellm-fnmatch",
  "rstest",
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "serde_with",
  "strum",
  "thiserror 2.0.21",
 ]
@@ -4060,34 +4135,52 @@ dependencies = [
  "futures-util",
  "http-body-util",
  "hyper-util",
+ "jiff",
+ "litellm-auth-store",
+ "litellm-callbacks",
+ "litellm-callbacks-model-capacity",
+ "litellm-callbacks-parallel-request-limiter",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-config-load",
+ "litellm-core-utils",
  "litellm-db",
  "litellm-db-resolve",
+ "litellm-db-testing",
  "litellm-env",
  "litellm-error",
+ "litellm-gateway",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-gateway-forward",
  "litellm-gateway-inference",
  "litellm-http",
  "litellm-inference",
+ "litellm-inference-messages",
  "litellm-license",
  "litellm-llms",
+ "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
+ "litellm-redis-store",
  "litellm-redis-testing",
  "litellm-redis-types",
+ "litellm-repositories",
+ "litellm-router-core",
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
+ "litellm-yaml",
+ "parking_lot",
  "rstest",
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "serde_yaml_ng",
+ "sqlx",
  "strum",
  "tempfile",
  "thiserror 2.0.21",
@@ -4105,13 +4198,13 @@ name = "litellm-gateway-auth"
 version = "0.1.0"
 dependencies = [
  "axum",
- "litellm-config",
+ "jiff",
  "litellm-error",
+ "litellm-gateway-auth-core",
  "litellm-secret-value",
  "rstest",
  "serde",
- "sha2 0.10.9",
- "subtle",
+ "strum",
  "thiserror 2.0.21",
  "tokio",
  "tower",
@@ -4172,29 +4265,37 @@ name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "bytes",
  "futures-util",
  "litellm-auth",
+ "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-callbacks",
+ "litellm-config",
  "litellm-core-utils",
  "litellm-error",
+ "litellm-framer",
+ "litellm-gateway",
  "litellm-gateway-auth",
+ "litellm-gateway-auth-core",
  "litellm-host",
  "litellm-host-http",
  "litellm-http",
  "litellm-inference",
- "litellm-inference-chat",
  "litellm-inference-messages",
  "litellm-inference-ocr",
- "litellm-inference-responses",
- "litellm-inference-transcription",
  "litellm-llms",
  "litellm-llms-types",
- "litellm-router",
+ "litellm-python-compat",
+ "litellm-redis-client",
+ "litellm-redis-store",
+ "litellm-redis-testing",
+ "litellm-router-core",
+ "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "parking_lot",
  "rstest",
  "serde",
  "serde_json",
@@ -4203,6 +4304,8 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tower",
+ "tower-http",
+ "tracing",
  "wiremock",
 ]
 
@@ -4360,6 +4463,7 @@ dependencies = [
 name = "litellm-inference-messages"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "flate2",
  "futures-util",
@@ -4382,16 +4486,19 @@ dependencies = [
  "litellm-llms",
  "litellm-llms-types",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
  "litellm-tracing",
+ "regex",
  "reqwest",
  "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-util",
  "tracing",
  "wiremock",
 ]
@@ -4559,6 +4666,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
 ]
 
@@ -4587,10 +4695,10 @@ dependencies = [
  "indexmap 2.14.0",
  "jiff",
  "jsonschema",
+ "litellm-auth-aws",
  "litellm-cost",
  "litellm-error",
  "litellm-python-compat",
- "litellm-tracing",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
@@ -4601,6 +4709,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.21",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -4616,12 +4725,12 @@ dependencies = [
  "litellm-http",
  "litellm-s3",
  "litellm-secret-value",
- "litellm-tracing",
  "percent-encoding",
  "reqwest",
  "rstest",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -4644,6 +4753,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-auth-azure",
  "litellm-auth-gcp",
+ "litellm-auth-store",
  "litellm-cache",
  "litellm-cache-response",
  "litellm-callbacks",
@@ -4653,10 +4763,13 @@ dependencies = [
  "litellm-callbacks-parallel-request-limiter",
  "litellm-callbacks-python",
  "litellm-callbacks-s3-log",
+ "litellm-callbacks-spend-log",
+ "litellm-callbacks-spend-logger",
  "litellm-circuit-breaker",
  "litellm-config",
  "litellm-core-utils",
  "litellm-coroutine",
+ "litellm-cost",
  "litellm-db",
  "litellm-db-resolve",
  "litellm-env",
@@ -4676,6 +4789,7 @@ dependencies = [
  "litellm-model-catalog",
  "litellm-model-catalog-refresh",
  "litellm-python-compat",
+ "litellm-redaction",
  "litellm-redis-client",
  "litellm-redis-connect",
  "litellm-redis-resolve",
@@ -4689,6 +4803,7 @@ dependencies = [
  "litellm-secrets-aws",
  "litellm-secrets-types",
  "litellm-spend-clickhouse",
+ "litellm-spend-log-writer",
  "litellm-storage-clickhouse",
  "litellm-token-counter",
  "litellm-tracing",
@@ -4721,6 +4836,7 @@ dependencies = [
  "base64 0.22.1",
  "criterion",
  "hex",
+ "litellm-host",
  "num-bigint 0.4.8",
  "num-traits",
  "rstest",
@@ -4730,6 +4846,16 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.21",
  "unicode-general-category",
+]
+
+[[package]]
+name = "litellm-redaction"
+version = "0.1.0"
+dependencies = [
+ "aho-corasick",
+ "fancy-regex 0.19.2",
+ "regex",
+ "rstest",
 ]
 
 [[package]]
@@ -4813,6 +4939,7 @@ name = "litellm-redis-store"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "jiff",
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-circuit-breaker",
@@ -4823,12 +4950,14 @@ dependencies = [
  "litellm-tracing",
  "parking_lot",
  "rstest",
+ "serde",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
  "uuid",
+ "veil",
 ]
 
 [[package]]
@@ -4873,21 +5002,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-router"
-version = "0.1.0"
-dependencies = [
- "litellm-config",
- "litellm-inference",
- "litellm-inference-messages",
- "litellm-llms",
- "litellm-model-catalog",
- "litellm-python-compat",
- "litellm-router-types",
- "rstest",
- "serde_json",
-]
-
-[[package]]
 name = "litellm-router-core"
 version = "0.1.0"
 dependencies = [
@@ -4920,6 +5034,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum",
+ "veil",
 ]
 
 [[package]]
@@ -4997,12 +5112,12 @@ dependencies = [
  "litellm-env",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "rstest",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "veil",
  "wiremock",
 ]
@@ -5040,7 +5155,6 @@ dependencies = [
  "litellm-python-compat",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "moka",
  "percent-encoding",
  "rcgen",
@@ -5051,6 +5165,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
  "veil",
  "wiremock",
@@ -5142,6 +5257,27 @@ dependencies = [
  "tokio",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "litellm-spend-log-writer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "litellm-callbacks-spend-log",
+ "litellm-db",
+ "litellm-error",
+ "litellm-python-compat",
+ "litellm-repositories",
+ "litellm-secret-value",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -5266,11 +5402,11 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
- "aho-corasick",
  "base64 0.22.1",
  "fancy-regex 0.19.2",
+ "litellm-redaction",
+ "parking_lot",
  "percent-encoding",
- "regex",
  "rstest",
  "serde_json",
  "tokio",
@@ -5471,6 +5607,18 @@ dependencies = [
  "mime",
  "spin 0.9.9",
  "version_check",
+]
+
+[[package]]
+name = "nix"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77730ed34f01f4990cb2ea67fec715ecebc6fab9a6396cf83c5529b13f581bdc"
+dependencies = [
+ "bitflags 2.13.1",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -6162,6 +6310,7 @@ checksum = "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b"
 dependencies = [
  "chrono",
  "indexmap 2.14.0",
+ "jiff",
  "libc",
  "once_cell",
  "portable-atomic",
@@ -8371,6 +8520,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "typed-path"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9213,18 +9368,21 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.4.2"
+version = "9.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fabe6324e908f85a1c52063ce7aa26b68dcb7eb6dbc83a2d148403c9bc3eba50"
+checksum = "953a376f4930ed5af88e1e65948385f76866b45e7f75b21ac275327d0eeb9b46"
 dependencies = [
- "arbitrary",
+ "constant_time_eq",
  "crc32fast",
- "crossbeam-utils",
- "displaydoc",
  "flate2",
+ "getrandom 0.4.3",
  "indexmap 2.14.0",
+ "libc",
  "memchr",
- "thiserror 2.0.21",
+ "nix",
+ "typed-path",
+ "windows-sys 0.61.2",
+ "zeroize",
  "zopfli",
 ]
 

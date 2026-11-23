@@ -3,6 +3,7 @@ mod key;
 
 use litellm_error::Source;
 
+pub(crate) use jwt::InvalidCredentials;
 pub use jwt::{
     AgentIdentityFailure, AssertionRejection, ClaimDenial, JwtDenial, KeyError, KeyFailure,
     ModelAccessDenied, RbacDenial, Searched, TeamDenial, TokenError, VerifyDenial,
@@ -27,15 +28,30 @@ pub enum Error {
     /// A host step raised. The host keeps that failure and surfaces it, so the core never renders this.
     #[error("the auth host failed a step")]
     HostFailed,
+    /// The host holds what a step asked for and does not serve it, so its caller answers the
+    /// request another way. No read treats it as absent.
+    #[error("the auth host does not serve this request")]
+    HostDeclined,
     #[error("OpenSSL could not hash the credential")]
     Hash(#[source] Source),
 }
 
 impl Error {
+    /// A read whose failure the core treats as nothing found. A host that declines found
+    /// something, so that ends the call.
+    pub(crate) fn absent_unless_declined<T>(
+        read: Result<Option<T>, Self>,
+    ) -> Result<Option<T>, Self> {
+        match read {
+            Err(Self::HostDeclined) => Err(Self::HostDeclined),
+            read => Ok(read.ok().flatten()),
+        }
+    }
+
     /// The host could not answer, so the caller surfaces the host's own failure instead of a denial.
     pub fn is_host_failure(&self) -> bool {
         match self {
-            Self::HostFailed => true,
+            Self::HostFailed | Self::HostDeclined => true,
             Self::PremiumRequired(_)
             | Self::Key(_)
             | Self::Jwt(_)

@@ -430,6 +430,14 @@ fn rejected(rejected: Option<&[String]>, member: &str) -> bool {
     rejected.is_some_and(|names| names.iter().any(|name| name == member))
 }
 
+/// What a held entry settles at: nothing when its window reset by `now`, the actual cost otherwise.
+pub(crate) fn settled_cost(reset_at: Option<Moment>, now: &Moment, actual: f64) -> f64 {
+    match reset_at {
+        Some(reset_at) if reset_at <= *now => 0.0,
+        _ => actual,
+    }
+}
+
 fn held_adjustment(
     index: usize,
     entry: &ReservationEntry,
@@ -448,10 +456,11 @@ fn held_adjustment(
     let Some(counter_key) = &entry.counter_key else {
         return Ok(None);
     };
-    let settled_cost = match window_reset.map(window::parse_reset).transpose()?.flatten() {
-        Some(reset_at) if reset_at <= *now => 0.0,
-        _ => actual,
-    };
+    let settled_cost = settled_cost(
+        window_reset.map(window::parse_reset).transpose()?.flatten(),
+        now,
+        actual,
+    );
     let reserved_cost = match entry.reserved_cost {
         Some(cost) if !rejected(names, "reserved_cost") => cost,
         _ => default_reserved_cost,

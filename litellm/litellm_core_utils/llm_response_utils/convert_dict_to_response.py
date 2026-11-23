@@ -63,9 +63,9 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
-_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
-_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+_MESSAGE_FIELDS: Final[frozenset[str]] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset[str]] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset[str]] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
@@ -798,6 +798,8 @@ def convert_to_model_response_object(
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
+    *,
+    preserve_stored_finish_reason: bool = False,
 ):
     additional_headers = get_response_headers(_response_headers)
 
@@ -939,7 +941,9 @@ def convert_to_model_response_object(
                 if finish_reason is None:
                     # gpt-4 vision can return 'finish_reason' or 'finish_details'
                     finish_reason = choice.get("finish_details") or "stop"
-                if finish_reason == "stop" and message.tool_calls and len(message.tool_calls) > 0:
+                    if finish_reason == "stop" and message.tool_calls:
+                        finish_reason = "tool_calls"
+                elif not preserve_stored_finish_reason and finish_reason == "stop" and message.tool_calls:
                     finish_reason = "tool_calls"
 
                 ## PROVIDER SPECIFIC FIELDS ##
@@ -1063,7 +1067,9 @@ def convert_to_model_response_object(
             if "text" in response_object:
                 model_response_object.text = response_object["text"]
 
-            optional_keys: Final = ["language", "task", "duration", "words", "segments"]
+            cache_hit: Final = _FIELD_MAP.validate_python(hidden_params).get("cache_hit") is True
+            cache_hit_keys: Final = ("request_id", "truncated") if cache_hit else ()
+            optional_keys: Final = ("language", "task", "duration", "words", "segments", *cache_hit_keys)
             for key in optional_keys:  # not guaranteed to be in response
                 if key in response_object:
                     setattr(model_response_object, key, response_object[key])

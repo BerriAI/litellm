@@ -23987,6 +23987,38 @@
       }
     }
   },
+  "live_sessions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/v1/live/sessions": {
+        "post": {
+          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
+          ]
+        }
+      }
+    }
+  },
   "llm_passthrough": {
     "components": {
       "schemas": {
@@ -46524,6 +46556,12 @@
               "title": "Per Server Oauth Discovery",
               "type": "boolean"
             },
+            "preserve_explicit_oauth_settings": {
+              "default": false,
+              "description": "Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.",
+              "title": "Preserve Explicit Oauth Settings",
+              "type": "boolean"
+            },
             "registration_url": {
               "anyOf": [
                 {
@@ -62868,6 +62906,54 @@
             }
           },
           "summary": "Skill Content",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/downloads/export": {
+        "get": {
+          "description": "Export all recorded authenticated downloads. Anonymous downloads remain totals-only.",
+          "operationId": "export_skill_downloads_skill_hub_skills__name__downloads_export_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Authenticated download history as CSV"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Export Skill Downloads",
           "tags": [
             "skill_hub"
           ]

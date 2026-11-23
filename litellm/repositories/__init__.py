@@ -23,6 +23,7 @@ from litellm.repositories.prisma_protocols import (
     SpendLinkedTable,
 )
 from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
 from litellm.repositories.table_repositories import (
     AdaptiveRouterSessionRepository,
     AdaptiveRouterStateRepository,
@@ -59,7 +60,6 @@ from litellm.repositories.table_repositories import (
     SearchToolsRepository,
     SkillsRepository,
     SpendLogGuardrailIndexRepository,
-    SpendLogsRepository,
     SpendLogToolIndexRepository,
     SSOConfigRepository,
     ToolRepository,

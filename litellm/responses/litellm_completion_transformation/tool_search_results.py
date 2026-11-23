@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.types.llms.anthropic import (
     ANTHROPIC_TOOL_SEARCH_RESULT_CONTENT_TYPE,
     AnthropicToolReferenceBlock,
@@ -27,8 +28,8 @@ from litellm.types.responses.main import OutputToolSearchCall, OutputToolSearchO
 from .custom_tools import openai_shaped_tool_call_item_id, serialize_tool_call_arguments
 from .tool_search import ANTHROPIC_TOOL_SEARCH_TOOL_NAME
 
-_ItemT: Final = TypeVar("_ItemT")
-_MessageT: Final = TypeVar("_MessageT")
+_ItemT = TypeVar("_ItemT")
+_MessageT = TypeVar("_MessageT")
 
 _MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
@@ -84,7 +85,7 @@ def _tool_entry(tool: object) -> tuple[Mapping[str, object], _ToolFields] | None
 def _member_chat_name(namespace: str, member: _ToolFields) -> str | None:
     match member.type:
         case "function":
-            return f"{namespace}__{member.name}"
+            return chat_member_name(namespace, member.name)
         case "custom":
             return member.name
         case _:

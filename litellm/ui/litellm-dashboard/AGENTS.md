@@ -30,6 +30,8 @@ Never run the full unit suite (`npx vitest run` with no path). It is 380 files a
 
 Type tests are `*.test-d.ts` files run by the `types` vitest project (`npm run test:types`). Keep them out of the `src/app/(dashboard)/` route group. Vitest matches a tsc error back to the test file by path, the parentheses break that match, and `ignoreSourceErrors: true` then drops the error as if it came from a source file. The test still collects and still reports as passing, so a `.test-d.ts` under a parenthesized directory is green no matter what it asserts. Confirm any new one has teeth by breaking the type it guards and watching it fail
 
+Some words stay in English in every locale. That covers proper nouns we do not own, like Google, Okta or Slack, acronyms like SCIM, SSO, URL or PII, and anything the dashboard forwards into a model, such as a message role like SYSTEM, a preconfigured prompt, or the category names a classifier prompt asks the model to answer with. A translated message keeps these words exactly as the English writes them and translates only the text around them. When a whole string is one of these, with nothing around it to translate, it does not belong in a locale file. Put brand and product names in `src/i18n/untranslated/productNames.ts`, code and ids in `src/i18n/untranslated/codeSamples.ts`, and keep prompt text next to the code that sends it
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 ## This is NOT the Next.js you know
