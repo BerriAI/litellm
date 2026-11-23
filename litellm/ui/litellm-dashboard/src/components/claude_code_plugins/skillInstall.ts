@@ -77,6 +77,6 @@ printf '%s: Bearer %s\\n' ${shellQuote(options.authHeaderName)} "$skill_key" |
     ${shellQuote(archive.href)} --output "$skill_tmp/skill.zip"
 unset skill_key
 unzip -q "$skill_tmp/skill.zip" -d "$skill_tmp/skill"
-DISABLE_TELEMETRY=1 npx --yes ${skillsPackage} add "$skill_tmp/skill" --skill ${shellQuote(options.name)} -a ${options.agent} --copy --yes${scope}
+DISABLE_TELEMETRY=1 INSTALL_INTERNAL_SKILLS=1 npx --yes ${skillsPackage} add "$skill_tmp/skill" -a ${options.agent} --copy --yes${scope}
 LITELLM_SKILL`;
 }

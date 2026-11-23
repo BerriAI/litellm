@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Final
 
@@ -414,7 +415,7 @@ def test_query_builders_reject_nonpositive_limits(builder) -> None:
 def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
     export_type: ExportType, group_key: str, key_filter: str, joins: str
 ) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=ExportCursor(date="2026-01-12", entity_id="user-2", group_key="group-3"),
@@ -445,16 +446,62 @@ def test_export_groups_by_requested_key_and_binds_cursor_after_scope(
 
 @pytest.mark.parametrize("export_type", [ExportType.DAILY_WITH_KEYS, ExportType.DAILY_WITH_USERS])
 def test_export_uses_latest_deleted_key_metadata(export_type: ExportType) -> None:
-    query = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
 
     assert 'FROM "LiteLLM_DeletedVerificationToken"' in query.sql
     assert "ORDER BY deleted_at DESC" in query.sql
     assert "COALESCE(vt.user_id, dvt.user_id)" in query.sql
 
 
+_DROPPED_KEYS: Final = (
+    "- 'callback_settings' - 'logging' - 'scim_enterprise' - 'scim_entitlements' - 'scim_roles' "
+    "- 'secret_manager_settings'"
+)
+_REDACTED_KEY_METADATA: Final = (
+    f"THEN (COALESCE(vt.metadata, dvt.metadata) {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS key_metadata"
+)
+_REDACTED_USER_METADATA: Final = f"THEN (u.metadata {_DROPPED_KEYS})::text END), '{{}}')::jsonb AS user_metadata"
+_EMPTY_KEY_METADATA: Final = "'{}'::jsonb AS key_metadata"
+_EMPTY_USER_METADATA: Final = "'{}'::jsonb AS user_metadata"
+
+
+@pytest.mark.parametrize(
+    ("export_type", "key_metadata", "user_metadata"),
+    [
+        (ExportType.DAILY_WITH_KEYS, _REDACTED_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY_WITH_USERS, _EMPTY_KEY_METADATA, _REDACTED_USER_METADATA),
+        (ExportType.DAILY, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
+        (ExportType.DAILY_WITH_MODELS, _EMPTY_KEY_METADATA, _EMPTY_USER_METADATA),
+    ],
+)
+def test_export_selects_redacted_key_and_user_metadata_objects_for_admin_view(
+    export_type: ExportType, key_metadata: str, user_metadata: str
+) -> None:
+    query: Final = build_export_sql(
+        _scope(entity_ids=None), export_type=export_type, after=None, batch_size=2, include_metadata=True
+    )
+
+    assert key_metadata in query.sql
+    assert user_metadata in query.sql
+    if export_type is ExportType.DAILY_WITH_KEYS:
+        assert "SELECT key_alias, user_id, metadata" in query.sql
+
+
+@pytest.mark.parametrize("export_type", tuple(ExportType))
+def test_export_without_metadata_selects_empty_objects_and_never_reads_metadata_columns(
+    export_type: ExportType,
+) -> None:
+    query: Final = build_export_sql(_scope(entity_ids=None), export_type=export_type, after=None, batch_size=2)
+
+    assert _EMPTY_KEY_METADATA in query.sql
+    assert _EMPTY_USER_METADATA in query.sql
+    assert "u.metadata" not in query.sql
+    assert "vt.metadata" not in query.sql
+
+
 @pytest.mark.parametrize("export_type", tuple(ExportType))
 def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type: ExportType) -> None:
-    query = build_export_sql(
+    query: Final = build_export_sql(
         _scope(entity_ids=None),
         export_type=export_type,
         after=None,
@@ -468,3 +515,26 @@ def test_export_without_cursor_omits_cursor_predicate_and_parameters(export_type
         *((PTU_SENTINEL_API_KEY,) if export_type is not ExportType.DAILY else ()),
         2,
     )
+
+
+def test_customer_app_filter_is_bound_without_replacing_customer_model_or_key_filters() -> None:
+    app_id: Final = "app-value-with-quote'"
+    scope: Final = replace(
+        _scope(entity_ids=("customer-a",), exclude_entity_ids=("excluded",), api_keys=("key-a",), model="model-a"),
+        table=DailyActivityTable.CUSTOMER_MEMBER,
+        entity_id_field="customer_org_id",
+        app_id=app_id,
+    )
+    clause, params = build_where_clause(scope, start_index=4)
+    assert '"customer_org_id" = ANY($6::text[])' in clause
+    assert "model = $8" in clause and "api_key = ANY($9::text[])" in clause
+    assert '"app_id" = $10' in clause and app_id not in clause
+    assert params == ("2026-01-01", "2026-01-31", ["customer-a"], ["excluded"], "model-a", ["key-a"], app_id)
+    query: Final = build_aggregated_sql(scope, api_key_limit=1)
+    assert '"app_id" = $7' in query.sql and app_id not in query.sql
+    assert query.params[-3:] == (app_id, PTU_SENTINEL_API_KEY, 1)
+
+
+def test_app_filter_cannot_be_applied_to_a_table_without_app_attribution() -> None:
+    with pytest.raises(ValueError, match="App filtering"):
+        replace(_scope(), app_id="app-a")

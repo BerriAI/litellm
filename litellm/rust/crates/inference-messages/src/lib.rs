@@ -6,6 +6,7 @@ mod host_answer;
 mod pre_request;
 mod reads;
 mod relay;
+mod request;
 pub mod route;
 mod safeguards;
 mod transport;
@@ -29,10 +30,12 @@ pub use host_answer::HostAnswer;
 pub use litellm_inference::Error;
 pub use pre_request::PreRequestHooks;
 pub use safeguards::Safeguards;
-pub use transport::{Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader};
+pub use transport::{
+    Delivered, Transport, TransportRequest, TransportResponse, UnencodableHeader, UnsendableUrl,
+};
 pub use types::{
     MessagesBody, MessagesCall, MessagesCallResponse, MessagesSettings, MessagesShaping,
-    litellm_params, messages_body,
+    VertexShaping, litellm_params, messages_body,
 };
 pub use workload_identity::WorkloadIdentity;
 

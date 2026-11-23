@@ -3,10 +3,12 @@
 
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
+use litellm_router_types::RoutingStrategy;
+
 use crate::{
     config::{
         AllowedFailsPolicy, DEFAULT_COOLDOWN_TIME, PluginSpec, RetryPolicy, RouterConfig,
-        RouterDynamicConfig, RoutingStrategy,
+        RouterDynamicConfig,
     },
     error::AttemptError,
 };
@@ -33,6 +35,7 @@ pub struct Settings {
     pub health_check_staleness: Duration,
     pub background_health_check_model_groups: Option<Arc<[String]>>,
     pub enable_weighted_failover: bool,
+    pub enable_cross_model_group_collision_check: bool,
     pub fallback_on_unsupported_params: bool,
     pub provider_default_deployment_ids: Arc<[String]>,
     pub dynamic: Arc<RouterDynamicConfig>,
@@ -73,6 +76,8 @@ impl Settings {
                 .clone()
                 .map(Into::into),
             enable_weighted_failover: config.enable_weighted_failover,
+            enable_cross_model_group_collision_check: config
+                .enable_cross_model_group_collision_check,
             fallback_on_unsupported_params: config.fallback_on_unsupported_params.unwrap_or(true),
             provider_default_deployment_ids: config.provider_default_deployment_ids.clone().into(),
             dynamic,

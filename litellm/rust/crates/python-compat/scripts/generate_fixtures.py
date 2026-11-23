@@ -3,7 +3,7 @@
     python scripts/generate_fixtures.py > generated/values.json
 
 Each row records `repr`, `str`, `json.dumps` (or its error), `bool`, and `pickle.dumps` at
-every protocol. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,
+every protocol, plus `bool` and the type name of `json.loads` of that `json.dumps` text. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,
 which is how Python reads `str(dict)` text back from a cache; the Rust tests reach the other
 rows only through pickle. `view` is `repr` of the value as `pickle::loads` decodes it, with
 tuples, sets, and frozensets rendered as lists. `sources` records `ast.literal_eval` on raw
@@ -329,6 +329,9 @@ def row(entry):
     }
     try:
         entry["json"] = json.dumps(value)
+        loaded = json.loads(entry["json"])
+        entry["json_truthy"] = bool(loaded)
+        entry["json_type"] = type(loaded).__name__
     except (TypeError, ValueError) as error:
         entry["json_error"] = str(error)
     try:

@@ -16,6 +16,7 @@ schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
+struct-field-names-as-array.workspace = true
 strum.workspace = true
 
 [dev-dependencies]

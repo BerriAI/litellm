@@ -120,7 +120,7 @@ def native_call(legacy: inspect.Signature, args: tuple[object, ...], kwargs: Map
     return NativeCall(args=args, kwargs=kwargs, base=_without_bags(legacy, positional.arguments))
 
 
-NativeResultT: Final = TypeVar("NativeResultT")
+NativeResultT = TypeVar("NativeResultT")
 
 
 def native_call_hook(
