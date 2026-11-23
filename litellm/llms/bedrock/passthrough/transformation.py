@@ -9,7 +9,6 @@ import httpx
 from httpx import Response
 from pydantic import TypeAdapter
 
-from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.bedrock.chat.converse_to_openai import as_json_array, as_json_object
@@ -189,9 +188,13 @@ def _translate_message(decoder: "AWSEventStreamDecoder", message: str) -> ModelR
         convert_generic_chunk_to_model_response_stream,
         generic_chunk_has_all_required_fields,
     )
+    from litellm.llms.openai.common_utils import OpenAIError
     from litellm.types.utils import GenericStreamingChunk
 
-    translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
+    try:
+        translated_chunk: Final = decoder.chunk_parser(chunk_data=json.loads(message))
+    except OpenAIError:
+        return None
     if isinstance(translated_chunk, ModelResponseStream):
         return translated_chunk
     if generic_chunk_has_all_required_fields(cast(dict, translated_chunk)):
@@ -471,14 +474,11 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
         )
 
         if "invoke" in endpoint:
-            invoke_provider: Final = AmazonInvokeConfig.get_bedrock_invoke_provider(model)
-            if invoke_provider is None:
-                verbose_logger.warning(
-                    "Bedrock passthrough spend tracking skipped: no invoke provider for model %s", model
-                )
-                return None
             return get_bedrock_event_stream_decoder(
-                invoke_provider=invoke_provider, model=model, sync_stream=True, json_mode=False
+                invoke_provider=AmazonInvokeConfig.get_bedrock_invoke_provider(model),
+                model=model,
+                sync_stream=True,
+                json_mode=False,
             )
         if "converse" in endpoint:
             return get_bedrock_event_stream_decoder(
