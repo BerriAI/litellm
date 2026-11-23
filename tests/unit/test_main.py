@@ -142,6 +142,11 @@ async def test_opencode_go_health_check_sends_session_header(
         "opencode_go/health-model",
         {"litellm_provider": "opencode_go", "mode": "chat", "input_cost_per_token": 0, "output_cost_per_token": 0},
     )
+    monkeypatch.setitem(
+        litellm.models_by_provider,
+        "opencode_go",
+        (*tuple(litellm.models_by_provider.get("opencode_go", ())), "opencode_go/health-model"),
+    )
     with respx.mock:
         route: Final = respx.post("https://health-test.example/v1/chat/completions").respond(
             200,
@@ -164,6 +169,8 @@ async def test_opencode_go_health_check_sends_session_header(
             mode="chat",
         )
     assert "error" not in result, result
+    sent: Final = TypeAdapter(dict[str, object]).validate_json(route.calls.last.request.content)
+    assert sent.get("model") == "health-model", sent.get("model")
     header: Final = route.calls.last.request.headers.get("x-opencode-session")
     assert header
     assert header == (expected or str(UUID(header)))

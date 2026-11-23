@@ -9798,6 +9798,8 @@ def speech(
 
 ##### Health Endpoints #######################
 
+_OPENCODE_HEALTH_PROBE_PARAMS: Final = TypeAdapter(dict[str, object])
+
 
 async def ahealth_check(
     model_params: dict,
@@ -9881,7 +9883,7 @@ async def ahealth_check(
             "extraction": "aextraction",
             "batch": ("alist_batches" if custom_llm_provider in LIST_BATCHES_SUPPORTED_PROVIDERS else "acompletion"),
         }.get("decisions" if is_decisions_model_mode(mode) else mode, "acompletion")
-        validated_params: Final = TypeAdapter(dict[str, object]).validate_python(model_params)
+        validated_params: Final = _OPENCODE_HEALTH_PROBE_PARAMS.validate_python(model_params)
         probe_params: Final = (
             {**validated_params, "litellm_session_id": get_stable_session_id(validated_params) or str(uuid.uuid4())}
             if custom_llm_provider == "opencode_go"
