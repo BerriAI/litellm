@@ -8,6 +8,7 @@ receipts in the conversation history (no LLM-as-a-judge required). Requires the 
 
 from collections.abc import Mapping
 from datetime import datetime
+import json
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
@@ -35,6 +36,51 @@ if TYPE_CHECKING:
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
     """Base-class constructor options forwarded untouched to CustomGuardrail."""
+
+
+def _tool_payload_indicates_failure(content: object) -> bool:
+    """Return True if a tool message payload explicitly signals failure via JSON or text."""
+    obj: Mapping[str, Any] | None = None
+    if isinstance(content, Mapping):
+        obj = content
+    elif isinstance(content, str):
+        stripped = content.strip()
+        if stripped.lower().startswith(("error:", "traceback")):
+            return True
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                parsed = json.loads(stripped)
+                if isinstance(parsed, Mapping):
+                    obj = parsed
+            except (TypeError, ValueError):
+                return False
+    if obj is None:
+        return False
+    if obj.get("ok") is False or obj.get("success") is False:
+        return True
+    if obj.get("isError") is True or obj.get("is_error") is True:
+        return True
+    err_val = obj.get("error")
+    if err_val not in (None, False, "", [], {}):
+        return True
+    status_val = str(obj.get("status", "")).strip().lower()
+    return status_val in {"error", "failed", "failure", "denied", "rejected"}
+
+
+def _normalize_tool_error_messages(
+    messages: list[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Mark explicit structured JSON tool failures with `is_error=True` before receipt extraction."""
+    normalized: list[Mapping[str, Any]] = []
+    for msg in messages:
+        if str(msg.get("role", "")).lower() == "tool" and not msg.get("is_error"):
+            if _tool_payload_indicates_failure(msg.get("content")):
+                mut = dict(msg)
+                mut["is_error"] = True
+                normalized.append(mut)
+                continue
+        normalized.append(msg)
+    return normalized
 
 
 def _import_epistemic_guard() -> tuple[Any, Any]:
@@ -144,7 +190,7 @@ class EpistemicGuardrail(CustomGuardrail):
 
             supervisor, verify_chat_turn = self._get_supervisor()
             raw_msgs = request_data.get("messages")
-            messages = (
+            messages = _normalize_tool_error_messages(
                 [m for m in raw_msgs if isinstance(m, Mapping)]
                 if isinstance(raw_msgs, list)
                 else []

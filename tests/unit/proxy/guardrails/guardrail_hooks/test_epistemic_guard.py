@@ -265,3 +265,42 @@ async def test_failed_tool_claim_blocked():
             input_type="response",
         )
     assert exc_info.value.status_code == 400
+
+
+
+@pytest.mark.asyncio
+async def test_structured_json_failed_tool_claim_blocked():
+    pytest.importorskip("epistemic_guard")
+    guardrail = EpistemicGuardrail(guardrail_name="eg-json-fail", on_fail="block")
+    request_data = {
+        "messages": [
+            {"role": "user", "content": "Delete report.txt."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_json_fail",
+                        "type": "function",
+                        "function": {
+                            "name": "delete_file",
+                            "arguments": '{"path": "report.txt"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_json_fail",
+                "name": "delete_file",
+                "content": '{"ok": false, "error": "PermissionError: access denied"}',
+            },
+        ]
+    }
+    with pytest.raises(HTTPException) as exc_info:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["I deleted report.txt."]},
+            request_data=request_data,
+            input_type="response",
+        )
+    assert exc_info.value.status_code == 400
