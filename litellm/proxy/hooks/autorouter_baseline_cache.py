@@ -40,7 +40,7 @@ from litellm.proxy.spend_tracking.savings import (
 from litellm.router_strategy.auto_router.baseline_request import baseline_request
 from litellm.router_strategy.complexity_router.context_compaction import compaction_applied
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.router import BaselineRouteStamp
+from litellm.types.router import BaselineRouteStamp, LiteLLM_Params
 from litellm.types.utils import CallTypes, ModelInfo, Usage
 from litellm.utils import get_prompt_cache_min_tokens
 
@@ -53,7 +53,15 @@ _METADATA: Final = TypeAdapter(Mapping[str, object])
 _PRICES: Final[TypeAdapter[ModelInfo | None]] = TypeAdapter(ModelInfo | None)
 _JSON_BODY: Final = TypeAdapter(dict[str, JsonValue])
 _COUNT_TIMEOUT: Final = 3.0
+_TARGET_TIMEOUT: Final = 0.5
 _MAX_COUNTS: Final = 4096
+
+
+async def _baseline_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    try:
+        return await asyncio.wait_for(aresolve_baseline_prediction_target(params), _TARGET_TIMEOUT)
+    except TimeoutError:
+        return UnsupportedPredictionTarget("provider_credentials_timeout")
 
 
 class CapturedBaselineObservation(LiteLLMBaseModel):
@@ -153,7 +161,7 @@ class AutoRouterBaselineCache(CustomLogger):
             deployment: Final = router.registry().deployment(request.route.baseline_deployment_id) if router else None
             if deployment is None:
                 return
-            target: Final = await aresolve_baseline_prediction_target(deployment.litellm_params)
+            target: Final = await _baseline_target(deployment.litellm_params)
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
             )

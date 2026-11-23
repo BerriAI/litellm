@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 from collections.abc import AsyncIterator, Callable, Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime
@@ -51,6 +52,7 @@ _MODELS_JSON: Final = """[
     {"model_name":"opus","litellm_params":{"model":"anthropic/claude-opus-5","api_key":"test-selected"},
       "model_info":{"id":"baseline"}}]"""
 _MODELS: Final = _MESSAGES.validate_json(_MODELS_JSON)
+_GOOGLE_METADATA_IDENTITY: Final = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
 
 
 def _message(completed: bool, model: str) -> Mapping[str, JsonValue]:
@@ -306,6 +308,39 @@ async def test_baseline_count_uses_the_secret_behind_an_admin_oidc_api_key(monke
         await _call(rig.router, rig.logging(), messages=_MESSAGES_JSON.replace("question", "question USE_OPUS"))
         captured: Final = _observation(await rig.capture.payload())
     assert captured.observation.plan is not None and captured.observation.plan.total_tokens == 6000
+
+
+async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metadata_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    audience: Final = f"https://baseline.example.test/{uuid4().hex}"
+    released: Final = threading.Event()
+
+    def identity(request: httpx.Request) -> httpx.Response:
+        _ = released.wait(timeout=5)
+        return httpx.Response(200, text="test-selected")
+
+    async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
+        return await _count(model, api_key, body) if api_key == "test-selected" else None
+
+    models: Final = _MESSAGES.validate_json(
+        _MODELS_JSON.replace(
+            'claude-opus-5","api_key":"test-selected"', f'claude-opus-5","api_key":"oidc/google/{audience}"'
+        )
+    )
+    with respx.mock() as upstream:
+        _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+        _ = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=identity)
+        while_fetching: Final = _Rig(monkeypatch, count=count, models=models)
+        await _call(while_fetching.router, while_fetching.logging())
+        uncounted: Final = _observation(await while_fetching.capture.payload())
+        released.set()
+        after_fetch: Final = _Rig(monkeypatch, count=count, models=models)
+        await _call(after_fetch.router, after_fetch.logging())
+        counted: Final = _observation(await after_fetch.capture.payload())
+    assert uncounted.observation.plan is None and uncounted.observation.reason == "provider_credentials_timeout"
+    assert counted.observation.plan is not None and counted.observation.plan.total_tokens == 6000
 
 
 async def test_native_retry_is_uncertain_even_when_final_response_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
