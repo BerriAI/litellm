@@ -51,7 +51,11 @@ class EventsUpstream:
         cursor: Final = 1 if token == self.second_page_cursor else int(str(token or 0))
         names: Final = self.pages[cursor]
         page: Final = {"events": [{"name": name, "delivery": ["poll", "push"]} for name in names]}
-        return {**page, "nextCursor": self.second_page_cursor if cursor == 0 else str(cursor + 1)} if cursor + 1 < len(self.pages) else page
+        return (
+            {**page, "nextCursor": self.second_page_cursor if cursor == 0 else str(cursor + 1)}
+            if cursor + 1 < len(self.pages)
+            else page
+        )
 
     async def poll(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
