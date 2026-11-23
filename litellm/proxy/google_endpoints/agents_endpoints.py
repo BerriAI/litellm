@@ -15,6 +15,7 @@ These are distinct from the A2A agent registry at /v1/agents.
 """
 
 import json
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -41,7 +42,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
 
 
 def _enforce_caller_supplied_provider_key(
-    data: dict,
+    data: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
@@ -72,7 +73,7 @@ def _enforce_caller_supplied_provider_key(
     )
 
 
-def _merge_query_params_into_data(data: dict, request: Request) -> dict:
+def _merge_query_params_into_data(data: dict[str, object], request: Request) -> dict[str, object]:
     """
     For GET/DELETE endpoints that cannot carry a JSON body, read a
     JSON-encoded ``litellm_params_template`` query parameter and merge its
@@ -238,7 +239,7 @@ async def list_gemini_agents(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final[dict] = {"custom_llm_provider": "gemini"}
+    data: Final[dict[str, object]] = {"custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
@@ -296,7 +297,7 @@ async def get_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final[dict[str, object]] = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
@@ -354,7 +355,7 @@ async def delete_gemini_agent(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final[dict[str, object]] = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
@@ -412,7 +413,7 @@ async def list_gemini_agent_versions(
     ```
     """
     srv: Final = _proxy_server_imports()
-    data: Final = {"name": name, "custom_llm_provider": "gemini"}
+    data: Final[dict[str, object]] = {"name": name, "custom_llm_provider": "gemini"}
     _merge_query_params_into_data(data, request)
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
