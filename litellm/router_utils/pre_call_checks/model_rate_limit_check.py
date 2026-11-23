@@ -37,6 +37,7 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     io_token_refund_failure,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.responses.streaming_websocket import ResponsesClientWebSocket
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -148,7 +149,9 @@ class ModelRateLimitingCheck(CustomLogger):
         self._io_token_conflict_warned_ids: set[str] = set()
 
     def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
-        return "first_message" in request_kwargs and not request_kwargs.get("previous_response_id")
+        return isinstance(request_kwargs.get("websocket"), ResponsesClientWebSocket) and not request_kwargs.get(
+            "previous_response_id"
+        )
 
     async def async_filter_deployments(
         self,

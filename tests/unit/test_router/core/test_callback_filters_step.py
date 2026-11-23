@@ -6,8 +6,10 @@ routing callback filters them, and the kept ids come back in order, once each.
 
 from collections.abc import Mapping
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
+from starlette.websockets import WebSocket
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.redis.stores.connection import connect
@@ -18,6 +20,7 @@ from tests.unit.test_router.core.registry_helpers import MakeCore
 from tests.unit.test_router.core.scripted_host import ScriptedHost, deployment
 
 GROUP: Final = [deployment("g", "a"), deployment("g", "b"), deployment("g", "c")]
+_CLIENT_SOCKET: Final = WebSocket({"type": "websocket"}, AsyncMock(), AsyncMock())
 
 
 class Narrow(CustomLogger):
@@ -96,8 +99,10 @@ def _rate_limit_check() -> ModelRateLimitingCheck:
     ("request_kwargs", "filters"),
     [
         ({"messages": []}, False),
-        ({"first_message": "{}"}, True),
-        ({"first_message": "{}", "previous_response_id": "resp_1"}, False),
+        ({"first_message": "{}"}, False),
+        ({"websocket": "x", "first_message": "{}"}, False),
+        ({"websocket": _CLIENT_SOCKET, "first_message": "{}"}, True),
+        ({"websocket": _CLIENT_SOCKET, "first_message": "{}", "previous_response_id": "resp_1"}, False),
     ],
 )
 async def test_the_model_rate_limit_check_filters_only_a_new_socket_turn(

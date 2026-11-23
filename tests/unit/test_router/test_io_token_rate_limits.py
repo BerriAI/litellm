@@ -9,10 +9,12 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 import respx
+from starlette.websockets import WebSocket
 
 import litellm
 from litellm import Router
@@ -1888,7 +1890,11 @@ def _socket_deployment(deployment_id: str) -> dict[str, object]:
     return {"litellm_params": {"model": "openai/gpt-5-mini", "itpm": 100}, "model_info": {"id": deployment_id}}
 
 
-_SOCKET_TURN: Final = {"first_message": "{}", "input": _INPUT_PAST_40_TOKENS}
+_SOCKET_TURN: Final = {
+    "websocket": WebSocket({"type": "websocket"}, AsyncMock(), AsyncMock()),
+    "first_message": "{}",
+    "input": _INPUT_PAST_40_TOKENS,
+}
 
 
 @pytest.mark.asyncio
@@ -1899,6 +1905,8 @@ _SOCKET_TURN: Final = {"first_message": "{}", "input": _INPUT_PAST_40_TOKENS}
         (90, 90, _SOCKET_TURN, ["a", "b"]),
         (100, 90, _SOCKET_TURN, ["a"]),
         (90, 0, {"input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {"first_message": "x", "input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
+        (90, 0, {"websocket": "x", "first_message": "x", "input": _INPUT_PAST_40_TOKENS}, ["a", "b"]),
         (90, 0, {**_SOCKET_TURN, "previous_response_id": "resp_1"}, ["a", "b"]),
         (90, 0, {**_SOCKET_TURN, "generate": False}, ["a", "b"]),
     ],

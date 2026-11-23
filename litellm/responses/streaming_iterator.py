@@ -90,6 +90,7 @@ if TYPE_CHECKING:
         ResponsesBackendWebSocket,
         ResponsesClientWebSocket,
         ResponsesWebSocketRequestDefaults,
+        ResponsesWsQuotaRefund,
     )
     from litellm.types.router import LiteLLM_Params
 
@@ -101,7 +102,7 @@ class ProjectQuotaCallback(Protocol):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None: ...
+    ) -> ResponsesWsQuotaRefund | None: ...
 
 
 class TokenLimitCallback(Protocol):
@@ -2196,29 +2197,42 @@ async def _enforce_frame_project_quota(
     user_api_key_dict: UserAPIKeyAuth | None,
     model: str | None,
     raw_message: str,
-) -> None:
+) -> tuple[ResponsesWsQuotaRefund, ...]:
     """Charge one response.create frame's estimated tokens against every
     registered project ITPM/OTPM quota callback, in isolation from PII
     masking / logging so a malformed frame still reaches those callbacks."""
     if not quota_callbacks:
-        return
+        return ()
     try:
         msg_obj: Final = _load_json_value(raw_message)
     except (json.JSONDecodeError, TypeError):
-        return
+        return ()
     if not _is_json_object(msg_obj) or msg_obj.get("type") != "response.create":
-        return
+        return ()
     estimated_input_tokens, explicit_max_output_tokens = _extract_frame_quota_estimate_inputs(msg_obj)
     estimated_output_tokens: Final = (
         explicit_max_output_tokens if explicit_max_output_tokens is not None else _FRAME_NO_MAX_OUTPUT_TOKENS_FLOOR
     )
-    for callback in quota_callbacks:
-        await callback.enforce_project_io_token_quota_for_frame(
-            user_api_key_dict=user_api_key_dict,
-            requested_model=model,
-            estimated_input_tokens=estimated_input_tokens,
-            estimated_output_tokens=estimated_output_tokens,
-        )
+    refunds: Final = tuple(
+        [
+            await callback.enforce_project_io_token_quota_for_frame(
+                user_api_key_dict=user_api_key_dict,
+                requested_model=model,
+                estimated_input_tokens=estimated_input_tokens,
+                estimated_output_tokens=estimated_output_tokens,
+            )
+            for callback in quota_callbacks
+        ]
+    )
+    return tuple(refund for refund in refunds if refund is not None)
+
+
+async def _refund_frame_quota(refunds: Sequence[ResponsesWsQuotaRefund]) -> None:
+    for refund in refunds:
+        try:
+            await refund()
+        except Exception as e:  # noqa: BLE001  # a failed refund must not end the client's socket
+            verbose_logger.exception("Responses WS project quota refund failed: %s", e)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2687,12 +2701,15 @@ class ResponsesWebSocketStreaming:
             return None
 
     async def _forward_guarded_frame(
-        self, message: str, turn_admission: ResponsesWsTurnAdmission | None = None
+        self,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None = None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund] = (),
     ) -> None:
         guarded: Final = await self._guard_frame(message)
         if guarded is None:
             return
-        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission)
+        admitted: Final = await self._admit_or_reject_turn(guarded, message, turn_admission, quota_refunds)
         if admitted is None:
             return
         if guarded.pii_tokens:
@@ -3103,30 +3120,34 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(evt_obj) if modified else response_str
 
-    async def _enforce_or_reject_frame(self, message: str) -> bool:
-        """Run the per-frame project quota check.
+    async def _enforce_or_reject_frame(self, message: str) -> tuple[ResponsesWsQuotaRefund, ...] | None:
+        """Run the per-frame project quota check and return the charge's refunds.
 
-        On rejection, sends an ``error`` event to the client and reports that
-        the frame must be dropped instead of forwarded, so the connection
+        On rejection, sends an ``error`` event to the client and returns None
+        so the frame is dropped instead of forwarded, and the connection
         stays open for the client to retry once the window resets.
         """
         try:
-            await _enforce_frame_project_quota(
+            return await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.authorized_model, message
             )
         except RateLimitError as e:
             await self._send_turn_refusal(e)
-            return False
-        return True
+            return None
 
     async def _admit_or_reject_turn(
-        self, guarded: GuardedResponsesWsFrame, message: str, turn_admission: ResponsesWsTurnAdmission | None
+        self,
+        guarded: GuardedResponsesWsFrame,
+        message: str,
+        turn_admission: ResponsesWsTurnAdmission | None,
+        quota_refunds: Sequence[ResponsesWsQuotaRefund],
     ) -> _AdmittedTurn | None:
         verdict: Final = await _admit_frame_turn(turn_admission, message)
         match verdict:
             case _AdmittedTurn():
                 return verdict
             case _RefusedTurn(rejection=rejection):
+                await _refund_frame_quota(quota_refunds)
                 if self._failure is None:
                     self._failure = rejection
                 await _reject_guarded_turn(self.websocket, guarded, rejection)
@@ -3141,14 +3162,14 @@ class ResponsesWebSocketStreaming:
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
-            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message):
+            if self.first_message is not None and await self._enforce_or_reject_frame(self.first_message) is not None:
                 await self._forward_guarded_frame(self.first_message)
 
             while True:
                 message = await self.websocket.receive_text()
-                if not await self._enforce_or_reject_frame(message):
+                if (quota_refunds := await self._enforce_or_reject_frame(message)) is None:
                     continue
-                await self._forward_guarded_frame(message, self.turn_admission)
+                await self._forward_guarded_frame(message, self.turn_admission, quota_refunds)
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)
@@ -3684,7 +3705,7 @@ class ManagedResponsesWebSocketHandler:
             return
 
         try:
-            await _enforce_frame_project_quota(
+            quota_refunds: Final = await _enforce_frame_project_quota(
                 self.quota_callbacks, self.user_api_key_dict, self.model_group or self.model, raw_message
             )
         except RateLimitError as e:
@@ -3695,6 +3716,7 @@ class ManagedResponsesWebSocketHandler:
             return
         verdict: Final = await _admit_frame_turn(turn_admission, raw_message)
         if isinstance(verdict, _RefusedTurn):
+            await _refund_frame_quota(quota_refunds)
             if self._failure is None:
                 self._failure = verdict.rejection
             await _reject_guarded_turn(self.websocket, guarded, verdict.rejection)
