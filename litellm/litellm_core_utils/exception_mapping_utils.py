@@ -330,8 +330,12 @@ def _without_credentials(response: httpx.Response | None) -> httpx.Response | No
     return error_response_without_credentials(response.status_code, response, "https://docs.litellm.ai/docs")
 
 
-def _upstream_reply(response: httpx.Response | None) -> httpx.Response | None:
-    return response if response is not None and (response.headers or response.content) else None
+def _upstream_reply(response: httpx.Response | None, status_code: int) -> httpx.Response | None:
+    if response is None or not (response.headers or response.content):
+        return None
+    if response.status_code == status_code:
+        return response
+    return error_response_without_credentials(status_code, response, "https://docs.litellm.ai/docs")
 
 
 def _github_copilot_custom_app_hint(custom_llm_provider: str, request_kwargs: Mapping[str, object]) -> str | None:
@@ -467,7 +471,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             litellm_debug_info=extra_information,
-            response=_upstream_reply(response),
+            response=_upstream_reply(response, 408),
         )
     elif (
         ("invalid_request_error" in error_str and "content_policy_violation" in error_str)
@@ -548,7 +552,7 @@ def _map_openai_exception(
             model=model,
             llm_provider=custom_llm_provider,
             body=body,
-            response=_upstream_reply(response),
+            response=_upstream_reply(response, 500),
         )
     elif "Request too large" in error_str:
         raise RateLimitError(
@@ -579,7 +583,7 @@ def _map_openai_exception(
             model=model,
             request=_request,
             litellm_debug_info=extra_information,
-            response=_upstream_reply(response),
+            response=_upstream_reply(response, 500),
         )
     elif hasattr(original_exception, "status_code"):
         if original_exception.status_code == 400:
@@ -621,7 +625,7 @@ def _map_openai_exception(
                 model=model,
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -673,7 +677,7 @@ def _map_openai_exception(
                 llm_provider=custom_llm_provider,
                 litellm_debug_info=extra_information,
                 exception_status_code=original_exception.status_code,
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
         else:
             raise APIError(
@@ -683,7 +687,7 @@ def _map_openai_exception(
                 model=model,
                 request=getattr(original_exception, "request", None),
                 litellm_debug_info=extra_information,
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2313,7 +2317,7 @@ def _map_azure_exception(
                 model=model,
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
         elif original_exception.status_code == 422:
             raise BadRequestError(
@@ -2354,7 +2358,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 llm_provider="azure",
                 exception_status_code=original_exception.status_code,
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
         else:
             raise APIError(
@@ -2364,7 +2368,7 @@ def _map_azure_exception(
                 litellm_debug_info=extra_information,
                 model=model,
                 request=httpx.Request(method="POST", url="https://openai.com/"),
-                response=_upstream_reply(response),
+                response=_upstream_reply(response, original_exception.status_code),
             )
     else:
         # if no status code then it is an APIConnectionError: https://github.com/openai/openai-python#handling-errors
@@ -2831,7 +2835,7 @@ def exception_type(
                     llm_provider=custom_llm_provider,
                     litellm_debug_info=extra_information,
                     response=_upstream_reply(
-                        _without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider))
+                        _without_credentials(_litellm_proxy_response(mappable_exception, custom_llm_provider)), 408
                     ),
                 )
 

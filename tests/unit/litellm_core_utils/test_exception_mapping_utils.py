@@ -3932,16 +3932,27 @@ def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet
 
 
 @pytest.mark.parametrize(
-    ("provider", "wire_status", "mapped_error"),
-    [("replicate", 402, litellm.APIError), ("nlp_cloud", 522, litellm.Timeout)],
+    ("provider", "wire_status", "message", "mapped_error"),
+    [
+        ("replicate", 402, json.dumps(_PROVIDER_WIRE_BODY), litellm.APIError),
+        ("nlp_cloud", 522, json.dumps(_PROVIDER_WIRE_BODY), litellm.Timeout),
+        ("openai", 524, "A timeout occurred", litellm.Timeout),
+        ("openai", 503, "The server had an error processing your request.", litellm.InternalServerError),
+        ("mistral", 400, "Mistral API raised a streaming error", litellm.APIError),
+        ("openai", 504, "Request timed out", litellm.Timeout),
+    ],
 )
 def test_an_error_mapped_to_another_status_reports_that_status_on_the_provider_reply(
-    provider: str, wire_status: int, mapped_error: type[litellm.APIError | litellm.Timeout], quiet_exception_mapping: None
+    provider: str,
+    wire_status: int,
+    message: str,
+    mapped_error: type[litellm.APIError | litellm.Timeout | litellm.InternalServerError],
+    quiet_exception_mapping: None,
 ) -> None:
     request: Final = httpx.Request("POST", "https://provider.example/v1/predictions")
     original: Final = BaseLLMException(
         status_code=wire_status,
-        message=json.dumps(_PROVIDER_WIRE_BODY),
+        message=message,
         request=request,
         response=httpx.Response(wire_status, json=_PROVIDER_WIRE_BODY, request=request),
     )
