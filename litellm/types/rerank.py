@@ -141,7 +141,7 @@ def provider_usage_or_none(value: object) -> Mapping[str, object] | None:
         return None
 
 
-class RerankResponse(LiteLLMBaseModel):
+class RerankResponse(LiteLLMBaseModel):  # frozen-ok: existing conversion updates supplied response objects in place
     model_config = ConfigDict(validate_by_name=True)
 
     id: str | None = None
