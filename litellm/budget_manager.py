@@ -34,7 +34,7 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: str | None = None,
-        headers: dict[str, str] | None = None,
+        headers: dict | None = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -43,7 +43,7 @@ class BudgetManager:
         ## load the data or init the initial dictionaries
         self.load_data()
 
-    def print_verbose(self, print_statement: object):
+    def print_verbose(self, print_statement):
         try:
             if litellm.set_verbose:
                 import logging
@@ -166,10 +166,10 @@ class BudgetManager:
         self._save_data_thread()  # [Non-Blocking] Update persistent storage without blocking execution
         return {"user": self.user_dict[user]}
 
-    def get_current_cost(self, user: str):
+    def get_current_cost(self, user):
         return self.user_dict[user].get("current_cost", 0)
 
-    def get_model_cost(self, user: str):
+    def get_model_cost(self, user):
         return self.user_dict[user].get("model_cost", 0)
 
     def is_valid_user(self, user: str) -> bool:
@@ -178,7 +178,7 @@ class BudgetManager:
     def get_users(self):
         return list(self.user_dict.keys())
 
-    def reset_cost(self, user: str):
+    def reset_cost(self, user):
         """
         Reset the tracked spend for a user back to zero.
 
