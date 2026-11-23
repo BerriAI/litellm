@@ -2418,6 +2418,24 @@ class Logging(LiteLLMLoggingBaseClass):
     def with_failed_attempts_owed(self, own_cost: float) -> float:
         return own_cost + sum(cost for _, cost in self._failed_attempts_owed_on_success)
 
+    def bill_failed_attempts_owed_on_failure(self) -> None:
+        """A request cancelled before any attempt served it still owes the attempts it set aside."""
+        failed_attempts: Final = self._failed_attempts_owed_on_success
+        if not failed_attempts:
+            return
+        later_usage: Final = self.model_call_details.get("combined_usage_object")
+        later_attempts: Final = (later_usage,) if isinstance(later_usage, Usage) else ()
+        later_cost: Final = self.model_call_details.get("response_cost")
+        own_cost: Final = later_cost if later_attempts and isinstance(later_cost, (int, float)) else 0.0
+        total_cost: Final = self.with_failed_attempts_owed(own_cost)
+        self._failed_attempts_owed_on_success = ()
+        self.record_partial_usage_for_failure(
+            BaseTokenUsageProcessor.combine_usage_objects(
+                usage_objects=[*later_attempts, *(usage for usage, _ in failed_attempts)]
+            ),
+            total_cost,
+        )
+
     def _add_failed_attempts_spend(self, served_response: object, image_usage: Usage | None) -> None:
         failed_attempts: Final = self._failed_attempts_owed_on_success
         if not failed_attempts:

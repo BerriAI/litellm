@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
 from types import MappingProxyType
@@ -15,6 +16,7 @@ import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
@@ -2578,12 +2580,17 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 class _FailureBillingCapture(CustomLogger):
     billed: tuple[object, object] | None = None
 
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+
     async def async_log_failure_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
     ) -> None:
         payload: Final = kwargs.get("standard_logging_object")
         assert isinstance(payload, dict)
         self.billed = (payload.get("response_cost"), payload.get("prompt_tokens"))
+        self.logged.set()
 
 
 class _StreamCutAfterFirstEvent(httpx.AsyncByteStream):
@@ -2683,13 +2690,121 @@ async def test_a_stream_fallback_still_bills_the_broken_stream_on_its_failure_lo
 
     response: Final = await router.acompletion(**request, litellm_logging_obj=request_logging)
     content: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None])
-    for _ in range(200):
-        if capture.billed is not None:
-            break
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(capture.logged.wait(), timeout=30)
 
     assert content == "ready"
     assert capture.billed is not None
     billed_cost, billed_prompt_tokens = capture.billed
     assert isinstance(billed_cost, float) and billed_cost > 0
     assert isinstance(billed_prompt_tokens, int) and billed_prompt_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_a_client_disconnect_during_an_image_fallback_still_bills_the_refused_attempt(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fallback_reached: Final = threading.Event()
+    client_gone: Final = threading.Event()
+
+    def hold_until_the_client_is_gone(_: httpx.Request) -> httpx.Response:
+        fallback_reached.set()
+        client_gone.wait(timeout=30)
+        return httpx.Response(500)
+
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}],
+                "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+            },
+        )
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(side_effect=hold_until_the_client_is_gone)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.example",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="image-fallback-disconnect",
+    )
+    call: Final = asyncio.create_task(
+        router.aimage_generation(
+            model="primary",
+            prompt="draw a circle",
+            litellm_logging_obj=logging_obj,
+            litellm_call_id="image-fallback-disconnect",
+        )
+    )
+    assert await asyncio.to_thread(fallback_reached.wait, 30)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    client_gone.set()
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+    lifted_again: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, litellm.Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (777, 333)
+    response_cost: Final = lifted["response_cost"]
+    assert isinstance(response_cost, float) and response_cost > 0
+    assert lifted_again["response_cost"] == response_cost
+
+
+def _image_request_logging(call_id: str) -> litellm.litellm_core_utils.litellm_logging.Logging:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id=call_id,
+    )
+    logging_obj.owe_failed_attempt_on_success(
+        litellm.Usage(prompt_tokens=777, completion_tokens=333, total_tokens=1110), 0.25
+    )
+    return logging_obj
+
+
+def test_a_cancelled_request_bills_the_attempt_it_stopped_at_and_the_attempts_it_set_aside() -> None:
+    logging_obj: Final = _image_request_logging("cancelled-with-later-attempt")
+    logging_obj.record_partial_usage_for_failure(
+        litellm.Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12), 0.5
+    )
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, litellm.Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (782, 340)
+    assert lifted["response_cost"] == 0.75
+
+
+def test_a_request_whose_success_was_logged_does_not_bill_its_set_aside_attempts_again() -> None:
+    logging_obj: Final = _image_request_logging("success-already-logged")
+    logging_obj.mark_async_success_log_enqueued()
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert "combined_usage_object" not in lifted
+    assert "response_cost" not in lifted
