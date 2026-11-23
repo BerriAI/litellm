@@ -1,6 +1,7 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from datetime import timedelta
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
@@ -263,6 +264,43 @@ async def test_an_unreachable_database_reported_as_a_data_error_never_parks_a_de
     assert delivery_database.execute('SELECT state::text, attempts FROM "LiteLLM_SpendLogDelivery"').fetchall() == [
         ("pending", 3)
     ]
+
+
+class _ShortTransactions:
+    def __init__(self, client: Prisma, timeout: timedelta) -> None:
+        self._client: Final = client
+        self._timeout: Final = timeout
+
+    def tx(self, *, timeout: timedelta):
+        return self._client.tx(timeout=min(timeout, self._timeout))
+
+
+@pytest.mark.asyncio
+async def test_a_failed_full_batch_is_scheduled_for_retry_within_one_short_transaction(
+    delivery_database, delivery_client
+):
+    batch: Final = 5000
+    _insert(delivery_database, tuple(_row(f"request-{index}") for index in range(batch)))
+    delivery_database.execute("""UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 3 WHERE delivery_id = 'request-0'""")
+
+    async def apply(transaction, deliveries):
+        delivery_database.execute(
+            """UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 7 WHERE delivery_id = 'request-1'"""
+        )
+        raise ConnectionError("database went away")
+
+    repository = AccountingDeliveryRepository(_ShortTransactions(delivery_client, timedelta(seconds=2)))
+    result = await repository.apply_pending(apply, batch_size=batch, retry_only=False)
+
+    assert (result.failed, result.parked, result.error) == (batch - 1, (), "ConnectionError")
+    assert delivery_database.execute(
+        """SELECT state::text, attempts, last_error, bool_and(next_attempt_at > CURRENT_TIMESTAMP), count(*)
+        FROM "LiteLLM_SpendLogDelivery" GROUP BY 1, 2, 3 ORDER BY attempts"""
+    ).fetchall() == [
+        ("pending", 1, "ConnectionError", True, batch - 2),
+        ("pending", 3, None, False, 1),
+        ("pending", 7, None, False, 1),
+    ], "every claimed delivery backs off once, and one another worker already retried is left alone"
 
 
 @pytest_asyncio.fixture(loop_scope="function")
