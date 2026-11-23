@@ -252,7 +252,7 @@ def _ensure_datetime_utc(timestamp: datetime) -> datetime:
 
 def _get_messages_for_spend_logs_payload(
     standard_logging_payload: StandardLoggingPayload | None,
-    metadata: dict | None = None,
+    metadata: Mapping[str, object] | None = None,
 ) -> str:
     if spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs(
         _SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata)
@@ -589,9 +589,9 @@ def _sanitize_proxy_server_request_body(request_body: Mapping[str, object]) -> M
 
 
 def _get_proxy_server_request_for_spend_logs_payload(
-    metadata: dict,
+    metadata: Mapping[str, object],
     litellm_params: Mapping[str, object],
-    kwargs: dict | None = None,
+    kwargs: Mapping[str, object] | None = None,
     drop_requester_ip_address: bool = False,
 ) -> str:
     """
@@ -642,7 +642,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_response_for_spend_logs_payload(
     payload: StandardLoggingPayload | None,
-    kwargs: dict | None = None,
+    kwargs: dict[str, object] | None = None,
 ) -> str:
     if payload is None:
         return "{}"
