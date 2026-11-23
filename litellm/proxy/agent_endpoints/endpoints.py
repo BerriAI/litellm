@@ -67,7 +67,6 @@ from litellm.proxy.agent_endpoints.kill_switch import (
     redact_kill_switch,
 )
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
-from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
@@ -86,10 +85,12 @@ from litellm.types.agents import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.agent_identity import (
+    AGENT_IDENTITY_CONFIG,
     AgentIdentityBinding,
     AgentIdentityFailure,
-    EntraIdentityConfig,
     ManagedAgentIdentityStatus,
+    OktaIdentityConfig,
+    identity_config_model,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
@@ -551,6 +552,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 from litellm.proxy.agent_endpoints.agent_registry import (
     global_agent_registry as AGENT_REGISTRY,
 )
+from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
 
 
 def _trusted_agent_issuers() -> tuple[str, ...]:
@@ -584,12 +586,20 @@ def _validate_managed_identity_request(
     if raw is None:
         return
     try:
-        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else EntraIdentityConfig.model_validate(raw)
+        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else AGENT_IDENTITY_CONFIG.validate_python(raw)
     except ValidationError as exc:
-        raise HTTPException(400, "Invalid Entra identity configuration") from exc
-    if identity.issuer not in _trusted_agent_issuers():
+        name: Final = "Okta" if identity_config_model(raw) is OktaIdentityConfig else "Entra"
+        raise HTTPException(400, f"Invalid {name} identity configuration") from exc
+    if identity.provider == "okta" and identity.issuer not in _okta_agent_issuers():
+        raise HTTPException(
+            400, "Add this issuer to litellm_jwtauth.issuers with an audience and agent_identity_provider: okta first"
+        )
+    if identity.provider == "microsoft_entra" and identity.issuer not in _trusted_agent_issuers():
         raise HTTPException(400, "Configure trusted JWT issuer and audience validation for this Entra tenant first")
-    if request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous":
+    if (
+        identity.provider == "microsoft_entra"
+        and request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous"
+    ):
         if os.getenv("MICROSOFT_TENANT") != identity.tenant_id or not os.getenv("MICROSOFT_CLIENT_ID"):
             raise HTTPException(400, "Delegated agents require Microsoft SSO for the same trusted tenant")
 

@@ -1759,3 +1759,34 @@ async def test_deleting_an_agent_bound_by_a_newer_release_returns_the_row_and_fo
 
     assert deleted["agent_id"] == "agent-123"
     assert await cache.async_get_cache(key=key) is None
+
+
+@pytest.mark.asyncio
+async def test_a_duplicate_okta_registration_names_okta_in_the_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+    from prisma.errors import UniqueViolationError
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+    from litellm.types.proxy.agent_identity import OktaIdentityConfig
+
+    issuer: Final = JWTIssuerConfig(
+        issuer="https://acme.okta.example/oauth2/aus1", audience="api", agent_identity_provider="okta", okta_org="acme"
+    )
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(issuers=[issuer]))
+
+    registry: Final = AgentRegistry()
+    client: Final = MagicMock()
+    client.writer_db.litellm_retiredagentidentity.find_unique = AsyncMock(return_value=None)
+    client.db.litellm_agentstable.create = AsyncMock(
+        side_effect=UniqueViolationError(
+            {"user_facing_error": {"message": "Unique", "meta": {"target": ["client_id"]}, "error_code": "P2002"}}
+        )
+    )
+    okta: Final = OktaIdentityConfig(provider="okta", issuer="https://acme.okta.example/oauth2/aus1", client_id="0oa1")
+    incoming: Final[AgentConfig] = {"agent_name": "Agent", "agent_card_params": AgentCard(), "identity": okta}
+
+    with pytest.raises(HTTPException, match="Agent name or Okta application is already registered") as failure:
+        await registry.add_agent_to_db(incoming, client, created_by="admin")
+
+    assert failure.value.status_code == 409
