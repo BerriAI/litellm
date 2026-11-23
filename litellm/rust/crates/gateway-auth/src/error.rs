@@ -81,7 +81,8 @@ impl From<auth_core::Error> for Error {
                 | KeyDenial::Blocked
                 | KeyDenial::NoToken,
             )
-            | auth_core::Error::Jwt(_) => Self::InvalidToken,
+            | auth_core::Error::Jwt(_)
+            | auth_core::Error::Hash(_) => Self::InvalidToken,
         }
     }
 }
@@ -146,6 +147,10 @@ mod tests {
     #[case::a_key_nothing_can_look_up(KeyDenial::NoDbConfigured.into(), "invalid_token")]
     #[case::an_unknown_key(not_found(), "invalid_token")]
     #[case::a_blocked_key(KeyDenial::Blocked.into(), "invalid_token")]
+    #[case::a_key_openssl_cannot_hash(
+        auth_core::Error::Hash(Source::new(std::io::Error::other("no digest"))),
+        "invalid_token"
+    )]
     fn a_credential_the_core_did_not_authenticate_is_answered_in_this_servers_words(
         #[case] denied: auth_core::Error,
         #[case] answered: &str,
