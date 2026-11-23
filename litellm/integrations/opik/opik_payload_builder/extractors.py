@@ -7,7 +7,7 @@ from typing import Final, Protocol
 from pydantic import TypeAdapter
 
 from litellm import _logging
-from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items, require_attributes
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -180,8 +180,8 @@ def apply_proxy_header_overrides(
             thread_id = value
         elif param_key == "tags":
             try:
-                parsed_tags = _DECODED_JSON.validate_python(json.loads(value))
-                if isinstance(parsed_tags, list):
+                parsed_tags = as_object_list(_DECODED_JSON.validate_python(json.loads(value)))
+                if parsed_tags is not None:
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
                 _logging.verbose_logger.warning("Failed to parse tags from header: %s", value)
