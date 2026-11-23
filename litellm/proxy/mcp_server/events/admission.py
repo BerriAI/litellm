@@ -73,7 +73,7 @@ async def admit(
     if mismatch is not None:
         return Error(mismatch)
     server: Final = prepared.ok.resolved.target.server
-    if mode not in offered_modes(prepared.ok.descriptor, server, settings, context):
+    if mode not in offered_modes(prepared.ok.descriptor, server, settings.public_base_url is not None, context):
         return Error(unsupported("deliveryMode", mode))
     if await runtime.rate_limited(server, context.user_api_key_auth):
         return Error(exhausted("rate", server.rpm or 0))

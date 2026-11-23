@@ -179,7 +179,6 @@ class MemoryStore:
             and (query.server_id is None or row.server_id == query.server_id)
             and (query.status is None or row.status == query.status)
             and (not query.live_only or row.status in LIVE_STATUSES)
-            and (query.after_id is None or row.id > query.after_id)
         )
         ordered: Final = sorted(matching, key=lambda row: row.id) if query.live_only else matching
         return tuple(ordered[query.offset : query.offset + query.limit])

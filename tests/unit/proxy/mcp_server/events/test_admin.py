@@ -297,8 +297,16 @@ async def test_delete_reports_a_conflict_if_a_refresh_wins() -> None:
 
 
 async def test_revoking_a_key_visits_every_page_of_live_subscriptions() -> None:
+    class RenewedStore(MemoryStore):
+        async def end_if_current(
+            self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+        ) -> bool:
+            if subscription_id == "0" and generation != "renewed":
+                await self.save(self.rows[subscription_id].model_copy(update={"generation": "renewed"}))
+            return await super().end_if_current(subscription_id, upstream_subscription_id, generation)
+
     base: Final = _row("base", ALICE)
-    store: Final = MemoryStore(rows={str(i): base.model_copy(update={"id": str(i)}) for i in range(1001)})
+    store: Final = RenewedStore(rows={str(i): base.model_copy(update={"id": str(i)}) for i in range(1001)})
     await store.save(_row("other", BOB))
     services: Final = AdminServices(
         store=store, runtime=runtime((server(),)), post=Callback().post, lookup=_lookup, key_for_alias=_no_alias
@@ -313,3 +321,15 @@ async def test_admin_catalog_removes_webhook_mode_when_there_is_no_public_origin
         response = await client.get("/events/types", params={"server_id": "srv-ci"})
     assert response.status_code == 200
     assert response.json()[0]["delivery"] == ["poll", "push"]
+
+
+@pytest.mark.parametrize(("with_store", "modes"), ((False, ["poll", "push"]), (True, ["poll", "push", "webhook"])))
+async def test_catalog_requires_storage_to_offer_webhooks(
+    monkeypatch: pytest.MonkeyPatch, with_store: bool, modes: list[str]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_events_public_base_url", "https://gateway.example")
+    async with _client(ALICE, _store() if with_store else None, Callback()) as client:
+        response = await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert response.status_code == 200 and response.json()[0]["delivery"] == modes
