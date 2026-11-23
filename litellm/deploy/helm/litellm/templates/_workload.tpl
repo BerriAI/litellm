@@ -384,24 +384,36 @@ scoped to this release's metrics Service through the `job` label the
 ServiceMonitor gives every scrape.
 */}}
 {{- define "litellm.workload.keda" -}}
-{{- $component := include "litellm.workload.componentName" . -}}
-{{- $keda := .Values.gateway.keda -}}
-{{- $prom := $keda.prometheus -}}
+{{- include "litellm.keda.scaledObject" (dict
+  "root" .
+  "valuesKey" "gateway"
+  "keda" .Values.gateway.keda
+  "prometheus" .Values.gateway.keda.prometheus
+  "metricsServerEnabled" .Values.gateway.metricsServer.enabled
+  "name" (include "litellm.workload.fullname" .)
+  "component" (include "litellm.workload.componentName" .)
+) }}
+{{- end -}}
+
+{{- define "litellm.keda.scaledObject" -}}
+{{- $root := .root -}}
+{{- $keda := .keda -}}
+{{- $prom := .prometheus | default dict -}}
 {{- $wantsPrometheus := or $prom.targetRequestsPerSecond $prom.targetTokensPerSecond -}}
 {{- if and $wantsPrometheus (not $prom.serverAddress) }}
-{{- fail "gateway.keda.prometheus.serverAddress is required when gateway.keda.prometheus.targetRequestsPerSecond or targetTokensPerSecond is set" }}
+{{- fail (printf "%s.keda.prometheus.serverAddress is required when %s.keda.prometheus.targetRequestsPerSecond or targetTokensPerSecond is set" .valuesKey .valuesKey) }}
 {{- end }}
-{{- if and $wantsPrometheus (not .Values.gateway.metricsServer.enabled) }}
-{{- fail "gateway.metricsServer.enabled is required when gateway.keda.prometheus.targetRequestsPerSecond or targetTokensPerSecond is set" }}
+{{- if and $wantsPrometheus (not .metricsServerEnabled) }}
+{{- fail (printf "%s.metricsServer.enabled is required when %s.keda.prometheus.targetRequestsPerSecond or targetTokensPerSecond is set" .valuesKey .valuesKey) }}
 {{- end }}
-{{- $selector := printf "namespace=%q,job=%q" .Release.Namespace (printf "%s-metrics" (include "litellm.workload.fullname" .)) -}}
+{{- $selector := printf "namespace=%q,job=%q" $root.Release.Namespace (printf "%s-metrics" .name) -}}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: {{ include "litellm.workload.fullname" . }}
+  name: {{ .name }}
   labels:
-    {{- include "litellm.commonLabels" . | nindent 4 }}
-    app.kubernetes.io/component: {{ $component }}
+    {{- include "litellm.commonLabels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ .component }}
   {{- with (dig "scaledObject" "annotations" (dict) $keda) }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -410,7 +422,7 @@ spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: {{ include "litellm.workload.fullname" . }}
+    name: {{ .name }}
   minReplicaCount: {{ $keda.minReplicaCount }}
   maxReplicaCount: {{ $keda.maxReplicaCount }}
   pollingInterval: {{ $keda.pollingInterval }}
