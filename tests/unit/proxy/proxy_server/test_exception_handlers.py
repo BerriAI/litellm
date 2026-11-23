@@ -707,6 +707,7 @@ async def test_otel_unhandled_exception_handler_returns_500_generic_payload():
     body = json.loads(response.body)
 
     assert response.status_code == 500
+    assert response.headers["cache-control"] == "no-store"
     assert normalize(body) == {
         "error": {
             "message": "Internal server error",
@@ -728,6 +729,7 @@ async def test_otel_unhandled_exception_handler_honors_the_litellm_header_opt_ou
 
     assert response.status_code == 500
     assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
     assert Headers(raw=response.raw_headers).get("x-litellm-call-id") == ("call-123" if include else None)
 
 
@@ -761,6 +763,7 @@ async def test_otel_unhandled_exception_handler_answers_a_db_outage_with_503_no_
     response = await otel_unhandled_exception_handler(request=_make_request(path="/v2/team/list"), exc=exc)
 
     assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
     assert json.loads(response.body) == _DB_OUTAGE_503_BODY
 
 
@@ -774,6 +777,7 @@ async def test_otel_unhandled_exception_handler_answers_the_anthropic_api_error_
     )
 
     assert response.status_code == 500
+    assert response.headers["cache-control"] == "no-store"
     assert json.loads(response.body) == {
         "type": "error",
         "error": {"type": "api_error", "message": "Internal server error"},

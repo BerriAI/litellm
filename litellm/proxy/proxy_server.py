@@ -23302,6 +23302,8 @@ app.add_middleware(
     state=admission_control_state,
 )
 app.add_middleware(LiteLLMResponseHeadersMiddleware, include_litellm_headers=_include_litellm_headers)
+# Outside request rejection, and inside only the root-path rewrite. Size and
+# admission middleware answer 413 and 503 without calling the app.
 app.add_middleware(SecurityHeadersMiddleware)
 # Added last on purpose - last-added is outermost, and the client-visible URL
 # prefix must be resolved into scope["root_path"] before any inner middleware
