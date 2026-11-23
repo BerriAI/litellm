@@ -407,3 +407,28 @@ async def test_delayed_teardown_preserves_reused_upstream_id_and_replacement_del
             assert await new.has_pending(row.id) and await new.get(row.id) == active
         finally:
             await new.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_expiry_rechecks_a_renewed_deadline_before_removing_its_deliveries() -> None:
+    async with _connected() as sweeper, _connected() as subscriber:
+        row: Final = await _active(sweeper)
+        after_old_deadline: Final = NOW + timedelta(hours=2)
+        try:
+            assert row.id in {item.id for item in await sweeper.expired(after_old_deadline)}
+            renewal: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=NOW + timedelta(hours=3),
+                cursor=None,
+            )
+            assert await subscriber.activate(row.id, renewal)
+            renewed: Final = await subscriber.get(row.id)
+            assert renewed is not None and await subscriber.enqueue_current(renewed, _delivery(row.id))
+            assert not await sweeper.end_if_expired(row.id, after_old_deadline)
+            assert await subscriber.has_pending(row.id)
+            assert await sweeper.end_if_expired(row.id, NOW + timedelta(hours=4))
+            assert not await subscriber.has_pending(row.id)
+        finally:
+            await subscriber.delete(row.id)
