@@ -1,9 +1,7 @@
 use crate::{
-    AuthHost, Error,
+    AuthHost, Error, TeamGrant,
     authn::key::{KeyRecord, UI_TEAM_ID},
 };
-
-use super::TeamGrant;
 
 pub(super) async fn read<H: AuthHost>(
     host: &H,

@@ -1,8 +1,8 @@
-//! Who a verified JWT is acting as: the caller its claims name, then the team, user and
+//! Who a verified JWT is acting as: the claimant its claims name, then the team, user and
 //! organization behind it. Provisioning writes happen here, and grants are collected for `commit`.
 
 pub(crate) mod agent;
-pub(crate) mod caller;
+pub(crate) mod claimant;
 pub mod claims;
 pub(crate) mod org;
 pub(crate) mod team;
@@ -25,7 +25,7 @@ pub use team::{
 pub use user::{TeamSync, team_sync};
 
 use crate::{
-    Rows,
+    Belongs, Rows,
     authn::{
         jwt::{JwtSettings, MappedJwt, MappedKey},
         key::Keyed,
@@ -156,30 +156,8 @@ pub struct JwtIdentity<R: Rows> {
     pub end_user_id: Option<String>,
     pub agent_id: Option<String>,
     pub managed_agent: Option<ManagedAgent<R::Agent>>,
-    pub rows: JwtRows<R>,
-}
-
-/// The rows behind a `JwtIdentity`'s ids. The membership is the user's in `team`, and none for a
-/// proxy admin.
-#[derive(Clone, Debug, PartialEq)]
-pub struct JwtRows<R: Rows> {
-    pub user: Option<R::User>,
-    pub team: Option<R::Team>,
-    pub membership: Option<R::Membership>,
-    pub org: Option<R::Org>,
-    pub end_user: Option<R::EndUser>,
-}
-
-impl<R: Rows> Default for JwtRows<R> {
-    fn default() -> Self {
-        Self {
-            user: None,
-            team: None,
-            membership: None,
-            org: None,
-            end_user: None,
-        }
-    }
+    /// The rows behind the ids. A proxy admin has no membership.
+    pub belongs: Belongs<R>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

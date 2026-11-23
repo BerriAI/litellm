@@ -16,19 +16,20 @@ impl RoutePolicy<'_> {
             .header_team
             .as_ref()
             .filter(|header_team| header_team.provisional)
-            && principal.team_id.as_deref() == Some(header_team.team_id.as_str())
+            && principal.identity.team_id.as_deref() == Some(header_team.team_id.as_str())
         {
-            let user_teams = principal
-                .user
-                .as_ref()
-                .map(|user| user.teams.as_slice())
-                .unwrap_or_default();
             let route_allowed = self.team_eligibility(target).route_allowed();
-            check_provisional_header_team(header_team, user_teams, route_allowed, target.route)?;
+            check_provisional_header_team(
+                header_team,
+                &principal.user_teams,
+                route_allowed,
+                target.route,
+            )?;
         }
+        let identity = &principal.identity;
         if self.jwt.enforce_rbac
-            && principal.user_id.as_deref().is_none_or(str::is_empty)
-            && principal.team_id.as_deref().is_none_or(str::is_empty)
+            && identity.user_id.as_deref().is_none_or(str::is_empty)
+            && identity.team_id.as_deref().is_none_or(str::is_empty)
         {
             return Err(JwtDenial::NoObjectId);
         }

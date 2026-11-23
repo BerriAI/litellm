@@ -5,9 +5,9 @@ use crate::{
     host::KeyRow,
     identity::{
         self,
-        key::{KeyContext, KeyIdentity},
+        key::{KeyContext, KeyOutcome},
     },
-    outcome::{KeyOutcome, Refused},
+    outcome::Refused,
 };
 
 /// The key path: what the credential settles alone, the route policy, the key and whether it is
@@ -18,7 +18,7 @@ pub(crate) async fn authenticate<H: AuthHost>(
     settings: &KeySettings,
     policy: &RoutePolicy<'_>,
     credential: Credential<'_, KeyRow<H>>,
-) -> KeyOutcome<H::Rows> {
+) -> Result<KeyOutcome<H::Rows>, Refused<H::Rows>> {
     let checked = key::precheck::<H::Rows>(request.route, credential, settings)
         .map_err(|denial| Refused::new(denial, None))?;
     let verified = match checked {
@@ -31,16 +31,14 @@ pub(crate) async fn authenticate<H: AuthHost>(
         }
     };
     match verified {
-        Verified::NoMasterKey { token } => Ok(KeyIdentity::NoMasterKey { token }),
-        Verified::UserAuthRoute => Ok(KeyIdentity::UserAuthRoute),
-        Verified::MasterKey { hash, end_user } => Ok(KeyIdentity::MasterKey { hash, end_user }),
-        Verified::CachedAdmin { key, end_user } => Ok(KeyIdentity::CachedAdmin { key, end_user }),
+        Verified::NoMasterKey { token } => Ok(KeyOutcome::NoMasterKey { token }),
+        Verified::UserAuthRoute => Ok(KeyOutcome::UserAuthRoute),
+        Verified::MasterKey { hash, end_user } => Ok(KeyOutcome::MasterKey { hash, end_user }),
+        Verified::CachedAdmin { key, end_user } => Ok(KeyOutcome::CachedAdmin { key, end_user }),
         Verified::VirtualKey { key, end_user } => {
             let principal = identity::key::principal(host, key, end_user).await?;
             let admitted = crate::admission::key(host, principal, request, settings).await?;
-            Ok(KeyIdentity::VirtualKey(Box::new(KeyContext::from(
-                admitted,
-            ))))
+            Ok(KeyOutcome::VirtualKey(Box::new(KeyContext::from(admitted))))
         }
     }
 }
@@ -54,12 +52,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        Error, KeyDenial, KeyHash, MasterKey, Token,
+        Belongs, Error, KeyDenial, KeyHash, MasterKey, TeamGrant, Token,
         authn::{
             jwt::JwtSettings,
             key::{KeyRecord, Keyed},
         },
-        identity::key::TeamGrant,
         testing::{Labels, ScriptedHost},
     };
 
@@ -69,7 +66,7 @@ mod tests {
         request: &KeyRequest<'_>,
         settings: &KeySettings,
         credential: Credential<'_, String>,
-    ) -> KeyOutcome<Labels> {
+    ) -> Result<KeyOutcome<Labels>, Refused<Labels>> {
         let jwt = JwtSettings::default();
         super::authenticate(
             host,
@@ -123,7 +120,7 @@ mod tests {
         token: &str,
         route: &str,
         settings: &KeySettings,
-    ) -> KeyOutcome<Labels> {
+    ) -> Result<KeyOutcome<Labels>, Refused<Labels>> {
         let token = Token::new(token);
         let request = KeyRequest {
             route,
@@ -144,7 +141,7 @@ mod tests {
         host: &ScriptedHost,
         record: KeyRecord,
         settings: &KeySettings,
-    ) -> KeyOutcome<Labels> {
+    ) -> Result<KeyOutcome<Labels>, Refused<Labels>> {
         let request = KeyRequest {
             route: "/chat/completions",
             end_user_id: None,
@@ -168,15 +165,15 @@ mod tests {
         token: &str,
         route: &str,
         settings: &KeySettings,
-    ) -> Result<KeyIdentity<Labels>, Error> {
+    ) -> Result<KeyOutcome<Labels>, Error> {
         run_with(host, token, route, settings)
             .await
             .map_err(|refused| *refused.error)
     }
 
-    fn context(outcome: Result<KeyIdentity<Labels>, Error>) -> KeyContext<Labels> {
+    fn context(outcome: Result<KeyOutcome<Labels>, Error>) -> KeyContext<Labels> {
         match outcome {
-            Ok(KeyIdentity::VirtualKey(context)) => *context,
+            Ok(KeyOutcome::VirtualKey(context)) => *context,
             other => panic!("expected a virtual key, got {other:?}"),
         }
     }
@@ -191,7 +188,7 @@ mod tests {
         let host = ScriptedHost::default();
         assert_eq!(
             run(&host, "", "/chat/completions", &settings).await,
-            Ok(KeyIdentity::NoMasterKey {
+            Ok(KeyOutcome::NoMasterKey {
                 token: Some(Token::new(""))
             })
         );
@@ -242,13 +239,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::allowed(true, Ok(KeyIdentity::UserAuthRoute))]
+    #[case::allowed(true, Ok(KeyOutcome::UserAuthRoute))]
     #[case::disabled(false, Err(KeyDenial::UserAuthDisabled.into()))]
     #[tokio::test]
     async fn user_auth_route(
         settings: KeySettings,
         #[case] allow_user_auth: bool,
-        #[case] expected: Result<KeyIdentity<Labels>, Error>,
+        #[case] expected: Result<KeyOutcome<Labels>, Error>,
     ) {
         let settings = KeySettings {
             allow_user_auth,
@@ -265,7 +262,7 @@ mod tests {
         let host = ScriptedHost::default();
         assert_eq!(
             run(&host, MASTER, "/chat/completions", &settings).await,
-            Ok(KeyIdentity::MasterKey {
+            Ok(KeyOutcome::MasterKey {
                 hash: Token::new(MASTER).hash(),
                 end_user: "end-user".to_owned()
             })
@@ -378,7 +375,7 @@ mod tests {
         };
         assert_eq!(
             run(&host, "sk-admin", "/chat/completions", &settings).await,
-            Ok(KeyIdentity::CachedAdmin {
+            Ok(KeyOutcome::CachedAdmin {
                 key: "cached".to_owned(),
                 end_user: "end-user".to_owned()
             })
@@ -443,7 +440,7 @@ mod tests {
         assert!(host.calls().is_empty());
         assert!(matches!(
             run(&host, MASTER, "/global/spend/reset", &settings).await,
-            Ok(KeyIdentity::MasterKey { .. })
+            Ok(KeyOutcome::MasterKey { .. })
         ));
     }
 
@@ -468,7 +465,7 @@ mod tests {
         );
         assert!(matches!(
             run(&host, MASTER, "/chat/completions", &settings).await,
-            Ok(KeyIdentity::MasterKey { .. })
+            Ok(KeyOutcome::MasterKey { .. })
         ));
     }
 
@@ -481,7 +478,7 @@ mod tests {
         settings: KeySettings,
         #[case] token: &str,
         #[case] jwt_auth: bool,
-        #[case] expected: Result<KeyIdentity<Labels>, Error>,
+        #[case] expected: Result<KeyOutcome<Labels>, Error>,
     ) {
         let settings = KeySettings {
             jwt_auth,
@@ -563,10 +560,13 @@ mod tests {
             context(run(&host, "sk-1", "/chat/completions", &settings).await),
             KeyContext {
                 key: "db+prepared".to_owned(),
-                end_user: "end-user".to_owned(),
-                owner: Some("owner u".to_owned()),
-                team: TeamGrant::Loaded("team t".to_owned()),
-                project: Some("project p".to_owned()),
+                belongs: Belongs {
+                    user: Some("owner u".to_owned()),
+                    team: TeamGrant::Loaded("team t".to_owned()),
+                    project: Some("project p".to_owned()),
+                    end_user: Some("end-user".to_owned()),
+                    ..Belongs::default()
+                },
             }
         );
         assert_eq!(
@@ -772,7 +772,9 @@ mod tests {
             ..ScriptedHost::default()
         };
         assert_eq!(
-            context(run(&host, "sk-1", "/chat/completions", &settings).await).team,
+            context(run(&host, "sk-1", "/chat/completions", &settings).await)
+                .belongs
+                .team,
             expected
         );
     }
@@ -867,7 +869,7 @@ mod tests {
             ..ScriptedHost::default()
         };
         let context = context(run(&host, "sk-1", "/chat/completions", &settings).await);
-        assert_eq!((context.key.as_str(), context.owner), (key, None));
+        assert_eq!((context.key.as_str(), context.belongs.user), (key, None));
     }
 
     #[rstest]

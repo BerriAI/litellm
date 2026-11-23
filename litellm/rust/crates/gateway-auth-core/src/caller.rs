@@ -9,9 +9,48 @@ use litellm_config::LitellmRole;
 use crate::{
     KeyHash, Rows,
     authn::key::KeyRecord,
-    identity::key::{KeyContext, KeyIdentity},
+    identity::key::{KeyContext, KeyOutcome},
     outcome::Identity,
 };
+
+/// The team a caller acts in.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TeamGrant<R: Rows> {
+    NoTeam,
+    Loaded(R::Team),
+    /// Only a key's: the UI team, or a team `get_team_object` did not report. The key's own copy
+    /// of the team values stands, with the object permission it names.
+    KeyCopy(Option<R::ObjectPermission>),
+}
+
+/// The rows a caller belongs to. The key path and the JWT path both fill it, and every struct
+/// that says who a request is for holds one instead of declaring the slots again. A slot a path
+/// does not read stays empty: a key has no membership or organization row, a JWT no project.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Belongs<R: Rows> {
+    /// A key's owner, or the user a JWT names.
+    pub user: Option<R::User>,
+    pub team: TeamGrant<R>,
+    /// The user's membership of `team`.
+    pub membership: Option<R::Membership>,
+    pub org: Option<R::Org>,
+    pub project: Option<R::Project>,
+    /// The key path always reads one, which is empty for a request that names no end user.
+    pub end_user: Option<R::EndUser>,
+}
+
+impl<R: Rows> Default for Belongs<R> {
+    fn default() -> Self {
+        Self {
+            user: None,
+            team: TeamGrant::NoTeam,
+            membership: None,
+            org: None,
+            project: None,
+            end_user: None,
+        }
+    }
+}
 
 /// A host's key row that keeps the record the key path read it with, which gives a caller its id
 /// and role.
@@ -57,11 +96,11 @@ impl<R: Rows> TryFrom<Identity<R>> for Caller<R> {
 
     fn try_from(identity: Identity<R>) -> Result<Self, NotACaller> {
         match identity {
-            Identity::Key(KeyIdentity::MasterKey { .. }) => Ok(Self::MasterKey),
-            Identity::Key(KeyIdentity::VirtualKey(context)) => Ok(Self::Key(context)),
-            Identity::Key(KeyIdentity::NoMasterKey { .. }) => Err(NotACaller::NoMasterKey),
-            Identity::Key(KeyIdentity::UserAuthRoute) => Err(NotACaller::UserAuthRoute),
-            Identity::Key(KeyIdentity::CachedAdmin { .. }) => Err(NotACaller::CachedAdmin),
+            Identity::Key(KeyOutcome::MasterKey { .. }) => Ok(Self::MasterKey),
+            Identity::Key(KeyOutcome::VirtualKey(context)) => Ok(Self::Key(context)),
+            Identity::Key(KeyOutcome::NoMasterKey { .. }) => Err(NotACaller::NoMasterKey),
+            Identity::Key(KeyOutcome::UserAuthRoute) => Err(NotACaller::UserAuthRoute),
+            Identity::Key(KeyOutcome::CachedAdmin { .. }) => Err(NotACaller::CachedAdmin),
             Identity::MappedJwtKey(..) | Identity::AdminJwt(_) | Identity::FinishedJwt(_) => {
                 Err(NotACaller::Jwt)
             }
@@ -103,10 +142,7 @@ mod tests {
     use crate::{
         Token,
         authn::jwt::{KeyOrigin, MappedJwt},
-        identity::{
-            jwt::{JwtIdentity, JwtRows},
-            key::TeamGrant,
-        },
+        identity::jwt::JwtIdentity,
     };
 
     #[derive(Clone, Debug, PartialEq)]
@@ -134,15 +170,15 @@ mod tests {
     fn key(record: KeyRecord) -> Box<KeyContext<Stored>> {
         Box::new(KeyContext {
             key: record,
-            end_user: "end-user".to_owned(),
-            owner: None,
-            team: TeamGrant::NoTeam,
-            project: None,
+            belongs: Belongs {
+                end_user: Some("end-user".to_owned()),
+                ..Belongs::default()
+            },
         })
     }
 
-    fn cached_admin() -> KeyIdentity<Stored> {
-        KeyIdentity::CachedAdmin {
+    fn cached_admin() -> KeyOutcome<Stored> {
+        KeyOutcome::CachedAdmin {
             key: KeyRecord {
                 is_proxy_admin: true,
                 ..stored("stored")
@@ -173,16 +209,16 @@ mod tests {
             end_user_id: None,
             agent_id: None,
             managed_agent: None,
-            rows: JwtRows::default(),
+            belongs: Belongs::default(),
         }))
     }
 
     #[rstest]
     #[case::no_master_key(
-        Identity::Key(KeyIdentity::NoMasterKey { token: Some(Token::new("anything")) }),
+        Identity::Key(KeyOutcome::NoMasterKey { token: Some(Token::new("anything")) }),
         NotACaller::NoMasterKey
     )]
-    #[case::user_auth_route(Identity::Key(KeyIdentity::UserAuthRoute), NotACaller::UserAuthRoute)]
+    #[case::user_auth_route(Identity::Key(KeyOutcome::UserAuthRoute), NotACaller::UserAuthRoute)]
     #[case::cached_admin(Identity::Key(cached_admin()), NotACaller::CachedAdmin)]
     #[case::jwt_mapped_to_a_key(mapped_jwt(), NotACaller::Jwt)]
     #[case::admin_jwt(admin_jwt(), NotACaller::Jwt)]
@@ -196,7 +232,7 @@ mod tests {
 
     #[rstest]
     fn the_master_key_is_an_admin_with_no_row() {
-        let master = Identity::<Stored>::Key(KeyIdentity::MasterKey {
+        let master = Identity::<Stored>::Key(KeyOutcome::MasterKey {
             hash: Token::new("sk-master").hash(),
             end_user: "end-user".to_owned(),
         });
@@ -220,7 +256,7 @@ mod tests {
             is_proxy_admin,
             ..stored("stored")
         };
-        let identity = Identity::Key(KeyIdentity::VirtualKey(key(record)));
+        let identity = Identity::Key(KeyOutcome::VirtualKey(key(record)));
 
         let caller = Caller::try_from(identity).unwrap();
 

@@ -20,7 +20,7 @@ mod testing;
 mod token;
 mod value;
 
-pub use caller::{Caller, NotACaller, StoredKey};
+pub use caller::{Belongs, Caller, NotACaller, StoredKey, TeamGrant};
 pub use error::{
     AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
     KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
@@ -30,7 +30,7 @@ pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,
     OrgRow, ProjectRow, Row, Rows, TeamRow, UserRow,
 };
-pub use outcome::{Identity, KeyOutcome, Outcome, Refused};
+pub use outcome::{Identity, Outcome, Refused};
 pub use public::{ErrorType, PublicDenial};
 pub use request::Request;
 pub use routes::{
@@ -43,7 +43,7 @@ use crate::{
     authn::key::Credential,
     identity::{
         jwt::{ClaimIdentity, JwtIdentity, JwtMapping, JwtOutcome, Provisioning},
-        key::KeyIdentity,
+        key::KeyOutcome,
     },
     plan::Plan,
 };
@@ -110,7 +110,7 @@ pub async fn authenticate_jwt<H: AuthHost>(
             )
             .await;
             match outcome {
-                Ok(KeyIdentity::VirtualKey(context)) => {
+                Ok(KeyOutcome::VirtualKey(context)) => {
                     Ok(Outcome::Authenticated(Identity::MappedJwtKey(jwt, context)))
                 }
                 outcome => key_outcome(outcome),
@@ -137,7 +137,7 @@ fn denied<R: Rows>(error: Error, key: Option<R::Key>) -> Result<Outcome<R>, Erro
     }
 }
 
-fn key_outcome<R: Rows>(outcome: KeyOutcome<R>) -> Result<Outcome<R>, Error> {
+fn key_outcome<R: Rows>(outcome: Result<KeyOutcome<R>, Refused<R>>) -> Result<Outcome<R>, Error> {
     match outcome {
         Ok(identity) => Ok(Outcome::Authenticated(Identity::Key(identity))),
         Err(refused) => denied(*refused.error, refused.key),

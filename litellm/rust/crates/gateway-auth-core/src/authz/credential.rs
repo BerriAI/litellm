@@ -5,7 +5,7 @@ use crate::{
     Error, JwtDenial, RbacDenial, Rows,
     authn::jwt::{JwtSettings, managed_issuer_is_trusted},
     identity::{
-        Caller, CallerKind,
+        Claimant, ClaimantKind,
         jwt::{AgentMode, UserInfo},
     },
     routes::RouteAllowlist,
@@ -170,11 +170,11 @@ impl RoutePolicy<'_> {
     /// role's models and routes, the scope mappings and a proxy admin's routes.
     pub(crate) fn credential<R: Rows>(
         &self,
-        caller: &Caller<R>,
+        claimant: &Claimant<R>,
         target: &Target<'_>,
     ) -> Result<(), Error> {
-        if caller.agent.is_some() {
-            if !managed_issuer_is_trusted(&caller.issuer, self.jwt) {
+        if claimant.agent.is_some() {
+            if !managed_issuer_is_trusted(&claimant.issuer, self.jwt) {
                 return Err(JwtDenial::ManagedIssuerUntrusted.into());
             }
             if !self
@@ -185,14 +185,14 @@ impl RoutePolicy<'_> {
                 return Err(JwtDenial::ManagedRouteNotAllowed.into());
             }
         }
-        if caller.kind == CallerKind::ManagedAgent(AgentMode::Autonomous) {
+        if claimant.kind == ClaimantKind::ManagedAgent(AgentMode::Autonomous) {
             return Ok(());
         }
-        check_rbac_role(caller.rbac_role, target.model, target.route, self.jwt)?;
+        check_rbac_role(claimant.rbac_role, target.model, target.route, self.jwt)?;
         if let Some(mappings) = self.jwt.enforced_scope_mappings() {
-            check_scope_based_access(mappings, &caller.scopes, target.model)?;
+            check_scope_based_access(mappings, &claimant.scopes, target.model)?;
         }
-        if caller.kind == CallerKind::ProxyAdmin {
+        if claimant.kind == ClaimantKind::ProxyAdmin {
             check_admin_route(target.route, self.jwt)?;
         }
         Ok(())
@@ -213,12 +213,12 @@ impl RoutePolicy<'_> {
     /// a managed agent.
     pub(crate) fn email_domain<R: Rows>(
         &self,
-        caller: &Caller<R>,
+        claimant: &Claimant<R>,
         info: &UserInfo,
     ) -> Result<(), JwtDenial> {
-        match caller.kind {
-            CallerKind::Jwt => self.claimed_email(info),
-            CallerKind::ProxyAdmin | CallerKind::ManagedAgent(_) => Ok(()),
+        match claimant.kind {
+            ClaimantKind::Jwt => self.claimed_email(info),
+            ClaimantKind::ProxyAdmin | ClaimantKind::ManagedAgent(_) => Ok(()),
         }
     }
 }

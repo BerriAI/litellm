@@ -12,9 +12,7 @@ use litellm_gateway_auth::{
     RequireMasterKey, authenticate,
 };
 use litellm_gateway_auth_core::{
-    Caller, KeyHash, Rows,
-    authn::key::KeyRecord,
-    identity::key::{KeyContext, TeamGrant},
+    Belongs, Caller, KeyHash, Rows, authn::key::KeyRecord, identity::key::KeyContext,
 };
 use litellm_secret_value::SecretValue;
 use rstest::rstest;
@@ -44,10 +42,7 @@ fn stored_key() -> Caller<Held> {
             token: Some(KeyHash::new("stored")),
             ..KeyRecord::default()
         },
-        end_user: (),
-        owner: None,
-        team: TeamGrant::NoTeam,
-        project: None,
+        belongs: Belongs::default(),
     }))
 }
 

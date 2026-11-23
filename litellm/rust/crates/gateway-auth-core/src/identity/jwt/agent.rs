@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use super::{DelegatedTeam, JwtIdentity, JwtRows, ManagedAgent, team::ClaimedTeam};
-use crate::{AuthHost, Error, Rows, authn::jwt::JwtSettings, host::AgentRow};
+use super::{DelegatedTeam, JwtIdentity, ManagedAgent, team::ClaimedTeam};
+use crate::{AuthHost, Belongs, Error, Rows, authn::jwt::JwtSettings, host::AgentRow};
 
 /// An autonomous managed agent acts as itself, with no user, team or organization.
 pub(crate) fn autonomous_identity<R: Rows>(
@@ -18,7 +18,7 @@ pub(crate) fn autonomous_identity<R: Rows>(
         end_user_id: None,
         agent_id: Some(agent.agent_id.clone()),
         managed_agent: Some(agent),
-        rows: JwtRows::default(),
+        belongs: Belongs::default(),
     }
 }
 

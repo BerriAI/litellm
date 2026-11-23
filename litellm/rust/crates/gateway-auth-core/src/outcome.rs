@@ -4,13 +4,13 @@ use crate::{
     host::Rows,
     identity::{
         jwt::JwtIdentity,
-        key::{KeyContext, KeyIdentity},
+        key::{KeyContext, KeyOutcome},
     },
 };
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Identity<R: Rows> {
-    Key(KeyIdentity<R>),
+    Key(KeyOutcome<R>),
     /// A JWT mapped onto a virtual key that then passed the key checks.
     MappedJwtKey(MappedJwt<R::User>, Box<KeyContext<R>>),
     /// A proxy admin's JWT, with the rows the host converts.
@@ -50,5 +50,3 @@ impl<R: Rows> From<Error> for Refused<R> {
         }
     }
 }
-
-pub type KeyOutcome<R> = Result<KeyIdentity<R>, Refused<R>>;
