@@ -359,7 +359,7 @@ SEARCH_USAGE_WITH_COST: Final = {"search_units": 1, "cost": 0.002}
         ({"litellm_provider": "scaleway", "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.0),
         ({"litellm_provider": "scaleway", "input_cost_per_token": 0.0}, SEARCH_USAGE_WITH_COST, 0.0),
         ({"litellm_provider": "jina_ai", "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.002),
-        ({"litellm_provider": None, "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.0),
+        ({"litellm_provider": None, "input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.002),
         ({"input_cost_per_token": 1e-06}, TOKEN_USAGE_WITH_COST, 0.002),
     ],
 )
