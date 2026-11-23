@@ -568,10 +568,6 @@ const ChatUI: React.FC<ChatUIProps> = ({
     setImagePreviewUrls((prev) => [...prev, ...previews]);
   };
 
-  const handleImageUpload = (file: File): void => {
-    handleImageFiles([file]);
-  };
-
   const handleRemoveImage = (index: number) => {
     if (imagePreviewUrls[index]) {
       URL.revokeObjectURL(imagePreviewUrls[index]);
