@@ -2805,7 +2805,6 @@ class TestTemporaryMCPSessionEndpoints:
             TEMPORARY_MCP_SERVER_TTL_SECONDS,
             add_session_mcp_server,
         )
-
         from litellm.types.mcp_server.mcp_server_manager import MCPServerEventsConfig
 
         settings: Final = MCPServerEventsConfig(enabled=True, allowed_events=("build.*",))
