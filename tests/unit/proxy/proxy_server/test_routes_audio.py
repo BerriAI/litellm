@@ -249,6 +249,34 @@ def test_audio_speech_happy_path(client, auth_as, patched_speech, path):
 
 
 @pytest.mark.parametrize(
+    ("response_cost", "expected_header"), [(0.0, "0.0"), (0.25, "0.25"), (None, None), (math.nan, None)]
+)
+@pytest.mark.usefixtures("patched_speech")
+def test_audio_speech_reports_a_free_clip_as_zero_cost(
+    client: TestClient,
+    auth_as: Callable[[], AbstractContextManager[None]],
+    monkeypatch: pytest.MonkeyPatch,
+    response_cost: float | None,
+    expected_header: str | None,
+) -> None:
+    async def _priced_speech(*args: object, **kwargs: object) -> HttpxBinaryResponseContent:
+        clip: Final = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"\x00\x01\x02"))
+        clip._hidden_params = {"response_cost": response_cost}
+        return clip
+
+    async def _route_request(*args: object, **kwargs: object) -> Awaitable[HttpxBinaryResponseContent]:
+        return _priced_speech()
+
+    monkeypatch.setattr(proxy_server, "route_request", _route_request)
+
+    with auth_as():
+        response: Final = client.post("/v1/audio/speech", json={"model": "tts-1", "input": "Hi", "voice": "alloy"})
+
+    assert response.status_code == 200, response.text
+    assert response.headers.get("x-litellm-response-cost") == expected_header
+
+
+@pytest.mark.parametrize(
     ("patched_speech", "response_format", "expected_content_type"),
     [
         ("audio/wav", "wav", "audio/wav"),

@@ -41,6 +41,57 @@ from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("duration,end_month,end_day", (("1d", 11, 2), ("1mo", 12, 1), ("30d", 12, 1)))
+async def test_scalar_and_window_resets_do_not_reopen_the_fall_back_allowance(
+    duration: str, end_month: int, end_day: int
+) -> None:
+    zone: Final = ZoneInfo("America/New_York")
+    now: Final = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1).astimezone(timezone.utc)
+    first_reset: Final = datetime(2026, 11, 1, 1, 30, tzinfo=zone).astimezone(timezone.utc)
+    expected: Final = datetime(2026, end_month, end_day, 1, 30, tzinfo=zone).astimezone(timezone.utc)
+    settings: Final = BudgetResetSettings(timezone=zone.key, reset_time_of_day=dt_time(1, 30))
+    key: Final = LiteLLM_VerificationToken(
+        token="dst-key", spend=10.0, max_budget=10.0, budget_duration=duration, budget_reset_at=first_reset
+    )
+    window: Final = {"budget_duration": duration, "max_budget": 10.0, "reset_at": first_reset.isoformat()}
+    store: Final = FakeSpendCounters().store()
+    counter: Final = f"spend:key:dst-key:window:{duration}"
+    await store.set(counter, 10.0)
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    scalar: Final = await ResetBudgetJob._reset_budget_for_key(key, now, settings)
+    changed: Final = await _reset_inline_window(window, "dst-key", store, now, settings)
+
+    assert scalar is not None and scalar.spend == 0.0
+    assert scalar.budget_reset_at == expected
+    assert datetime.fromisoformat(str(changed["reset_at"])) == expected
+    assert get_budget_window_start(changed, settings) == first_reset
+    await store.set(counter, 10.0)
+    repeated: Final = await _reset_inline_window(changed, "dst-key", store, now.replace(minute=30), settings)
+    assert repeated == changed
+    assert (await store.read(counter))[0] == 10.0
+
+
+@pytest.mark.parametrize("duration,end_month,end_day", (("1d", 11, 2), ("1mo", 12, 1), ("12mo", 1, 1)))
+def test_budget_table_window_uses_the_sweep_clock(duration: str, end_month: int, end_day: int) -> None:
+    zone: Final = ZoneInfo("America/New_York")
+    now: Final = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1).astimezone(timezone.utc)
+    expected: Final = datetime(
+        2027 if duration == "12mo" else 2026, end_month, end_day, 1, 30, tzinfo=zone
+    ).astimezone(timezone.utc)
+
+    result: Final = ResetBudgetJob._next_window_reset(
+        {"budget_duration": duration, "reset_at": "2026-11-01T05:30:00Z"},
+        now,
+        BudgetResetSettings(timezone=zone.key, reset_time_of_day=dt_time(1, 30)),
+    )
+
+    assert result == expected
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "reset_at,now",
     (
@@ -1190,7 +1241,7 @@ def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
     """A member's cached hierarchy holds the org, team and member spend the
     request path checks, so every member a reset touches, directly or through
     its team or org, is evicted once the cascade lands."""
-    from litellm.proxy.auth.customer_hierarchy_auth import customer_member_cache_key, customer_org_alias_cache_key
+    from litellm.redis.stores.auth_cache import AuthObject
 
     counter_cache = _make_counter_invalidation_job(monkeypatch)
     broadcasts: list[tuple[str, ...]] = []
@@ -1209,9 +1260,9 @@ def test_budget_table_reset_evicts_cached_customer_hierarchies_after_commit(
 
     assert mock_prisma_client.db.batchers[-1].committed is True
     evicted = {call.kwargs["key"] for call in counter_cache.user_api_key_cache.async_delete_cache.await_args_list}
-    assert customer_member_cache_key("member-1") in evicted
-    assert customer_member_cache_key("member-1") in {key for keys in broadcasts for key in keys}
-    assert customer_org_alias_cache_key("org-alias") in {key for keys in broadcasts for key in keys}
+    assert AuthObject.customer_member("member-1").key in evicted
+    assert AuthObject.customer_member("member-1").key in {key for keys in broadcasts for key in keys}
+    assert AuthObject.customer_org_alias("org-alias").key in {key for keys in broadcasts for key in keys}
     descendant_reads = [
         call["where"]
         for call in mock_prisma_client.db.litellm_customermembertable.find_many_calls
@@ -1772,13 +1823,10 @@ def test_reset_budget_windows_rolls_the_key_window_spend_row(monkeypatch):
     assert (entity_type, entity_id, durations) == ("key", "sk-expired", ("1d",))
     assert "spend = 0" in " ".join(query.split())
 
-    # window_start is the start of the window that just began: new reset_at minus the duration.
     written_windows = json.loads(_window_cas_writes(prisma_client)[0][3])
-    new_reset_at = datetime.fromisoformat(written_windows[0]["reset_at"].replace("Z", "+00:00")).replace(tzinfo=None)
-    assert datetime.fromisoformat(starts[0]).replace(tzinfo=None) == pytest.approx(
-        new_reset_at - timedelta(days=1),
-        abs=timedelta(seconds=1),
-    )
+    new_window_start = datetime.fromisoformat(starts[0]).replace(tzinfo=None)
+    assert new_window_start == (now - timedelta(minutes=5)).replace(microsecond=0)
+    assert datetime.fromisoformat(written_windows[0]["window_start"]).replace(tzinfo=None) == new_window_start
 
 
 def test_reset_budget_windows_roll_is_conditional_on_an_older_stored_window(monkeypatch):
@@ -1933,7 +1981,9 @@ async def test_window_cas_retry_uses_fresh_limits_and_preserves_removed_and_unex
     assert json.loads(original_write[2]) == list(windows)
     assert json.loads(retry[2]) == list(fresh)
     updated: Final = json.loads(retry[3])
-    assert updated == [{**fresh[0], "reset_at": updated[0]["reset_at"]}, fresh[1]]
+    assert updated == [
+        {**fresh[0], "reset_at": updated[0]["reset_at"], "window_start": "2024-06-15T00:00:00+00:00"}, fresh[1]
+    ]
     assert datetime.fromisoformat(updated[0]["reset_at"]) > frozen_reset_clock
     assert [roll[3] for roll in _window_spend_rolls(client)] == ([("1d",)] if source.counters else [])
     assert counters.memory == {removed: 12.0, reset: 20.0 if source.counters else 100.0, added: 30.0}
@@ -2029,7 +2079,10 @@ async def test_duplicate_due_windows_apply_each_cap_to_the_shared_counter(
     assert counters.redis == counters.memory == {counter: carried_spend if rollover else 0.0}
     saved: Final = json.loads(_window_cas_writes(client)[0][3])
     assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
-    assert saved == [{**window, "reset_at": saved[0]["reset_at"]} for window in windows]
+    assert saved == [
+        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"}
+        for window in windows
+    ]
     assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
 
 
@@ -2056,7 +2109,9 @@ async def test_duplicate_unexpired_window_does_not_reduce_the_shared_rollover(
     assert counters.redis == counters.memory == {counter: 50.0}
     saved: Final = json.loads(_window_cas_writes(client)[0][3])
     expired_index: Final = 0 if expired_first else 1
-    advanced: Final = {**expired, "reset_at": saved[expired_index]["reset_at"]}
+    advanced: Final = {
+        **expired, "reset_at": saved[expired_index]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"
+    }
     assert datetime.fromisoformat(advanced["reset_at"]) > frozen_reset_clock
     assert saved == ([advanced, upcoming] if expired_first else [upcoming, advanced])
     assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
@@ -2104,7 +2159,10 @@ async def test_duplicate_window_cas_retry_recalculates_from_fresh_limits_and_spe
     assert json.loads(retry[2]) == list(fresh)
     saved: Final = json.loads(retry[3])
     assert datetime.fromisoformat(saved[0]["reset_at"]) > frozen_reset_clock
-    assert saved == [{**window, "reset_at": saved[0]["reset_at"]} for window in fresh]
+    assert saved == [
+        {**window, "reset_at": saved[0]["reset_at"], "window_start": "2024-06-15T10:00:00+00:00"}
+        for window in fresh
+    ]
     assert [roll[3] for roll in _window_spend_rolls(client)] == [("1h",)]
 
 
@@ -2315,6 +2373,7 @@ def _make_counter_invalidation_job(monkeypatch):
     fake_module.spend_counter_store = spend_counter_cache.store()
     fake_module.user_api_key_cache = user_api_key_cache
     fake_module.redis_usage_cache = None
+    fake_module.proxy_config = types.SimpleNamespace(cache_invalidation=None)
     monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
 
     spend_counter_cache.user_api_key_cache = user_api_key_cache  # pyright: ignore[reportAttributeAccessIssue]  # the test reads both caches off one handle
@@ -4544,6 +4603,7 @@ class _EndUserLedger:
             budget_id: types.SimpleNamespace(
                 budget_id=budget_id,
                 max_budget=max_budget,
+                rollover_max_budget=None,
                 budget_duration="1d",
                 budget_reset_at=window,
                 budget_reset_count=0,
@@ -6261,6 +6321,34 @@ async def test_reset_budget_for_litellm_team_members_called():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "duration,start,end,next_end",
+    (
+        ("30d", "2026-07-15T12:00:00Z", "2026-08-14T12:00:00Z", "2026-09-01T04:00:00Z"),
+        ("1d", "2026-10-31T16:00:00Z", "2026-11-01T16:00:00Z", "2026-11-02T05:00:00Z"),
+    ),
+)
+async def test_scheduled_rollover_never_reopens_a_manually_cleared_period(
+    duration: str, start: str, end: str, next_end: str
+) -> None:
+    window: Final = {"budget_duration": duration, "max_budget": 1.0, "window_start": start, "reset_at": end}
+    store: Final = FakeSpendCounters().store()
+    counter: Final = f"spend:key:manual-key:window:{duration}"
+    await store.set(counter, 1.0)
+    client: Final = MagicMock(spec=PrismaClient)
+    client.db = MagicMock()
+    client.db.execute_raw = AsyncMock(return_value=1)
+
+    changed: Final = await _reset_inline_window(
+        window, "manual-key", store, datetime.fromisoformat(end), BudgetResetSettings(timezone="America/New_York")
+    )
+
+    assert get_budget_window_start(changed) == datetime.fromisoformat(end)
+    assert datetime.fromisoformat(str(changed["reset_at"])) == datetime.fromisoformat(next_end)
+    assert (await store.read(counter))[0] == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     "duration,saved,expected",
     (
         ("45m", "2026-07-15T11:30:00Z", "2026-07-15T12:15:00Z"),
@@ -6352,3 +6440,4 @@ async def test_existing_daily_budgets_stay_on_local_midnight_after_fall_back(dur
         assert scalar is not None and scalar.budget_reset_at is not None
         assert scalar.budget_reset_at.astimezone(timezone.utc) == expected
         assert datetime.fromisoformat(str(changed["reset_at"])) == expected
+        assert get_budget_window_start(changed, settings) == boundary

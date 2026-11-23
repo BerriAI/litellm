@@ -24,6 +24,7 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.team import LiteLLM_TeamTable
 from litellm.models.verification_token import LiteLLM_VerificationToken
 from litellm.proxy._types import (
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLMKeyType,
@@ -49,6 +50,7 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset(
         "metadata",
         "team_member_budget",
         "team_member_budget_duration",
+        "team_member_rollover_max_budget",
         "team_member_tpm_limit",
         "team_member_rpm_limit",
     }
@@ -110,6 +112,7 @@ PROXY_CONTROLLED_TEAM_METADATA_KEYS: Final[frozenset[str]] = frozenset(
         "phoenix_project_name",
         "opik",
         "model_limit_max_borrow_multiple",
+        REQUIRED_CUSTOMER_HEADERS_SETTING,
     )
 )
 _NOT_COLUMNS: Final[frozenset[str]] = frozenset({"team_id", "metadata"})
@@ -120,12 +123,19 @@ _SETTINGS_LOCATION: Final = "Settings > UI > Team admin editable fields"
 class TeamMemberDefaults:
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_rollover_max_budget: float | None = None
     team_member_tpm_limit: int | None = None
     team_member_rpm_limit: int | None = None
 
 
 TEAM_MEMBER_DEFAULT_FIELDS: Final[frozenset[str]] = frozenset(
-    {"team_member_budget", "team_member_budget_duration", "team_member_tpm_limit", "team_member_rpm_limit"}
+    {
+        "team_member_budget",
+        "team_member_budget_duration",
+        "team_member_rollover_max_budget",
+        "team_member_tpm_limit",
+        "team_member_rpm_limit",
+    }
 )
 
 
@@ -342,6 +352,7 @@ def team_member_defaults(budget: LiteLLM_BudgetTable | None) -> TeamMemberDefaul
     return TeamMemberDefaults(
         team_member_budget=budget.max_budget,
         team_member_budget_duration=budget.budget_duration,
+        team_member_rollover_max_budget=budget.rollover_max_budget,
         team_member_tpm_limit=budget.tpm_limit,
         team_member_rpm_limit=budget.rpm_limit,
     )
@@ -359,6 +370,11 @@ def _column_changed(
     existing_row: LiteLLM_TeamTable,
     member_defaults: Mapping[str, object],
 ) -> bool:
+    if field == "budget_limits":
+        sent: Final = _budget_windows(submitted.get(field))
+        stored: Final = _budget_windows(existing.get(field))
+        if sent is not None and stored is not None:
+            return sent != stored
     if field == "model_aliases":
         return _as_object(submitted.get(field)) != _stored_model_aliases(existing_row)
     if field in member_defaults:
@@ -374,6 +390,7 @@ def _member_defaults_by_field(member_defaults: TeamMemberDefaults | None) -> Map
         {
             "team_member_budget": stored.team_member_budget,
             "team_member_budget_duration": stored.team_member_budget_duration,
+            "team_member_rollover_max_budget": stored.team_member_rollover_max_budget,
             "team_member_tpm_limit": stored.team_member_tpm_limit,
             "team_member_rpm_limit": stored.team_member_rpm_limit,
         }

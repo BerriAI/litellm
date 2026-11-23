@@ -13,6 +13,7 @@ from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
 from litellm.types.utils import CallTypesLiteral
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging
@@ -49,7 +50,9 @@ def sent_with(anthropic_beta: str, **data: object) -> dict[str, object]:
         litellm_call_id="call",
         function_id="function",
     )
-    sent: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages", headers={"anthropic-beta": anthropic_beta})
+    sent: Final = httpx.Request(
+        "POST", "https://api.anthropic.com/v1/messages", headers={"anthropic-beta": anthropic_beta}
+    )
     logging_obj.model_call_details["httpx_response"] = httpx.Response(200, request=sent)
     logging_obj.post_call(original_response="{}", additional_args={"complete_input_dict": {}})
     return {**data, "litellm_logging_obj": logging_obj}
@@ -106,7 +109,7 @@ async def allows(
 
 @pytest.mark.asyncio
 async def test_the_proxy_starts_with_a_hook_that_keeps_each_thread_with_its_key() -> None:
-    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     proxy_logging._add_proxy_hooks()
     await proxy_logging.post_call_success_hook(
         data={"thread": CREATE}, response=anthropic_message("msg_started"), user_api_key_dict=OWNER
@@ -395,7 +398,10 @@ async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> 
     items: Final = (sse_frame(message_start("msg_streamed_first")), sse_frame({"type": "message_stop"}))
     await served(ownership, items, sent_with("advisor-tool-2026-03-01,message-threads-2026-08-12", thread=CREATE))
     second: Final = await ownership.async_pre_call_hook(
-        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_streamed_first"), call_type="anthropic_messages"
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data=continue_from("msg_streamed_first"),
+        call_type="anthropic_messages",
     )
     assert second is not None
     second_headers: Final = second["extra_headers"]
@@ -406,7 +412,10 @@ async def test_the_create_turns_betas_reach_every_later_turn_of_the_thread() -> 
         response=anthropic_message("msg_second_turn"),
     )
     third: Final = await ownership.async_pre_call_hook(
-        user_api_key_dict=OWNER, cache=DualCache(), data=continue_from("msg_second_turn"), call_type="anthropic_messages"
+        user_api_key_dict=OWNER,
+        cache=DualCache(),
+        data=continue_from("msg_second_turn"),
+        call_type="anthropic_messages",
     )
 
     assert third is not None
@@ -432,7 +441,10 @@ async def test_a_continue_on_chat_or_responses_resends_the_betas_its_create_turn
     assert continued["extra_headers"] == {"anthropic-beta": "advisor-tool-2026-03-01,message-threads-2026-08-12"}
 
 
-CLIENT_BETAS: Final = {"custom_llm_provider": "anthropic,azure_ai", "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"}}
+CLIENT_BETAS: Final = {
+    "custom_llm_provider": "anthropic,azure_ai",
+    "extra_headers": {"anthropic-beta": "context-1m-2025-08-07"},
+}
 CLIENT_VERSION: Final = {"custom_llm_provider": "anthropic", "extra_headers": {"anthropic-version": "2023-06-01"}}
 CLIENT_BETAS_WITH_THE_CREATES: Final = {
     "custom_llm_provider": "anthropic,azure_ai",
@@ -493,7 +505,7 @@ async def test_a_pass_through_continue_is_checked_but_left_unchanged() -> None:
 
 @pytest.mark.asyncio
 async def test_thread_bindings_never_push_the_proxys_rate_limit_counters_out_of_memory() -> None:
-    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=UserApiKeyCache())
     ownership: Final = MessageThreadOwnership(message_thread_owner_cache=proxy_logging.message_thread_owner_cache)
     await proxy_logging.internal_usage_cache.async_set_cache(
         key="rpm-counter", value=1, litellm_parent_otel_span=None, ttl=60
@@ -503,7 +515,9 @@ async def test_thread_bindings_never_push_the_proxys_rate_limit_counters_out_of_
             data={"thread": CREATE}, user_api_key_dict=OWNER, response=anthropic_message(f"msg_{turn}")
         )
 
-    assert await proxy_logging.internal_usage_cache.async_get_cache(key="rpm-counter", litellm_parent_otel_span=None) == 1
+    assert (
+        await proxy_logging.internal_usage_cache.async_get_cache(key="rpm-counter", litellm_parent_otel_span=None) == 1
+    )
     assert await allows(ownership, OWNER, "msg_0")
 
 
@@ -556,3 +570,142 @@ async def test_a_message_start_after_another_event_is_not_read_as_the_threads_me
 
     assert await served(ownership, items, {"thread": CREATE}) == list(items)
     assert not await allows(ownership, OWNER, "msg_late")
+
+
+START_DIAGNOSTICS: Final = {"previous_message_id": None}
+
+
+def compared_with(message_id: str | None, *, in_extra_body: bool = False) -> dict[str, object]:
+    diagnostics: Final = {"previous_message_id": message_id}
+    if in_extra_body:
+        return {"extra_body": {"diagnostics": diagnostics}, "messages": []}
+    return {"diagnostics": diagnostics, "messages": []}
+
+
+async def may_compare(
+    ownership: MessageThreadOwnership,
+    key: UserAPIKeyAuth,
+    data: dict[str, object],
+    call_type: CallTypesLiteral = "anthropic_messages",
+) -> bool:
+    rejected: Final = await comparison_rejection(ownership, key, data, call_type)
+    if rejected is None:
+        return True
+    assert rejected.status_code == 403
+    error: Final = _JSON_OBJECT.validate_json(rejected.detail)["error"]
+    assert isinstance(error, dict)
+    assert error["type"] == "permission_error"
+    assert "previous_message_id" in str(error["message"])
+    return False
+
+
+async def forwarded(
+    ownership: MessageThreadOwnership,
+    key: UserAPIKeyAuth,
+    data: dict[str, object],
+    call_type: CallTypesLiteral = "anthropic_messages",
+) -> dict[str, object]:
+    rescoped: Final = await ownership.async_pre_call_hook(
+        user_api_key_dict=key, cache=DualCache(), data=data, call_type=call_type
+    )
+    return data if rescoped is None else rescoped
+
+
+async def comparison_rejection(
+    ownership: MessageThreadOwnership, key: UserAPIKeyAuth, data: dict[str, object], call_type: CallTypesLiteral
+) -> HTTPException | None:
+    try:
+        await ownership.async_pre_call_hook(user_api_key_dict=key, cache=DualCache(), data=data, call_type=call_type)
+    except HTTPException as rejected:
+        return rejected
+    return None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_extra_body", (False, True), ids=("top_level", "extra_body"))
+async def test_only_the_key_that_got_a_diagnostics_reply_can_compare_against_it(in_extra_body: bool) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"diagnostics": START_DIAGNOSTICS}, user_api_key_dict=OWNER, response=anthropic_message("msg_diag")
+    )
+
+    assert await forwarded(ownership, OWNER, compared_with("msg_diag", in_extra_body=in_extra_body)) == compared_with(
+        "msg_diag", in_extra_body=in_extra_body
+    )
+    assert not await may_compare(ownership, INTRUDER, compared_with("msg_diag", in_extra_body=in_extra_body))
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_starts_with_a_hook_that_keeps_each_diagnostics_reply_with_its_key() -> None:
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging._add_proxy_hooks()
+    await proxy_logging.post_call_success_hook(
+        data={"diagnostics": START_DIAGNOSTICS}, response=anthropic_message("msg_diag_proxy"), user_api_key_dict=OWNER
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=INTRUDER, data=compared_with("msg_diag_proxy"), call_type="anthropic_messages"
+        )
+    assert rejected.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_any_key_can_start_a_diagnostics_comparison() -> None:
+    assert await may_compare(hook(), INTRUDER, compared_with(None))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("in_extra_body", (False, True), ids=("top_level", "extra_body"))
+@pytest.mark.parametrize(
+    "message_id", ("msg_without_diagnostics", "msg_owner_forgotten"), ids=("served_without_diagnostics", "no_owner")
+)
+async def test_a_comparison_against_a_message_with_no_recorded_owner_is_answered_as_a_fresh_comparison(
+    message_id: str, in_extra_body: bool
+) -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={}, user_api_key_dict=OWNER, response=anthropic_message("msg_without_diagnostics")
+    )
+
+    assert await forwarded(ownership, OWNER, compared_with(message_id, in_extra_body=in_extra_body)) == compared_with(
+        None, in_extra_body=in_extra_body
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_comparison_is_left_to_the_upstream_unless_another_key_owns_the_message() -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"diagnostics": START_DIAGNOSTICS}, user_api_key_dict=OWNER, response=anthropic_message("msg_owned")
+    )
+
+    assert await forwarded(
+        ownership, INTRUDER, compared_with("msg_never_bound"), "pass_through_endpoint"
+    ) == compared_with("msg_never_bound")
+    assert not await may_compare(ownership, INTRUDER, compared_with("msg_owned"), "pass_through_endpoint")
+
+
+@pytest.mark.asyncio
+async def test_an_owned_thread_does_not_let_another_keys_diagnostics_comparison_through() -> None:
+    ownership: Final = hook()
+    await ownership.async_post_call_success_hook(
+        data={"thread": CREATE}, user_api_key_dict=INTRUDER, response=anthropic_message("msg_intruder_thread")
+    )
+    await ownership.async_post_call_success_hook(
+        data={"diagnostics": START_DIAGNOSTICS}, user_api_key_dict=OWNER, response=anthropic_message("msg_victim")
+    )
+
+    assert not await may_compare(
+        ownership, INTRUDER, {**continue_from("msg_intruder_thread"), **compared_with("msg_victim")}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_diagnostics_turn_hands_its_message_to_its_key() -> None:
+    ownership: Final = hook()
+    items: Final = (sse_frame(message_start("msg_diag_stream")), sse_frame({"type": "message_stop"}))
+
+    assert await served(ownership, items, {"diagnostics": START_DIAGNOSTICS}) == list(items)
+    assert await may_compare(ownership, OWNER, compared_with("msg_diag_stream"))
+    assert not await may_compare(ownership, INTRUDER, compared_with("msg_diag_stream"))

@@ -16,6 +16,7 @@ import { getBatchIdFromRequestId, getBatchRequestCounts, isBatchCallType } from 
 import type { LogEntry } from "../types";
 import { customerLogIdentity } from "../customerIdentity";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
+import { readMetaString } from "../detail/utils";
 import { AgentBadge, AgentIcon, BatchBadge, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
@@ -23,11 +24,6 @@ export interface RequestLogsTableColumnsDeps {
   onSessionClick: (log: LogEntry) => void;
   resolveUserEmail?: (userId: string) => string | undefined;
 }
-
-const readMetaString = (metadata: Record<string, unknown> | undefined, key: string): string | undefined => {
-  const value = metadata?.[key];
-  return typeof value === "string" && value !== "" ? value : undefined;
-};
 
 const readMcpLogoUrl = (metadata: Record<string, unknown> | undefined): string | undefined => {
   const mcpMetadata = metadata?.["mcp_tool_call_metadata"];

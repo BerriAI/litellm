@@ -1,0 +1,23 @@
+[package]
+name = "litellm-callbacks-spend-log"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-python-compat.workspace = true
+litellm-tracing.workspace = true
+
+base64.workspace = true
+fancy-regex.workspace = true
+num-traits = "0.2"
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+veil.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

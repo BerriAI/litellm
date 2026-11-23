@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -30,6 +30,7 @@ import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, require_get
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.models.team import BudgetLimitEntry
 from litellm.proxy._types import *
@@ -52,14 +53,10 @@ from litellm.proxy.auth.password_policy import (
     validate_passwords_bulk,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import openai_shaped_proxy_exception, proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time, keeps_budget_reset
-from litellm.proxy.common_utils.user_api_key_cache import (
-    AUTH_OBJECTS_TARGET,
-    object_permission_cache_key,
-    user_object_permission_id_cache_key,
-)
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -73,11 +70,13 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     raise_public,
 )
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     require_caller_user_id_for_non_admin,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_rollover_budget_patch,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -104,11 +103,15 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     user_counter,
     user_window_counter,
 )
-from litellm.repositories.budget_limits_repository import BudgetLimitsTransaction, rebase_budget_limits_update
+from litellm.repositories.budget_limits_repository import (
+    BudgetLimitsTransaction,
+    rebase_budget_limits_update,
+)
 from litellm.repositories.chunked_in import find_many_in, update_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -152,6 +155,7 @@ _JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _LOCK_ALL_USERS_SQL: Final = (
     'SELECT 1 AS locked FROM "LiteLLM_UserTable" WHERE TRUE ORDER BY user_id COLLATE "C" FOR UPDATE'
 )
+_LOCK_USER_ROLLOVER_SQL: Final = 'SELECT max_budget, rollover_max_budget, budget_duration FROM "LiteLLM_UserTable" WHERE user_id = $1::text FOR UPDATE'
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -248,6 +252,27 @@ def _strip_password_from_response(response) -> None:
             response["data"].pop("password", None)
         elif hasattr(response.get("data"), "__dict__"):
             response["data"].__dict__.pop("password", None)
+
+
+def _user_update_response(response: Mapping[str, object]) -> Mapping[str, object]:
+    nested: Final = response.get("data")
+    if isinstance(nested, BaseModel) and getattr(nested, "rollover_max_budget", None) is None:
+        return {
+            **response,
+            "data": nested.model_dump(
+                mode="json", by_alias=True, exclude={"password", "rollover_max_budget", "rollover_credit"}
+            ),
+        }
+    row: Final = as_str_mapping(nested)
+    if row is not None and row.get("rollover_max_budget") is None:
+        return {**response, "data": _without_rollover_fields(row)}
+    if nested is None and response.get("rollover_max_budget") is None:
+        return _without_rollover_fields(response)
+    return response
+
+
+def _without_rollover_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in row.items() if key not in {"rollover_max_budget", "rollover_credit"}}
 
 
 def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> dict:
@@ -554,6 +579,7 @@ async def new_user(
     - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
     - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
     - max_budget: Optional[float] - Specify max budget for a given user.
+    - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus unused allowance carried forward. Requires a reset period and must exceed the base budget.
     - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
     - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models). Set to ['no-default-models'] to block all model access. Restricting user to only team-based model access.
     - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -658,6 +684,7 @@ async def new_user(
 
         data_json = data.json()
         data_json = _update_internal_new_user_params(data_json, data)
+        _validate_new_user_rollover(data_json, data.rollover_max_budget)
         # Persist the requested grants as their own row and link it, mirroring key/team creation.
         # generate_key_helper_fn only forwards object_permission_id, so without this the entitlement
         # the caller sent would be dropped on the floor.
@@ -958,16 +985,15 @@ async def _get_user_info_teams(
 _SCIM_DIRECTORY_METADATA_KEYS: Final = SCIM_DIRECTORY_METADATA_KEYS
 
 
-def _redact_scim_enterprise_metadata(
-    metadata: dict[str, object] | None,
-) -> dict[str, object] | None:
+def _redact_scim_enterprise_metadata(metadata: object) -> object:
     """SCIM enterprise attributes, entitlements, and roles are persisted in user
     metadata so reporting can group on them, but they are directory-only fields
     that generic user-info endpoints must not surface; SCIM clients read them
     through the SCIM endpoints."""
-    if not isinstance(metadata, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(metadata):
+    mapping: Final = as_str_mapping(metadata)
+    if not isinstance(mapping, dict) or not _SCIM_DIRECTORY_METADATA_KEYS.intersection(mapping):
         return metadata
-    return {k: v for k, v in metadata.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
+    return {k: v for k, v in mapping.items() if k not in _SCIM_DIRECTORY_METADATA_KEYS}
 
 
 async def _user_budget_limits_usage(
@@ -985,7 +1011,7 @@ async def _user_budget_limits_usage(
 
 def _build_user_info_response(
     user_id: str | None,
-    user_info: Any | None,
+    user_info: object,
     keys: Sequence[LiteLLM_VerificationToken] | None,
     team_list: list[TeamListResponseObject],
     teams_1: list[TeamListResponseObject] | None,
@@ -1001,19 +1027,24 @@ def _build_user_info_response(
     team_list.sort(key=lambda x: getattr(x, "team_alias", "") or "")
 
     _user_info: Final = user_info.model_dump() if isinstance(user_info, BaseModel) else user_info
-    if isinstance(_user_info, dict):
-        _user_info.pop("password", None)
-        _user_info["metadata"] = _redact_scim_enterprise_metadata(_user_info.get("metadata"))
+    info_fields: Final = as_str_mapping(_user_info)
+    if isinstance(info_fields, dict):
+        info_fields.pop("password", None)
+        if info_fields.get("rollover_max_budget") is not None:
+            rollover_user: Final = LiteLLM_UserTable.model_validate(info_fields)
+            info_fields["rollover_credit"] = rollover_user.active_rollover_credit()
+            info_fields["effective_max_budget"] = rollover_user.effective_max_budget()
+        else:
+            info_fields.pop("rollover_max_budget", None)
+            info_fields.pop("rollover_credit", None)
+        info_fields["metadata"] = _redact_scim_enterprise_metadata(info_fields.get("metadata"))
         if model_max_budget_usage is not None:
-            _user_info["model_max_budget_usage"] = model_max_budget_usage
+            info_fields["model_max_budget_usage"] = model_max_budget_usage
         if budget_limits_usage is not None:
-            _user_info["budget_limits_usage"] = budget_limits_usage
+            info_fields["budget_limits_usage"] = budget_limits_usage
 
-    return UserInfoResponse(
-        user_id=user_id,
-        user_info=_user_info,
-        keys=returned_keys,
-        teams=team_list,
+    return UserInfoResponse.model_validate(
+        {"user_id": user_id, "user_info": _user_info, "keys": returned_keys, "teams": team_list}
     )
 
 
@@ -1285,37 +1316,49 @@ async def user_info_v2(
                 detail=f"User not found: {user_id}",
             )
 
-        user_data: Final = user_row.model_dump()
+        user_dump: Final = user_row.model_dump()
+        user_data: Final = require_get(user_dump)
+        row_user_id: Final = user_data.get("user_id", user_id)
+        row_user_key: Final = None if row_user_id is None else f"{row_user_id}"
+        rollover_user: Final = (
+            LiteLLM_UserTable.model_validate(user_dump) if user_data.get("rollover_max_budget") is not None else None
+        )
+        rollover_credit: Final = rollover_user.active_rollover_credit() if rollover_user is not None else None
 
-        return UserInfoV2Response(
-            user_id=user_data.get("user_id", user_id),
-            user_email=user_data.get("user_email"),
-            user_alias=user_data.get("user_alias"),
-            user_role=user_data.get("user_role"),
-            spend=user_data.get("spend", 0.0),
-            max_budget=user_data.get("max_budget"),
-            tpm_limit=user_data.get("tpm_limit"),
-            rpm_limit=user_data.get("rpm_limit"),
-            models=user_data.get("models") or [],
-            budget_duration=user_data.get("budget_duration"),
-            budget_limits=user_data.get("budget_limits"),
-            budget_reset_at=user_data.get("budget_reset_at"),
-            metadata=_redact_scim_enterprise_metadata(user_data.get("metadata")),
-            created_at=user_data.get("created_at"),
-            updated_at=user_data.get("updated_at"),
-            sso_user_id=user_data.get("sso_user_id"),
-            teams=user_data.get("teams") or [],
-            object_permission=user_data.get("object_permission"),
-            model_max_budget=user_data.get("model_max_budget"),
-            model_max_budget_usage=await build_model_max_budget_usage(
-                entity_type=Litellm_EntityType.USER,
-                entity_id=user_data.get("user_id", user_id),
-                model_max_budget=user_data.get("model_max_budget"),
-                cache=model_max_budget_limiter.dual_cache,
-            ),
-            budget_limits_usage=await _user_budget_limits_usage(
-                user_data.get("user_id", user_id), user_data.get("budget_limits")
-            ),
+        return UserInfoV2Response.model_validate(
+            {
+                "user_id": row_user_id,
+                "user_email": user_data.get("user_email"),
+                "user_alias": user_data.get("user_alias"),
+                "user_role": user_data.get("user_role"),
+                "spend": user_data.get("spend", 0.0),
+                "max_budget": user_data.get("max_budget"),
+                "rollover_max_budget": rollover_user.rollover_max_budget if rollover_user is not None else None,
+                "rollover_credit": rollover_credit,
+                "effective_max_budget": rollover_user.effective_max_budget()
+                if rollover_user is not None and rollover_credit is not None
+                else None,
+                "tpm_limit": user_data.get("tpm_limit"),
+                "rpm_limit": user_data.get("rpm_limit"),
+                "models": user_data.get("models") or [],
+                "budget_duration": user_data.get("budget_duration"),
+                "budget_limits": user_data.get("budget_limits"),
+                "budget_reset_at": user_data.get("budget_reset_at"),
+                "metadata": _redact_scim_enterprise_metadata(user_data.get("metadata")),
+                "created_at": user_data.get("created_at"),
+                "updated_at": user_data.get("updated_at"),
+                "sso_user_id": user_data.get("sso_user_id"),
+                "teams": user_data.get("teams") or [],
+                "object_permission": user_data.get("object_permission"),
+                "model_max_budget": user_data.get("model_max_budget"),
+                "model_max_budget_usage": await build_model_max_budget_usage(
+                    entity_type=Litellm_EntityType.USER,
+                    entity_id=row_user_key,
+                    model_max_budget=user_dump.get("model_max_budget"),
+                    cache=model_max_budget_limiter.dual_cache,
+                ),
+                "budget_limits_usage": await _user_budget_limits_usage(row_user_key, user_dump.get("budget_limits")),
+            }
         )
     except Exception as e:
         if isinstance(e, HTTPException) and e.status_code < 500:
@@ -1457,12 +1500,17 @@ def _windows_by_user(
     )
 
 
+def _validate_new_user_rollover(data_json: object, cap: float | None) -> None:
+    if cap is not None:
+        validate_rollover_budget_patch({**(as_str_mapping(data_json) or {}), "rollover_max_budget": cap})
+
+
 def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | UpdateUserRequestNoUserIDorEmail) -> dict:
     non_default_values: Final = {}
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits"):
+        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits", "rollover_max_budget"):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1486,9 +1534,10 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     if "budget_limits" in non_default_values:
         non_default_values["budget_limits"] = budget_windows_json(data.budget_limits, stored=None)
 
-    is_internal_user = False
-    if data.user_role == LitellmUserRoles.INTERNAL_USER:
-        is_internal_user = True
+    if "rollover_max_budget" in data.model_fields_set and data.rollover_max_budget is None:
+        non_default_values["rollover_credit"] = None
+
+    is_internal_user: Final = data.user_role == LitellmUserRoles.INTERNAL_USER
 
     if "budget_duration" in non_default_values:
         validate_budget_duration(non_default_values["budget_duration"])
@@ -1625,8 +1674,8 @@ async def _invalidate_cached_user_entitlement(user_id: str | None, object_permis
     from litellm.proxy.proxy_server import user_api_key_cache
 
     keys: Final = (
-        *(object_permission_cache_key(permission_id) for permission_id in dict.fromkeys(object_permission_ids)),
-        *((user_object_permission_id_cache_key(user_id), user_id) if user_id is not None else ()),
+        *(AuthObject.object_permission(permission_id).key for permission_id in dict.fromkeys(object_permission_ids)),
+        *((AuthObject.user_object_permission(user_id).key, user_id) if user_id is not None else ()),
     )
     await evict_and_broadcast(cache_keys=keys, user_api_key_cache=user_api_key_cache)
 
@@ -1637,14 +1686,25 @@ async def _write_user_update(
     data: Mapping[str, object],
     original: LiteLLM_UserTable | None,
 ) -> Mapping[str, object] | None:
-    if "budget_limits" not in data and "budget_duration" not in data:
+    changes_rollover: Final = bool(data.keys() & ROLLOVER_BUDGET_FIELDS)
+    if "budget_limits" not in data and not changes_rollover:
         return cast(  # cast-ok: the user branch returns a user_id/data dictionary
             "Mapping[str, object] | None",
             await prisma_client.update_data(user_id=user_id, data=data, table_name="user"),
         )
+    if data.keys() & ROLLOVER_BUDGET_FIELDS == {"max_budget"} and "budget_limits" not in data:
+        uncapped: Final = await _user_table(prisma_client).update(
+            where={"user_id": user_id, "rollover_max_budget": None}, data=prisma_client.jsonify_object(data)
+        )
+        if uncapped is not None:
+            return {"user_id": user_id, "data": uncapped}
     async with prisma_client.tx() as transaction:
+        lock_tx: Final = cast("BudgetLimitsTransaction", transaction)  # cast-ok: Prisma implements raw queries
+        if changes_rollover:
+            rows: Final = await lock_tx.query_raw(_LOCK_USER_ROLLOVER_SQL, user_id)
+            validate_rollover_budget_patch(data, rows[0] if rows else {})
         rebased: Final = await rebase_budget_limits_update(
-            cast("BudgetLimitsTransaction", transaction),  # cast-ok: Prisma implements raw transaction queries
+            lock_tx,
             "LiteLLM_UserTable",
             user_id,
             original.budget_limits if original is not None else None,
@@ -1662,7 +1722,7 @@ async def _update_single_user_helper(
     litellm_changed_by: str | None = None,
     password_prevalidated: bool = False,
     hibp_client: AsyncHTTPHandler | None = None,
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Helper function to update a single user.
     Used by both user_update and bulk_user_update endpoints.
@@ -1733,11 +1793,18 @@ async def _update_single_user_helper(
         _sent_fields: Final = user_request.fields_set() if hasattr(user_request, "fields_set") else set()
         _protected_fields: Final = (
             "max_budget",
+            "rollover_max_budget",
             "budget_limits",
             "model_max_budget",
             "soft_budget",
             "spend",
             "object_permission",
+            *(
+                ("budget_duration",)
+                if isinstance(existing_user_row, LiteLLM_UserTable)
+                and existing_user_row.rollover_max_budget is not None
+                else ()
+            ),
         )
         for _field in _protected_fields:
             if _field in non_default_values or _field in _sent_fields:
@@ -1814,6 +1881,7 @@ async def _update_single_user_helper(
                 break  # Update first matching user
         else:
             # Create new user if not found
+            _validate_new_user_rollover(non_default_values, user_request.rollover_max_budget)
             non_default_values["user_id"] = str(uuid.uuid4())
             non_default_values["user_email"] = user_request.user_email
             inserted_user_row: Final = await prisma_client.insert_data(data=non_default_values, table_name="user")
@@ -1877,7 +1945,7 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
-    return dict(response)
+    return _user_update_response(dict(response))
 
 
 def can_user_call_user_update(
@@ -1927,6 +1995,7 @@ async def user_update(
         - send_invite_email: Optional[bool] - Specify if an invite email should be sent.
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
+        - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)
@@ -2012,11 +2081,13 @@ async def bulk_update_processed_users(
                 )
                 # Record success
                 results.append(
-                    UserUpdateResult(
-                        user_id=(response.get("user_id") if response else user_request.user_id),
-                        user_email=user_request.user_email,
-                        success=True,
-                        updated_user=response,
+                    UserUpdateResult.model_validate(
+                        {
+                            "user_id": (response.get("user_id") if response else user_request.user_id),
+                            "user_email": user_request.user_email,
+                            "success": True,
+                            "updated_user": response,
+                        }
                     )
                 )
                 successful_updates += 1
@@ -2194,6 +2265,16 @@ async def bulk_user_update(
             async with prisma_client.tx() as transaction:
                 _ = await transaction.query_raw(_LOCK_ALL_USERS_SQL)
                 locked_users: Final = await user_tx_db(transaction).find_many(order={"created_at": "desc"})
+                if shared_values.keys() & ROLLOVER_BUDGET_FIELDS:
+                    for stored_user in locked_users:
+                        validate_rollover_budget_patch(
+                            shared_values,
+                            {
+                                "max_budget": stored_user.max_budget,
+                                "rollover_max_budget": stored_user.rollover_max_budget,
+                                "budget_duration": stored_user.budget_duration,
+                            },
+                        )
                 windows_by_user: Final[Mapping[str, str]] = (
                     _windows_by_user(locked_users, data.user_updates.budget_limits)
                     if "budget_limits" in non_default_values
@@ -2273,6 +2354,8 @@ async def bulk_user_update(
             except Exception as audit_error:
                 verbose_proxy_logger.warning("Failed to create bulk audit log: %s", audit_error)
 
+        except HTTPException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception("Failed to perform bulk update: %s", e)
             raise HTTPException(status_code=500, detail={"error": str(e)}) from e
@@ -2468,14 +2551,14 @@ async def _authorize_user_list_request(
 _NO_SEARCH_WHERE: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def _user_search_where(search: str | None) -> Mapping[str, object]:
-    """Prisma predicate for `/user/list?search=`: user_id or user_email contains it, case-insensitive."""
+def _user_search_where(search: str | None, *, include_alias: bool = False) -> Mapping[str, object]:
     if not search:
         return _NO_SEARCH_WHERE
     search_where: Final[UserSearchWhere] = {
         "OR": (
             {"user_id": {"contains": search, "mode": "insensitive"}},
             {"user_email": {"contains": search, "mode": "insensitive"}},
+            *(({"user_alias": {"contains": search, "mode": "insensitive"}},) if include_alias else ()),
         )
     }
     return search_where
@@ -3022,7 +3105,7 @@ async def ui_view_users(
     user_email: str | None = fastapi.Query(default=None, description="User email in the request parameters"),
     search: str | None = fastapi.Query(
         default=None,
-        description="Combined search: matches users whose 'user_id' or 'user_email' contains the value (case-insensitive).",
+        description="Case-insensitive search by ID or email, or by alias for proxy admins and admin viewers.",
     ),
     team_id: str | None = fastapi.Query(
         default=None,
@@ -3034,6 +3117,7 @@ async def ui_view_users(
 ):
     """
     Filter users based on partial match of user_id or email, or combined ``search``, with pagination.
+    Proxy admins and admin viewers can also search by alias and receive the alias in results.
 
     Behaviour depends on the ``scope_user_search_to_org`` UI-setting flag
     (stored in the ``litellm_uisettings`` table):
@@ -3085,9 +3169,13 @@ async def ui_view_users(
         if org_filter_ids is not None:
             where_conditions["organization_memberships"] = {"some": {"organization_id": {"in": org_filter_ids}}}
 
+        include_alias: Final = user_api_key_has_admin_view(user_api_key_dict)
         where: Final[Mapping[str, object]] = {
             key: value
-            for key, value in (*where_conditions.items(), *_user_search_where(search).items())
+            for key, value in (
+                *where_conditions.items(),
+                *_user_search_where(search, include_alias=include_alias).items(),
+            )
             if value is not None
         }
 
@@ -3102,7 +3190,12 @@ async def ui_view_users(
         if not users:
             return []
 
-        return [LiteLLM_UserTableFiltered.model_validate(user.model_dump()) for user in users]
+        return [
+            LiteLLM_UserTableFiltered(
+                user_id=user.user_id, user_email=user.user_email, user_alias=user.user_alias if include_alias else None
+            )
+            for user in users
+        ]
 
     except HTTPException:
         raise
