@@ -315,6 +315,7 @@ MCP_STDIO_ALLOWED_COMMANDS: Final[frozenset] = frozenset(
 # MCP OAuth2 Token Exchange (OBO) Defaults
 MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE: Final = get_env_int("MCP_TOKEN_EXCHANGE_CACHE_MAX_SIZE", 500)
 
+SEMANTIC_CACHE_SCOPE_HEADER: Final = "x-litellm-cache-scope"
 LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-semantic-filter",
     "x-litellm-semantic-filter-tools",
@@ -323,6 +324,7 @@ LITELLM_UI_ALLOW_HEADERS: Final = [
     "x-litellm-guardrail-scan-id",
     "x-litellm-guardrail-scan-metadata",
     "x-litellm-cache-key",
+    SEMANTIC_CACHE_SCOPE_HEADER,
 ]
 
 # Gemini model-specific minimal thinking budget constants
@@ -694,6 +696,8 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS: Final[float] = 6000.0
 COMPLETION_HTTP_FALLBACK_SECONDS: Final[float] = 600.0
 HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
+SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
+SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
@@ -736,9 +740,6 @@ FIREWORKS_AI_176_B_MOE: Final = get_env_int("FIREWORKS_AI_176_B_MOE", 176)
 FIREWORKS_AI_4_B: Final = get_env_int("FIREWORKS_AI_4_B", 4)
 FIREWORKS_AI_16_B: Final = get_env_int("FIREWORKS_AI_16_B", 16)
 FIREWORKS_AI_80_B: Final = get_env_int("FIREWORKS_AI_80_B", 80)
-# https://docs.fireworks.ai/guides/prompt-caching (accessed 2026-09-19): serverless cached prompt tokens
-# default to a 50% discount off the input rate
-FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = get_env_int("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50)
@@ -1750,6 +1751,7 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (

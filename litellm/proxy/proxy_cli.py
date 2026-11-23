@@ -783,7 +783,9 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout, max_request_header_size),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(
+                graceful_shutdown_timeout, max_request_header_size, recycle_workers=bool(max_requests_before_restart)
+            ),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
@@ -2048,6 +2050,10 @@ def run_server(
             if single_worker_warning is not None:
                 print_startup_warning(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if max_requests_before_restart is not None:
+                from litellm.proxy.shutdown.recycling_http_protocol import RecyclingHTTPProtocol
+
+                uvicorn_args["http"] = RecyclingHTTPProtocol
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:

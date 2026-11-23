@@ -5,6 +5,7 @@ mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -55,6 +56,11 @@ mod _native {
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::{
+        NativeBilledRates, NativeCallContext, NativePriced, NativePrices, NativeQuote,
+        NativeRateCard, NativeReceipt, NativeTokenUsage,
+    };
+    #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
@@ -94,7 +100,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
+    use crate::redis::store::auth_cache::{
+        NativeAuthCache, NativeTeamRoster, PyAuthObject, PyLocalSizes,
+    };
     #[pymodule_export]
     use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
@@ -164,6 +172,10 @@ mod _native {
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
         )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
+        )?;
         let py = module.py();
         let dict = module.dict();
         dict.set_item(
@@ -219,6 +231,7 @@ mod tests {
                 "NativeSend",
                 "drain_post_call_redis_batches",
                 "NativeAuthCache",
+                "NativeTeamRoster",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",
@@ -268,6 +281,14 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -303,6 +324,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",
