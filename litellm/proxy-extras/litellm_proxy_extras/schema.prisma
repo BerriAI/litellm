@@ -2361,6 +2361,16 @@ model LiteLLM_BackgroundResponseSettlement {
   settled_at  DateTime @default(now())
 }
 
+model LiteLLM_BackgroundResponseCreator {
+  response_id           String    @id
+  upstream_url          String
+  create_context        Json
+  created_at            DateTime  @default(now())
+  poll_lease_expires_at DateTime?
+
+  @@index([created_at], map: "idx_background_response_creator_created_at")
+}
+
 model LiteLLM_Lens {
   reviews LiteLLM_LensReview[]
   id      String @id

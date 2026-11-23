@@ -94,7 +94,9 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyAuthObject, PyLocalSizes};
+    use crate::redis::store::auth_cache::{
+        NativeAuthCache, NativeTeamRoster, PyAuthObject, PyLocalSizes,
+    };
     #[pymodule_export]
     use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
@@ -219,6 +221,7 @@ mod tests {
                 "NativeSend",
                 "drain_post_call_redis_batches",
                 "NativeAuthCache",
+                "NativeTeamRoster",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
                 "AuthObject",

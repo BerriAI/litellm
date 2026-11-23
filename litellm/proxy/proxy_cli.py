@@ -24,7 +24,11 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
+)
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -458,8 +462,9 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
-        if keepalive_timeout is not None:
-            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        uvicorn_args["timeout_keep_alive"] = (
+            DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS if keepalive_timeout is None else keepalive_timeout
+        )
         if timeout_worker_healthcheck is not None:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
@@ -778,7 +783,9 @@ class ProxyInitializationHelpers:
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout, max_request_header_size),
+            "worker_class": build_graceful_shutdown_uvicorn_worker(
+                graceful_shutdown_timeout, max_request_header_size, recycle_workers=bool(max_requests_before_restart)
+            ),
             "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
@@ -889,7 +896,11 @@ class ProxyInitializationHelpers:
             ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
             if server is Server.GUNICORN
             else (
-                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                (
+                    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+                    if server is Server.UVICORN
+                    else uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                )
                 if keepalive_timeout is None
                 else keepalive_timeout,
                 uvicorn_trusted_proxies(None),
@@ -2039,6 +2050,10 @@ def run_server(
             if single_worker_warning is not None:
                 print_startup_warning(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
+            if max_requests_before_restart is not None:
+                from litellm.proxy.shutdown.recycling_http_protocol import RecyclingHTTPProtocol
+
+                uvicorn_args["http"] = RecyclingHTTPProtocol
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
             if max_requests_before_restart_jitter is not None:
@@ -2086,10 +2101,17 @@ def run_server(
                         "and an OS other than Windows, so only a single worker reloads.\033[0m"
                     )
                 uvicorn_args.update(worker_overrides)
-            uvicorn.run(
-                **uvicorn_args,
-                workers=num_workers,
-            )
+            if max_requests_before_restart is None:
+                uvicorn.run(**uvicorn_args, workers=num_workers)
+            else:
+                from litellm.proxy import dev_reload
+
+                dev_reload.run_uvicorn_with_recycling(
+                    dev_reload.RELOAD_OPTIONS.validate_python(
+                        {"reload": False, "reload_dirs": (), "reload_includes": (), **uvicorn_args}
+                    ),
+                    workers=TypeAdapter(int).validate_python(num_workers),
+                )
         elif run_gunicorn is True:
             from litellm.proxy.rust_forward.peer import wrap
 
