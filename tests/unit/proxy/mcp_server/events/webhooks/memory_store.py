@@ -187,7 +187,8 @@ class MemoryStore:
             and (query.status is None or row.status == query.status)
             and (not query.live_only or row.status in LIVE_STATUSES)
         )
-        return matching[query.offset : query.offset + query.limit]
+        ordered: Final = sorted(matching, key=lambda row: row.id) if query.live_only else matching
+        return tuple(ordered[query.offset : query.offset + query.limit])
 
     async def due_for_upstream_refresh(self, before: datetime) -> tuple[SubscriptionRow, ...]:
         return ()

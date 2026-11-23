@@ -183,6 +183,7 @@ class KeyManagementEventHooks:
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
+        await KeyManagementEventHooks._terminate_mcp_event_subscriptions((existing_key_row.token,))
         # store the audit log
         if is_audit_logging_enabled() and existing_key_row.token is not None:
             asyncio.create_task(
@@ -261,6 +262,7 @@ class KeyManagementEventHooks:
             litellm_changed_by=litellm_changed_by,
         )
         await KeyManagementEventHooks._delete_virtual_keys_from_secret_manager(keys_being_deleted=keys_being_deleted)
+        await KeyManagementEventHooks._terminate_mcp_event_subscriptions(tuple(key.token for key in keys_being_deleted))
 
     @staticmethod
     def create_key_deleted_audit_logs(
@@ -311,6 +313,15 @@ class KeyManagementEventHooks:
                 create_audit_logs_for_updates(audit_rows), name=f"{len(audit_rows)} deleted key audit logs"
             )
         )
+
+    @staticmethod
+    async def _terminate_mcp_event_subscriptions(token_hashes: Sequence[str | None]) -> None:
+        try:
+            from litellm.proxy.mcp_server.events.admin import terminate_key_subscriptions
+            from litellm.proxy.mcp_server.events.config import events_settings
+        except ImportError:
+            return
+        await terminate_key_subscriptions(token_hashes, notify=events_settings().enabled)
 
     @staticmethod
     async def _store_virtual_key_in_secret_manager(secret_name: str, secret_token: str, team_id: str | None = None):

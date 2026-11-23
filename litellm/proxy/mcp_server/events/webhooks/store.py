@@ -435,7 +435,10 @@ class PrismaEventStore:
         }
         live: Final = {"status": {"in": list(LIVE_STATUSES)}} if query.live_only and query.status is None else {}
         records: Final = await self._subscriptions.find_many(
-            where={**where, **live}, take=query.limit, skip=query.offset, order={"created_at": "desc"}
+            where={**where, **live},
+            take=query.limit,
+            skip=query.offset,
+            order={"id": "asc"} if query.live_only else [{"created_at": "desc"}, {"id": "asc"}],
         )
         return tuple(_row_from_record(record) for record in records)
 

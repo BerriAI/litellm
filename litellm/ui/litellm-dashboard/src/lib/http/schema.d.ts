@@ -22697,6 +22697,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/events/subscriptions/{subscription_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Subscription */
+        delete: operations["delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/events/subscriptions/{subscription_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Test Event
+         * @description Send one signed test event to an active webhook subscription's callback URL.
+         *
+         *     The event carries `data` from the body, or `{"test": true}` when the body is empty, and is signed with
+         *     the subscription's secret like a real delivery. The response reports whether the callback answered 2xx.
+         */
+        post: operations["send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/events/types": {
         parameters: {
             query?: never;
@@ -52676,6 +52716,22 @@ export interface components {
             } | null;
             /** Success */
             success: boolean;
+        };
+        /** TestDeliveryResult */
+        TestDeliveryResult: {
+            /** Delivered */
+            delivered: boolean;
+            /** Error */
+            error?: ("connection_refused" | "timeout" | "tls_error" | "http_4xx" | "http_5xx" | "challenge_failed") | null;
+            /** Status */
+            status?: number | null;
+        };
+        /** TestEventRequest */
+        TestEventRequest: {
+            /** Data */
+            data?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * TestPoliciesAndGuardrailsRequest
@@ -90076,6 +90132,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_subscription_v1_mcp_events_subscriptions__subscription_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_test_event_v1_mcp_events_subscriptions__subscription_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                subscription_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["TestEventRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TestDeliveryResult"];
                 };
             };
             /** @description Validation Error */
