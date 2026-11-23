@@ -1872,9 +1872,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         if len(choices) == 0 and raw_response.status == "completed":
-            completed_items: Final = cast(
-                "Sequence[object]", output_items
-            )  # cast-ok: ResponsesAPIResponse.output is partially untyped
+            completed_items: Final = cast("Sequence[object]", output_items)  # cast-ok: output is partially untyped
             if _holds_only_reasoning_items(completed_items):
                 choices.append(self._build_empty_choice(completed_items, "stop"))
 
