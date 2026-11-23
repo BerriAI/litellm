@@ -41,10 +41,10 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = litellm_params.api_key or os.getenv("DATABRICKS_API_KEY")
         api_base: Final = litellm_params.api_base or os.getenv("DATABRICKS_API_BASE")
@@ -67,7 +67,7 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         api_base = api_base or os.getenv("DATABRICKS_API_BASE")
         api_base = self._get_api_base(api_base)
@@ -77,10 +77,10 @@ class DatabricksResponsesAPIConfig(DatabricksBase, OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform request for Databricks Responses API.
 
