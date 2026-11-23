@@ -7581,14 +7581,8 @@ def get_model_info_helper(
                and strip it. Tried last so no model that already resolves through 1-6 can change.
             """
 
-            lookup_order: Final = _model_cost_lookup_order(model, potential_model_names)
-            strict_lookup: Final = _first_registered_match(lookup_order, model_cost_custom_llm_provider)
-            # AI21 chat calls resolve to ai21_chat while the catalog prices them under ai21. Catalog-only lookups
-            # decide where register_model writes land, so they keep the strict match.
-            lookup: Final = (
-                _first_registered_match(lookup_order, "ai21")
-                if strict_lookup[1] is None and not catalog_only and model_cost_custom_llm_provider == "ai21_chat"
-                else strict_lookup
+            lookup: Final = _first_registered_match(
+                _model_cost_lookup_order(model, potential_model_names), model_cost_custom_llm_provider
             )
             key: str | None = lookup[0]
             _model_info: dict[str, Any] | None = lookup[1]

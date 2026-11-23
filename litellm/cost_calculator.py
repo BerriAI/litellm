@@ -3,7 +3,7 @@
 import logging
 import math
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from itertools import accumulate
@@ -1103,6 +1103,13 @@ def _routed_model_pricing_provider(
     if not azure_ai_is_model_router_name(request_model) or _resolves_to_rates(served_model, "azure"):
         return None
     return "azure_ai" if _resolves_to_rates(served_model, "azure_ai") else None
+
+
+def _cost_or_none(price: Callable[[], float]) -> float | None:
+    try:
+        return price()
+    except Exception:  # noqa: BLE001  # completion_cost raises plain Exception for an unmapped model
+        return None
 
 
 def _pricing_provider_for_cost_candidate(
@@ -2590,8 +2597,48 @@ def completion_cost(
                 verbose_logger.debug(
                     "litellm.cost_calculator.py::completion_cost() - Error calculating cost for model=%s - %s", model, e
                 )
-                if idx == len(potential_model_names) - 1:
-                    raise e
+                if idx < len(potential_model_names) - 1:
+                    continue
+                # Every AI21 catalog row is priced under ai21 while AI21 calls route as ai21_chat. Retrying under ai21
+                # only after every ai21_chat candidate missed keeps registered ai21_chat and provider-less prices first.
+                if (
+                    custom_llm_provider == "ai21_chat"
+                    and (
+                        ai21_catalog_cost := _cost_or_none(
+                            lambda: completion_cost(
+                                completion_response=completion_response,
+                                model=requested_model,
+                                prompt=prompt,
+                                messages=messages,
+                                completion=completion,
+                                total_time=total_time,
+                                call_type=call_type,
+                                custom_llm_provider="ai21",
+                                region_name=region_name,
+                                size=size,
+                                quality=quality,
+                                n=n,
+                                custom_cost_per_token=custom_cost_per_token,
+                                custom_cost_per_second=custom_cost_per_second,
+                                requested_model_info_override=requested_model_info_override,
+                                optional_params=optional_params,
+                                custom_pricing=custom_pricing,
+                                base_model=base_model,
+                                standard_built_in_tools_params=standard_built_in_tools_params,
+                                litellm_model_name=litellm_model_name,
+                                router_model_id=router_model_id,
+                                litellm_logging_obj=litellm_logging_obj,
+                                pricing_provider="ai21",
+                                service_tier=service_tier,
+                                data_residency=data_residency,
+                                vertex_location=vertex_location,
+                            )
+                        )
+                    )
+                    is not None
+                ):
+                    return ai21_catalog_cost
+                raise e
         raise Exception(f"Unable to calculate cost for received potential model names - {potential_model_names}")
     except Exception as e:
         raise e
