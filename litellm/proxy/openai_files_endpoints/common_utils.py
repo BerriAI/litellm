@@ -717,7 +717,7 @@ def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
 def router_default_drop_params(
     llm_router: Optional["Router"], request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    if llm_router is None or "drop_params" in request:
+    if llm_router is None or request.get("drop_params") is not None:
         return MappingProxyType({})
     router_defaults: Final = cast(  # cast-ok: the Router stores default_litellm_params as an untyped dict
         Mapping[str, object], llm_router.default_litellm_params
