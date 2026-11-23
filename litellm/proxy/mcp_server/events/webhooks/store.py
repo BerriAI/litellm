@@ -59,7 +59,7 @@ class QueuedDelivery(BaseModel):
     claim_id: str | None = None
 
 
-class ActivatedCursor(BaseModel):
+class ActivatedCursor(BaseModel, frozen=True):
     cursor: str | None
 
 
