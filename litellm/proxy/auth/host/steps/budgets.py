@@ -135,7 +135,7 @@ class BudgetChecks:
         membership: Final = await self._team_membership(self.prisma_client, user_id, team_id)
         if membership is None or membership.litellm_budget_table is None:
             return
-        max_budget: Final = membership.litellm_budget_table.effective_max_budget(now=datetime.now(timezone.utc))
+        max_budget: Final = membership.effective_budget_with_rollover(now=datetime.now(timezone.utc))
         if max_budget is None or max_budget <= 0:
             return
         from litellm.proxy.proxy_server import get_current_spend  # noqa: PLC0415  # proxy global

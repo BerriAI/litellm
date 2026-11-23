@@ -160,8 +160,8 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
-_RequestInputT: Final = TypeVar("_RequestInputT")
-_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
+_RequestInputT = TypeVar("_RequestInputT")
+_StreamEventT = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(
@@ -170,9 +170,19 @@ def _provider_mapped_params(
     model: str,
     drop_params: bool,
     declared_reasoning_efforts: Collection[str] | None,
+    allowed_openai_params: Collection[str],
 ) -> Mapping[str, object]:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedResponsesParams
 
+    if isinstance(config, MapsAllowedResponsesParams):
+        return config.map_openai_params_for_deployment(
+            params,
+            model,
+            drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
+        )
     if (
         declared_reasoning_efforts is not None
         and isinstance(config, OpenAIResponsesAPIConfig)
@@ -364,6 +374,7 @@ class ResponsesAPIRequestUtils:
                 model,
                 should_drop_params,
                 declared_reasoning_efforts,
+                allowed_openai_param_names(allowed_openai_params),
             ),
             strict=True,
         )

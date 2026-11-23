@@ -50,7 +50,7 @@ from litellm.types.proxy.management_endpoints.customer_hierarchy import (
 )
 from litellm.types.proxy.management_endpoints.management_v1 import ListMeta, ListResponse, ProblemDetail
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 
 _ERROR_DETAILS: Final[Mapping[ErrorCode, tuple[int, str, str]]] = MappingProxyType(

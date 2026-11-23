@@ -96,7 +96,7 @@ def resolve_inference_model(
         case "body":
             return body_model
         case "path":
-            return endpoint_model
+            return endpoint_model or body_model
         case "completion":
             return settings.get("completion_model") or cli_model or endpoint_model or body_model
     return assert_never(kind)

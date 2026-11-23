@@ -107,6 +107,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (  # pyright: ignore[reportAttributeAccessIssue]
     AllMessageValues,
     AsyncCursorPage,
+    BatchInputFormat,
     ChatCompletionFileObject,
     CreateFileRequest,
     FileListPage,
@@ -2903,7 +2904,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         managed_file: Final = await self.get_unified_file_id(file_id, litellm_parent_otel_span)
         if managed_file is not None and managed_file.storage_backend and managed_file.storage_url:
-            return await self._storage_backend_content(managed_file.storage_backend, managed_file.storage_url)
+            return await self._storage_backend_content(
+                managed_file.storage_backend,
+                managed_file.storage_url,
+                managed_file.file_object.purpose if managed_file.file_object else None,
+            )
 
         model_file_id_mapping = data.pop("model_file_id_mapping", None)
         model_file_id_mapping = model_file_id_mapping or await self.get_model_file_id_mapping(
@@ -2942,10 +2947,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
-    async def _storage_backend_content(self, storage_backend_name: str, storage_url: str) -> HttpxBinaryResponseContent:
+    async def _storage_backend_content(
+        self, storage_backend_name: str, storage_url: str, purpose: str | None
+    ) -> HttpxBinaryResponseContent:
         storage_backend: Final = get_storage_backend(storage_backend_name, prisma_client=self.prisma_client)
         content: Final = await storage_backend.download_file(storage_url)
-        return HttpxBinaryResponseContent(response=httpx.Response(status_code=httpx.codes.OK, content=content))
+        return HttpxBinaryResponseContent(
+            response=httpx.Response(status_code=httpx.codes.OK, content=content),
+            batch_input_format=BatchInputFormat.OPENAI if purpose == "batch" else BatchInputFormat.UNKNOWN,
+        )
 
     async def _convert_storage_files_to_base64(
         self,

@@ -130,7 +130,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
 from litellm.utils import clamp_max_tokens
 
-_RaisedT: Final = TypeVar("_RaisedT", bound=Exception)
+_RaisedT = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(_native.messages_optional_params())
 

@@ -18,4 +18,6 @@ pub enum Error {
     RouterConfig(#[from] litellm_router_core::ConfigError),
     #[error(transparent)]
     Router(#[from] litellm_router_core::Error),
+    #[error(transparent)]
+    Callback(#[from] crate::callbacks::Unregistrable),
 }

@@ -12,7 +12,7 @@ use litellm_spend_log_writer::PgLedgerStore;
 use pyo3::prelude::*;
 
 use crate::{
-    logger::NativeTokenRedactor, redis::store::spend_counters::NativeSpendCounters,
+    redaction::NativeTokenRedactor, redis::store::spend_counters::NativeSpendCounters,
     spend_log_writer::RustSpendLogWriter,
 };
 

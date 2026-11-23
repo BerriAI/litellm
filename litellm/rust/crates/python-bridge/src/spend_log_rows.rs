@@ -12,7 +12,7 @@ use litellm_callbacks_spend_log::{
 use litellm_host_python::{from_py_argument, release_gil, to_py};
 use pyo3::{exceptions::PyValueError, prelude::*};
 
-use crate::logger::NativeTokenRedactor;
+use crate::redaction::NativeTokenRedactor;
 
 fn row_error(error: RowError) -> PyErr {
     PyValueError::new_err(error.to_string())
