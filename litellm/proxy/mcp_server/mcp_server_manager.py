@@ -2006,7 +2006,7 @@ class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
 
 
-_Gathered: Final = TypeVar("_Gathered")
+_Gathered = TypeVar("_Gathered")
 
 
 async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:

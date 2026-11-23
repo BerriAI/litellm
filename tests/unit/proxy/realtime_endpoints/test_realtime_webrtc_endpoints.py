@@ -1964,7 +1964,9 @@ def test_realtime_calls_meter_the_call_on_a_sideband_for_the_key_that_minted_the
 
     started: Final[list[tuple[str, str | None, str | None]]] = []
 
-    async def _record(call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None) -> bool:
+    async def _record(
+        call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None, is_translation: bool = False
+    ) -> bool:
         started.append((call_id, caller_auth.token, deployment_id))
         return True
 
@@ -1995,6 +1997,60 @@ def test_realtime_calls_meter_the_call_on_a_sideband_for_the_key_that_minted_the
     assert response.status_code == 201, response.text
     assert response.headers.get("location") == location
     assert started == expected_sidebands
+
+
+@pytest.mark.parametrize(
+    ("sideband_joins", "expected_status"), [(True, 201), (False, 503)], ids=["metered", "refused-when-unmetered"]
+)
+def test_translation_calls_are_metered_on_a_translation_sideband(
+    proxy_app,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+    sideband_joins: bool,
+    expected_status: int,
+) -> None:
+    from litellm.proxy.realtime_endpoints import endpoints as realtime_endpoints
+
+    started: Final[list[tuple[str, str | None, bool]]] = []
+
+    async def _record(
+        call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None, is_translation: bool = False
+    ) -> bool:
+        started.append((call_id, caller_auth.token, is_translation))
+        return sideband_joins
+
+    monkeypatch.setattr(realtime_endpoints, "_start_realtime_billing_sideband", _record)
+    encrypted_token: Final = encrypt_value_helper(
+        _encode_realtime_token_payload(
+            ephemeral_key="fake_upstream_epk",
+            model_id="gpt-realtime-translate",
+            user_id=None,
+            team_id=None,
+            expires_at=int(time.time()) + 3600,
+            session_type="translation",
+            caller_auth={"token": "caller-key-hash"},
+        )
+    )
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.route_request",
+            side_effect=_upstream_sdp_answer_route("/v1/realtime/translations/calls/rtc_abc"),
+        ),
+        patch("litellm.proxy.proxy_server.add_litellm_data_to_request", side_effect=mock_add_litellm_data),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_logging.post_call_failure_hook = AsyncMock()
+        response: Final = TestClient(proxy_app).post(
+            "/v1/realtime/translations/calls",
+            headers={"Authorization": f"Bearer {encrypted_token}"},
+            content=b"v=0\r\n",
+        )
+
+    assert response.status_code == expected_status, response.text
+    assert started == [("rtc_abc", "caller-key-hash", True)]
 
 
 def test_realtime_calls_refuse_a_call_the_proxy_could_not_join_to_meter(
@@ -2185,7 +2241,9 @@ def test_realtime_calls_read_the_minting_key_as_it_is_stored_when_the_call_start
 
     started: Final[list[tuple[str | None, str | None, int | None, str | None]]] = []
 
-    async def _record(call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None) -> bool:
+    async def _record(
+        call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None, is_translation: bool = False
+    ) -> bool:
         started.append((caller_auth.token, caller_auth.team_id, caller_auth.rpm_limit, caller_auth.end_user_id))
         return True
 
@@ -2211,7 +2269,9 @@ def test_realtime_calls_read_the_minting_key_as_it_is_stored_when_the_call_start
     assert started == expected_caller
 
 
+@pytest.mark.parametrize("route", ["/v1/realtime", "/v1/realtime/translations"], ids=["realtime", "translation"])
 def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(
+    route: str,
     proxy_app: FastAPI,
     mock_add_litellm_data: AddLitellmDataToRequest,
     mock_pre_call_hook: PreCallHook,
@@ -2249,7 +2309,9 @@ def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(
     )
     metered_on: Final[list[str | None]] = []  # mutable-ok: collects the deployment each sideband was pinned to
 
-    async def _record(call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None) -> bool:
+    async def _record(
+        call_id: str, model: str, caller_auth: UserAPIKeyAuth, deployment_id: str | None, is_translation: bool = False
+    ) -> bool:
         metered_on.append(deployment_id)
         return True
 
@@ -2272,13 +2334,13 @@ def test_a_webrtc_call_stays_on_the_deployment_that_minted_its_client_secret(
         logging.post_call_failure_hook = AsyncMock()
         for _ in range(8):
             minted = client.post(
-                "/v1/realtime/client_secrets",
+                f"{route}/client_secrets",
                 headers={"Authorization": "Bearer sk-test-master-key"},
                 json={"model": "realtime-group"},
             )
             assert minted.status_code == 200, minted.text
             answered = client.post(
-                "/v1/realtime/calls",
+                f"{route}/calls",
                 headers={"Authorization": f"Bearer {minted.json()['value']}"},
                 content=b"v=0\r\n",
             )

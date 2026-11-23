@@ -9,7 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream};
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde_json::{Map, Value};
 
@@ -28,11 +28,27 @@ pub enum CallType {
     Aocr,
 }
 
-/// A call a callback refused, in that callback's status and words.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A call a callback refused, as the proxy's `ProxyException` carries it to a route's handler.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Refusal {
     pub status: StatusCode,
     pub message: String,
+    /// The exception's `type`, when it is not the one its status gives.
+    pub kind: Option<String>,
+    /// The exception's `code`, when it is not its status.
+    pub code: Option<String>,
+    /// In the order Python sends them.
+    pub headers: Vec<(String, String)>,
+}
+
+impl Refusal {
+    pub fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            ..Self::default()
+        }
+    }
 }
 
 /// How a hook ended a call: a callback refused it, or one failed on a hook where the proxy raises
@@ -117,7 +133,7 @@ impl Told {
 /// tells the hooks it failed.
 pub(crate) async fn around<H, F, Fut>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
+    identity: &Authenticated<H::Rows>,
     call_type: CallType,
     body: Map<String, Value>,
     serve: F,

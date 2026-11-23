@@ -16,7 +16,7 @@ use axum::{
 use litellm_config::{Config, Environment};
 use litellm_env::Lookup;
 use litellm_gateway::{Admit, AppState, Refused, Resources};
-use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
+use litellm_tracing::{KeyLength, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use serde_json::json;
 use tower::{Layer, Service};
 
@@ -55,15 +55,39 @@ impl Sink for StderrSink {
 async fn main() -> Result<(), Box<dyn Error>> {
     litellm_gateway::install_crypto_provider();
     let process = Process::from_env(std::env::vars_os())?;
-    Logger::new(StderrSink {
-        level: process.log_level,
-    })
-    .install_global()?;
+    let scrubbed = Scrubbed::new(
+        StderrSink {
+            level: process.log_level,
+        },
+        process.minimum_custom_key_length,
+    );
+    let key_length = scrubbed.key_length();
+    Logger::new(scrubbed).install_global()?;
     match process.mode {
-        Mode::InFrontOfPython(forward) => in_front_of_python(forward, &process.environment).await,
-        Mode::Standalone(settings) => {
-            standalone(settings, &process.environment, process.log_level).await
+        Mode::InFrontOfPython(forward) => {
+            in_front_of_python(forward, &process.environment, &key_length).await
         }
+        Mode::Standalone(settings) => {
+            standalone(
+                settings,
+                &process.environment,
+                process.log_level,
+                &key_length,
+            )
+            .await
+        }
+    }
+}
+
+/// The log is installed before the config is read, so it starts with the process's key length. The config's
+/// environment can set it too, and authentication reads it from there, so the log follows once the config is in.
+fn scrub_at_the_configs_key_length(key_length: &KeyLength, environment: &dyn Lookup) {
+    if let Some(length) = environment
+        .get("MINIMUM_CUSTOM_KEY_LENGTH")
+        .as_deref()
+        .and_then(process::key_length)
+    {
+        key_length.set(length);
     }
 }
 
@@ -72,9 +96,11 @@ async fn standalone(
     settings: Standalone,
     environment: &Environment,
     log_level: Level,
+    key_length: &KeyLength,
 ) -> Result<(), Box<dyn Error>> {
     let config = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
+    scrub_at_the_configs_key_length(key_length, &*state.environment);
     let admit = Arc::new(Admit::new(&config, environment, &state));
     let app = alone(native(state.clone(), &config, environment), admit);
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
@@ -199,10 +225,12 @@ async fn admitted_state(
 async fn in_front_of_python(
     forward: litellm_gateway_forward::Settings,
     environment: &Environment,
+    key_length: &KeyLength,
 ) -> Result<(), Box<dyn Error>> {
     let stdin_closed = litellm_gateway_forward::input_closed(std::io::stdin());
     let loaded = pythons_config(forward.config.as_deref()).await;
     let (config, state, admit) = native_state(loaded, environment).await?;
+    scrub_at_the_configs_key_length(key_length, &*state.environment);
     let ran = litellm_gateway_forward::run(
         forward,
         native(state.clone(), &config, environment),
@@ -427,6 +455,46 @@ mod tests {
 
         assert_eq!(refused(admit).await, Some("configuration"));
         state.close().await;
+    }
+
+    struct Lines(std::sync::mpsc::Sender<String>);
+
+    impl Sink for Lines {
+        fn enabled(&self, _: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn emit(&self, record: &Record) {
+            self.0.send(record.message.clone()).unwrap();
+        }
+    }
+
+    #[rstest]
+    #[case::unset("model_list: []\n", "key sk-abcde rejected")]
+    #[case::config_environment_variables(
+        "model_list: []\nenvironment_variables:\n  MINIMUM_CUSTOM_KEY_LENGTH: \"8\"\n",
+        "key REDACTED rejected"
+    )]
+    #[tokio::test]
+    async fn the_log_scrubs_keys_at_the_length_the_config_exports(
+        #[case] yaml: &str,
+        #[case] logged: &str,
+    ) {
+        litellm_gateway::install_crypto_provider();
+        let config = Config::from_yaml(yaml).unwrap();
+        let state = AppState::build(&config, &Environment::default())
+            .await
+            .unwrap();
+        let (sender, lines) = std::sync::mpsc::channel();
+        let scrubbed = Scrubbed::new(Lines(sender), 16);
+        let key_length = scrubbed.key_length();
+        let logger = Logger::new(scrubbed);
+
+        scrub_at_the_configs_key_length(&key_length, &*state.environment);
+        logger.scope(|| tracing::warn!("key sk-abcde rejected"));
+
+        state.close().await;
+        assert_eq!(lines.try_recv().unwrap(), logged);
     }
 
     #[rstest]

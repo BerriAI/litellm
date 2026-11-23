@@ -4,9 +4,9 @@ use std::{
 };
 
 use axum::{body::Body, http::Request};
-use litellm_config::Config;
+use litellm_config::{Config, Environment};
 use litellm_db::{Endpoint, PoolLimits, Pools, SslMode};
-use litellm_gateway::{AppState, Gateway, RedisClients, Resources};
+use litellm_gateway::{AppState, Inference, RedisClients, Resources};
 use litellm_gateway_inference::Error;
 use litellm_http::ClientVariant;
 use litellm_license::Entitlements;
@@ -35,14 +35,16 @@ impl Sink for LogSink {
     }
 }
 
-async fn inference_for(config: &Config) -> Arc<Gateway> {
+async fn inference_for(config: &Config) -> Inference {
     litellm_gateway::build_inference(
         config,
+        &Environment::default(),
         &Resources::build(config).unwrap(),
         litellm_gateway_inference::RoutingCache::new(
             None,
             litellm_gateway_inference::RouterTiers::default(),
         ),
+        &RedisClients::default(),
     )
     .await
     .unwrap()
@@ -58,15 +60,17 @@ fn global(router: axum::Router) -> axum::Router {
 }
 
 #[fixture]
-async fn inference() -> Arc<Gateway> {
+async fn inference() -> Inference {
     inference_for(&Config::from_yaml("model_list: []").unwrap()).await
 }
 
-fn without_stores(inference: Arc<Gateway>) -> AppState {
+fn without_stores(inference: Inference) -> AppState {
     AppState {
-        inference,
+        key_limiter: inference.key_limiter,
+        inference: inference.gateway,
         redis: RedisClients::default(),
         database: None,
+        keys: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
     }
@@ -84,7 +88,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
 #[case::unconfigured("/v1/messages", &[("authorization", "Bearer gateway-key")], None, 500, None)]
 #[tokio::test]
 async fn authenticates_before_serving_mounted_inference_routes(
-    #[future(awt)] inference: Arc<Gateway>,
+    #[future(awt)] inference: Inference,
     #[case] path: &str,
     #[case] headers: &[(&str, &str)],
     #[case] master_key: Option<&str>,
@@ -97,9 +101,10 @@ async fn authenticates_before_serving_mounted_inference_routes(
     ))
     .unwrap();
     let client = inference
+        .gateway
         .resources
         .pool
-        .client(&inference.http, ClientVariant::Provider)
+        .client(&inference.gateway.http, ClientVariant::Provider)
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
@@ -154,7 +159,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
 
 #[rstest]
 #[tokio::test]
-async fn logs_request_outcome_without_credentials_or_query(#[future(awt)] inference: Arc<Gateway>) {
+async fn logs_request_outcome_without_credentials_or_query(#[future(awt)] inference: Inference) {
     let config =
         Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
             .unwrap();
@@ -192,7 +197,7 @@ async fn logs_request_outcome_without_credentials_or_query(#[future(awt)] infere
 #[case::without_master_key("model_list: []\n")]
 #[tokio::test]
 async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
-    #[future(awt)] inference: Arc<Gateway>,
+    #[future(awt)] inference: Inference,
     #[case] yaml: &str,
 ) {
     let config = Config::from_yaml(yaml).unwrap();
@@ -220,7 +225,7 @@ async fn readiness_answers_without_credentials_like_the_proxy_with_no_database(
 #[rstest]
 #[tokio::test]
 async fn readiness_reports_a_configured_database_it_cannot_reach(
-    #[future(awt)] inference: Arc<Gateway>,
+    #[future(awt)] inference: Inference,
 ) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let closed_port = listener.local_addr().unwrap().port();
@@ -519,6 +524,33 @@ async fn a_call_through_an_alias_reports_the_alias_as_its_model_group() {
             ("x-litellm-model-id", "primary-1"),
             ("x-litellm-model-group", "alias"),
         ]
+    );
+}
+
+/// The proxy reads a group's usage by the group an alias names, and still reports the alias as the
+/// model group.
+#[tokio::test]
+async fn a_call_through_an_alias_tells_the_remaining_usage_of_the_group_it_names() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    let config = format!(
+        "model_list:\n  - model_name: primary\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n      rpm: 10\n    model_info:\n      id: primary-1\nrouter_settings:\n  model_group_alias:\n    alias: primary\ngeneral_settings:\n  master_key: gateway-key\n",
+        upstream.uri()
+    );
+
+    let response = routed(&config, "alias").await;
+
+    let told = |name: &str| response.headers().get(name)?.to_str().ok();
+    assert_eq!(
+        (
+            told("x-litellm-model-group"),
+            told("x-ratelimit-limit-requests"),
+            told("x-ratelimit-remaining-requests").is_some(),
+        ),
+        (Some("alias"), Some("10"), true)
     );
 }
 
@@ -1282,4 +1314,261 @@ async fn forwards_a_param_the_catalog_says_the_model_supports(
     let forwarded: Value =
         serde_json::from_slice(&upstream.received_requests().await.unwrap()[0].body).unwrap();
     assert_eq!(forwarded[param], value);
+}
+
+const VIRTUAL_KEY: &str = "sk-cached-virtual-key";
+
+/// A key as Python's auth cache holds it, cut down to the fields the gateway cannot do without.
+fn python_cached_key() -> Value {
+    json!({
+        "token": litellm_gateway_auth_core::Token::new(VIRTUAL_KEY).hash().to_string(), "soft_budget_cooldown": false,
+        "spend": 0.0, "total_spend": 0.0, "models": [], "aliases": {}, "config": {},
+        "permissions": {}, "metadata": {}, "model_spend": {}, "model_max_budget": {},
+        "budget_fallbacks": {}, "team_models": [], "team_blocked": false, "expires": null,
+        "budget_reset_at": null, "created_at": null, "updated_at": null,
+        "settings_updated_at": null, "last_active": null, "last_rotation_at": null,
+        "key_rotation_at": null
+    })
+}
+
+/// A gateway whose database never answers and whose coordination Redis holds `cached` under the
+/// key's hash, as Python's `UserApiKeyCache` writes it.
+async fn behind_the_auth_cache(
+    cached: Option<Value>,
+    litellm_settings: &str,
+    upstream: &MockServer,
+) -> axum::response::Response {
+    asking_behind_the_auth_cache(cached, litellm_settings, upstream, "claude").await
+}
+
+async fn asking_behind_the_auth_cache(
+    cached: Option<Value>,
+    litellm_settings: &str,
+    upstream: &MockServer,
+    model: &str,
+) -> axum::response::Response {
+    let redis = litellm_redis_testing::RedisServer::start().await.unwrap();
+    if let Some(cached) = cached {
+        let hash = litellm_gateway_auth_core::Token::new(VIRTUAL_KEY)
+            .hash()
+            .to_string();
+        redis
+            .cli(&["SET", &hash, &cached.to_string()])
+            .await
+            .unwrap();
+    }
+    let database = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let closed_port = database.local_addr().unwrap().port();
+    drop(database);
+    let config = Config::from_yaml(&format!(
+        "model_list:\n{}{}general_settings:\n  master_key: gateway-key\n  database_url: postgresql://app@127.0.0.1:{closed_port}/proxy\n  database_connection_timeout: 0.5\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\nlitellm_settings:\n{litellm_settings}",
+        deployment("claude", "claude-a", upstream),
+        deployment("claude-down", "claude-down", upstream),
+        redis.port()
+    ))
+    .unwrap();
+    let state = AppState::over(
+        &config,
+        &litellm_config::Environment::default(),
+        &Resources::build(&config).unwrap(),
+    )
+    .await
+    .unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", format!("Bearer {VIRTUAL_KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    global(litellm_gateway::router(state, &config))
+        .oneshot(request)
+        .await
+        .unwrap()
+}
+
+#[rstest]
+#[case::plain(python_cached_key(), 200)]
+#[case::blocked(json!({"blocked": true}), 401)]
+#[case::with_a_budget(json!({"max_budget": 5.0}), 403)]
+#[case::with_a_user_limit(json!({"user_id": "u", "user_rpm_limit": 3}), 403)]
+#[case::with_an_end_user_limit(json!({"end_user_id": "e", "end_user_tpm_limit": 3}), 403)]
+#[case::with_a_field_the_gateway_does_not_know(json!({"future_limit": 1}), 403)]
+#[case::with_an_empty_field_the_gateway_does_not_know(json!({"future_limit": null}), 200)]
+#[tokio::test]
+async fn a_virtual_key_python_cached_is_judged_without_the_database(
+    #[case] change: Value,
+    #[case] status: u16,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    let mut cached = python_cached_key();
+    cached
+        .as_object_mut()
+        .unwrap()
+        .extend(change.as_object().unwrap().clone());
+
+    let response =
+        behind_the_auth_cache(Some(cached), "  enable_redis_auth_cache: true\n", &upstream).await;
+
+    assert_eq!(response.status().as_u16(), status);
+}
+
+#[rstest]
+#[case::cache_off(Some(python_cached_key()), "  enable_redis_auth_cache: false\n")]
+#[case::not_cached(None, "  enable_redis_auth_cache: true\n")]
+#[case::an_entry_the_gateway_cannot_read(
+    Some({
+        let mut cached = python_cached_key();
+        cached["spend"] = json!("free");
+        cached
+    }),
+    "  enable_redis_auth_cache: true\n"
+)]
+#[tokio::test]
+async fn a_key_the_auth_cache_does_not_answer_is_read_from_the_database(
+    #[case] cached: Option<Value>,
+    #[case] litellm_settings: &str,
+) {
+    let upstream = MockServer::start().await;
+
+    let response = behind_the_auth_cache(cached, litellm_settings, &upstream).await;
+
+    assert_eq!(response.status().as_u16(), 503);
+}
+
+#[rstest]
+#[case::a_model_on_its_list("claude", 200, 1)]
+#[case::a_model_off_its_list("claude-down", 403, 0)]
+#[tokio::test]
+async fn a_virtual_key_with_a_model_list_reaches_only_the_models_it_lists(
+    #[case] asked: &str,
+    #[case] status: u16,
+    #[case] sent: u64,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .expect(sent)
+        .mount(&upstream)
+        .await;
+    let mut cached = python_cached_key();
+    cached["models"] = json!(["claude"]);
+
+    let response = asking_behind_the_auth_cache(
+        Some(cached),
+        "  enable_redis_auth_cache: true\n",
+        &upstream,
+        asked,
+    )
+    .await;
+
+    assert_eq!(response.status().as_u16(), status);
+}
+
+/// A native answer for `group`, whose deployment `claude-a` carries `limits`, while Python has
+/// already counted 100 tokens and 5 requests against it this minute and the next, in the
+/// coordination Redis under the router core's `global_router:` counters. Returns the response and
+/// each counter's two minutes as Redis then holds them.
+async fn counted_with_python(limits: &str) -> (axum::response::Response, Vec<String>) {
+    let redis = litellm_redis_testing::RedisServer::start().await.unwrap();
+    let now = std::time::SystemTime::now();
+    let minutes =
+        [now, now + Duration::from_secs(60)].map(litellm_router_core::health::current_minute);
+    let counters: Vec<String> = ["tpm", "rpm"]
+        .iter()
+        .flat_map(|kind| {
+            minutes.iter().map(move |minute| {
+                format!("global_router:claude-a:anthropic/claude-unlisted-9:{kind}:{minute}")
+            })
+        })
+        .collect();
+    for (counter, count) in counters.iter().zip(["100", "100", "5", "5"]) {
+        redis.cli(&["SET", counter, count]).await.unwrap();
+    }
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(served_message())
+        .mount(&upstream)
+        .await;
+    let config = Config::from_yaml(&format!(
+        "model_list:\n  - model_name: claude\n    litellm_params:\n      model: anthropic/claude-unlisted-9\n      api_base: {}\n      api_key: test-key\n{limits}    model_info:\n      id: claude-a\ngeneral_settings:\n  master_key: gateway-key\n  coordination_redis:\n    host: 127.0.0.1\n    port: {}\n",
+        upstream.uri(),
+        redis.port()
+    ))
+    .unwrap();
+    let state = AppState::over(
+        &config,
+        &litellm_config::Environment::default(),
+        &Resources::build(&config).unwrap(),
+    )
+    .await
+    .unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", "Bearer gateway-key")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"model": "claude", "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = global(litellm_gateway::router(state, &config))
+        .oneshot(request)
+        .await
+        .unwrap();
+    let mut held = Vec::new();
+    for counter in &counters {
+        held.push(
+            redis
+                .cli(&["GET", counter])
+                .await
+                .unwrap()
+                .trim()
+                .to_owned(),
+        );
+    }
+    (response, held)
+}
+
+const GROUP_LIMIT_HEADERS: [&str; 4] = [
+    "x-ratelimit-remaining-tokens",
+    "x-ratelimit-limit-tokens",
+    "x-ratelimit-remaining-requests",
+    "x-ratelimit-limit-requests",
+];
+
+#[rstest]
+#[case::limited(
+    "      tpm: 1000\n      rpm: 10\n",
+    vec![("x-ratelimit-remaining-tokens", "898"), ("x-ratelimit-limit-tokens", "1000"),
+        ("x-ratelimit-remaining-requests", "4"), ("x-ratelimit-limit-requests", "10")]
+)]
+#[case::requests_only("      rpm: 10\n", vec![("x-ratelimit-remaining-requests", "4"), ("x-ratelimit-limit-requests", "10")])]
+#[case::unlimited("", vec![])]
+#[tokio::test]
+async fn a_native_answer_tells_its_model_groups_remaining_usage_counted_with_python(
+    #[case] limits: &str,
+    #[case] headers: Vec<(&str, &str)>,
+) {
+    let (response, held) = counted_with_python(limits).await;
+
+    let told: Vec<(&str, &str)> = GROUP_LIMIT_HEADERS
+        .into_iter()
+        .filter_map(|name| Some((name, response.headers().get(name)?.to_str().ok()?)))
+        .collect();
+    assert_eq!((response.status().as_u16(), told), (200, headers));
+    let (tokens, requests) = held.split_at(2);
+    let counted = !limits.is_empty();
+    assert_eq!(
+        (
+            tokens.contains(&"102".to_owned()),
+            requests.contains(&"6".to_owned())
+        ),
+        (counted, counted),
+        "{held:?}"
+    );
 }

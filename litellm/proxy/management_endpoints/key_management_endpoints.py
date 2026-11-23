@@ -48,8 +48,10 @@ from litellm.constants import (
     MINIMUM_CUSTOM_KEY_LENGTH,
     UI_SESSION_TOKEN_TEAM_ID,
 )
+from litellm.integrations.lens.policy import LENS_ENABLED_METADATA_KEY, lens_logging_metadata_error
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
+    as_str_mapping,
     attribute_or_none,
     has_attributes,
     int_of,
@@ -488,6 +490,7 @@ _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_ROLLOVER_CAP_VALUE: Final[TypeAdapter[BudgetRolloverCap]] = TypeAdapter(BudgetRolloverCap)
 _METADATA_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _HASHED_TOKEN: Final = re.compile(r"[0-9a-f]{64}")
 
@@ -1001,6 +1004,9 @@ def raise_on_invalid_key_metadata(metadata: Mapping[str, object] | None) -> None
     """Every key metadata check that rejects a write: logging config and expiry alert days."""
     raise_on_invalid_key_logging_config(metadata)
     raise_on_invalid_key_expiry_alert_days(metadata)
+    error: Final = lens_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
     validate_required_customer_headers_metadata(metadata)
 
 
@@ -1068,7 +1074,7 @@ _KEY_TYPE_PRESET_ROUTES: Final = MappingProxyType(
 )
 
 
-_KeyJsonT: Final = TypeVar("_KeyJsonT", bound=dict[str, object])
+_KeyJsonT = TypeVar("_KeyJsonT", bound=dict[str, object])
 
 
 def handle_key_type(data: GenerateKeyRequest, data_json: _KeyJsonT) -> _KeyJsonT:
@@ -3267,7 +3273,7 @@ async def prepare_key_update_data(
             prisma_client=prisma_client,
             llm_router=llm_router,
         )
-    data_json: Final[dict] = data.model_dump(exclude_unset=True)
+    data_json: Final[dict] = data.model_dump(exclude_unset=True, exclude={LENS_ENABLED_METADATA_KEY})
     if "metadata" in data_json:
         customer_binding: Final = validated_customer_key_metadata(
             data.metadata,
@@ -3275,6 +3281,15 @@ async def prepare_key_update_data(
             user_api_key_dict,
         )
         data_json["metadata"] = dict(customer_binding) if customer_binding is not None else None
+    if isinstance(data, UpdateKeyRequest) and "lens_enabled" in data.model_fields_set:
+        stored_metadata: Final = _StoredKeyMetadata.model_validate(existing_key_row, from_attributes=True).metadata
+        requested_metadata: Final = (
+            _StoredKeyMetadata.model_validate(data_json).metadata if "metadata" in data_json else stored_metadata
+        )
+        data_json["metadata"] = {
+            **(as_str_mapping(requested_metadata) or {}),
+            LENS_ENABLED_METADATA_KEY: data.lens_enabled,
+        }
     data_json.pop("key", None)
     data_json.pop("new_key", None)
     data_json.pop("grace_period", None)  # Request-only param, not a DB column
@@ -4374,6 +4389,7 @@ async def update_key_fn(
     - router_settings: Optional[UpdateRouterConfig] - key-specific router settings. Example - {"model_group_retry_policy": {"gpt-4": {"RateLimitErrorRetries": 5}}}. IF null or {} then no router settings.
     - access_group_ids: Optional[List[str]] - List of access group IDs to associate with the key. Access groups define which models a key can access. Example - ["access_group_1", "access_group_2"].
     - budget_limits: Optional[list] - List of concurrent budget windows for the key. Each window specifies a budget_limit, time_period, and optional budget_duration. Example - [{"budget_limit": 10.0, "time_period": "1d"}, {"budget_limit": 50.0, "time_period": "7d"}].
+    - lens_enabled: Optional[bool] - Whether this key's requests are sent to Lens. `null` inherits the team default, which is on when unset.
 
     Example:
     ```bash
@@ -5548,6 +5564,7 @@ async def generate_key_helper_fn(
     *,
     llm_router: Router | None = None,
     actor: UserAPIKeyAuth | None = None,
+    rollover_max_budget: object = None,
 ):
     customer_metadata: Final = validated_customer_key_metadata(_DECODED_JSON.validate_python(metadata), None, actor)
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -5642,6 +5659,8 @@ async def generate_key_helper_fn(
         }
         if teams is not None:
             user_data["teams"] = teams
+        if request_type == "user" and rollover_max_budget is not None:
+            user_data["rollover_max_budget"] = _ROLLOVER_CAP_VALUE.validate_python(rollover_max_budget)
         if request_type == "user" and budget_limits_json is not None:
             user_data["budget_limits"] = budget_limits_json
         if model_max_budget:

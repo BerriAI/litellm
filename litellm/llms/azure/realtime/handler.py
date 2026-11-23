@@ -171,8 +171,10 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             if _is_ga
             else "/openai/realtime"
         )
+        call_id: Final = (query_params or {}).get("call_id")
         base_query_parts: Final = (
-            (urlencode((("model", model),)),)
+            # Azure opens a new translation session, and never joins the call, when the join also names a model.
+            (() if call_id else (urlencode((("model", model),)),))
             if realtime_mode == "translation"
             else (
                 (urlencode((("model", model),)),)
@@ -183,7 +185,6 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             else (urlencode((("api-version", api_version), ("deployment", model))),)
         )
 
-        call_id: Final = (query_params or {}).get("call_id")
         query_parts: Final = (
             *base_query_parts,
             *((urlencode((("intent", intent),)),) if intent else ()),

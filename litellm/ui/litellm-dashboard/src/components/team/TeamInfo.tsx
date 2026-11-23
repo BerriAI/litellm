@@ -1,3 +1,6 @@
+import { LensControls, LensTabTrigger } from "@/components/lens/LensControls";
+import { readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { lensEntityHref } from "@/components/lens/entityLinks";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -297,6 +300,8 @@ export interface TeamMembership {
   budget_source: TeamMemberBudgetSource;
   spend: number;
   total_spend: number | null;
+  rollover_credit?: number | null;
+  effective_max_budget?: number | null;
   litellm_budget_table: {
     budget_id: string;
     soft_budget: number | null;
@@ -357,6 +362,7 @@ export interface TeamData {
     caller_edit_access?: CallerEditAccess;
     team_member_budget_table: {
       max_budget: number | null;
+      rollover_max_budget?: number | null;
       budget_duration: string | null;
       tpm_limit: number | null;
       rpm_limit: number | null;
@@ -387,6 +393,7 @@ const buildMemberDefaultsSchema = (t: TFunction) => {
   const fields = {
     default_team_member_models: z.array(z.string()).optional(),
     team_member_budget: numericInputSchema,
+    team_member_rollover_max_budget: numericInputSchema,
     team_member_budget_duration: z.string().nullish(),
     team_member_key_duration: z.string().optional(),
     team_member_tpm_limit: numericInputSchema,
@@ -554,6 +561,7 @@ const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: 
 const toMemberDefaultsValues = (info: TeamInfoRecord): MemberDefaultsValues => ({
   default_team_member_models: info.default_team_member_models || [],
   team_member_budget: info.team_member_budget_table?.max_budget,
+  team_member_rollover_max_budget: info.team_member_budget_table?.rollover_max_budget,
   team_member_budget_duration: info.team_member_budget_table?.budget_duration,
   team_member_key_duration: info.metadata?.team_member_key_duration,
   team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
@@ -1084,6 +1092,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       default_team_member_models: values.default_team_member_models,
       team_member_budget: budget,
       team_member_budget_duration: values.team_member_budget_duration,
+      ...(memberDefaultsForm.getFieldState("team_member_rollover_max_budget").isDirty
+        ? { team_member_rollover_max_budget: numberOrNull(values.team_member_rollover_max_budget) }
+        : {}),
       team_member_key_duration: values.team_member_key_duration,
       ...(values.team_member_tpm_limit !== undefined || values.team_member_rpm_limit !== undefined
         ? {
@@ -1390,6 +1401,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   }
 
   const { team_info: info } = teamData;
+
+  const updateLensPolicy = async (policy: LensPolicy): Promise<void> => {
+    if (!accessToken || !canEditAsProxyAdmin) return;
+    const metadata = { ...info.metadata, lens_enabled: policy };
+    await fetchClient.PATCH("/team/{team_id}", {
+      params: { path: { team_id: teamId } },
+      body: { metadata: { lens_enabled: policy } },
+    });
+    const updatedTeam = { ...teamData, team_info: { ...info, metadata } };
+    setTeamData(updatedTeam);
+    onUpdate(updatedTeam);
+    void invalidateTeamQueries(queryClient);
+  };
   const customMetadata = metadataObjectToPairs(
     info.metadata,
     teamEditAccess.kind === "team_admin"
@@ -1418,6 +1442,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const noLimit = t("teams.teamInfo.settingsView.noLimit");
   const memberDefaultSummary = [
     [t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"), memberBudget?.max_budget ?? noLimit],
+    [t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"), memberBudget?.rollover_max_budget ?? noLimit],
     [
       t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetDuration"),
       memberBudget?.budget_duration ??
@@ -1561,6 +1586,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               label={labelWithHint(
                 t("teams.teamInfo.editForm.teamMemberSettings.defaultBudget"),
                 t("teams.teamInfo.editForm.teamMemberSettings.defaultBudgetHint"),
+              )}
+            >
+              {({ ref, value, ...field }) => (
+                <NumericalInput {...field} ref={ref} value={value ?? ""} step={0.01} precision={2} />
+              )}
+            </FormField>
+            <FormField
+              control={memberDefaultsForm.control}
+              name="team_member_rollover_max_budget"
+              label={labelWithHint(
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCap"),
+                t("teams.teamInfo.editForm.teamMemberSettings.rolloverCapHint"),
               )}
             >
               {({ ref, value, ...field }) => (
@@ -1891,6 +1928,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       key: TEAM_INFO_TAB_KEYS.ACTIVITY,
       label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.ACTIVITY]),
       children: <ResourceActivity scope="team" id={teamId} />,
+    },
+    {
+      key: TEAM_INFO_TAB_KEYS.LENS,
+      label: t(TEAM_INFO_TAB_LABELS[TEAM_INFO_TAB_KEYS.LENS]),
+      children: (
+        <LensControls
+          kind="team"
+          policy={readLensPolicy(info.metadata)}
+          canEdit={canEditAsProxyAdmin}
+          href={lensEntityHref({ kind: "team", teamId })}
+          onPolicyChange={updateLensPolicy}
+        />
+      ),
     },
     {
       key: TEAM_INFO_TAB_KEYS.MY_USER,
@@ -2923,11 +2973,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       <Tabs value={activeTab} className="mb-4" onValueChange={handleTabChange}>
         <TabsList variant="line" className="mb-4 h-auto w-full flex-wrap justify-start rounded-none border-b p-0">
-          {tabItems.map(({ key, label }) => (
-            <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
-              {label}
-            </TabsTrigger>
-          ))}
+          {tabItems.map(({ key, label }) =>
+            key === TEAM_INFO_TAB_KEYS.LENS ? (
+              <LensTabTrigger key={key} />
+            ) : (
+              <TabsTrigger key={key} value={key} className="flex-none rounded-none px-4 py-2">
+                {label}
+              </TabsTrigger>
+            ),
+          )}
         </TabsList>
         {tabItems.map(({ key, children }) => (
           <TabsContent key={key} value={key} keepMounted={hasVisited(key)}>
