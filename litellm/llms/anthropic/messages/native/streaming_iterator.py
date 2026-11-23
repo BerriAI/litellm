@@ -549,7 +549,7 @@ class BaseAnthropicMessagesStreamingIterator:
     def __init__(
         self,
         litellm_logging_obj: LiteLLMLoggingObj,
-        request_body: dict,
+        request_body: dict[str, object],
     ):
         self.litellm_logging_obj = litellm_logging_obj
         self.request_body = request_body
@@ -591,10 +591,10 @@ class BaseAnthropicMessagesStreamingIterator:
 
     def get_async_streaming_response_iterator(
         self,
-        httpx_response,
-        request_body: dict,
+        httpx_response: httpx.Response,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,

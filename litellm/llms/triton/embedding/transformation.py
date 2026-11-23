@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -34,16 +34,16 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
     def __init__(self) -> None:
         pass
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return []
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to Triton Embedding params
         """
@@ -51,23 +51,23 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     def transform_embedding_request(
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return {
             "inputs": [
                 {
@@ -87,15 +87,15 @@ class TritonEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final[_TritonEmbeddingResponse] = raw_response.json()
         except Exception:
             raise TritonError(message=raw_response.text, status_code=raw_response.status_code)
 
-        _embedding_output: Final = []
+        _embedding_output: Final[list[dict[str, object]]] = []
 
         _outputs: Final = raw_response_json["outputs"]
         for output in _outputs:

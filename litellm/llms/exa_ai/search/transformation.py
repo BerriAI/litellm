@@ -66,7 +66,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         headers: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         """
         Validate environment and return headers.
@@ -87,9 +87,9 @@ class ExaAISearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: object,
+        data: object = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -100,8 +100,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to Exa AI API format.
 
@@ -158,7 +158,7 @@ class ExaAISearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform Exa AI API response to LiteLLM unified SearchResponse format.
@@ -185,10 +185,8 @@ class ExaAISearchConfig(BaseSearchConfig):
         response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
         # Transform results to SearchResult objects
-        results: Final = []
-        for raw_result in _JSON_VALUES.validate_python(response_json.get("results", [])):
-            result = _JSON_OBJECT.validate_python(raw_result)
-            search_result = SearchResult.model_validate(
+        results: Final = [
+            SearchResult.model_validate(
                 {
                     "title": result.get("title", ""),
                     "url": result.get("url", ""),
@@ -201,7 +199,11 @@ class ExaAISearchConfig(BaseSearchConfig):
                     **{field: result[key] for key, field in _RESULT_EXTRAS if key in result},
                 }
             )
-            results.append(search_result)
+            for result in (
+                _JSON_OBJECT.validate_python(raw_result)
+                for raw_result in _JSON_VALUES.validate_python(response_json.get("results", []))
+            )
+        ]
 
         return SearchResponse.model_validate(
             {

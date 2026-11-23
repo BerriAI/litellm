@@ -138,7 +138,7 @@ class BaseModelResponseIterator:
         return self
 
     @staticmethod
-    def _string_to_dict_parser(str_line: str) -> dict | None:
+    def _string_to_dict_parser(str_line: str) -> dict[str, object] | None:
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
         decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
         return decoded if isinstance(decoded, dict) else None

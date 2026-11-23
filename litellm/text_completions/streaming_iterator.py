@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Final, Protocol
 
 from litellm.constants import VLLM_CHOICE_FIELDS
@@ -27,8 +28,8 @@ class TextCompletionStreamWrapper:
     def __init__(
         self,
         completion_stream,
-        model,
-        stream_options: dict | None = None,
+        model: object,
+        stream_options: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
         usage_injected_by_proxy: bool = False,
     ):

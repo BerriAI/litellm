@@ -171,7 +171,7 @@ class JSONProviderRegistry:
         return endpoint in provider.supported_endpoints or endpoint in model_endpoints
 
     @classmethod
-    def list_providers(cls) -> list:
+    def list_providers(cls) -> list[str]:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
 

@@ -4,6 +4,7 @@ Support for Mistral Voxtral audio transcription via ``/v1/audio/transcriptions``
 API reference: https://docs.mistral.ai/api/#tag/audio/operation/audio_transcriptions_v1_audio_transcriptions_post
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -42,7 +43,7 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -58,8 +59,8 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return join_api_base("https://api.mistral.ai/v1" if api_base is None else api_base, "audio/transcriptions")
@@ -73,18 +74,18 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("MISTRAL_API_KEY")
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
         }
@@ -96,11 +97,11 @@ class MistralAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         audio_file: FileTypes,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
 
-        form_fields: Final[dict] = {
+        form_fields: Final[dict[str, object]] = {
             "model": model,
         }
 

@@ -38,7 +38,7 @@ else:
 class BaseEvalsAPIConfig(ABC):
     """Base configuration for Evals API providers"""
 
-    def __init__(self):
+    def __init__(self) -> None:
         pass
 
     @property
@@ -47,7 +47,9 @@ class BaseEvalsAPIConfig(ABC):
         pass
 
     @abstractmethod
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Validate and update headers with provider-specific requirements
 
@@ -87,8 +89,8 @@ class BaseEvalsAPIConfig(ABC):
         self,
         create_request: CreateEvalRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform create eval request to provider-specific format
 
@@ -123,8 +125,8 @@ class BaseEvalsAPIConfig(ABC):
         self,
         list_params: ListEvalsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform list evals request parameters
 
@@ -160,8 +162,8 @@ class BaseEvalsAPIConfig(ABC):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform get eval request
 
@@ -199,8 +201,8 @@ class BaseEvalsAPIConfig(ABC):
         update_request: UpdateEvalRequest,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """
         Transform update eval request
 
@@ -238,8 +240,8 @@ class BaseEvalsAPIConfig(ABC):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform delete eval request
 
@@ -276,8 +278,8 @@ class BaseEvalsAPIConfig(ABC):
         eval_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """
         Transform cancel eval request
 
@@ -315,8 +317,8 @@ class BaseEvalsAPIConfig(ABC):
         eval_id: str,
         create_request: CreateRunRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create run request to provider-specific format
 
@@ -353,8 +355,8 @@ class BaseEvalsAPIConfig(ABC):
         eval_id: str,
         list_params: ListRunsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform list runs request parameters
 
@@ -392,8 +394,8 @@ class BaseEvalsAPIConfig(ABC):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform get run request
 
@@ -432,8 +434,8 @@ class BaseEvalsAPIConfig(ABC):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """
         Transform cancel run request
 
@@ -472,8 +474,8 @@ class BaseEvalsAPIConfig(ABC):
         run_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict, dict]:
+        headers: dict[str, object],
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         """
         Transform delete run request
 

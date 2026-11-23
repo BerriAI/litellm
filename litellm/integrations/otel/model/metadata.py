@@ -101,7 +101,7 @@ class RequestIdentity:
     # auth-time seed and filled only from the payload.
     provider_model: str | None = None
     request_route: str | None = None
-    metadata: Mapping[str, str] = field(default_factory=dict)
+    metadata: Mapping[str, str] = field(default_factory=dict[str, str])
 
     @classmethod
     def from_payload(cls, payload: StandardLoggingPayload) -> RequestIdentity:

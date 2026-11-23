@@ -433,7 +433,7 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
 
-        responses: Final = []
+        responses: Final[list[ResourceObjectType]] = []
         for model in target_model_names_list:
             individual_response = await self.create_resource_for_model(
                 llm_router=llm_router,

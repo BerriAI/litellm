@@ -85,7 +85,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         model: str,
         messages: Sequence[object],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -113,8 +113,8 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         return join_api_base(deepseek_anthropic_base(api_base), "v1/messages")
@@ -126,7 +126,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         anthropic_messages_request: Final = _REQUEST_FIELDS.validate_python(
             super().transform_anthropic_messages_request(
                 model=model,

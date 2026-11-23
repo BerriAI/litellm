@@ -209,8 +209,8 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
             return super()._transform_messages(stripped, model, is_async=True)
         return super()._transform_messages(stripped, model, is_async=False)
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
-        supported_params: Final = super().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
+        supported_params: Final[list[str]] = super().get_supported_openai_params(model)
         if not _supports_together_reasoning(model):
             return supported_params
         return [
@@ -220,12 +220,14 @@ class TogetherAIChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
-        mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
+    ) -> dict[str, object]:
+        mapped_openai_params: Final[dict[str, object]] = super().map_openai_params(
+            non_default_params, optional_params, model, drop_params
+        )
         for param in _tool_params_to_drop(mapped_openai_params, model, drop_params):
             mapped_openai_params.pop(param)
         if _drop_response_format(mapped_openai_params, model, drop_params):

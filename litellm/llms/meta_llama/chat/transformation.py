@@ -17,7 +17,7 @@ from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 
 
 class LlamaAPIConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Llama API has limited support for OpenAI parameters
 

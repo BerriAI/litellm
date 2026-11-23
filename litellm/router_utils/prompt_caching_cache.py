@@ -284,7 +284,7 @@ class PromptCachingCache:
             return []
 
         # Build the cacheable prefix: all messages up to and including the last cacheable message
-        cacheable_prefix: Final = []
+        cacheable_prefix: Final[list[AllMessageValues]] = []
 
         for msg_idx, message in enumerate(messages):
             if msg_idx < last_cacheable_message_idx:

@@ -59,7 +59,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
 
     #### ASYNC ####
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         from litellm.proxy.proxy_server import premium_user
         from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
@@ -84,7 +84,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         except Exception as e:
             verbose_logger.exception("GCS Bucket logging error: %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             verbose_logger.debug(
                 "GCS Logger: async_log_failure_event logging kwargs: %s, response_obj: %s",
@@ -193,7 +193,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Combine multiple log payloads into newline-delimited JSON (NDJSON) format.
         Each line is a valid JSON object representing one log entry.
         """
-        lines: Final = []
+        lines: Final[list[str]] = []
         for item in items:
             logging_payload = item["payload"]
             json_line = json.dumps(logging_payload, default=str, ensure_ascii=False)

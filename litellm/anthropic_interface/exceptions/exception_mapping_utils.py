@@ -95,7 +95,7 @@ class AnthropicExceptionMapping:
         return raw_message
 
     @staticmethod
-    def _is_anthropic_error_dict(parsed: dict) -> bool:
+    def _is_anthropic_error_dict(parsed: Mapping[str, object]) -> bool:
         """
         Check if a parsed dict is in Anthropic error format.
 
@@ -105,12 +105,10 @@ class AnthropicExceptionMapping:
             "error": {"type": "...", "message": "..."}
         }
         """
-        return (
-            parsed.get("type") == "error"
-            and isinstance(parsed.get("error"), dict)
-            and "type" in parsed["error"]
-            and "message" in parsed["error"]
-        )
+        if parsed.get("type") != "error":
+            return False
+        error: Final = parsed.get("error")
+        return isinstance(error, dict) and "type" in error and "message" in error
 
     @staticmethod
     def _extract_message_from_dict(parsed: dict, raw_message: str) -> str:

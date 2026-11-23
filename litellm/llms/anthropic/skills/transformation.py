@@ -2,6 +2,7 @@
 Anthropic Skills API configuration and transformations
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
 
@@ -85,8 +86,8 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         self,
         create_request: CreateSkillRequest,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """Transform create skill request for Anthropic"""
         verbose_logger.debug("Transforming create skill request: %s", create_request)
 
@@ -110,8 +111,8 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         self,
         list_params: ListSkillsParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, object]]:
         """Transform list skills request for Anthropic"""
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
@@ -122,7 +123,7 @@ class AnthropicSkillsConfig(BaseSkillsAPIConfig):
         limit: Final = list_params.get("limit")
         page: Final = list_params.get("page")
         source: Final = list_params.get("source")
-        query_params: Final[dict[str, int | str]] = {
+        query_params: Final[dict[str, object]] = {
             key: value for key, value in (("limit", limit), ("page", page), ("source", source)) if value
         }
 

@@ -1,5 +1,5 @@
 # litellm/proxy/vector_stores/vector_store_registry.py
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import fields, replace
 from datetime import datetime, timezone
 from itertools import chain
@@ -146,7 +146,7 @@ class VectorStoreRegistry:
         self.vector_stores: list[LiteLLM_ManagedVectorStore] = vector_stores if vector_stores is not None else []
         self.vector_store_ids_to_vector_store_map: dict[str, LiteLLM_ManagedVectorStore] = {}
 
-    def _extract_tool_params(self, tool: dict) -> VectorStoreToolParams:
+    def _extract_tool_params(self, tool: Mapping[str, object]) -> VectorStoreToolParams:
         tool_fields: Final = decoded_json_object(tool)
         return replace(
             VectorStoreToolParams(),
@@ -157,7 +157,7 @@ class VectorStoreRegistry:
             },
         )
 
-    def get_vector_store_ids_to_run(self, non_default_params: dict, tools: object = None) -> list[str]:
+    def get_vector_store_ids_to_run(self, non_default_params: Mapping[str, object], tools: object = None) -> list[str]:
         """
         Returns the vector store ids to run
 
@@ -177,7 +177,7 @@ class VectorStoreRegistry:
 
     def get_and_pop_recognised_vector_store_tools(
         self,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         vector_store_ids: list[str] | None = None,
     ) -> dict[str, VectorStoreToolParams]:
         """
@@ -225,7 +225,7 @@ class VectorStoreRegistry:
         return params_by_id
 
     def get_vector_store_to_run(
-        self, non_default_params: dict, tools: list[dict] | None = None
+        self, non_default_params: Mapping[str, object], tools: Sequence[Mapping[str, object]] | None = None
     ) -> LiteLLM_ManagedVectorStore | None:
         """
         Returns the vector store to run
@@ -296,7 +296,7 @@ class VectorStoreRegistry:
         return None
 
     def pop_vector_stores_to_run(
-        self, non_default_params: dict, tools: list[dict] | None = None
+        self, non_default_params: MutableMapping[str, object], tools: list[dict[str, object]] | None = None
     ) -> list[LiteLLM_ManagedVectorStore]:
         """
         Pops the vector stores to run with their tool parameters merged.
@@ -339,8 +339,8 @@ class VectorStoreRegistry:
 
     async def pop_vector_stores_to_run_with_db_fallback(
         self,
-        non_default_params: dict,
-        tools: list[dict] | None = None,
+        non_default_params: MutableMapping[str, object],
+        tools: list[dict[str, object]] | None = None,
         prisma_client: PrismaClient | None = None,
     ) -> list[LiteLLM_ManagedVectorStore]:
         """

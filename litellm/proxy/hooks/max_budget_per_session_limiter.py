@@ -137,7 +137,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Before each LLM call, check if max_budget_per_session is set and
         whether accumulated spend exceeds the budget (429 if so).
@@ -176,7 +176,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return None
 
     @with_service_target("session_budgets")
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """

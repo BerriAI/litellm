@@ -63,7 +63,7 @@ class BaseVideoConfig(ABC):
         video_create_optional_params: VideoCreateOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     @abstractmethod
@@ -111,7 +111,7 @@ class BaseVideoConfig(ABC):
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles, str]:
+    ) -> tuple[dict[str, object], RequestFiles, str]:
         pass
 
     @abstractmethod
@@ -194,7 +194,7 @@ class BaseVideoConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video remix request into a URL and data
 
@@ -221,7 +221,7 @@ class BaseVideoConfig(ABC):
         limit: int | None = None,
         order: str | None = None,
         extra_query: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video list request into a URL and params
 
@@ -245,7 +245,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video delete request into a URL and data
 
@@ -268,7 +268,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video retrieve request into a URL and data/params
 
@@ -329,7 +329,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video get character request into a URL and params.
 
@@ -351,7 +351,7 @@ class BaseVideoConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[str, dict] | None:
+    ) -> tuple[str, dict[str, object]] | None:
         """
         Return (url, body) for a pre-fetch HTTP call that must be made before
         transform_video_edit_request, or None if no pre-fetch is required.
@@ -402,7 +402,7 @@ class BaseVideoConfig(ABC):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the video extension request into a URL and JSON data.
 

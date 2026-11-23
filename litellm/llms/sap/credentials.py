@@ -195,7 +195,7 @@ def _env_name(name: str) -> str:
 
 def extract_credentials(source: Source) -> dict[str, str]:
     """Extract all credentials from a source."""
-    credentials: Final = {}
+    credentials: Final[dict[str, str]] = {}
     for cv in CREDENTIAL_VALUES:
         value = source.get(cv)
         if value is not None:
@@ -225,7 +225,7 @@ def resolve_resource_group(sources: list[Source]) -> str | None:
 
 
 def _parse_service_key_once(
-    service_key: str | dict | None,
+    service_key: str | Mapping[str, object] | None,
 ) -> object:
     """
     Pre-parse service_key if it's a string to avoid repeated JSON parsing.
@@ -258,9 +258,9 @@ def _resolve_credential_from_service_key(service_key: object, cv: CredentialsVal
 
 
 def fetch_credentials(
-    service_key: str | dict | None = None,
+    service_key: str | Mapping[str, object] | None = None,
     profile: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> dict[str, str]:
     """
     Resolution order (first-source-wins):
@@ -426,12 +426,12 @@ def _request_token(
 
 
 def get_token_creator(
-    service_key: str | dict | None = None,
+    service_key: str | Mapping[str, object] | None = None,
     profile: str | None = None,
     *,
     timeout: float = 30.0,
     expiry_buffer_minutes: int = 60,
-    **overrides,
+    **overrides: object,
 ) -> tuple[Callable[[], str], str, str]:
     """
     Creates a callable that fetches and caches an OAuth2 bearer token

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -41,7 +42,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")

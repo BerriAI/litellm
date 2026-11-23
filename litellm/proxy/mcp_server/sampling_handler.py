@@ -12,6 +12,7 @@ MCP Spec Reference:
 
 import typing
 from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import Final, NamedTuple, Optional, Protocol, Union, runtime_checkable
 
 if typing.TYPE_CHECKING:
@@ -296,14 +297,12 @@ def _convert_mcp_content_to_openai(
     - List of mixed content → list of content parts
     """
     if isinstance(content, list):
-        parts: Final = []
-        for item in content:
-            converted = _convert_single_content(item)
-            if isinstance(converted, list):
-                parts.extend(converted)
-            else:
-                parts.append(converted)
-        return parts
+        converted_items: Final = [_convert_single_content(item) for item in content]
+        return list(
+            chain.from_iterable(
+                converted if isinstance(converted, list) else [converted] for converted in converted_items
+            )
+        )
     return _convert_single_content(content)
 
 
@@ -442,9 +441,9 @@ def _convert_mcp_messages_to_openai(
         )
 
         # Separate marker items from regular content parts
-        tool_call_markers = []
-        tool_result_markers = []
-        regular_parts = []
+        tool_call_markers: list[Mapping[str, object]] = []
+        tool_result_markers: list[Mapping[str, object]] = []
+        regular_parts: list[Mapping[str, object]] = []
         for part in converted_parts:
             marker = part.get("_marker_type") if isinstance(part, dict) else None
             if marker == "tool_use":
@@ -502,20 +501,18 @@ def _extract_tool_calls(
     import json
 
     items: Final = content if isinstance(content, list) else [content]
-    tool_calls: Final = []
-    for item in items:
-        if getattr(item, "type", None) == "tool_use":
-            tool_calls.append(
-                {
-                    "id": getattr(item, "id", f"call_{id(item)}"),
-                    "type": "function",
-                    "function": {
-                        "name": getattr(item, "name", ""),
-                        "arguments": json.dumps(getattr(item, "input", {}), default=str),
-                    },
-                }
-            )
-    return tool_calls
+    return [
+        {
+            "id": getattr(item, "id", f"call_{id(item)}"),
+            "type": "function",
+            "function": {
+                "name": getattr(item, "name", ""),
+                "arguments": json.dumps(getattr(item, "input", {}), default=str),
+            },
+        }
+        for item in items
+        if getattr(item, "type", None) == "tool_use"
+    ]
 
 
 def _extract_text_parts(
@@ -523,10 +520,7 @@ def _extract_text_parts(
 ) -> str | None:
     """Extract text parts from mixed content."""
     items: Final = content if isinstance(content, list) else [content]
-    texts: Final = []
-    for item in items:
-        if getattr(item, "type", None) == "text":
-            texts.append(getattr(item, "text", ""))
+    texts: Final = [getattr(item, "text", "") for item in items if getattr(item, "type", None) == "text"]
     return "\n".join(texts) if texts else None
 
 
@@ -535,7 +529,7 @@ def _extract_tool_results(
 ) -> "Sequence[Mapping[str, object]]":
     """Extract OpenAI-format tool messages from MCP ToolResultContent."""
     items: Final = content if isinstance(content, list) else [content]
-    results: Final = []
+    results: Final[list[Mapping[str, object]]] = []
     for item in items:
         if getattr(item, "type", None) == "tool_result":
             tool_use_id = getattr(item, "tool_use_id", "")
@@ -566,9 +560,8 @@ def _convert_mcp_tools_to_openai(
     """
     if not tools:
         return None
-    openai_tools: Final = []
-    for tool in tools:
-        openai_tool = {
+    return [
+        {
             "type": "function",
             "function": {
                 "name": tool.name,
@@ -580,8 +573,8 @@ def _convert_mcp_tools_to_openai(
                 },
             },
         }
-        openai_tools.append(openai_tool)
-    return openai_tools
+        for tool in tools
+    ]
 
 
 def _convert_mcp_tool_choice_to_openai(

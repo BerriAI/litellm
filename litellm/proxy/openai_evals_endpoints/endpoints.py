@@ -2,10 +2,13 @@
 OpenAI Evals API endpoints - /v1/evals
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 import orjson
 from fastapi import APIRouter, Depends, Request, Response
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -22,6 +25,31 @@ from litellm.types.llms.openai_evals import (
 )
 
 router: Final = APIRouter()
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _EvalRequestBody(TypedDict, total=False):
+    """JSON body of an evals request: only the routing model is read, every other key passes through."""
+
+    model: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _RunCompletion(TypedDict, total=False):
+    """The `completion` object of a create-run body, read only for its routing model."""
+
+    model: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _CreateRunRequestBody(_EvalRequestBody, total=False):
+    """JSON body of a create-run request, whose `completion` may carry the routing model."""
+
+    completion: ReadOnly[_RunCompletion | str | int | float | bool | Sequence[object] | None]
+
+
+_EVAL_REQUEST_BODY: Final = TypeAdapter(_EvalRequestBody)
+_CREATE_RUN_REQUEST_BODY: Final = TypeAdapter(_CreateRunRequestBody)
 
 
 @router.post(
@@ -74,11 +102,14 @@ async def create_eval(
 
     # Read request body
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Extract model for routing (header > query > body)
     # When using extra_body={"model": "..."}, the OpenAI SDK merges it into the body
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -98,7 +129,7 @@ async def create_eval(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -164,7 +195,8 @@ async def list_evals(
 
     # Read request body (optional for GET)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Use query params if not in body
     if "limit" not in data and limit is not None:
@@ -179,7 +211,9 @@ async def list_evals(
         data["order_by"] = order_by
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -199,7 +233,7 @@ async def list_evals(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -261,13 +295,16 @@ async def get_eval(
 
     # Read request body (optional for GET)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -287,7 +324,7 @@ async def get_eval(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -351,13 +388,16 @@ async def update_eval(
 
     # Read request body
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -377,7 +417,7 @@ async def update_eval(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -439,13 +479,16 @@ async def delete_eval(
 
     # Read request body (optional for DELETE)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -465,7 +508,7 @@ async def delete_eval(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -527,13 +570,16 @@ async def cancel_eval(
 
     # Read request body (optional for cancel)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -553,7 +599,7 @@ async def cancel_eval(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -626,17 +672,19 @@ async def create_run(
 
     # Read request body
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _CREATE_RUN_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id from path parameter
     data["eval_id"] = eval_id
 
     # Extract model for routing (header > query > body > completion.model)
+    completion: Final = body_fields.get("completion")
     model: Final = (
         request.headers.get("x-litellm-model")
         or request.query_params.get("model")
-        or data.get("model")
-        or (data.get("completion", {}).get("model") if isinstance(data.get("completion"), dict) else None)
+        or body_fields.get("model")
+        or (completion.get("model") if isinstance(completion, dict) else None)
     )
     if model:
         data["model"] = model
@@ -657,7 +705,7 @@ async def create_run(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -899,14 +947,17 @@ async def cancel_run(
 
     # Read request body (optional for cancel)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id and run_id from path parameters
     data["eval_id"] = eval_id
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -926,7 +977,7 @@ async def cancel_run(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -988,14 +1039,17 @@ async def delete_run(
 
     # Read request body (optional for delete)
     body: Final = await request.body()
-    data: Final = orjson.loads(body) if body else {}
+    body_fields: Final = _EVAL_REQUEST_BODY.validate_python(orjson.loads(body) if body else {})
+    data: Final = dict(body_fields)
 
     # Set eval_id and run_id from path parameters
     data["eval_id"] = eval_id
     data["run_id"] = run_id
 
     # Extract model for routing (header > query > body)
-    model: Final = data.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    model: Final = (
+        body_fields.get("model") or request.query_params.get("model") or request.headers.get("x-litellm-model")
+    )
     if model:
         data["model"] = model
 
@@ -1015,7 +1069,7 @@ async def delete_run(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=data.get("model"),
+            model=model or body_fields.get("model"),
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,

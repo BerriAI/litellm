@@ -74,7 +74,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "temperature",
@@ -84,7 +84,7 @@ class AmazonAI21Config(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,

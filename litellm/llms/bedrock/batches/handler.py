@@ -196,7 +196,9 @@ class BedrockBatchesHandler:
         return job_status()
 
     @staticmethod
-    def handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def handle_async_invoke_status(
+        batch_id: str, aws_region_name: str, logging_obj: "LiteLLMLoggingObj | None" = None, **kwargs: object
+    ) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -278,7 +280,7 @@ class BedrockBatchesHandler:
     def handle_model_invocation_job_status(
         batch_id: str,
         aws_region_name: str | None = None,
-        logging_obj=None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
         **kwargs: object,
     ) -> "LiteLLMBatch":
         """

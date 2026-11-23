@@ -281,7 +281,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         litellm_params: dict[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> tuple[list[AllMessageValues], dict[str, object] | None]:
         """
         Pre-call hook that processes the prompt template before making the LLM call.
@@ -339,7 +339,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         messages = []
         lines: Final = prompt_content.strip().split("\n")
         current_role = None
-        current_content = []
+        current_content: list[str] = []
 
         for line in lines:
             line = line.strip()
@@ -400,7 +400,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         litellm_params: Mapping[str, object] | None = None,
         prompt_id: str | None = None,
         prompt_variables: Mapping[str, object] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> object:
         """
         Post-call hook for any post-processing after the LLM call.
@@ -435,7 +435,7 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -467,7 +467,7 @@ class BitBucketPromptManager(CustomPromptManagement):
             template_model: Final = prompt_metadata.get("model")
 
             # Extract optional parameters from metadata
-            optional_params: Final = {}
+            optional_params: Final[dict[str, object]] = {}
             for param in [
                 "temperature",
                 "max_tokens",
@@ -492,7 +492,7 @@ class BitBucketPromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -518,16 +518,16 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Get chat completion prompt from BitBucket and return processed model, messages, and parameters.
         """
@@ -548,18 +548,18 @@ class BitBucketPromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """

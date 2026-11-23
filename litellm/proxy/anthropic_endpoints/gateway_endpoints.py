@@ -73,7 +73,7 @@ _DEVICE_CODE_SEPARATOR: Final = "."
 _DEVICE_POLL_INTERVAL_SECONDS: Final = 5
 _SECONDS_PER_HOUR: Final = 3600
 _MANAGED_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
-_NO_SETTINGS: Final = MappingProxyType({})
+_NO_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 _POST_ONLY: Final = ["POST"]
 
 

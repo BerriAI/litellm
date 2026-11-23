@@ -99,14 +99,14 @@ class CohereChatConfig(BaseConfig):
     """
 
     preamble: str | None = None
-    chat_history: list | None = None
+    chat_history: list[object] | None = None
     generation_id: str | None = None
     response_id: str | None = None
     conversation_id: str | None = None
     prompt_truncation: str | None = None
-    connectors: list | None = None
+    connectors: list[object] | None = None
     search_queries_only: bool | None = None
-    documents: list | None = None
+    documents: list[object] | None = None
     temperature: int | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
@@ -114,21 +114,21 @@ class CohereChatConfig(BaseConfig):
     p: int | None = None
     frequency_penalty: int | None = None
     presence_penalty: int | None = None
-    tools: list | None = None
-    tool_results: list | None = None
+    tools: list[object] | None = None
+    tool_results: list[object] | None = None
     seed: int | None = None
 
     def __init__(
         self,
         preamble: str | None = None,
-        chat_history: list | None = None,
+        chat_history: Sequence[object] | None = None,
         generation_id: str | None = None,
         response_id: str | None = None,
         conversation_id: str | None = None,
         prompt_truncation: str | None = None,
-        connectors: list | None = None,
+        connectors: Sequence[object] | None = None,
         search_queries_only: bool | None = None,
-        documents: list | None = None,
+        documents: Sequence[object] | None = None,
         temperature: int | None = None,
         max_tokens: int | None = None,
         max_completion_tokens: int | None = None,
@@ -136,8 +136,8 @@ class CohereChatConfig(BaseConfig):
         p: int | None = None,
         frequency_penalty: int | None = None,
         presence_penalty: int | None = None,
-        tools: list | None = None,
-        tool_results: list | None = None,
+        tools: Sequence[object] | None = None,
+        tool_results: Sequence[object] | None = None,
         seed: int | None = None,
     ) -> None:
         locals_: Final[dict[str, object]] = locals().copy()
@@ -276,7 +276,7 @@ class CohereChatConfig(BaseConfig):
         cohere_tools_response: Final = raw_response_json.get("tool_calls", None)
         if cohere_tools_response is not None and cohere_tools_response != []:
             # convert cohere_tools_response to OpenAI response format
-            tool_calls: Final = []
+            tool_calls: Final[list[Mapping[str, object]]] = []
             for tool in cohere_tools_response:
                 function_name = tool.get("name", "")
                 generation_id = tool.get("generation_id", "")
@@ -315,10 +315,10 @@ class CohereChatConfig(BaseConfig):
     def _construct_cohere_tool(
         self,
         tools: list | None = None,
-    ):
+    ) -> list[Mapping[str, object]]:
         if tools is None:
             tools = []
-        cohere_tools: Final = []
+        cohere_tools: Final[list[Mapping[str, object]]] = []
         for tool in tools:
             cohere_tool = self._translate_openai_tool_to_cohere(tool)
             cohere_tools.append(cohere_tool)
@@ -327,7 +327,7 @@ class CohereChatConfig(BaseConfig):
     def _translate_openai_tool_to_cohere(
         self,
         openai_tool: dict,
-    ):
+    ) -> Mapping[str, object]:
         # cohere tools look like this
         """
         {

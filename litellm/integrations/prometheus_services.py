@@ -63,7 +63,7 @@ class PrometheusServicesLogger:
     def __init__(
         self,
         mock_testing: bool = False,
-        **kwargs,
+        **kwargs: object,
     ):
         try:
             try:
@@ -155,7 +155,7 @@ class PrometheusServicesLogger:
         if failure_class is not None:
             self.redis_breaker_failures.labels(failure_class).inc()
 
-    def is_metric_registered(self, metric_name) -> bool:
+    def is_metric_registered(self, metric_name: str) -> bool:
         # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
         # perf regression when a new Router is created per request (e.g. router_settings in DB).
         names_to_collectors: Final = getattr(self.REGISTRY, "_names_to_collectors", None)
@@ -166,7 +166,7 @@ class PrometheusServicesLogger:
                 return True
         return False
 
-    def _get_metric(self, metric_name):
+    def _get_metric(self, metric_name: str):
         """
         Helper function to get a metric from the registry by name.
         """
@@ -211,7 +211,7 @@ class PrometheusServicesLogger:
 
     def observe_histogram(
         self,
-        histogram,
+        histogram: object,
         labels: str,
         amount: float,
     ):
@@ -221,7 +221,7 @@ class PrometheusServicesLogger:
 
     def update_gauge(
         self,
-        gauge,
+        gauge: object,
         labels: str,
         amount: float,
     ):
@@ -230,7 +230,7 @@ class PrometheusServicesLogger:
 
     def increment_counter(
         self,
-        counter,
+        counter: object,
         labels: str,
         amount: float,
         additional_labels: list[str] | None = [],
