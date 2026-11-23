@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.timezone_utils import (
     get_budget_reset_time,
     keeps_budget_reset,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     ROLLOVER_BUDGET_FIELDS,
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -74,6 +75,7 @@ from litellm.repositories.table_repositories import (
     CustomerMemberRepository,
     CustomerOrganizationRepository,
     CustomerTeamRepository,
+    RepositoryTransaction,
 )
 
 if TYPE_CHECKING:
@@ -107,7 +109,7 @@ def _validate_member_rollover(budget: TeamMemberBudgetWrite) -> None:
 
 
 async def _write_budget_update(
-    prisma_client: PrismaClient,
+    prisma_client: PrismaClient | RepositoryTransaction,
     budget_id: str,
     data: Mapping[str, object],
     limits: tuple[BudgetLimit, ...] | None,
@@ -199,6 +201,8 @@ def _field_default(field: _FieldWithDefault) -> object:
 async def new_budget(
     budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    *,
+    transaction: RepositoryTransaction | None = None,
 ):
     """
     Create a new budget object. Can apply this to teams, orgs, end-users, keys.
@@ -278,7 +282,7 @@ async def new_budget(
         else {}
     )
     try:
-        response: Final = await BudgetRepository(prisma_client).table.create(
+        response: Final = await BudgetRepository(transaction or prisma_client).table.create(
             data={
                 **budget_obj_jsonified,
                 **window_data,
@@ -300,6 +304,8 @@ async def new_budget(
 async def update_budget(
     budget_obj: BudgetNewRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    *,
+    transaction: RepositoryTransaction | None = None,
 ):
     """
     Update an existing budget object.
@@ -364,24 +370,32 @@ async def update_budget(
     )
 
     response: Final = await _write_budget_update(
-        prisma_client,
+        transaction or prisma_client,
         budget_obj.budget_id,
         budget_obj_jsonified,
         budget_obj.budget_limits if isinstance(budget_obj, BudgetWriteRequest) else None,
     )
-    await evict_and_broadcast((AuthObject.customer_app_budget(budget_obj.budget_id).key,), user_api_key_cache)
+    if transaction is None:
+        await invalidate_budget_caches(prisma_client, budget_obj.budget_id, user_api_key_cache)
+    return response
+
+
+async def invalidate_budget_caches(
+    prisma_client: PrismaClient, budget_id: str, user_api_key_cache: UserApiKeyCache
+) -> None:
+    await evict_and_broadcast((AuthObject.customer_app_budget(budget_id).key,), user_api_key_cache)
     members: Final = await CustomerMemberRepository(prisma_client).table.find_many(
         where={
             "OR": (
-                {"budget_id": budget_obj.budget_id},
-                {"budget_override_id": budget_obj.budget_id},
-                {"parent_org": {"is": {"budget_id": budget_obj.budget_id}}},
+                {"budget_id": budget_id},
+                {"budget_override_id": budget_id},
+                {"parent_org": {"is": {"budget_id": budget_id}}},
             )
         }
     )
     await forget_customer_hierarchies(tuple(member.customer_member_id for member in members), user_api_key_cache)
     teams: Final = await CustomerTeamRepository(prisma_client).table.find_many(
-        where={"OR": ({"budget_id": budget_obj.budget_id}, {"budget_override_id": budget_obj.budget_id})}
+        where={"OR": ({"budget_id": budget_id}, {"budget_override_id": budget_id})}
     )
     team_ids: Final = tuple(team.customer_team_id for team in teams)
     for offset in range(0, len(team_ids), IN_LIST_CHUNK_SIZE):
@@ -395,18 +409,16 @@ async def update_budget(
             user_api_key_cache,
         )
     organizations: Final = await CustomerOrganizationRepository(prisma_client).table.find_many(
-        where={"budget_id": budget_obj.budget_id}
+        where={"budget_id": budget_id}
     )
     await forget_customer_organization_aliases(
         tuple(organization.alias for organization in organizations), user_api_key_cache
     )
     with service_target("team_member_budgets"):
         try:
-            await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_obj.budget_id}")
+            await user_api_key_cache.async_delete_cache(key=f"team_member_default_budget:{budget_id}")
         except Exception:  # noqa: BLE001  # Cache failure must not fail a committed budget update.
             verbose_proxy_logger.warning("Failed to evict the team member default budget cache", exc_info=True)
-
-    return response
 
 
 def _budget_response(row: "prisma_models.LiteLLM_BudgetTable | None") -> Mapping[str, object] | None:
