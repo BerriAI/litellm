@@ -47,7 +47,10 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.proxy.hooks.rate_limiter_utils import (
+    record_responses_websocket_slot_admission,
+    resolve_llm_provider_for_rate_limit,
+)
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
 from litellm.types.utils import MCP_GUARDRAIL_CALL_TYPES, CallTypes, Usage
@@ -451,6 +454,8 @@ class ParallelRequestLimiterNativeLogger(RustLogger):
                 _PreCallHost(limiter, data, ctx, auth),
             )
         finally:
+            if call_type == CallTypes.aresponses_websocket.value and self.bridge.holds_parallel_slot(state):
+                record_responses_websocket_slot_admission()
             self._stash_descriptors(stash, state, ceiling)
             mirror_rate_limit_response(self.bridge, state)
 

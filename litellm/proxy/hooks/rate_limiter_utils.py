@@ -2,7 +2,11 @@
 Shared utility functions for rate limiter hooks.
 """
 
-from collections.abc import Mapping
+import contextlib
+from collections.abc import Awaitable, Generator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Final
 
 from pydantic import TypeAdapter
@@ -28,6 +32,47 @@ def socket_session_usage(kwargs: Mapping[str, object], response_obj: object) -> 
             )
         case _:
             return None
+
+
+@dataclass(slots=True)
+class ResponsesWebsocketSlotAdmission:
+    admitted: bool = False
+    pending_write: Awaitable[object] | None = None
+
+
+_responses_ws_slot_admission: Final[ContextVar[ResponsesWebsocketSlotAdmission | None]] = ContextVar(
+    "litellm_responses_ws_slot_admission", default=None
+)
+
+
+@contextmanager
+def track_responses_websocket_slot_admission() -> Generator[ResponsesWebsocketSlotAdmission]:
+    admission: Final = ResponsesWebsocketSlotAdmission()
+    token: Final = _responses_ws_slot_admission.set(admission)
+    try:
+        yield admission
+    finally:
+        _responses_ws_slot_admission.reset(token)
+
+
+def record_responses_websocket_slot_admission(
+    pending_write: Awaitable[object] | None = None,
+) -> None:
+    admission: Final = _responses_ws_slot_admission.get()
+    if admission is not None:
+        admission.admitted = True
+        if pending_write is not None:
+            admission.pending_write = pending_write
+
+
+async def await_pending_responses_websocket_slot_write() -> None:
+    admission: Final = _responses_ws_slot_admission.get()
+    if admission is None or admission.pending_write is None:
+        return
+    pending: Final = admission.pending_write
+    admission.pending_write = None
+    with contextlib.suppress(Exception):
+        await pending
 
 
 def resolve_llm_provider_for_rate_limit(

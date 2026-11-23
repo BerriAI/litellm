@@ -97,6 +97,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+from litellm.proxy.hooks.rate_limiter_utils import track_responses_websocket_slot_admission
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
     _CLIENT_PRICING_METADATA_FIELDS,  # pyright: ignore[reportPrivateUsage]  # the HTTP path's own strip list
@@ -2849,107 +2850,113 @@ async def _responses_websocket_session(
 
     request.body = return_body
 
-    # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
-    try:
-        if not model:
-            await _enforce_responses_ws_first_frame_model_auth(
-                request=request,
-                model=resolved_model,
-                user_api_key_dict=user_api_key_dict,
-                llm_router=llm_router,
-            )
-        (
-            data,
-            litellm_logging_obj,
-        ) = await base_llm_response_processor.common_processing_pre_call_logic(
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_logging_obj=proxy_logging_obj,
-            proxy_config=proxy_config,
-            user_model=user_model,
-            user_temperature=user_temperature,
-            user_request_timeout=user_request_timeout,
-            user_max_tokens=user_max_tokens,
-            user_api_base=user_api_base,
-            route_type="_aresponses_websocket",
-            skip_guardrails=True,
-        )
-    except RateLimitError as e:
-        verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
-        with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
-            await websocket.send_text(turn_refusal_frame(e))
-        await websocket.close(code=1008, reason="Rate limit exceeded")
-        return
-    except Exception as e:
-        verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+    with track_responses_websocket_slot_admission() as slot_admission:
         try:
-            open_status: Final = error_status_code(e, 500)
-            await websocket.send_text(
-                responses_ws_error_frame(open_status, responses_ws_error_type(open_status), str(e))
-            )
-        except (WebSocketDisconnect, RuntimeError, OSError):
-            pass
-        await websocket.close(code=1008, reason="Pre-call error")
-        return
-
-    refused_turns: Final = _RefusedTurns()
-    routed_data: Final = dict(
-        data,
-        **_socket_trace_id(data),
-        user_api_key_dict=user_api_key_dict,
-        responses_ws_frame_guard=_responses_ws_frame_guard(
-            data, user_api_key_dict, proxy_logging_obj, refused_turns.add
-        ),
-        **_routing_hints_from_first_ws_frame(first_message),
-    )
-
-    async def run_failure_hooks(exception: Exception) -> None:
-        await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict,
-            original_exception=exception,
-            request_data=dict(refused_turns.failure_hook_data(exception, routed_data)),
-        )
-
-    def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
-        return spawn_logging_task(
-            asyncio.get_running_loop(), run_failure_hooks(exception), task_name="Responses WebSocket failure row"
-        )
-
-    async def relay_and_bill_failure() -> asyncio.Task[object] | None:
-        try:
-            llm_call: Final = await route_request(
-                data=routed_data,
-                route_type="_aresponses_websocket",
-                llm_router=llm_router,
-                user_model=user_model,
-            )
-            outcome: Final = _DECODED_JSON.validate_python(await llm_call)
-        except asyncio.CancelledError:
-            if refused_turns.first is not None:
-                _ = bill_socket_failure(refused_turns.first)
-            raise
-        except Exception as e:
-            crash_row: Final = bill_socket_failure(e)
-            with contextlib.suppress(Exception):
-                await websocket.send_text(_responses_ws_failure_frame(e))
-            with contextlib.suppress(Exception):
-                await websocket.close(
-                    code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
-                    reason="Pre-call error"
-                    if isinstance(e, EndpointNotSupportedByModelError)
-                    else "Internal server error",
+            # Phase 1: pre-call processing (auth, guardrails, rate limits)
+            try:
+                if not model:
+                    await _enforce_responses_ws_first_frame_model_auth(
+                        request=request,
+                        model=resolved_model,
+                        user_api_key_dict=user_api_key_dict,
+                        llm_router=llm_router,
+                    )
+                (
+                    data,
+                    _,
+                ) = await base_llm_response_processor.common_processing_pre_call_logic(
+                    request=request,
+                    general_settings=general_settings,
+                    user_api_key_dict=user_api_key_dict,
+                    version=version,
+                    proxy_logging_obj=proxy_logging_obj,
+                    proxy_config=proxy_config,
+                    user_model=user_model,
+                    user_temperature=user_temperature,
+                    user_request_timeout=user_request_timeout,
+                    user_max_tokens=user_max_tokens,
+                    user_api_base=user_api_base,
+                    route_type="_aresponses_websocket",
+                    skip_guardrails=True,
                 )
-            return crash_row
-        return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
+            except RateLimitError as e:
+                verbose_proxy_logger.info("Responses WebSocket refused at open by a rate limit: %s", e)
+                with contextlib.suppress(WebSocketDisconnect, RuntimeError, OSError):
+                    await websocket.send_text(turn_refusal_frame(e))
+                await websocket.close(code=1008, reason="Rate limit exceeded")
+                return
+            except Exception as e:
+                verbose_proxy_logger.exception("Responses WebSocket pre-call error")
+                try:
+                    open_status: Final = error_status_code(e, 500)
+                    await websocket.send_text(
+                        responses_ws_error_frame(open_status, responses_ws_error_type(open_status), str(e))
+                    )
+                except (WebSocketDisconnect, RuntimeError, OSError):
+                    pass
+                await websocket.close(code=1008, reason="Pre-call error")
+                return
 
-    # Phase 2: route to upstream provider
-    try:
-        failure_row: Final = await relay_and_bill_failure()
-    finally:
-        await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+            slot_admission.admitted = True
+            refused_turns: Final = _RefusedTurns()
+            routed_data: Final = dict(
+                data,
+                **_socket_trace_id(data),
+                user_api_key_dict=user_api_key_dict,
+                responses_ws_frame_guard=_responses_ws_frame_guard(
+                    data, user_api_key_dict, proxy_logging_obj, refused_turns.add
+                ),
+                **_routing_hints_from_first_ws_frame(first_message),
+            )
+
+            async def run_failure_hooks(exception: Exception) -> None:
+                await proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=exception,
+                    request_data=dict(refused_turns.failure_hook_data(exception, routed_data)),
+                )
+
+            def bill_socket_failure(exception: Exception) -> asyncio.Task[object]:
+                return spawn_logging_task(
+                    asyncio.get_running_loop(),
+                    run_failure_hooks(exception),
+                    task_name="Responses WebSocket failure row",
+                )
+
+            async def relay_and_bill_failure() -> asyncio.Task[object] | None:
+                try:
+                    llm_call: Final = await route_request(
+                        data=routed_data,
+                        route_type="_aresponses_websocket",
+                        llm_router=llm_router,
+                        user_model=user_model,
+                    )
+                    outcome: Final = _DECODED_JSON.validate_python(await llm_call)
+                except asyncio.CancelledError:
+                    if refused_turns.first is not None:
+                        _ = bill_socket_failure(refused_turns.first)
+                    raise
+                except Exception as e:
+                    crash_row: Final = bill_socket_failure(e)
+                    with contextlib.suppress(Exception):
+                        await websocket.send_text(_responses_ws_failure_frame(e))
+                    with contextlib.suppress(Exception):
+                        await websocket.close(
+                            code=1008 if isinstance(e, EndpointNotSupportedByModelError) else 1011,
+                            reason="Pre-call error"
+                            if isinstance(e, EndpointNotSupportedByModelError)
+                            else "Internal server error",
+                        )
+                    return crash_row
+                return bill_socket_failure(outcome) if isinstance(outcome, Exception) else None
+
+            # Phase 2: route to upstream provider
+            failure_row: Final = await relay_and_bill_failure()
+        finally:
+            if slot_admission.admitted:
+                await proxy_logging_obj.arelease_responses_websocket_slot(user_api_key_dict)
+
     if failure_row is not None:
         with contextlib.suppress(Exception):
             await asyncio.shield(failure_row)

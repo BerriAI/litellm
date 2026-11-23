@@ -4985,6 +4985,218 @@ def test_responses_ws_session_limit_resolution(monkeypatch, configured, expected
     assert _resolve_responses_ws_session_limit_seconds() == expected
 
 
+class TestResponsesWSPreCallSlotRelease:
+    @staticmethod
+    def _make_websocket(first_frame: str):
+        from starlette.datastructures import URL
+
+        class _FakeWebSocket:
+            def __init__(self) -> None:
+                self.headers: dict[str, str] = {}
+                self.query_params: dict[str, str] = {}
+                self.scope: dict[str, object] = {"type": "websocket", "path": "/v1/responses", "headers": []}
+                self.url = URL("ws://testserver/v1/responses")
+                self.sent: list[str] = []
+                self.closes: list[tuple[int, str]] = []
+
+            async def accept(self, **kwargs: object) -> None:
+                return None
+
+            async def receive_text(self) -> str:
+                return first_frame
+
+            async def send_text(self, text: str) -> None:
+                self.sent.append(text)
+
+            async def close(self, code: int = 1000, reason: str = "") -> None:
+                self.closes.append((code, reason))
+
+        return _FakeWebSocket()
+
+    @pytest.mark.asyncio
+    async def test_legacy_limiter_releases_slot_on_post_admission_pre_call_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm.proxy.proxy_server as ps
+        import litellm.proxy.route_llm_request as route_mod
+        from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.proxy.utils import InternalUsageCache, hash_token
+
+        frozen_now: Final = datetime.datetime(2026, 11, 23, 12, 0, 0)
+        usage_cache: Final = InternalUsageCache(DualCache())
+        limiter: Final = PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=usage_cache,
+            clock=lambda: frozen_now,
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+        class _FailingPreCallCallback(CustomLogger):
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict,
+                call_type: CallTypesLiteral,
+            ) -> None:
+                raise RuntimeError("post-admission pre-call failure")
+
+        routed_models: Final[list[object]] = []
+
+        async def _fake_route_request(data: dict, **kwargs: object):
+            routed_models.append(data.get("model"))
+
+            async def _relay() -> None:
+                return None
+
+            return _relay()
+
+        monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging_obj)
+        monkeypatch.setattr(ps, "general_settings", {})
+        monkeypatch.setattr(ps, "llm_router", None)
+        monkeypatch.setattr(ps, "proxy_config", ps.ProxyConfig())
+        monkeypatch.setattr(ps, "version", "test")
+        monkeypatch.setattr(route_mod, "route_request", _fake_route_request)
+
+        auth: Final = UserAPIKeyAuth(api_key="sk-legacy-ws-leak", max_parallel_requests=1)
+        bucket: Final = f"{hash_token('sk-legacy-ws-leak')}::{frozen_now.strftime('%Y-%m-%d-%H-%M')}::request_count"
+        first_frame: Final = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+
+        ws1: Final = self._make_websocket(first_frame)
+        monkeypatch.setattr(litellm, "callbacks", [limiter, _FailingPreCallCallback()])
+        await responses_websocket_endpoint(websocket=ws1, model="gpt-4o", user_api_key_dict=auth)
+
+        assert ws1.closes == [(1008, "Pre-call error")]
+        after_fail: Final = await usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+        assert after_fail is not None and after_fail["current_requests"] == 0, after_fail
+
+        ws2: Final = self._make_websocket(first_frame)
+        monkeypatch.setattr(litellm, "callbacks", [limiter])
+        await responses_websocket_endpoint(websocket=ws2, model="gpt-4o", user_api_key_dict=auth)
+
+        assert ws2.closes == []
+        assert routed_models == ["gpt-4o"]
+        after_second: Final = await usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+        assert after_second is not None and after_second["current_requests"] == 0, after_second
+
+    @pytest.mark.asyncio
+    async def test_legacy_limiter_pre_admission_failure_keeps_existing_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm.proxy.proxy_server as ps
+        import litellm.proxy.response_api_endpoints.endpoints as ws_endpoints
+        from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.proxy.utils import InternalUsageCache, hash_token
+
+        frozen_now: Final = datetime.datetime(2026, 11, 23, 12, 0, 0)
+        usage_cache: Final = InternalUsageCache(DualCache())
+        limiter: Final = PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=usage_cache,
+            clock=lambda: frozen_now,
+        )
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+        auth: Final = UserAPIKeyAuth(api_key="sk-legacy-ws-held", max_parallel_requests=1)
+        bucket: Final = f"{hash_token('sk-legacy-ws-held')}::{frozen_now.strftime('%Y-%m-%d-%H-%M')}::request_count"
+        await usage_cache.async_set_cache(
+            key=bucket,
+            value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+            litellm_parent_otel_span=None,
+        )
+
+        monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging_obj)
+        monkeypatch.setattr(ps, "general_settings", {})
+        monkeypatch.setattr(ps, "llm_router", None)
+        monkeypatch.setattr(ps, "proxy_config", ps.ProxyConfig())
+        monkeypatch.setattr(ps, "version", "test")
+        monkeypatch.setattr(litellm, "callbacks", [limiter])
+
+        first_frame: Final = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+
+        async def _deny_auth(**kwargs: object) -> None:
+            raise HTTPException(status_code=403, detail="denied")
+
+        monkeypatch.setattr(ws_endpoints, "_enforce_responses_ws_first_frame_model_auth", _deny_auth)
+        ws_auth_denied: Final = self._make_websocket(first_frame)
+        await responses_websocket_endpoint(websocket=ws_auth_denied, model=None, user_api_key_dict=auth)
+        assert ws_auth_denied.closes == [(1008, "Pre-call error")]
+        after_auth_fail: Final = await usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+        assert after_auth_fail is not None and after_auth_fail["current_requests"] == 1, after_auth_fail
+
+        ws_rate_limited: Final = self._make_websocket(first_frame)
+        await responses_websocket_endpoint(websocket=ws_rate_limited, model="gpt-4o", user_api_key_dict=auth)
+        assert ws_rate_limited.closes == [(1008, "Rate limit exceeded")]
+        after_rate_limit: Final = await usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
+        assert after_rate_limit is not None and after_rate_limit["current_requests"] == 1, after_rate_limit
+
+    @pytest.mark.asyncio
+    async def test_v3_limiter_releases_slot_on_post_admission_pre_call_failure(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm.proxy.proxy_server as ps
+        import litellm.proxy.route_llm_request as route_mod
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+        from litellm.proxy.hooks.parallel_request_limiter_v3_native import native_parallel_request_limiter
+        from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
+        from litellm.proxy.utils import InternalUsageCache
+
+        frozen_now: Final = datetime.datetime(2026, 11, 23, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+            internal_usage_cache=InternalUsageCache(DualCache()),
+            time_provider=lambda: frozen_now,
+        )
+        native_logger: Final = native_parallel_request_limiter(limiter)
+        assert native_logger is not None
+
+        proxy_logging_obj: Final = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+        class _FailingPreCallCallback(CustomLogger):
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict,
+                call_type: CallTypesLiteral,
+            ) -> None:
+                raise RuntimeError("post-admission pre-call failure")
+
+        routed_models: Final[list[object]] = []
+
+        async def _fake_route_request(data: dict, **kwargs: object):
+            routed_models.append(data.get("model"))
+
+            async def _relay() -> None:
+                return None
+
+            return _relay()
+
+        monkeypatch.setattr(ps, "proxy_logging_obj", proxy_logging_obj)
+        monkeypatch.setattr(ps, "general_settings", {})
+        monkeypatch.setattr(ps, "llm_router", None)
+        monkeypatch.setattr(ps, "proxy_config", ps.ProxyConfig())
+        monkeypatch.setattr(ps, "version", "test")
+        monkeypatch.setattr(route_mod, "route_request", _fake_route_request)
+
+        auth: Final = UserAPIKeyAuth(api_key="sk-v3-ws-leak", max_parallel_requests=1)
+        first_frame: Final = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+
+        ws1: Final = self._make_websocket(first_frame)
+        monkeypatch.setattr(litellm, "callbacks", [native_logger, limiter, _FailingPreCallCallback()])
+        await responses_websocket_endpoint(websocket=ws1, model="gpt-4o", user_api_key_dict=auth)
+        assert ws1.closes == [(1008, "Pre-call error")]
+
+        ws2: Final = self._make_websocket(first_frame)
+        monkeypatch.setattr(litellm, "callbacks", [native_logger, limiter])
+        await responses_websocket_endpoint(websocket=ws2, model="gpt-4o", user_api_key_dict=auth)
+
+        assert ws2.closes == []
+        assert routed_models == ["gpt-4o"]
+
+
 class TestManagedResponsesSameProvider:
     def _handler(self, model, custom_llm_provider=None):
         from litellm.responses.streaming_iterator import (

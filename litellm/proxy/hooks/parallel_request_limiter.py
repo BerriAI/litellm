@@ -21,7 +21,12 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.budget_throttle import throttled_limit
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
-from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit, socket_session_usage
+from litellm.proxy.hooks.rate_limiter_utils import (
+    await_pending_responses_websocket_slot_write,
+    record_responses_websocket_slot_admission,
+    resolve_llm_provider_for_rate_limit,
+    socket_session_usage,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.redis.stores.rate_limits import RATE_LIMITS_TARGET
 from litellm.types.utils import CallTypes, Usage
@@ -513,13 +518,17 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 values_to_update_in_cache=values_to_update_in_cache,
             )
 
-        asyncio.create_task(
+        cache_update_task: Final = asyncio.create_task(
             self.internal_usage_cache.async_batch_set_cache(
                 cache_list=values_to_update_in_cache,
                 ttl=60,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # don't block execution for cache updates
         )
+        if call_type == CallTypes.aresponses_websocket.value and (
+            values_to_update_in_cache or global_max_parallel_requests is not None
+        ):
+            record_responses_websocket_slot_admission(pending_write=cache_update_task)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
@@ -800,6 +809,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             general_settings,  # pyright: ignore[reportUnknownVariableType]  # module-level settings dict is untyped
         )
 
+        await await_pending_responses_websocket_slot_write()
         now: Final = self._clock()
         await self.async_log_success_event(  # pyright: ignore[reportUnknownMemberType]  # legacy callback signature is untyped
             kwargs={
