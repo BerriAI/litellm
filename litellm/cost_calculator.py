@@ -3370,8 +3370,12 @@ def _optional_batch_rate(
         "input_cost_per_video_token_batches",
     ],
     prompt_tokens: int,
+    *,
+    threshold_is_inclusive: bool = False,
 ) -> float | None:
-    context_key: Final = get_modality_token_cost_key(model_info, key, prompt_tokens)
+    context_key: Final = get_modality_token_cost_key(
+        model_info, key, prompt_tokens, threshold_is_inclusive=threshold_is_inclusive
+    )
     context_rate: Final = get_cost_per_unit(model_info, context_key, None)
     return model_info.get(key) if context_rate is None else context_rate
 
@@ -3612,11 +3616,21 @@ def _batch_prompt_cost(
     text_tokens: Final = max(
         (usage.prompt_tokens or 0) - audio_tokens - image_tokens - video_tokens - cached_tokens - written_tokens, 0
     )
+    audio_batch_rate: Final = _optional_batch_rate(
+        model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens
+    )
     return (
         text_tokens * input_rate
         + audio_tokens
         * _batch_or_half(
-            _optional_batch_rate(model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens),
+            _optional_batch_rate(
+                model_info,
+                "input_cost_per_audio_token_batches",
+                usage.prompt_tokens,
+                threshold_is_inclusive=threshold_is_inclusive,
+            )
+            if audio_batch_rate is None and threshold_is_inclusive
+            else audio_batch_rate,
             _standard_rate(
                 model_info,
                 "input_cost_per_audio_token",
