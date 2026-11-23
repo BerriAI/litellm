@@ -165,6 +165,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     messageTraceId,
     setMessageTraceId,
     responsesSessionId,
+    previousResponseId,
     useApiSessionManagement,
     updateTextUI,
     updateReasoningContent,
@@ -175,6 +176,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     updateSearchResults,
     handleResponseId,
     handleToggleSessionManagement,
+    handleHistoryResent,
     handleMCPEvent,
     updateImageUI,
     updateEmbeddingsUI,
@@ -986,7 +988,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               .map(({ role, content }) => ({ role, content })),
             newUserMessage,
           ];
-          const apiChatHistory = useApiSessionManagement && responsesSessionId ? [newUserMessage] : fullChatHistory;
+          const apiChatHistory = previousResponseId ? [newUserMessage] : fullChatHistory;
 
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -1003,7 +1005,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
             selectedPolicies.length > 0 ? selectedPolicies : undefined,
             selectedMCPServers, // Pass the selected servers array
-            useApiSessionManagement ? responsesSessionId : null, // Only pass session ID if API mode is enabled
+            previousResponseId,
             handleResponseId, // Pass callback to capture new response ID
             handleMCPEvent, // Pass MCP event handler
             codeInterpreter.enabled, // Enable Code Interpreter tool
@@ -1015,7 +1017,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
             streamingEnabled,
             updateTotalLatency,
             customHeaders,
-            () => fullChatHistory,
+            () => {
+              handleHistoryResent();
+              return fullChatHistory;
+            },
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [

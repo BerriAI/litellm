@@ -582,13 +582,19 @@ describe("ChatUI", () => {
     expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
   });
 
-  it("continues an API session with only the new message and offers the answered turns for a resend", async () => {
+  it("continues an API session with only the new message, then sends the whole conversation once it was resent", async () => {
     type ResponsesArgs = Parameters<typeof makeOpenAIResponsesRequest>;
     const responsesRequest = vi.mocked(makeOpenAIResponsesRequest);
+    const resentHistories: unknown[] = [];
     responsesRequest
       .mockImplementationOnce(async (...args: ResponsesArgs) => {
         args[15]?.("resp-first");
         args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        resentHistories.push(args[26]?.());
+        args[15]?.("resp-second");
+        args[1]("assistant", "You are Ada", args[2]);
       })
       .mockResolvedValueOnce(undefined);
     (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -623,15 +629,27 @@ describe("ChatUI", () => {
     await sendMessage("I am Ada");
     expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
     await sendMessage("Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await sendMessage("Thanks");
 
-    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(2));
-    const followUp = responsesRequest.mock.calls[1];
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(3));
+    const [, followUp, afterResend] = responsesRequest.mock.calls;
     expect(followUp[14]).toBe("resp-first");
     expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
-    expect(followUp[26]?.()).toEqual([
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "I am Ada" },
+        { role: "assistant", content: "Hi Ada" },
+        { role: "user", content: "Who am I?" },
+      ],
+    ]);
+    expect(afterResend[14]).toBeNull();
+    expect(afterResend[0]).toEqual([
       { role: "user", content: "I am Ada" },
       { role: "assistant", content: "Hi Ada" },
       { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "Thanks" },
     ]);
   });
 

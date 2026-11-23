@@ -124,29 +124,52 @@ describe("/ui/chat request metrics", () => {
     expect(typeof call[ON_TOTAL_LATENCY_INDEX]).toBe("function");
   });
 
-  it("continues the session with only the new message and offers the whole conversation for a resend", async () => {
-    mockMakeOpenAIResponsesRequest
-      .mockImplementationOnce(async (...args: unknown[]) => {
+  it("continues the session with only the new message, then sends the whole conversation once it was resent", async () => {
+    const answer =
+      (reply: string, responseId: string) =>
+      async (...args: unknown[]) => {
         await new Promise((resolve) => setTimeout(resolve, 0));
-        (args[1] as (role: string, delta: string) => void)("assistant", "About a cent.");
-        (args[ON_RESPONSE_ID_INDEX] as (id: string) => void)("resp_first");
+        (args[1] as (role: string, delta: string) => void)("assistant", reply);
+        (args[ON_RESPONSE_ID_INDEX] as (id: string) => void)(responseId);
+      };
+    const resentHistories: unknown[] = [];
+    mockMakeOpenAIResponsesRequest
+      .mockImplementationOnce(answer("About a cent.", "resp_first"))
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        resentHistories.push((args[REPLAY_HISTORY_INDEX] as () => unknown[])());
+        await answer("Two cents.", "resp_second")(...args);
       })
       .mockResolvedValueOnce(undefined);
+    const sendFollowUp = async (text: string) => {
+      fireEvent.change(screen.getByPlaceholderText("Send a message..."), { target: { value: text } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    };
 
     await sendOneMessage();
     expect(await screen.findByText("About a cent.")).toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText("Send a message..."), { target: { value: "And yesterday?" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+    await sendFollowUp("And yesterday?");
+    expect(await screen.findByText("Two cents.")).toBeInTheDocument();
+    await sendFollowUp("Thanks");
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(3));
 
-    const followUp = mockMakeOpenAIResponsesRequest.mock.calls[1];
+    const [, followUp, afterResend] = mockMakeOpenAIResponsesRequest.mock.calls;
     expect(followUp[PREVIOUS_RESPONSE_ID_INDEX]).toBe("resp_first");
     expect(followUp[0]).toEqual([{ role: "user", content: "And yesterday?" }]);
-    expect((followUp[REPLAY_HISTORY_INDEX] as () => unknown[])()).toEqual([
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "How much did this cost?" },
+        { role: "assistant", content: "About a cent." },
+        { role: "user", content: "And yesterday?" },
+      ],
+    ]);
+    expect(afterResend[PREVIOUS_RESPONSE_ID_INDEX]).toBeNull();
+    expect(afterResend[0]).toEqual([
       { role: "user", content: "How much did this cost?" },
       { role: "assistant", content: "About a cent." },
       { role: "user", content: "And yesterday?" },
+      { role: "assistant", content: "Two cents." },
+      { role: "user", content: "Thanks" },
     ]);
   });
 
