@@ -81,6 +81,7 @@ def _issuers(okta_org: str | None = ORG) -> tuple[JWTIssuerConfig, ...]:
 
 def okta_agent(
     *,
+    agent_id: str = "invoice-bot",
     mode: AgentExecutionMode = "autonomous",
     enabled: bool = True,
     active: bool = True,
@@ -88,7 +89,7 @@ def okta_agent(
     scopes: tuple[str, ...] = (),
 ) -> AgentResponse:
     binding: Final = AgentIdentityBinding(
-        agent_id="invoice-bot",
+        agent_id=agent_id,
         active=active,
         provider="okta",
         issuer=CUSTOM,
@@ -98,8 +99,8 @@ def okta_agent(
         revision="r1",
     )
     return AgentResponse(
-        agent_id="invoice-bot",
-        agent_name="invoice-bot",
+        agent_id=agent_id,
+        agent_name=agent_id,
         agent_card_params={},
         identity_managed=True,
         identity=binding,
@@ -111,6 +112,8 @@ def okta_agent(
 class Gateway:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, stores: RustAuthStores) -> None:
         self.monkeypatch: Final = monkeypatch
+        self.agents: Final[dict[str, AgentResponse]] = {}
+        self.identities: Final[dict[str, AgentIdentityBinding]] = {}
         self.client: Final = prisma_with_empty_config()
         self.stores: Final = stores
         self.client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=None)
@@ -133,10 +136,20 @@ class Gateway:
         monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(issuers=list(_issuers())))
 
     def bind(self, agent: AgentResponse) -> None:
-        assert agent.identity is not None
-        self.client.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=agent.identity)
-        self.client.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
-        self.stores.agent_identity.current.add((agent.agent_id, agent.identity.revision))
+        identity: Final = agent.identity
+        assert identity is not None
+        self.agents[agent.agent_id] = agent
+        self.identities[identity.client_id] = identity
+
+        async def find_identity(where: Mapping[str, Mapping[str, str]]) -> AgentIdentityBinding | None:
+            return self.identities.get(where["provider_tenant_id_client_id"]["client_id"])
+
+        async def find_agent(where: Mapping[str, str], include: object = None) -> AgentResponse | None:
+            return self.agents.get(where["agent_id"])
+
+        self.client.writer_db.litellm_agentidentity.find_unique = AsyncMock(side_effect=find_identity)
+        self.client.writer_db.litellm_agentstable.find_unique = AsyncMock(side_effect=find_agent)
+        self.stores.agent_identity.current.add((agent.agent_id, identity.revision))
 
     async def send(
         self,
@@ -728,3 +741,133 @@ async def test_row_19_a_team_header_naming_a_team_that_does_not_grant_the_agent_
 
     assert outcome[:2] == ("refused", "403")
     assert "Select a team that grants access to this agent using x-litellm-team-id" in str(outcome[2])
+
+
+def _act(*actors: str) -> dict[str, object]:
+    nested: Final[dict[str, object]] = {"sub": actors[-1], "sub_profile": "service"}
+    return nested if len(actors) == 1 else {"sub": actors[0], "sub_profile": "ai_agent web_app", "act": _act(*actors[1:])}
+
+
+@pytest.mark.asyncio
+async def test_row_21_actor_token_runs_as_the_agent_its_top_level_actor_names(gateway: Gateway) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+
+    auth: Final = await gateway.send({**SIGN_IN, "act": _act(APP, "0oa1service")})
+
+    assert (auth.agent_id, auth.user_id) == ("invoice-bot", MARIA)
+    assert auth.managed_agent_context is not None
+    assert auth.managed_agent_context.mode == "delegated"
+    assert auth.managed_agent_context.actor_chain == (APP, "0oa1service")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("act", "chain"),
+    [
+        pytest.param(_act(APP, "a2", "a3", "a4", "a5", "a6", "a7"), (APP, "a2", "a3", "a4", "a5"), id="capped_at_five"),
+        pytest.param({"sub": APP, "act": {"sub": 7}}, (APP,), id="stops_at_a_malformed_nested_actor"),
+    ],
+)
+async def test_the_actor_chain_never_refuses_a_request_however_deep_or_broken(
+    gateway: Gateway, act: Mapping[str, object], chain: tuple[str, ...]
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+
+    auth: Final = await gateway.send({**SIGN_IN, "act": act})
+
+    assert auth.managed_agent_context is not None
+    assert auth.managed_agent_context.actor_chain == chain
+
+
+def _actor_bound_elsewhere(gateway: Gateway) -> None:
+    _person(gateway)
+    gateway.bind(okta_agent(agent_id="research-bot", mode="delegated", client="wlp1other"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setup", "act", "message"),
+    [
+        pytest.param(_delegated(), {"sub_profile": "ai_agent"}, "Invalid actor claim", id="row_13_no_actor_sub"),
+        pytest.param(_delegated(), "not-an-object", "Invalid actor claim", id="row_13_not_an_object"),
+        pytest.param(_actor_bound_elsewhere, {"sub": "wlp1other"}, "Token actor does not match its client", id="row_14"),
+        pytest.param(_delegated(enabled=False), {"sub": APP}, "Agent is disabled or no longer bound to an identity", id="row_09_actor"),
+    ],
+)
+async def test_actor_token_refusals(
+    gateway: Gateway, setup: Callable[[Gateway], None], act: object, message: str
+) -> None:
+    setup(gateway)
+
+    outcome: Final = await gateway.outcome({**SIGN_IN, "act": act})
+
+    assert outcome[:2] == ("refused", "403")
+    assert message in str(outcome[2])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "act",
+    [
+        pytest.param({"sub": "wlp1unbound"}, id="actor_unbound"),
+        pytest.param({"sub": "wlp1unbound", "sub_profile": "ai_agent web_app"}, id="ai_agent_actor_unbound"),
+    ],
+)
+async def test_an_actor_with_no_delegated_binding_falls_back_to_the_person_rule_on_cid(
+    gateway: Gateway, act: Mapping[str, object]
+) -> None:
+    gateway.bind(okta_agent(mode="delegated"))
+    _person(gateway)
+
+    auth: Final = await gateway.send({**SIGN_IN, "act": act})
+
+    assert (auth.agent_id, auth.user_id) == ("invoice-bot", MARIA)
+    assert auth.managed_agent_context is not None
+    assert auth.managed_agent_context.actor_chain == ("wlp1unbound",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("setup", "act"),
+    [
+        pytest.param(_bind(mode="autonomous"), {"sub": APP}, id="row_17_cid_autonomous_only"),
+        pytest.param(lambda gateway: None, {"sub": APP}, id="row_17_cid_unbound"),
+        pytest.param(_bind(mode="autonomous"), "not-an-object", id="row_13_malformed_cid_autonomous_only"),
+    ],
+)
+async def test_actor_token_without_a_delegated_binding_keeps_todays_plain_path(
+    gateway: Gateway, setup: Callable[[Gateway], None], act: object
+) -> None:
+    setup(gateway)
+    _person(gateway)
+    claims: Final = {**SIGN_IN, "act": act}
+    today: Final = await _plain_today(gateway, claims)
+
+    assert await gateway.outcome(claims) == today
+    assert today[:3] == ("admitted", None, None)
+
+
+@pytest.mark.asyncio
+async def test_row_03_actor_token_without_a_person_is_sorted_as_if_act_were_absent(gateway: Gateway) -> None:
+    gateway.bind(okta_agent())
+    machine: Final = {**CLIENT_CREDENTIALS, "act": {"sub": "wlp1agent", "sub_profile": "ai_agent"}}
+
+    assert await gateway.outcome(machine) == ("admitted", "invoice-bot", "autonomous", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claims",
+    [pytest.param(SIGN_IN, id="row_05_person"), pytest.param({**SIGN_IN, "act": {"sub": APP}}, id="row_05_actor")],
+)
+async def test_row_05_a_failed_binding_read_refuses_person_and_actor_tokens(
+    gateway: Gateway, claims: Mapping[str, object]
+) -> None:
+    _identity_read_fails(gateway)
+
+    outcome: Final = await gateway.outcome(claims)
+
+    assert outcome[:2] == ("refused", "503")
+    assert "Agent identity could not be loaded" in str(outcome[2])

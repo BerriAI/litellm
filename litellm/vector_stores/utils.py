@@ -25,6 +25,7 @@ LITELLM_WRITTEN_METADATA_KEYS: Final = frozenset(
         "actor_agent_id",
         "target_agent_id",
         "billing_agent_id",
+        "agent_actor_chain",
         "agent_execution_mode",
         "verified_human_user_id",
         "litellm_caller_session_id",

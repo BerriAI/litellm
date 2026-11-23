@@ -6,7 +6,7 @@
 //! a pattern added to `SensitiveDataMasker`, a header added to the client IP list.
 
 /// `SpendLogsMetadata.__annotations__`, in order: the keys of the stored metadata JSON.
-pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 66] = [
+pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 67] = [
     "user_api_key_customer_org_id",
     "user_api_key_app_id",
     "user_api_key_app_group_id",
@@ -22,6 +22,7 @@ pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 66] = [
     "billing_agent_id",
     "agent_execution_mode",
     "verified_human_user_id",
+    "agent_actor_chain",
     "autorouter_baseline_observation",
     "additional_usage_values",
     "user_api_key",

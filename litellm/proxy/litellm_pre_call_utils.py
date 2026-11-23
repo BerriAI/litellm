@@ -2390,15 +2390,16 @@ class LiteLLMProxyRequestSetup:
         user_api_key_logged_metadata: Final = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
             user_api_key_dict=user_api_key_dict
         )
-        if any(
-            key in data[_metadata_variable_name]
-            for key in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
-        ):
+        protected_keys: Final = (
+            "user_api_key_app_id",
+            "user_api_key_app_alias",
+            "user_api_key_app_group_id",
+            "agent_actor_chain",
+        )
+        if any(key in data[_metadata_variable_name] for key in protected_keys):
             incoming_metadata: Final = TypeAdapter(Mapping[str, object]).validate_python(data[_metadata_variable_name])
             data[_metadata_variable_name] = {  # rebind-ok: sanitize the legacy request metadata before trusted stamping
-                key: value
-                for key, value in incoming_metadata.items()
-                if key not in ("user_api_key_app_id", "user_api_key_app_alias", "user_api_key_app_group_id")
+                key: value for key, value in incoming_metadata.items() if key not in protected_keys
             }
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
         data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
@@ -2417,6 +2418,11 @@ class LiteLLMProxyRequestSetup:
                     "billing_agent_id": user_api_key_dict.agent_id or user_api_key_dict.invoked_agent_id,
                     "agent_execution_mode": managed_context.mode if managed_context else None,
                     "verified_human_user_id": managed_context.user_id if managed_context else None,
+                    **(
+                        {"agent_actor_chain": ",".join(managed_context.actor_chain)}
+                        if managed_context and managed_context.actor_chain
+                        else {}
+                    ),
                 }
             )
         )

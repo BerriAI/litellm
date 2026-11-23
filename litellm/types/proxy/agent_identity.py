@@ -103,6 +103,7 @@ class ManagedAgentContext(LiteLLMBaseModel):
     mode: Literal["autonomous", "delegated"]
     user_id: str | None = None
     subject_oid: str | None = None
+    actor_chain: tuple[str, ...] = ()
 
 
 class VerifiedHumanSubject(LiteLLMBaseModel):
