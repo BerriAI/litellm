@@ -249,7 +249,7 @@ def _is_known_model(name: str, known: frozenset[str]) -> bool:
 
 def _fallback_findings(section: Mapping[str, object], path: PathKey, known: frozenset[str]) -> Iterator[Finding]:
     for key in _FALLBACK_KEYS:
-        if key not in section:
+        if section.get(key) is None:
             continue
         rules = _sequence(section[key])
         if rules is None:

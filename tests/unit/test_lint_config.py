@@ -196,6 +196,11 @@ def test_fallbacks_to_db_models_are_not_reported_without_a_model_list(tmp_path: 
     assert _lint(tmp_path, text) == []
 
 
+def test_null_fallback_settings_are_treated_as_unset(tmp_path: Path) -> None:
+    text: Final = "router_settings:\n  fallbacks: null\n  context_window_fallbacks:\n  default_fallbacks: null\n"
+    assert _lint(tmp_path, text) == []
+
+
 def test_mistake_in_included_section_that_replaces_a_root_section_is_attributed_to_the_include(tmp_path: Path) -> None:
     (tmp_path / "settings.yaml").write_text("router_settings:\n  routing_strategy: simple-shufle\n", encoding="utf-8")
     assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
