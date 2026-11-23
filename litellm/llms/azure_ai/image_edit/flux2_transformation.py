@@ -89,10 +89,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request for FLUX 2.
 
