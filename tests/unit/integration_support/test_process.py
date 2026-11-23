@@ -130,6 +130,13 @@ def test_pool_limit_for_prisma_leaves_prisma_its_connections_after_the_rust_shar
     assert pool_limit_for_prisma(prisma) == limit
 
 
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 4), (4, 6)))
+def test_pool_limit_for_prisma_drops_the_spend_log_writer_reserve_when_the_ledger_is_off(
+    prisma: int, limit: int
+) -> None:
+    assert pool_limit_for_prisma(prisma, rust_spend_log_writer=False) == limit
+
+
 @pytest.mark.parametrize("prisma", (0, -1))
 def test_pool_limit_for_prisma_refuses_fewer_than_one_prisma_connection(prisma: int) -> None:
     with pytest.raises(ValueError, match="at least one connection"):

@@ -143,6 +143,9 @@ def test_spend_log_keeps_subscription_usage_from_standard_logging(call_type: str
 @pytest.mark.parametrize("failed", (False, True))
 def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: str, failed: bool) -> None:
     hierarchy: Final = CustomerHierarchyAuth(
+        app_id="app-1",
+        app_group_id="app-group-1",
+        app_alias="App display",
         customer_org_id="customer-org-1",
         customer_org_alias="Customer org display",
         customer_team_id="customer-team-1",
@@ -166,6 +169,9 @@ def test_spend_log_retains_resolved_customer_identity(bucket: str, call_type: st
     )
     stored: Final = TypeAdapter(Mapping[str, object]).validate_json(payload["metadata"])
     expected: Final = {
+        "user_api_key_app_id": "app-1",
+        "user_api_key_app_group_id": "app-group-1",
+        "user_api_key_app_alias": "App display",
         "user_api_key_customer_org_id": "customer-org-1",
         "user_api_key_customer_org_alias": "Customer org display",
         "user_api_key_customer_team_id": "customer-team-1",
@@ -7814,6 +7820,7 @@ def test_spend_logs_payload(model_id: str | None):
         "user_api_key_customer_member_alias",
         "user_api_key_app_id",
         "user_api_key_app_alias",
+        "user_api_key_app_group_id",
     }
 
     assert "metadata" in payload

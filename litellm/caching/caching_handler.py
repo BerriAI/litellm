@@ -142,7 +142,7 @@ def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object])
     )
 
 
-def _is_chat_completion_cached_dict(cached_result: dict) -> bool:
+def _is_chat_completion_cached_dict(cached_result: Mapping[str, object]) -> bool:
     obj: Final = cached_result.get("object")
     if obj == "response":
         return False
@@ -339,7 +339,7 @@ def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "as
     return task
 
 
-def _request_cache_key(request_kwargs: Mapping[str, Any]) -> str | None:
+def _request_cache_key(request_kwargs: Mapping[str, object]) -> object:
     """Read the caller-supplied ``cache_key`` off the request kwargs."""
     return request_kwargs.get("cache_key", None)
 
@@ -400,7 +400,7 @@ class LLMCachingHandler:
         self.async_streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.request_kwargs = _drop_logging_obj_from_kwargs(request_kwargs)
-        self.preset_cache_key: str | None = None
+        self.preset_cache_key: object = None
         self.original_function = original_function
         self.start_time = start_time
         if litellm.cache is not None and isinstance(litellm.cache.cache, RedisCache):
@@ -418,7 +418,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         start_time: datetime.datetime,
         call_type: str,
-        kwargs: dict[str, Any],
+        kwargs: dict[str, object],
         args: tuple[object, ...] | None = None,
     ) -> CachingHandlerResponse | None:
         """
@@ -767,7 +767,7 @@ class LLMCachingHandler:
 
         """
         embedding_all_elements_cache_hit: bool = False
-        remaining_list: Final = []
+        remaining_list: Final[list[EmbeddingCacheInputElement]] = []
         non_null_list: Final = []
         kwargs_input_as_list: Final = self.handle_kwargs_input_list_or_str(kwargs)
         for idx, cr in enumerate(cached_result):
@@ -896,7 +896,7 @@ class LLMCachingHandler:
         dict1: Final = _prompt_tokens_details_as_mapping(details1)
         dict2: Final = _prompt_tokens_details_as_mapping(details2)
 
-        merged: Final[dict] = {}
+        merged: Final[dict[str, object]] = {}
         for key in set(dict1.keys()) | set(dict2.keys()):
             v1 = dict1.get(key, 0)
             v2 = dict2.get(key, 0)
@@ -1011,8 +1011,12 @@ class LLMCachingHandler:
             dispatch_success_logging(logging_obj, cached_result, start_time, end_time, False, False)
             return
 
+        if not logging_obj.claim_async_success_log():
+            return
+
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
+        logging_obj.mark_async_success_log_enqueued()
         GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
             async_coroutine=logging_obj.async_success_handler(
                 result=cached_result,
@@ -1132,7 +1136,7 @@ class LLMCachingHandler:
         logging_obj: LiteLLMLoggingObj,
         model: str,
         args: tuple[object, ...],
-        custom_llm_provider: str | None = None,
+        custom_llm_provider: object = None,
     ) -> object:
         """
         Internal method to process the cached result
@@ -1546,7 +1550,7 @@ class LLMCachingHandler:
         self,
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict[str, Any],
+        kwargs: Mapping[str, object],
         cached_result: object,
         is_async: bool,
         is_embedding: bool = False,

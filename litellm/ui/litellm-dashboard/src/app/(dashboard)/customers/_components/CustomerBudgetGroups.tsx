@@ -1,5 +1,7 @@
 "use client";
 
+import type { BudgetGroupCatalogScope } from "./CustomerBudgetCatalog";
+
 import { useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -23,13 +25,14 @@ type Props =
       organization: BudgetGroups;
       onSaved: (groups: BudgetGroups) => void | Promise<void>;
       global: true;
-      scope?: "organization" | "app" | "overall-app" | "app-member";
+      scope?: BudgetGroupCatalogScope;
     };
 
 export default function CustomerBudgetGroups(props: Props) {
   const { organization } = props;
   const endpoints = {
     "overall-app": "/management/v1/app_budget_groups",
+    "app-group": "/management/v1/app_group_budget_groups",
     app: "/management/v1/app_customer_organization_budget_groups",
     "app-member": "/management/v1/app_customer_member_budget_groups",
     organization: "/management/v1/customer_organization_budget_groups",

@@ -1,8 +1,11 @@
 //! Calls into `litellm.rust_bridge.host.model_cost`
 
+use litellm_model_catalog::KnownNames;
 use pyo3::call::PyCallArgs;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+
+use super::snapshot::Generation;
 
 pub(crate) const MODULE: &str = "litellm.rust_bridge.host.model_cost";
 
@@ -69,6 +72,46 @@ pub(crate) fn kept<'py>(
     registration: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyDict>> {
     Ok(call(registration.py(), "kept", (previous, registration))?.cast_into::<PyDict>()?)
+}
+
+/// The published table, the generation a pricing snapshot of it is keyed on, and the Python-held state it reads
+pub(crate) fn generation(py: Python<'_>) -> PyResult<GenerationRead<'_>> {
+    let (rows, version, configs): (
+        Bound<'_, PyDict>,
+        (usize, usize, u64, u64),
+        Bound<'_, PyTuple>,
+    ) = call(py, "generation", ())?.extract()?;
+    let (table, size, writes, rules) = version;
+    let (discounts, margins, rule_list) = configs.extract()?;
+    Ok(GenerationRead {
+        rows,
+        generation: Generation {
+            table,
+            size,
+            writes,
+            rules,
+        },
+        discounts,
+        margins,
+        rules: rule_list,
+    })
+}
+
+/// The table, its generation, `cost_discount_config`, `cost_margin_config` and the `fallback_generalizations` rules
+pub(crate) struct GenerationRead<'py> {
+    pub(crate) rows: Bound<'py, PyDict>,
+    pub(crate) generation: Generation,
+    pub(crate) discounts: Bound<'py, PyAny>,
+    pub(crate) margins: Bound<'py, PyAny>,
+    pub(crate) rules: Bound<'py, PyAny>,
+}
+
+pub(crate) fn known_names(py: Python<'_>) -> PyResult<KnownNames> {
+    let (providers, renamed_models) = call(py, "known_names", ())?.extract()?;
+    Ok(KnownNames {
+        providers,
+        renamed_models,
+    })
 }
 
 pub(crate) fn published(py: Python<'_>) -> PyResult<Bound<'_, PyDict>> {

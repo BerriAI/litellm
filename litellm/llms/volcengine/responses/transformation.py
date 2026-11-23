@@ -8,7 +8,7 @@ from pydantic import fields as pyd_fields
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_attributes
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     safe_convert_created_field,
 )
@@ -46,6 +46,11 @@ class _EventModelClass(Protocol):
     def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
 
     def model_validate(self, obj: Mapping[str, object]) -> ResponsesAPIStreamingResponse: ...
+
+
+class _ModelFieldsCarrier(Protocol):
+    @property
+    def model_fields(self) -> Mapping[str, pyd_fields.FieldInfo]: ...
 
 
 class _FieldDefaultCarrier(Protocol):
@@ -528,7 +533,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
             v_type: Final = value_items.get("type")
             for candidate in candidates:
                 try:
-                    candidate_fields: Mapping[str, pyd_fields.FieldInfo] = getattr(candidate, "model_fields")
+                    candidate_fields = require_attributes(candidate, _ModelFieldsCarrier, "model_fields").model_fields
                     type_field = candidate_fields.get("type")
                     if type_field is None:
                         continue

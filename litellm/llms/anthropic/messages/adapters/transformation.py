@@ -1,4 +1,3 @@
-import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -9,12 +8,14 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_items,
     normalize_drop_params,
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.utils import (
@@ -26,11 +27,6 @@ from litellm.llms.anthropic.messages.utils import (
 )
 from litellm.responses.utils import auto_reasoning_summary
 
-# OpenAI has a 64-character limit for function/tool names
-# Anthropic does not have this limit, so we need to truncate long names
-OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
-TOOL_NAME_HASH_LENGTH: Final = 8
-TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 PROVIDERS_SERVED_BY_THE_MISTRAL_CHAT_CONFIG: Final = frozenset({"mistral", "codestral"})
 _COMPACTION_BLOCK: Final = TypeAdapter(dict[str, JsonValue])
@@ -103,25 +99,11 @@ def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
     return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
 
 
-def truncate_tool_name(name: str) -> str:
-    """
-    Truncate tool names that exceed OpenAI's 64-character limit.
-
-    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
-    when multiple tools have similar long names.
-
-    Args:
-        name: The original tool name
-
-    Returns:
-        The original name if <= 64 chars, otherwise truncated with hash
-    """
-    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
-        return name
-
-    # Create deterministic hash from full name to avoid collisions
-    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
-    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
+def is_anthropic_web_search_tool(tool: Mapping[str, object]) -> bool:
+    tool_type: Final = tool.get("type", "")
+    return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
+        tool.get("name", "") == "web_search" and "input_schema" not in tool
+    )
 
 
 def create_tool_name_mapping(
@@ -363,11 +345,30 @@ class AnthropicAdapter:
         Note: Use translate_completion_input_params_with_tool_mapping() if you need
         the tool name mapping for restoring original names in responses.
         """
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        route_params: Final = MappingProxyType({**kwargs})
+        caller_messages: Final = as_object_list(route_params.get("messages"))
+        custom_llm_provider: Final = route_params.get("custom_llm_provider")
         result, _ = self.translate_completion_input_params_with_tool_mapping(
             kwargs,
             drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
         )
-        return result
+        if result is None:
+            return None
+        return {
+            **result,
+            "messages": [
+                *result["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    as_str_mapping(caller_messages[-1]) if caller_messages else None,
+                    result["messages"],
+                    result["model"],
+                    custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                    route_params,
+                ),
+            ],
+        }
 
     def translate_completion_input_params_with_tool_mapping(
         self,
@@ -488,7 +489,7 @@ class AnthropicAdapter:
         return anthropic_wrapper.anthropic_sse_wrapper()
 
 
-_BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
+_BlockT = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 _CLAUDE_OVER_REASONING_EFFORT_PROVIDERS: Final = frozenset({LlmProviders.KYMA.value})
@@ -585,24 +586,7 @@ class LiteLLMAnthropicMessagesAdapter:
         ]
 
     def _is_web_search_tool(self, tool: Mapping[str, object]) -> bool:
-        """
-        Check if a tool is an Anthropic web search tool.
-
-        Anthropic web search tools have:
-        - type starting with "web_search" (e.g., "web_search_20260209")
-        - legacy name = "web_search" without a client input_schema
-
-        Args:
-            tool: Tool definition dict
-
-        Returns:
-            True if this is a web search tool
-        """
-        tool_type: Final = tool.get("type", "")
-        tool_name: Final = tool.get("name", "")
-        return (isinstance(tool_type, str) and tool_type.startswith("web_search")) or (
-            tool_name == "web_search" and "input_schema" not in tool
-        )
+        return is_anthropic_web_search_tool(tool)
 
     def translate_anthropic_messages_to_openai(
         self,
@@ -898,7 +882,7 @@ class LiteLLMAnthropicMessagesAdapter:
         thinking: Mapping[str, object],
         model: str,
         custom_llm_provider: str | None,
-    ) -> Any:
+    ) -> str | Mapping[str, object]:
         """
         Apply the reasoning_effort/summary wrapping rules shared by every
         thinking->reasoning_effort translation path.
@@ -1588,15 +1572,17 @@ class LiteLLMAnthropicMessagesAdapter:
                     # Strip Gemini thought-signature suffix and normalize id chars
                     # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
-                    tool_use_block = AnthropicResponseContentBlockToolUse(
-                        type="tool_use",
-                        id=normalize_anthropic_tool_use_id(raw_id),
-                        name=original_name,
-                        input=parse_tool_call_arguments(
-                            tool_call.function.arguments,
-                            tool_name=original_name,
-                            context="Anthropic pass-through adapter",
-                        ),
+                    tool_use_block = AnthropicResponseContentBlockToolUse.model_validate(
+                        {
+                            "type": "tool_use",
+                            "id": normalize_anthropic_tool_use_id(raw_id),
+                            "name": original_name,
+                            "input": parse_tool_call_arguments(
+                                tool_call.function.arguments,
+                                tool_name=original_name,
+                                context="Anthropic pass-through adapter",
+                            ),
+                        }
                     )
                     # Add provider_specific_fields if signature is present
                     if provider_specific_fields:

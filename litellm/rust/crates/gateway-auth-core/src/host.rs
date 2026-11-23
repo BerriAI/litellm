@@ -12,7 +12,7 @@ use crate::{
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
-            RegisteredAgent, TeamRead, UserLookup, UserRead,
+            RegisteredAgent, Team, TeamRead, UserLookup, UserRead,
         },
         key::Owner,
     },
@@ -145,7 +145,7 @@ pub trait AuthHost: Send + Sync {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// What the auth cache holds for `claim`: the hash of the key it maps to, or a sentinel.
-    /// Management endpoints evict it under `claim.cache_key()`.
+    /// Management endpoints evict it under the key the host caches the claim by.
     fn cached_key_mapping(
         &self,
         claim: MappedClaim<'_>,
@@ -246,6 +246,15 @@ pub trait AuthHost: Send + Sync {
         &self,
         alias: &str,
     ) -> impl Future<Output = Result<AliasRead<TeamRow<Self>>, Error>> + Send;
+
+    /// Project the effective user's member from the team already read by this request.
+    fn bind_team_member(
+        &self,
+        team: Team<TeamRow<Self>>,
+        _user_id: &str,
+    ) -> impl Future<Output = Result<Team<TeamRow<Self>>, Error>> + Send {
+        std::future::ready(Ok(team))
+    }
 
     /// `get_team_membership`
     fn load_team_membership(

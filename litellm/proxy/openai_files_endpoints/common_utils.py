@@ -23,13 +23,18 @@ from typing import (
 from urllib.parse import unquote, urlparse
 
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_FILE_LIST_LIMIT
 from litellm.litellm_core_utils.batch_utils import batch_cost_is_final
 from litellm.litellm_core_utils.cloud_storage_security import REQUEST_S3_BUCKET_PARAMS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    iter_items,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.llms.gemini.files.utils import gemini_file_id
@@ -39,6 +44,7 @@ from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -329,7 +335,13 @@ def is_litellm_executed_batch(decoded_unified_batch_id: str) -> bool:
     return bool(marker) and batch_id.startswith(LITELLM_EXECUTED_BATCH_ID_PREFIX)
 
 
-def encode_file_id_with_model(file_id: str, model: str, id_type: Literal["file", "batch"] = "file") -> str:
+class _FileIdLike(Protocol):
+    def startswith(self, prefix: str, /) -> object: ...
+
+
+def encode_file_id_with_model(
+    file_id: str | _FileIdLike, model: str, id_type: Literal["file", "batch"] = "file"
+) -> str:
     """
     Encode a file/batch ID with model routing information.
 
@@ -383,7 +395,10 @@ def encode_batch_response_ids(response, model: str) -> None:
             setattr(
                 response,
                 attr,
-                encode_file_id_with_model(file_id=getattr(response, attr), model=model),
+                encode_file_id_with_model(
+                    file_id=require_attributes(attribute_or_none(response, attr), _FileIdLike, "startswith"),
+                    model=model,
+                ),
             )
 
 
@@ -506,7 +521,7 @@ def is_model_embedded_id(file_id: str) -> bool:
 
 def extract_model_from_sources(
     file_id: str,
-    request,  # FastAPI Request object
+    request: "Request",  # FastAPI Request object
     data: dict | None = None,
 ) -> tuple[str | None, str | None]:
     """
@@ -539,7 +554,7 @@ def extract_model_from_sources(
 
 
 def get_credentials_for_model(
-    llm_router,  # Router instance
+    llm_router: Optional["Router"],  # Router instance
     model_id: str,
     operation_context: str = "file operation",
 ):
@@ -799,16 +814,30 @@ def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: s
     return get_llm_provider(model=deployment_model, custom_llm_provider=custom_llm_provider)[0]
 
 
-def deployment_drop_params(
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.registry().credentials(model_id, form="deployment")
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    return _as_drop_params(RoutingContext(llm_router).default_litellm_params().get("drop_params"))
+
+
+def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    deployment: Final = (
-        llm_router.registry().credentials(model_id, form="deployment")
-        if llm_router is not None and "drop_params" not in request
-        else None
-    )
-    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
-    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
 
 
 def _key_model_allowlist(llm_router: "Router", user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:
@@ -942,9 +971,8 @@ _CONFIG_FILE_RANK: Final = datetime.min.replace(tzinfo=timezone.utc)
 _UNKNOWN_CREATION_TIME: Final = datetime.max.replace(tzinfo=timezone.utc)
 
 
-class _RouterDeployment(TypedDict):
-    model_name: ReadOnly[NotRequired[str]]
-    model_info: ReadOnly[Mapping[str, object]]
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _KeyReach(IntEnum):
@@ -952,7 +980,7 @@ class _KeyReach(IntEnum):
     SHARED = 1
 
 
-def _team_deployment_rank(model_info: Mapping[str, object], deployment_id: str) -> tuple[datetime, str]:
+def _team_deployment_rank(model_info: _SupportsGet, deployment_id: str) -> tuple[datetime, str]:
     if model_info.get("db_model") is not True:
         return _CONFIG_FILE_RANK, ""
     created_at: Final = model_info.get("created_at")
@@ -1006,11 +1034,13 @@ def _team_provider_deployments(
         )
         return None if shared_model is None else _KeyReach.SHARED
 
-    def _usable_team_deployment_order(deployment: _RouterDeployment) -> _TeamDeploymentOrder | None:
-        model_info: Final[Mapping[str, object]] = deployment["model_info"]
+    def _usable_team_deployment_order(deployment: object) -> _TeamDeploymentOrder | None:
+        model_info: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get")
         if model_info.get("team_id") != team_id:
             return None
-        public_model_name: Final = model_info.get("team_public_model_name") or deployment.get("model_name")
+        public_model_name: Final = model_info.get("team_public_model_name") or require_attributes(
+            deployment, _SupportsGet, "get"
+        ).get("model_name")
         deployment_id: Final = model_info.get("id")
         if not isinstance(public_model_name, str) or not isinstance(deployment_id, str):
             return None
@@ -1029,7 +1059,7 @@ def _team_provider_deployments(
     team_deployment_orders: Final = sorted(
         (
             order
-            for deployment in registry.all() or []
+            for deployment in iter_items(registry.all() or [])
             if (order := _usable_team_deployment_order(deployment)) is not None
         ),
         key=_by_team_deployment_rank,
@@ -1219,8 +1249,8 @@ def prepare_data_with_credentials(
 
 async def handle_model_based_routing(
     file_id: str,
-    request,  # FastAPI Request object
-    llm_router,  # Router instance
+    request: "Request",  # FastAPI Request object
+    llm_router: Optional["Router"],  # Router instance
     data: dict,
     user_api_key_dict: "UserAPIKeyAuth",
     check_file_id_encoding: bool = True,
@@ -1737,7 +1767,7 @@ def _extract_model_param(request: "Request", request_body: dict) -> str | None:
 
 
 def _batch_response_model_id_candidates(
-    response,
+    response: object,
     unified_batch_id: str | Literal[False] | None,
 ) -> tuple[str, ...]:
     response_id: Final = getattr(response, "id", None)
@@ -1798,7 +1828,7 @@ def _batch_owner_auth_from_db_object(db_batch_object: object) -> "UserAPIKeyAuth
     return UserAPIKeyAuth(user_id=created_by, team_id=raw_team_id if isinstance(raw_team_id, str) else None)
 
 
-async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
+async def resolve_input_file_id_to_unified(response, prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains a raw provider input_file_id (not already a
     unified ID), look up the corresponding unified file ID from the managed file
@@ -1820,7 +1850,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
             pass
 
 
-async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
+async def resolve_output_file_ids_to_unified(response, prisma_client: "PrismaClient | None") -> None:
     """
     If the batch response contains raw provider output_file_id or error_file_id
     (not already unified IDs), look up the corresponding unified file IDs from
@@ -1932,9 +1962,9 @@ async def ensure_batch_response_managed_file_ids(
 async def get_batch_from_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
 ):
     """
     Try to retrieve batch object from ManagedObjectTable for consistent state.
@@ -2057,12 +2087,12 @@ async def update_batch_in_database(
     batch_id: str,
     unified_batch_id: str | Literal[False],
     response,
-    managed_files_obj,
-    prisma_client,
-    verbose_proxy_logger,
+    managed_files_obj: object | None,
+    prisma_client: "PrismaClient | None",
+    verbose_proxy_logger: logging.Logger,
     db_batch_object: "LiteLLM_ManagedObjectTable | None" = None,
     operation: str = "update",
-    user_api_key_dict=None,
+    user_api_key_dict: "UserAPIKeyAuth | None" = None,
     poller_owns_accounting: bool | None = None,
 ):
     """
