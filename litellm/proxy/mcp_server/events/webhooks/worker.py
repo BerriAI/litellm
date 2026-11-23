@@ -118,7 +118,9 @@ class DeliveryWorker:
         row: Final = context.row
         secret: Final = parse_secret(row.client_secret)
         if secret is None:
-            await self._store.finish(context.delivery, self._clock())
+            await self._store.reschedule(
+                context.delivery, context.delivery.attempt, self._clock() + timedelta(seconds=UNAVAILABLE_DELAY_SECONDS)
+            )
             return
         started: Final = time.monotonic()
         attributes: Final = {"mcp.event.name": context.gateway_name, "mcp.subscription.id": row.id}
