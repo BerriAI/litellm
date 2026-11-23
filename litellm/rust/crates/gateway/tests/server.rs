@@ -1351,6 +1351,7 @@ async fn asking_behind_the_auth_cache(
     if let Some(cached) = cached {
         let hash = litellm_gateway_auth_core::Token::new(VIRTUAL_KEY)
             .hash()
+            .unwrap()
             .to_string();
         redis
             .cli(&["SET", &hash, &cached.to_string()])
