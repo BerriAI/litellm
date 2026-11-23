@@ -38,6 +38,7 @@ import dotenv
 import httpx
 import openai
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -389,6 +390,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+class _EmbeddingResponseFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 ####### COMPLETION ENDPOINTS ################
@@ -6562,7 +6567,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
         response: EmbeddingResponse | None = None
         if isinstance(init_response, dict):
-            response = EmbeddingResponse(**init_response)
+            response = EmbeddingResponse(
+                **_EmbeddingResponseFields(**_REQUEST_KWARGS_ADAPTER.validate_python(init_response))
+            )
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):

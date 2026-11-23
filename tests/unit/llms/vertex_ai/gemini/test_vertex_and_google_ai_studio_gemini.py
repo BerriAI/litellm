@@ -45,6 +45,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 
 
 from litellm.llms.vertex_ai.context_caching.transformation import (
+    cached_block_ttl,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
 )
@@ -8390,6 +8391,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_with_ttl,
         cache_key="test-ttl-cache-key",
+        ttl=cached_block_ttl(messages_with_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -8417,6 +8419,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_invalid_ttl,
         cache_key="test-invalid-ttl",
+        ttl=cached_block_ttl(messages_invalid_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -8443,6 +8446,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_no_ttl,
         cache_key="test-no-ttl",
+        ttl=cached_block_ttl(messages_no_ttl),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,
@@ -8494,6 +8498,7 @@ def test_gemini_context_caching_with_ttl():
         model="gemini-1.5-pro",
         messages=messages_mixed,
         cache_key="test-mixed-ttl",
+        ttl=cached_block_ttl(messages_mixed),
         custom_llm_provider="gemini",
         vertex_project=None,
         vertex_location=None,

@@ -22,6 +22,7 @@ from litellm.anthropic_beta_headers_manager import (
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
@@ -1196,6 +1197,8 @@ class ModelResponseIterator:
                 id=self.response_id,
                 model=self.served_model,
             )
+            if type_chunk == "message_start":
+                set_hidden_params(returned_chunk, {"anthropic_message_start": True})
 
             return returned_chunk
 

@@ -410,6 +410,7 @@ if TYPE_CHECKING:
     from litellm.exceptions import MidStreamFallbackError
     from litellm.responses.streaming_iterator import (
         BaseResponsesAPIStreamingIterator,
+        PricedPartial,
     )
     from litellm.router_strategy.adaptive_router.adaptive_router import (
         AdaptiveRouter,
@@ -3678,6 +3679,7 @@ class Router:
 
                 self._async_generator = async_generator
                 self._billing_source: object = source_iterator
+                self._primary_partial: PricedPartial | None = None
                 self._last_sequence_number = -1
                 # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
                 # would have set. The wrapper bypasses super().__init__ (it has no
@@ -3732,23 +3734,36 @@ class Router:
                 self.fallback_headers_adopted = True
                 return prepared
 
+            def hold_primary_partial(self) -> None:
+                from litellm.responses.streaming_iterator import held_partial_on_disconnect
+
+                self._primary_partial = held_partial_on_disconnect(source_iterator)
+
             def partial_response_on_disconnect(self) -> "ResponseIncompleteEvent | None":
                 """
                 The event to bill on a client disconnect. After a mid-stream hop the primary
-                stream's relayed tokens are folded into the fallback's event, the way
-                _combine_responses_fallback_usage does for a natural end of stream.
+                stream's usage and cost, priced before the fallback took over the logging
+                object, are added to the fallback's event.
                 """
-                from litellm.responses.streaming_iterator import partial_responses_incomplete_event_on_disconnect
+                from litellm.responses.streaming_iterator import (
+                    partial_billed_for_both_deployments,
+                    partial_responses_incomplete_event_on_disconnect,
+                    priced_partial_on_disconnect,
+                    stream_logging,
+                )
 
-                current: Final = partial_responses_incomplete_event_on_disconnect(self._billing_source)
-                if self._billing_source is source_iterator:
-                    return current
-                primary: Final = partial_responses_incomplete_event_on_disconnect(source_iterator)
-                if current is None or primary is None:
-                    return current or primary
-                if primary.response.usage is not None:
-                    Router._combine_responses_fallback_usage(current, primary.response.usage)
-                return current
+                fallback_connected: Final = self._billing_source is not source_iterator
+                if not fallback_connected and self._primary_partial is None:
+                    return partial_responses_incomplete_event_on_disconnect(source_iterator)
+                current: Final = priced_partial_on_disconnect(self._billing_source) if fallback_connected else None
+                primary: Final = self._primary_partial or priced_partial_on_disconnect(source_iterator)
+                if primary is None:
+                    return None if current is None else current.event
+                billed: Final = partial_billed_for_both_deployments(primary, current)
+                billing_logging: Final = stream_logging(self)
+                if billing_logging is not None:
+                    billing_logging.cost_breakdown = billed.breakdown
+                return billed.event
 
             def __aiter__(self):
                 return self
@@ -3811,6 +3826,7 @@ class Router:
                 for held_event in held_lifecycle_events:
                     yield held_event
             except MidStreamFallbackError as e:
+                wrapper.hold_primary_partial()
                 async with contextlib.aclosing(
                     self._aresponses_fallback_attempt(
                         e, source_iterator, initial_kwargs, wrapper.adopt_fallback_headers, held_lifecycle_events
