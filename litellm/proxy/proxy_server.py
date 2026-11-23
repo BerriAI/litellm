@@ -184,6 +184,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -10311,10 +10312,16 @@ def _pricing_override_stamps(
 
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
+    configured_base_model: Final = model_info.get("base_model")
+    base_model: Final = (
+        None
+        if isinstance(configured_base_model, str) and unpriced_bedrock_arn(configured_base_model)
+        else configured_base_model
+    )
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or base_model:
+            model_to_lookup = base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:

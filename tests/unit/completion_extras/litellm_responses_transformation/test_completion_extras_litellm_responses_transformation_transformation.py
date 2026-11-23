@@ -392,6 +392,32 @@ def test_openai_responses_chunk_parser_reasoning_summary():
     assert delta.function_call is None
 
 
+def test_bridged_reasoning_summary_parts_stream_on_the_one_choice_with_a_space_between_parts():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    events: Final = (
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "delta": "First part.", "output_index": 0, "summary_index": 0},
+        {"type": "response.reasoning_summary_part.added", "output_index": 0, "summary_index": 1},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Second part.", "output_index": 0, "summary_index": 1},
+        {"type": "response.reasoning_summary_part.added", "output_index": 1, "summary_index": 0},
+        {"type": "response.reasoning_summary_text.delta", "delta": "Next item.", "output_index": 1, "summary_index": 0},
+        {"type": "response.output_text.delta", "delta": "Answer", "output_index": 2, "content_index": 0},
+    )
+
+    streamed: Final = tuple(choice for event in events for choice in iterator.chunk_parser(event).choices)
+
+    assert {choice.index for choice in streamed} == {0}
+    assert (
+        "".join(getattr(choice.delta, "reasoning_content", None) or "" for choice in streamed)
+        == "First part. Second part. Next item."
+    )
+    assert "".join(choice.delta.content or "" for choice in streamed) == "Answer"
+
+
 def test_chunk_parser_string_output_text_delta_produces_text():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,

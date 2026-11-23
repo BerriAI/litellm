@@ -210,7 +210,7 @@ class NoulAnswer(LiteLLMPydanticObjectBase):
 class ChoiceAnswer(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
     choice: str
-    confidence: float
+    confidence: float | None = None
     probabilities: Mapping[str, float]
 
     model_config = ConfigDict(extra="allow", frozen=True)
@@ -219,7 +219,7 @@ class ChoiceAnswer(LiteLLMPydanticObjectBase):
 class ScoreAnswer(LiteLLMPydanticObjectBase):
     type: Literal["score"]
     score: float
-    confidence: float
+    confidence: float | None = None
     legend: Mapping[str, DecisionsJSON]
     probabilities: Mapping[str, float]
 
@@ -292,8 +292,15 @@ class OpenAIDecisionInputImage(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class OpenAIDecisionInputJSON(LiteLLMPydanticObjectBase):
+    type: Literal["input_json"]
+    data: Mapping[str, object] | Sequence[Mapping[str, object]]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
 OpenAIDecisionContentPart: TypeAlias = Annotated[
-    OpenAIDecisionInputText | OpenAIDecisionInputImage,
+    OpenAIDecisionInputText | OpenAIDecisionInputImage | OpenAIDecisionInputJSON,
     Field(discriminator="type"),
 ]
 
@@ -388,7 +395,9 @@ class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
-            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+            description=(
+                "The text being judged, or user messages whose content mixes input_text, input_image and input_json parts"
+            )
         ),
     ]
     questions: Annotated[
@@ -431,7 +440,7 @@ class OpenAIChoiceAnswer(LiteLLMPydanticObjectBase):
     name: str | None
     choice: str | bool
     probabilities: tuple[OpenAIChoiceProbability, ...]
-    confidence: float
+    confidence: float | None = None
 
     model_config = ConfigDict(frozen=True)
 
@@ -449,7 +458,7 @@ class OpenAIScoreAnswer(LiteLLMPydanticObjectBase):
     name: str | None
     score: float
     probabilities: tuple[OpenAIScoreProbability, ...]
-    confidence: float
+    confidence: float | None = None
 
     model_config = ConfigDict(frozen=True)
 
@@ -578,6 +587,7 @@ class DecisionsIRRequest:
     assets: Mapping[str, DecisionsAsset] = field(default_factory=lambda: _NO_ASSETS)
     audio: tuple[DecisionsAudio, ...] = ()
     videos: tuple[DecisionsVideo, ...] = ()
+    drop_params: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -595,7 +605,7 @@ class DecisionsIRChoiceProbability:
 @dataclass(frozen=True, slots=True)
 class DecisionsIRChoiceAnswer:
     choice: str | bool
-    confidence: float
+    confidence: float | None
     probabilities: tuple[DecisionsIRChoiceProbability, ...]
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
@@ -610,7 +620,7 @@ class DecisionsIRScoreProbability:
 @dataclass(frozen=True, slots=True)
 class DecisionsIRScoreAnswer:
     score: float
-    confidence: float
+    confidence: float | None
     probabilities: tuple[DecisionsIRScoreProbability, ...]
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
 
@@ -650,8 +660,9 @@ class DecisionsIRUsage:
 class DecisionsIRResponse:
     model: str | None
     answers: tuple[DecisionsIRAnswer, ...]
-    usage: DecisionsIRUsage
+    usage: DecisionsIRUsage | None
     extra: Mapping[str, object] = field(default_factory=lambda: _NO_EXTRA)
+    reported_cost: float | None = None
 
 
 @dataclass(frozen=True, slots=True)

@@ -133,7 +133,7 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         return True
 
     def _resolve_api_key(self, api_key: str | None) -> str | None:
-        return api_key or get_secret_str(self._provider.api_key_env) or litellm.api_key
+        return api_key or self._provider.api_key_from(get_secret_str) or litellm.api_key
 
     def _resolve_api_base(self, api_base: str | None) -> str:
         env_api_base: Final = get_secret_str(self._provider.api_base_env) if self._provider.api_base_env else None
