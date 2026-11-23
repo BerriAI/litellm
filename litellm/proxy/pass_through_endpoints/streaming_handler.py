@@ -75,6 +75,12 @@ class PassThroughStreamContext:
     start_time: datetime
 
 
+def _custom_llm_provider_of(litellm_logging_obj: LiteLLMLoggingObj) -> str | None:
+    call_details: Final = as_str_mapping(litellm_logging_obj.model_call_details) or {}
+    custom_llm_provider: Final = call_details.get("custom_llm_provider", "openai")
+    return custom_llm_provider if isinstance(custom_llm_provider, str) else None
+
+
 class PassThroughStreamingHandler:
     @staticmethod
     def _stamp_first_chunk_if_needed(litellm_logging_obj: LiteLLMLoggingObj) -> None:
@@ -379,8 +385,6 @@ class PassThroughStreamingHandler:
         )
         if created is None:
             return
-        call_details: Final = as_str_mapping(litellm_logging_obj.model_call_details) or {}
-        custom_llm_provider: Final = call_details.get("custom_llm_provider", "openai")
         await passthrough_success_handler_obj.register_background_response_create(
             create_request=create_request,
             response_fields=_REQUEST_FIELDS.validate_python(created.model_dump(mode="json")),
@@ -388,7 +392,7 @@ class PassThroughStreamingHandler:
             logging_obj=litellm_logging_obj,
             url_route=url_route,
             start_time=start_time,
-            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+            custom_llm_provider=_custom_llm_provider_of(litellm_logging_obj),
         )
 
     @staticmethod
@@ -495,6 +499,7 @@ class PassThroughStreamingHandler:
                     url_route=url_route,
                     request_body=_REQUEST_FIELDS.validate_python(request_body),
                     raw_bytes=raw_bytes,
+                    custom_llm_provider=_custom_llm_provider_of(litellm_logging_obj),
                 )
                 if endpoint_type == EndpointType.OPENAI
                 else NOT_A_SETTLEMENT
@@ -539,6 +544,7 @@ class PassThroughStreamingHandler:
         url_route: str,
         request_body: Mapping[str, object],
         raw_bytes: Sequence[bytes],
+        custom_llm_provider: str | None,
     ) -> BackgroundResponseSettlementDecision:
         if not OpenAIPassthroughLoggingHandler.stream_may_settle_background_response(url_route, request_body):
             return NOT_A_SETTLEMENT
@@ -548,7 +554,9 @@ class PassThroughStreamingHandler:
         if terminal_response is None:
             return NOT_A_SETTLEMENT
         return await passthrough_success_handler_obj.background_response_settlement_for(
-            terminal_response.id, _REQUEST_FIELDS.validate_python(terminal_response.model_dump(mode="json"))
+            terminal_response.id,
+            _REQUEST_FIELDS.validate_python(terminal_response.model_dump(mode="json")),
+            custom_llm_provider,
         )
 
     @staticmethod

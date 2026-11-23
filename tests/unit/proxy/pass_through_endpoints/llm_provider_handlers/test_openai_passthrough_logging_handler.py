@@ -3713,6 +3713,59 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert not rows.logged_for(CREATOR_METADATA["user_api_key_team_id"])[1:]
 
     @pytest.mark.asyncio
+    async def test_an_azure_finished_read_bills_the_reader_without_reading_the_creator_table(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable(lookup_failures=1)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, _ScriptedFetch(), polls=False
+        )
+        read_url: Final = f"https://my-resource.openai.azure.com/openai/v1/responses/{STORED_RESPONSE_ID}"
+
+        await _passed_through(
+            passthrough_logging,
+            _identified_logging_obj(READ_CALL_ID, READER_METADATA),
+            httpx.Request("GET", read_url),
+            read_url,
+            {},
+            _stored_response("completed", True, RESPONSES_USAGE),
+            custom_llm_provider="azure",
+        )
+
+        assert creators.failed_lookups == []
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert read_row["spend"] > 0
+
+    @pytest.mark.asyncio
+    async def test_an_azure_finished_streamed_read_bills_the_reader_without_reading_the_creator_table(
+        self, local_model_cost_map
+    ):
+        creators: Final = _CreatorTable(lookup_failures=1)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            _DispatchedSpendRows(), _SettlementTable(), creators, _ScriptedFetch(), polls=False
+        )
+        recorder: Final = _SpendRowRecorder()
+        reader: Final = _identified_logging_obj(READ_CALL_ID, READER_METADATA, stream=True, callbacks=(recorder,))
+        reader.model_call_details["custom_llm_provider"] = "azure"
+
+        await PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=reader,
+            passthrough_success_handler_obj=passthrough_logging,
+            url_route=f"https://my-resource.openai.azure.com/openai/v1/responses/{STORED_RESPONSE_ID}?stream=true",
+            request_body={},
+            endpoint_type=EndpointType.OPENAI,
+            start_time=DISPATCH_TIME,
+            raw_bytes=_completed_stream_bytes(_stored_response("completed", True, RESPONSES_USAGE)),
+            end_time=DISPATCH_TIME,
+        )
+        streamed_read: Final = await asyncio.wait_for(recorder.call, timeout=5)
+
+        assert creators.failed_lookups == []
+        assert streamed_read.spend_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert streamed_read.spend_row["spend"] > 0
+
+    @pytest.mark.asyncio
     async def test_a_poll_claim_the_database_drops_is_retried_and_bills_the_creator_once(
         self, local_model_cost_map
     ):

@@ -354,10 +354,14 @@ class PassThroughEndpointLogging:
     _handle_logging = handle_logging
 
     async def background_response_settlement_for(
-        self, settled_response_id: str, response_body: Mapping[str, object]
+        self, settled_response_id: str, response_body: Mapping[str, object], custom_llm_provider: str | None
     ) -> BackgroundResponseSettlementDecision:
         upstream_response_id: Final = _upstream_response_id(settled_response_id)
-        creator: Final = await self.background_response_creators.creator(upstream_response_id)
+        creator: Final = (
+            await self.background_response_creators.creator(upstream_response_id)
+            if custom_llm_provider == LlmProviders.OPENAI.value
+            else None
+        )
         if isinstance(creator, CreatorLookupFailed):
             return CREATOR_BILL_DEFERRED
         match await self.background_response_settlement.claim_outcome(upstream_response_id):
@@ -371,7 +375,11 @@ class PassThroughEndpointLogging:
                 return SETTLES_FOR_CALLER
 
     async def background_response_settlement_of_call(
-        self, method: str, url_route: str, response_fields: Mapping[str, object] | None
+        self,
+        method: str,
+        url_route: str,
+        response_fields: Mapping[str, object] | None,
+        custom_llm_provider: str | None,
     ) -> BackgroundResponseSettlementDecision:
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
@@ -384,7 +392,7 @@ class PassThroughEndpointLogging:
         )
         if settled_response_id is None:
             return NOT_A_SETTLEMENT
-        return await self.background_response_settlement_for(settled_response_id, response_fields)
+        return await self.background_response_settlement_for(settled_response_id, response_fields, custom_llm_provider)
 
     async def settle_for_creator(self, settlement: SettlesForCreator) -> None:
         await self._bill_creator_once(settlement.creator, settlement.response_body)
@@ -942,7 +950,7 @@ class PassThroughEndpointLogging:
                 else None
             )
             settlement: Final = await self.background_response_settlement_of_call(
-                httpx_response.request.method, url_route, response_fields
+                httpx_response.request.method, url_route, response_fields, custom_llm_provider
             )
             if isinstance(settlement, SettlesForCreator):
                 await self.settle_for_creator(settlement)

@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final, TypeAlias
@@ -109,19 +109,63 @@ def _pass_through_client() -> httpx.AsyncClient:
     return get_async_httpx_client(llm_provider=httpxSpecialProvider.PassThroughEndpoint).client
 
 
+PollHeaders: TypeAlias = Callable[[str], Awaitable[Mapping[str, str] | None]]
+
+
+async def _openai_passthrough_poll_headers(api_base: str) -> Mapping[str, str] | None:
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (  # noqa: PLC0415  # that module imports this one
+        openai_passthrough_poll_headers,
+    )
+
+    return await openai_passthrough_poll_headers(api_base)
+
+
+def _api_base(url: httpx.URL) -> str:
+    return str(url.copy_with(path="/", query=None, fragment=None))
+
+
+def _authorization(headers: Iterable[tuple[str, str]]) -> str | None:
+    return next((value for name, value in headers if name.lower() == "authorization"), None)
+
+
+def _with_credential(
+    headers: tuple[tuple[str, str], ...], credential: Mapping[str, str]
+) -> tuple[tuple[str, str], ...]:
+    replaced: Final = frozenset(name.lower() for name in credential)
+    kept: Final = tuple((name, value) for name, value in headers if name.lower() not in replaced)
+    return kept + tuple(credential.items())
+
+
 @dataclass(frozen=True, slots=True)
 class HttpxBackgroundResponseFetch:
     client: Callable[[], httpx.AsyncClient] = _pass_through_client
     timeout_seconds: float = BACKGROUND_RESPONSE_FETCH_TIMEOUT_SECONDS
+    current_credential: PollHeaders = _openai_passthrough_poll_headers
 
     async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        match await self._get(request.url, request.headers):
+            case StopPolling(status_code=401) as unauthorized:
+                refreshed: Final = await self._refreshed_headers(request)
+                return unauthorized if refreshed is None else await self._get(request.url, refreshed)
+            case outcome:
+                return outcome
+
+    async def _get(self, url: httpx.URL, headers: tuple[tuple[str, str], ...]) -> FetchOutcome:
         try:
-            response: Final = await self.client().get(
-                request.url, headers=list(request.headers), timeout=self.timeout_seconds
-            )
+            response: Final = await self.client().get(url, headers=list(headers), timeout=self.timeout_seconds)
         except httpx.HTTPError as e:
             return RetryLater(reason=f"{type(e).__name__}: {e}")
         return _fetch_outcome(response)
+
+    async def _refreshed_headers(self, request: BackgroundResponsePollRequest) -> tuple[tuple[str, str], ...] | None:
+        try:
+            credential: Final = await self.current_credential(_api_base(request.url))
+        except Exception as e:  # noqa: BLE001  # a failed token exchange stops the poll as the 401 alone would
+            verbose_proxy_logger.debug("Could not refresh the credential for background response polls: %s", e)
+            return None
+        if credential is None or _authorization(credential.items()) == _authorization(request.headers):
+            return None
+        return _with_credential(request.headers, credential)
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,9 +295,6 @@ class BackgroundResponsePoller:
         self.active[creator.response_id] = task
         task.add_done_callback(lambda _: self.active.pop(creator.response_id, None))
         return task
-
-
-PollHeaders: TypeAlias = Callable[[str], Awaitable[Mapping[str, str] | None]]
 
 
 def _origin(url: httpx.URL) -> tuple[str, str, int | None]:

@@ -73,6 +73,10 @@ def _slots_released(kwargs: Mapping[str, object]) -> int:
     return 1
 
 
+def _request_count_for_an_uncounted_minute(kwargs: Mapping[str, object]) -> int:
+    return 0 if kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True else 1
+
+
 class CacheObject(TypedDict):
     current_global_requests: dict | None
     request_count_api_key: dict | None
@@ -537,6 +541,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         try:
             self.print_verbose("INSIDE parallel request limiter ASYNC SUCCESS LOGGING")
             released: Final = _slots_released(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            uncounted_minute_requests: Final = _request_count_for_an_uncounted_minute(
+                kwargs  # pyright: ignore[reportUnknownArgumentType]  # legacy callback kwargs are untyped
+            )
 
             global_max_parallel_requests: Final = kwargs["litellm_params"]["metadata"].get(
                 "global_max_parallel_requests", None
@@ -593,7 +600,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -634,7 +641,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
                     "current_rpm": 0,
                 }
@@ -658,9 +665,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {
@@ -682,9 +689,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {
@@ -706,9 +713,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     key=request_count_api_key,
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
-                    "current_requests": 1,
+                    "current_requests": uncounted_minute_requests,
                     "current_tpm": 0,
-                    "current_rpm": 1,
+                    "current_rpm": uncounted_minute_requests,
                 }
 
                 new_val = {

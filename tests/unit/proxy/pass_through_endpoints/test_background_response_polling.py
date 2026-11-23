@@ -19,8 +19,10 @@ from litellm.proxy.pass_through_endpoints.background_response_polling import (
     BACKGROUND_RESPONSE_POLL_SCHEDULE,
     BackgroundResponsePoller,
     BackgroundResponsePollRequest,
+    Fetched,
     HttpxBackgroundResponseFetch,
     RetryLater,
+    StopPolling,
     poll_request_for_create,
     sweep_background_response_polls,
     sweep_periodically,
@@ -33,6 +35,26 @@ COMPLETED: Final = {"id": RESPONSE_ID, "status": "completed", "background": True
 IN_PROGRESS: Final = {"id": RESPONSE_ID, "status": "in_progress", "background": True, "usage": None}
 FAST: Final = PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=0.01)
 ProviderAnswer = httpx.Response | httpx.HTTPError
+EXPIRED_TOKEN_READ: Final = BackgroundResponsePollRequest(
+    url=httpx.URL(f"{RESPONSES_URL}/{RESPONSE_ID}"),
+    headers=(("Authorization", "Bearer expired-token"), ("OpenAI-Project", "proj_creator")),
+)
+
+
+async def _no_credential(api_base: str) -> Mapping[str, str] | None:
+    return None
+
+
+async def _fresh_token(api_base: str) -> Mapping[str, str] | None:
+    return {"authorization": "Bearer fresh-token", "api-key": "fresh-token"}
+
+
+async def _the_expired_token(api_base: str) -> Mapping[str, str] | None:
+    return {"authorization": "Bearer expired-token"}
+
+
+async def _failed_token_exchange(api_base: str) -> Mapping[str, str] | None:
+    raise RuntimeError("workload identity token exchange failed")
 
 
 def _creator(response_id: str = RESPONSE_ID, upstream_url: str = RESPONSES_URL) -> BackgroundResponseCreator:
@@ -65,7 +87,7 @@ class _Provider:
     def poller(self, schedule: PollSchedule = FAST, database_configured: bool = True) -> BackgroundResponsePoller:
         client: Final = httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
         return BackgroundResponsePoller(
-            fetch=HttpxBackgroundResponseFetch(client=lambda: client),
+            fetch=HttpxBackgroundResponseFetch(client=lambda: client, current_credential=_no_credential),
             schedule=schedule,
             database_configured=lambda: database_configured,
             now=lambda: RESUMED_AT,
@@ -509,3 +531,56 @@ async def test_a_fetch_the_provider_never_answers_is_retried_later_instead_of_ho
 
     assert fetching in done
     assert isinstance(fetching.result(), RetryLater)
+
+
+@pytest.mark.asyncio
+async def test_a_read_whose_token_expired_reads_again_with_the_pass_throughs_current_credential():
+    provider: Final = _Provider((httpx.Response(401), httpx.Response(200, json=COMPLETED)))
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(provider.handle))
+    asked_for: Final[list[str]] = []
+
+    async def current_credential(api_base: str) -> Mapping[str, str] | None:
+        asked_for.append(api_base)
+        return await _fresh_token(api_base)
+
+    outcome: Final = await HttpxBackgroundResponseFetch(client=lambda: client, current_credential=current_credential)(
+        EXPIRED_TOKEN_READ
+    )
+
+    assert outcome == Fetched(body=COMPLETED)
+    assert asked_for == ["https://api.openai.com/"]
+    assert [read.headers["authorization"] for read in provider.requests] == [
+        "Bearer expired-token",
+        "Bearer fresh-token",
+    ]
+    assert provider.requests[1].headers["api-key"] == "fresh-token"
+    assert provider.requests[1].headers["openai-project"] == "proj_creator"
+    assert provider.requests[1].url == EXPIRED_TOKEN_READ.url
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("current_credential", [_no_credential, _the_expired_token, _failed_token_exchange])
+async def test_a_refused_read_is_not_sent_again_without_a_different_credential(current_credential):
+    provider: Final = _Provider((httpx.Response(401), httpx.Response(200, json=COMPLETED)))
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(provider.handle))
+
+    outcome: Final = await HttpxBackgroundResponseFetch(client=lambda: client, current_credential=current_credential)(
+        EXPIRED_TOKEN_READ
+    )
+
+    assert outcome == StopPolling(status_code=401)
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [403, 404])
+async def test_a_read_refused_for_another_reason_keeps_its_credential(status_code):
+    provider: Final = _Provider((httpx.Response(status_code), httpx.Response(200, json=COMPLETED)))
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(provider.handle))
+
+    outcome: Final = await HttpxBackgroundResponseFetch(client=lambda: client, current_credential=_fresh_token)(
+        EXPIRED_TOKEN_READ
+    )
+
+    assert outcome == StopPolling(status_code=status_code)
+    assert len(provider.requests) == 1
