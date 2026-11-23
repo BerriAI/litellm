@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from collections.abc import Mapping
@@ -251,7 +252,8 @@ async def test_unsubscribe_still_stops_local_delivery_when_the_upstream_catalog_
 
     down: Final = replace(runtime((server(),)), list_upstream=catalog_down, descriptor_cache=DescriptorCache())
     result: Final = await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, down, store)
-    assert result == Ok(None) and store.rows == {} and store.queue == {}
+    assert isinstance(result, Error) and result.error.code is EventsErrorCode.INTERNAL_ERROR
+    assert (store.rows[SID].status, store.rows[SID].upstream_subscription_id, store.queue) == ("pending", "up_1", {})
 
 
 @pytest.mark.asyncio
@@ -459,7 +461,7 @@ async def test_a_failed_activation_write_undoes_the_upstream_subscription() -> N
 async def test_unsubscribing_a_subscription_still_being_set_up_is_told_to_retry() -> None:
     store: Final = MemoryStore()
     await _subscribe(store, FakeUpstream(responses={"events/subscribe": UPSTREAM_OK}), _Client())
-    store.rows[SID] = store.rows[SID].model_copy(update={"status": "pending"})
+    store.rows[SID] = store.rows[SID].model_copy(update={"status": "pending", "upstream_subscription_id": None})
     result: Final = await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, runtime((server(),)), store)
     assert isinstance(result, Error) and result.error.code is EventsErrorCode.INTERNAL_ERROR
 
@@ -547,3 +549,46 @@ async def test_cancellation_after_upstream_acceptance_reconciles_only_the_origin
         )
         live: Final = subscriptions[-1]
         assert isinstance(live, Mapping) and live["url"] == callback_url(SETTINGS, SID, current.upstream_secret)
+
+
+@pytest.mark.parametrize("absent", (False, True))
+@pytest.mark.asyncio
+async def test_only_a_subscription_not_found_acknowledges_an_interrupted_unsubscribe(absent: bool) -> None:
+    store = MemoryStore()
+    peer = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    assert isinstance(await _subscribe(store, peer, _Client()), Ok)
+    peer.responses = {"events/unsubscribe": ConnectionError("reply lost")}
+    events = runtime((server(),), upstream=peer)
+    assert isinstance(await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, events, store), Error)
+    held = store.rows[SID]
+    assert (held.status, held.upstream_subscription_id) == ("pending", "up_1")
+    await store.discard_pending(SID, held.generation)
+    peer.responses = {
+        "events/unsubscribe": MCPError(
+            code=EventsErrorCode.NOT_FOUND, message="NotFound", data={"kind": "subscription" if absent else "event"}
+        )
+    }
+    retry = await unsubscribe(context(), _UNSUBSCRIBE, None, SETTINGS, events, store)
+    assert peer.calls[-1] == peer.calls[-2]
+    if absent:
+        assert retry == Ok(None) and await store.get(SID) is None
+    else:
+        assert isinstance(retry, Error) and await store.get(SID) == held
+
+
+@pytest.mark.asyncio
+async def test_interrupting_the_post_reservation_quota_check_allows_an_immediate_retry() -> None:
+    class InterruptedQuota(MemoryStore):
+        async def count_live(self, principal: str) -> int:
+            if SID in self.rows:
+                raise asyncio.CancelledError
+            return await super().count_live(principal)
+
+    store: Final = InterruptedQuota()
+    prepared: Final = await prepare_subscription(
+        context(), _params(), None, SETTINGS, runtime((server(),)), _request(store), _Client()
+    )
+    assert isinstance(prepared, Ok)
+    with pytest.raises(asyncio.CancelledError):
+        await reserve_subscription(prepared.ok, SETTINGS)
+    assert await store.reserve(prepared.ok.base)
