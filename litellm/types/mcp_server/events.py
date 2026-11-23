@@ -91,7 +91,7 @@ class PollEventsParams(_SubscriptionParams):
 
 class PollEventsResult(_Wire):
     events: tuple[EventOccurrence, ...]
-    cursor: str | None
+    cursor: str | None = None
     truncated: bool
     has_more: bool
     next_poll_ms: int = Field(ge=0)
