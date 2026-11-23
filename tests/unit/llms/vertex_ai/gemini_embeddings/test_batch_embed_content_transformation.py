@@ -1510,3 +1510,41 @@ class TestTextContentBlocks:
         )
         assert result.usage.prompt_tokens == 270
         assert result.usage.prompt_tokens_details.image_tokens == 0
+
+    def test_batch_usage_gives_a_text_block_its_own_text_tokens_next_to_an_image(self) -> None:
+        text: Final = 'data:image/png;base64,iVBORw0KGgo="}'
+        local: Final = litellm.token_counter(model=self.MODEL, text=text)
+        result: Final = process_response(
+            input=[_text_block(text), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={
+                "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+                "usageMetadata": {
+                    "promptTokenCount": local + 258,
+                    "promptTokenDetails": [
+                        {"modality": "TEXT", "tokenCount": local},
+                        {"modality": "IMAGE", "tokenCount": 258},
+                    ],
+                },
+            },
+        )
+        assert tuple(
+            (usage.prompt_tokens, usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens)
+            for usage in result.item_usage
+        ) == ((local, local, 0), (258, 0, 258))
+
+    def test_batch_usage_splits_text_blocks_by_their_text_length(self) -> None:
+        result: Final = process_response(
+            input=[_text_block("hello"), _text_block(" ".join(("a red apple",) * 200))],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={
+                "embeddings": [{"values": [0.1]}, {"values": [0.2]}],
+                "usageMetadata": {"promptTokenCount": 600},
+            },
+        )
+        short, long = result.item_usage
+
+        assert short.prompt_tokens + long.prompt_tokens == 600
+        assert short.prompt_tokens * 100 < long.prompt_tokens
