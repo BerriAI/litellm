@@ -202,6 +202,7 @@ export const printUsageReport = (html: string, frameTitle: string, fileName: str
   frame.title = frameTitle;
   frame.setAttribute("data-usage-report", "");
   frame.setAttribute("aria-hidden", "true");
+  frame.setAttribute("sandbox", "allow-same-origin allow-modals");
   frame.style.position = "fixed";
   frame.style.width = "0";
   frame.style.height = "0";
