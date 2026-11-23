@@ -11,6 +11,7 @@ import litellm
 from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import USAGE_ONLY_SETTLEMENT_KEY
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, get_parent_otel_span_from_kwargs
@@ -61,8 +62,13 @@ def _is_websocket_passthrough_row(kwargs: Mapping[str, object]) -> bool:
 
 
 def _slots_released(kwargs: Mapping[str, object]) -> int:
-    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect."""
-    if kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES or _is_websocket_passthrough_row(kwargs):
+    """A websocket turn callback releases nothing; the socket's slot is released once at disconnect.
+    A background usage settlement releases nothing either, since its request released its slot when it returned."""
+    if (
+        kwargs.get("call_type") in _CONNECTION_SCOPED_CALL_TYPES
+        or _is_websocket_passthrough_row(kwargs)
+        or kwargs.get(USAGE_ONLY_SETTLEMENT_KEY) is True
+    ):
         return 0
     return 1
 

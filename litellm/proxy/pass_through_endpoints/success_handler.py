@@ -14,7 +14,7 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
+from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER, BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 from litellm.interactions.background_cost_polling import rebuild_logging_obj
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -139,7 +139,9 @@ def _wires_logging(wiring: "TeamCallbackWiring | None") -> bool:
     return wiring is not None and bool(wiring.success_callbacks or wiring.failure_callbacks or wiring.logging_kwargs)
 
 
-async def proxy_creator_logging_wiring(context: BackgroundResponseCreateContext) -> "TeamCallbackWiring | None":
+async def proxy_creator_logging_wiring(
+    context: BackgroundResponseCreateContext, timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
+) -> "TeamCallbackWiring | None":
     from litellm.proxy.auth.auth_checks import get_key_object
     from litellm.proxy.proxy_server import prisma_client, proxy_config, user_api_key_cache
 
@@ -149,9 +151,12 @@ async def proxy_creator_logging_wiring(context: BackgroundResponseCreateContext)
     if not isinstance(key_hash, str):
         return None
     try:
-        creator_key: Final = await get_key_object(
-            hashed_token=key_hash, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        creator_key: Final = await asyncio.wait_for(
+            get_key_object(hashed_token=key_hash, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache),
+            timeout=timeout_seconds,
         )
+    except (TimeoutError, asyncio.TimeoutError):
+        raise
     except Exception as e:  # noqa: BLE001  # an unresolved creator key bills spend only instead of failing the bill
         verbose_proxy_logger.warning("Could not load the key that created a background response: %s", e)
         return None
@@ -485,8 +490,12 @@ class PassThroughEndpointLogging:
             OpenAIPassthroughLoggingHandler,
         )
 
-        if response_fields is None or not OpenAIPassthroughLoggingHandler.creates_pollable_background_response(
-            create_request.method, url_route, request_body, response_fields
+        if (
+            custom_llm_provider != LlmProviders.OPENAI.value
+            or response_fields is None
+            or not OpenAIPassthroughLoggingHandler.creates_pollable_background_response(
+                create_request.method, url_route, request_body, response_fields
+            )
         ):
             return
         response_id: Final = _upstream_response_id(str(response_fields["id"]))

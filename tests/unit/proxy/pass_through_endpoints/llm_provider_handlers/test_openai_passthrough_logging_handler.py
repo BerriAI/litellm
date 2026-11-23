@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from prisma.errors import UniqueViolationError
+from prisma.errors import TableNotFoundError, UniqueViolationError
 from pydantic import BaseModel, ConfigDict
 
 
@@ -27,6 +27,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrou
 )
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.interactions.background_cost_polling import PollSchedule
 from litellm.proxy.pass_through_endpoints.background_response_creator import (
@@ -3145,6 +3146,21 @@ class _CreatorTable:
         return 0 if removed is None else 1
 
 
+class _UnmigratedCreatorTable(_CreatorTable):
+    async def find_unique(self, *, where: Mapping[str, str]) -> _CreatorRow | None:
+        raise TableNotFoundError(data={"user_facing_error": {"meta": {"table": "LiteLLM_BackgroundResponseCreator"}}})
+
+
+class _StalledKeyCache:
+    async def async_get_cache(self, **kwargs: object) -> None:
+        await asyncio.Event().wait()
+
+
+class _DeadlineKeyCache:
+    async def async_get_cache(self, **kwargs: object) -> None:
+        raise DBLookupDeadlineExceeded("key", 0.1)
+
+
 class _ScriptedFetch:
     def __init__(self) -> None:
         self.outcomes: Final[asyncio.Queue[FetchOutcome]] = asyncio.Queue()
@@ -3342,6 +3358,7 @@ async def _passed_through(
     url_route: str,
     request_body: dict[str, object],
     response_body: dict[str, object],
+    custom_llm_provider: str = "openai",
 ) -> None:
     await passthrough_logging.pass_through_async_success_handler(
         httpx_response=httpx.Response(200, json=response_body, request=upstream_request),
@@ -3356,7 +3373,7 @@ async def _passed_through(
         passthrough_logging_payload=PassthroughStandardLoggingPayload(
             url=url_route, request_body=request_body, request_method=upstream_request.method
         ),
-        custom_llm_provider="openai",
+        custom_llm_provider=custom_llm_provider,
         finalize_before_dispatch=True,
     )
 
@@ -3641,6 +3658,59 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert read_row["team_id"] == READER_METADATA["user_api_key_team_id"]
         assert read_row["user"] == READER_METADATA["user_api_key_user_id"]
         assert read_row["spend"] > 0
+
+    @pytest.mark.asyncio
+    async def test_a_finished_read_before_the_creator_table_is_migrated_bills_the_reader(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+
+        await _finished_read(
+            _creator_billing_passthrough_logging(
+                rows, _SettlementTable(), _UnmigratedCreatorTable(), _ScriptedFetch(), polls=False
+            )
+        )
+
+        (read_row,) = rows.spend_rows()
+        assert read_row["team_id"] == READER_METADATA["user_api_key_team_id"]
+        assert read_row["spend"] > 0
+
+    @pytest.mark.asyncio
+    async def test_an_azure_background_create_records_no_creator_and_its_finished_read_bills_the_reader(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        azure_responses_url: Final = "https://my-resource.openai.azure.com/openai/v1/responses"
+        read_url: Final = f"{azure_responses_url}/{STORED_RESPONSE_ID}"
+        create_body: Final = {**CREATE_REQUEST, "background": True}
+
+        await _passed_through(
+            passthrough_logging,
+            _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
+            httpx.Request("POST", azure_responses_url, json=create_body),
+            azure_responses_url,
+            create_body,
+            {**_stored_response("queued", True, None), "id": STORED_RESPONSE_ID},
+            custom_llm_provider="azure",
+        )
+        await _passed_through(
+            passthrough_logging,
+            _identified_logging_obj(READ_CALL_ID, READER_METADATA),
+            httpx.Request("GET", read_url),
+            read_url,
+            {},
+            _stored_response("completed", True, RESPONSES_USAGE),
+            custom_llm_provider="azure",
+        )
+
+        assert creators.rows == {}
+        assert fetch.requests == []
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert read_row["spend"] > 0
+        assert not rows.logged_for(CREATOR_METADATA["user_api_key_team_id"])[1:]
 
     @pytest.mark.asyncio
     async def test_a_poll_claim_the_database_drops_is_retried_and_bills_the_creator_once(
@@ -4002,6 +4072,26 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
 
         assert await proxy_creator_logging_wiring(_creator_context(metadata)) is None
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "key_cache",
+        [pytest.param(_StalledKeyCache(), id="stalled"), pytest.param(_DeadlineKeyCache(), id="past_deadline")],
+    )
+    async def test_the_proxy_wiring_defers_the_bill_when_the_creator_key_lookup_times_out(
+        self, monkeypatch, key_cache: _StalledKeyCache | _DeadlineKeyCache
+    ):
+        monkeypatch.setattr(proxy_server, "prisma_client", SimpleNamespace())
+        monkeypatch.setattr(proxy_server, "user_api_key_cache", key_cache)
+
+        resolving: Final = asyncio.ensure_future(
+            proxy_creator_logging_wiring(_creator_context(CREATOR_METADATA), timeout_seconds=0.05)
+        )
+        done, _ = await asyncio.wait({resolving}, timeout=2)
+        resolving.cancel()
+
+        assert resolving in done
+        assert isinstance(resolving.exception(), (TimeoutError, asyncio.TimeoutError))
 
     @pytest.mark.asyncio
     async def test_the_creator_bill_ends_when_the_response_completed(self, local_model_cost_map):

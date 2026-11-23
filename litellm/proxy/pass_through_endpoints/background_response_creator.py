@@ -304,6 +304,8 @@ class PrismaBackgroundResponseCreatorStore:
         )
 
     async def creator(self, response_id: str) -> BackgroundResponseCreator | CreatorLookupFailed | None:
+        from prisma.errors import TableNotFoundError  # noqa: PLC0415  # local import: prisma may be ungenerated at load
+
         table: Final = self.table()
         if table is None:
             return None
@@ -311,6 +313,8 @@ class PrismaBackgroundResponseCreatorStore:
             row: Final = await asyncio.wait_for(
                 table.find_unique(where=_CreatorKey(response_id=response_id)), timeout=self.timeout_seconds
             )
+        except TableNotFoundError:
+            return None
         except Exception as e:  # noqa: BLE001  # an unknown creator defers the bill instead of billing the reader
             verbose_proxy_logger.warning("Could not look up the creator of background response %s: %s", response_id, e)
             return CREATOR_LOOKUP_FAILED

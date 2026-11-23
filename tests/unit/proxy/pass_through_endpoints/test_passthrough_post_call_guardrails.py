@@ -78,6 +78,7 @@ def _common_patches(mock_proxy_logging, mock_response):
 
     mock_pt_logging = MagicMock()
     mock_pt_logging.pass_through_async_success_handler = AsyncMock()
+    mock_pt_logging.settle_background_response_before_delete = AsyncMock()
 
     patches = [
         patch(

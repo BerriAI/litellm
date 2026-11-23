@@ -28,6 +28,7 @@ BACKGROUND_RESPONSE_POLL_SCHEDULE: Final = PollSchedule(
 )
 
 BACKGROUND_RESPONSE_POLL_LEASE_SECONDS: Final = 300.0
+BACKGROUND_RESPONSE_FETCH_TIMEOUT_SECONDS: Final = 10.0
 
 BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS: Final = 120.0
 
@@ -111,10 +112,13 @@ def _pass_through_client() -> httpx.AsyncClient:
 @dataclass(frozen=True, slots=True)
 class HttpxBackgroundResponseFetch:
     client: Callable[[], httpx.AsyncClient] = _pass_through_client
+    timeout_seconds: float = BACKGROUND_RESPONSE_FETCH_TIMEOUT_SECONDS
 
     async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
         try:
-            response: Final = await self.client().get(request.url, headers=list(request.headers))
+            response: Final = await self.client().get(
+                request.url, headers=list(request.headers), timeout=self.timeout_seconds
+            )
         except httpx.HTTPError as e:
             return RetryLater(reason=f"{type(e).__name__}: {e}")
         return _fetch_outcome(response)
