@@ -412,7 +412,7 @@ pub(super) fn get_bedrock_invoke_anthropic_beta_headers(
         })
         .collect();
     if !dropped.is_empty() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Bedrock Invoke: dropping unsupported anthropic-beta values from client headers: {dropped:?}. Bedrock has no mapping entry for these; forwarding them would cause a 400."
         );
     }
