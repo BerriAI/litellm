@@ -6,13 +6,14 @@ from typing import Final
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
     PENDING_TTL,
+    ActivatedCursor,
     Activation,
     QueuedDelivery,
     SubscriptionQuery,
     SubscriptionRow,
     pending_row,
 )
-from litellm.types.mcp_server.events import CallbackFailure
+from litellm.types.mcp_server.events import CallbackFailure, GapEnvelope
 
 
 @dataclass
@@ -52,18 +53,31 @@ class MemoryStore:
 
     async def activate(
         self, subscription_id: str, activation: Activation, from_statuses: tuple[str, ...] = LIVE_STATUSES
-    ) -> bool:
+    ) -> ActivatedCursor | None:
         current: Final = self.rows.get(subscription_id)
         if current is None or current.status not in from_statuses:
-            return False
-        if activation.reactivation_gap is not None and not await self.enqueue(activation.reactivation_gap):
-            raise ValueError("Duplicate reactivation gap")
-        return self._update_live(
+            return None
+        pending: Final = any(item.subscription_id == subscription_id for item in self.queue.values())
+        watermark: Final = ActivatedCursor(cursor=current.cursor if pending else activation.cursor)
+        if activation.reactivation_gap_id is not None:
+            gap: Final = QueuedDelivery(
+                delivery_id=activation.reactivation_gap_id,
+                subscription_id=subscription_id,
+                webhook_id=activation.reactivation_gap_id,
+                body=GapEnvelope(cursor=watermark.cursor).model_dump_json(),
+                next_attempt_at=datetime.now(timezone.utc),
+                prepared=True,
+            )
+            if not await self.enqueue(gap):
+                raise ValueError("Duplicate reactivation gap")
+        self._update_live(
             subscription_id,
             status="active",
             consecutive_failures=0,
-            **activation.model_dump(exclude={"reactivation_gap"}),
+            cursor=watermark.cursor,
+            **activation.model_dump(exclude={"reactivation_gap_id", "cursor"}),
         )
+        return watermark
 
     async def mark_delivered(self, subscription_id: str, at: datetime) -> None:
         self._update_live(
