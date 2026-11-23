@@ -1,10 +1,13 @@
 import datetime
+import json
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
 
@@ -87,3 +90,23 @@ def test_sambanova_embedding_usage_that_is_not_an_object_is_rejected(usage):
 def test_sambanova_embedding_token_count_that_is_not_an_integer_is_rejected(usage):
     with pytest.raises(ValidationError):
         _transform({"data": [EMBEDDING_ROW], "usage": usage})
+
+
+@pytest.mark.parametrize("encoding_format", ["float", "base64"])
+def test_sambanova_embedding_forwards_encoding_format(encoding_format):
+    sent_bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "list", "model": "E5-Mistral-7B-Instruct", "data": [EMBEDDING_ROW]})
+
+    litellm.embedding(
+        model="sambanova/E5-Mistral-7B-Instruct",
+        input=["hello"],
+        encoding_format=encoding_format,
+        api_base="https://sambanova.test/v1",
+        api_key="sk-test",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
+    )
+
+    assert [body.get("encoding_format") for body in sent_bodies] == [encoding_format]
