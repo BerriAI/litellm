@@ -628,6 +628,39 @@ def test_cost_map_flag_gives_a_new_model_prisma_v25_fields(
     }
 
 
+
+@pytest.mark.asyncio
+async def test_priced_deployment_keeps_prisma_v25_fields_when_the_cost_map_lacks_gnani(
+    respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delitem(litellm.model_cost, "gnani/prisma-v2.5")
+    litellm.get_model_info.cache_clear()
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "v25-unpriced",
+                "litellm_params": {"model": "gnani/prisma-v2.5", "api_key": "test", "api_base": _BASE},
+            },
+            {
+                "model_name": "v25",
+                "litellm_params": {"model": "gnani/prisma-v2.5", "api_key": "test", "api_base": _BASE},
+                "model_info": {"input_cost_per_second": 0.0001},
+            },
+        ]
+    )
+    route: Final = respx_mock.post(f"{_BASE}/stt/v3").respond(json={"success": True, "transcript": "ok"})
+    with pytest.raises(litellm.BadRequestError, match="one explicit language"):
+        await router.atranscription(model="v25", file=_AUDIO)
+    await router.atranscription(model="v25", file=_AUDIO, language="hi", keywords=["rupees"])
+    assert _form(route.calls.last.request) == {
+        "model": b"prisma-v2.5",
+        "language_code": b"hi-IN",
+        "bias_list": b'["rupees"]',
+        "bias_score": b"1.0",
+        "audio_file": _AUDIO[1],
+    }
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("failure", "expected"), [(httpx.ConnectError, litellm.APIConnectionError), (httpx.ReadTimeout, litellm.Timeout)]

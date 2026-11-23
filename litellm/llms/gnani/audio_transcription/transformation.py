@@ -62,7 +62,7 @@ def _is_v25(model: str) -> bool:
     if (as_str_mapping(published().get(f"gnani/{name}")) or {}).get("litellm_provider") != "gnani":
         return name == _V25_MODEL
     flags: Final = litellm.get_model_info(model=name, custom_llm_provider="gnani").get("provider_specific_entry")
-    return flags is not None and flags.get(_V25_FIELDS_FLAG) == 1
+    return name == _V25_MODEL if flags is None else flags.get(_V25_FIELDS_FLAG) == 1
 
 
 def _normalized_hint(hint: str) -> str:
