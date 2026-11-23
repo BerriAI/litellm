@@ -337,3 +337,55 @@ def test_model_level_during_call_guardrail_runs_for_a_request_by_the_deployment_
     finally:
         deleted: Final = gateway.request("DELETE", f"/guardrails/{string_value(created['guardrail_id'])}")
         assert deleted.status_code == 200, deleted.text
+
+
+def _completion(request: Request) -> Reply:
+    if (request.method, request.target) == ("GET", "/v1/models"):
+        return Reply(body=b'{"object":"list","data":[]}')
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "served"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 1},
+            }
+        ).encode()
+    )
+
+
+@pytest.mark.parametrize("caller", ("teamless", "team-1"))
+def test_another_teams_ungranted_deployment_neither_blocks_nor_serves_a_request_by_the_litellm_model(
+    gateway: Gateway, caller: str
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"granted-{suffix}"
+        litellm_model: Final = f"openai/two-teams-{suffix}"
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="granted-deployment",
+            model_info={"access_groups": [group]},
+        )
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="other-team-deployment",
+            model_info={"team_id": scenario.team(), "team_public_model_name": f"other-team-{suffix}"},
+        )
+        key: Final = (
+            scenario.key(models=[group])
+            if caller == "teamless"
+            else scenario.key(team_id=scenario.team(models=[group]))
+        )
+        statuses: Final = tuple(_chat(gateway, litellm_model, key).status_code for _ in range(6))
+        served_by: Final = {
+            entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+        }
+        assert statuses == (200,) * 6, statuses
+        assert served_by == {"Bearer granted-deployment"}, served_by

@@ -5020,10 +5020,11 @@ def deployments_routed_by_litellm_model(
 ) -> tuple[DeploymentTypedDict, ...]:
     if not _routes_to_deployments_by_litellm_model(model, llm_router, team_id):
         return ()
+    registry: Final = llm_router.registry()
     return tuple(
         deployment
-        for deployment in llm_router.registry().deployments() or ()
-        if "model" in deployment["litellm_params"] and deployment["litellm_params"]["model"] == model
+        for deployment in registry.deployments() or ()
+        if deployment["litellm_params"].get("model") == model and registry.includes(deployment, team_id=team_id)
     )
 
 
@@ -5064,7 +5065,7 @@ def _every_deployment_with_litellm_model_granted(
     if not isinstance(llm_router, Router):
         return False
     namesakes: Final = deployments_routed_by_litellm_model(model, llm_router, team_id)
-    return any(llm_router.registry().includes(deployment, team_id=team_id) for deployment in namesakes) and all(
+    return bool(namesakes) and all(
         _deployment_granted(deployment, llm_router, models, team_model_aliases, team_id) for deployment in namesakes
     )
 

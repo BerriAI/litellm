@@ -2939,6 +2939,8 @@ _NAMESAKE_DEPLOYMENTS: Final = (
     _namesake_deployment(
         "model_name_team-2_grouped", "openai/team-2-grouped-raw", "group-a", team_info={"team_id": "team-2"}
     ),
+    _namesake_deployment("cross-team-granted", "openai/cross-team-raw", "group-a"),
+    _namesake_deployment("model_name_team-2_ungranted", "openai/cross-team-raw", team_info={"team_id": "team-2"}),
 )
 
 
@@ -2988,6 +2990,9 @@ def _can_call(
         (["group-a"], "openai/team-2-grouped-raw", "team-2", True),
         (["group-a"], "openai/team-2-grouped-raw", "team-1", False),
         (["group-a"], "openai/team-2-grouped-raw", None, False),
+        (["group-a"], "openai/cross-team-raw", None, True),
+        (["group-a"], "openai/cross-team-raw", "team-1", True),
+        (["group-a"], "openai/cross-team-raw", "team-2", False),
     ],
 )
 def test_a_restricted_caller_reaches_a_litellm_model_name_only_when_every_deployment_behind_it_is_granted(

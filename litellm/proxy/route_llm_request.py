@@ -807,7 +807,7 @@ def model_route(
     settings: Final = llm_router.settings()
     if settings.router_general_settings.pass_through_all_models:
         return RouterModelRoute("pass_through")
-    if settings.default_deployment is not None or len(registry.patterns().patterns) > 0:
+    if settings.default_deployment is not None or len(registry.patterns().patterns) > 0:  # pyright: ignore[reportUnknownMemberType]  # untyped deployment dicts
         return RouterModelRoute("default_or_wildcard")
     if model in registry.names(kind="deployment_names"):
         return RouterModelRoute("specific_deployment")
