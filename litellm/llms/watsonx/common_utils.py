@@ -1,9 +1,7 @@
-from collections.abc import Mapping
 from typing import Final, cast
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -24,17 +22,6 @@ class WatsonXAIError(BaseLLMException):
         headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
-
-
-class _WatsonXCustomPrompt(TypedDict):
-    """Prompt template settings registered for one model in a custom prompt dict."""
-
-    role_dict: NotRequired[ReadOnly[Mapping[str, Mapping[str, str]]]]
-    roles: NotRequired[ReadOnly[Mapping[str, Mapping[str, str]]]]
-    initial_prompt_value: NotRequired[ReadOnly[str]]
-    final_prompt_value: NotRequired[ReadOnly[str]]
-    bos_token: NotRequired[ReadOnly[str]]
-    eos_token: NotRequired[ReadOnly[str]]
 
 
 iam_token_cache: Final = InMemoryCache()
@@ -152,7 +139,7 @@ async def _aconvert_watsonx_messages_core(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Mapping[str, _WatsonXCustomPrompt],
+    custom_prompt_dict: dict,
     apply_template_fn,
 ) -> str:
     """Async core logic for converting watsonx messages to prompt"""
@@ -184,7 +171,7 @@ def _convert_watsonx_messages_core(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Mapping[str, _WatsonXCustomPrompt],
+    custom_prompt_dict: dict,
     apply_template_fn,
 ) -> str:
     """Sync core logic for converting watsonx messages to prompt"""
@@ -216,7 +203,7 @@ async def aconvert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Mapping[str, _WatsonXCustomPrompt],
+    custom_prompt_dict: dict,
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -234,7 +221,7 @@ def convert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: Mapping[str, _WatsonXCustomPrompt],
+    custom_prompt_dict: dict,
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
