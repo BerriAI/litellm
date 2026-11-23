@@ -1320,6 +1320,16 @@ class TestAgenticStreamingIteratorHoldBack:
         assert [chunk for chunk in received if chunk != STREAM_SSE_KEEPALIVE_PING_BYTES] == trickled
 
     @pytest.mark.asyncio
+    async def test_an_upstream_failure_before_any_output_fails_the_first_read_instead_of_answering_a_ping(self):
+        handler = _hooks_returning(None)
+        iterator = _build_hold_back_iterator(MockFailingAsyncStream([], RuntimeError("upstream died")), handler)
+
+        with pytest.raises(RuntimeError, match="upstream died"):
+            await iterator.__anext__()
+
+        handler._call_agentic_completion_hooks.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("partial_frame_bytes", [0, 20], ids=["at_a_frame_boundary", "mid_frame"])
     async def test_an_upstream_failure_after_text_reaches_the_client_after_that_text_and_keeps_failing(
         self, partial_frame_bytes
