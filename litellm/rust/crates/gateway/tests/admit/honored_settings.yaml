@@ -29,6 +29,7 @@ config:
     max_request_size_mb: 1
     enable_jwt_auth: true
     store_model_in_db: false
+    token_rate_limit_type: output
   environment_variables:
     SOME_KEY: value
 

@@ -146,7 +146,7 @@ async def _aiter_sse_events(stream: AsyncIterator[str]) -> AsyncIterator[str]:
         yield stripped
 
 
-def _normalize_tool_choice(selected_params: dict) -> None:
+def _normalize_tool_choice(selected_params: dict[str, object]) -> None:
     tc: Final = selected_params.get("toolChoice")
     if tc is None:
         return
@@ -263,7 +263,7 @@ def _without_non_function_tools(params: Mapping[str, object], drop_params: bool)
     return {**params, "tools": kept}
 
 
-def _normalize_response_format(selected_params: dict, vendor: OCIVendors) -> None:
+def _normalize_response_format(selected_params: dict[str, object], vendor: OCIVendors) -> None:
     rf: Final = selected_params.get("responseFormat")
     if not isinstance(rf, dict) or "type" not in rf:
         return
