@@ -636,7 +636,7 @@ model LiteLLM_MCPServerTable {
 }
 
 model LiteLLM_MCPEventSubscription {
-  generation               String    @default(dbgenerated("('db-'::text || (nextval('mcp_event_generation_seq'::regclass))::text)"))
+  generation               String    @default(dbgenerated("concat('db-', txid_current(), '-', random())"))
   id                       String    @id
   principal                String
   key_hash                 String?
