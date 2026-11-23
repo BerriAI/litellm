@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -25,6 +24,7 @@ from litellm.proxy.auth.resolvers.grants import (
     user_models,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 USER_ID = "user-1"
 TEAM_ID = "team-1"
@@ -35,25 +35,18 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize("user_exists", (True, False), ids=("created-on-another-worker", "still-missing"))
 async def test_session_grants_recheck_a_recently_missing_user(
-    user_exists: bool, monkeypatch: pytest.MonkeyPatch
+    user_exists: bool, monkeypatch: pytest.MonkeyPatch, rust_auth_stores: RustAuthStores
 ) -> None:
     monkeypatch.setattr("time.time", lambda: 1_700_000_000.0)
     user_id: Final = "session-user-after-miss"
     row: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user")
-    read: Final = AsyncMock(return_value=None)
-    database: Final = cast(
-        "PrismaClient",
-        SimpleNamespace(
-            db=SimpleNamespace(
-                litellm_usertable=SimpleNamespace(find_unique=read, find_first=AsyncMock(return_value=None))
-            )
-        ),
-    )
+    database: Final = cast("PrismaClient", SimpleNamespace(db=SimpleNamespace()))
     resolver: Final = GrantResolver(database, UserApiKeyCache())
     forget_missing_user(user_id)
     try:
         assert await resolver.resolve(UserLookup(user_id=user_id), team_id=None) == UserGone(user_id=user_id)
-        read.return_value = row if user_exists else None
+        if user_exists:
+            rust_auth_stores.user.rows[user_id] = row.model_dump(mode="json")
 
         outcome: Final = await resolver.resolve(UserLookup(user_id=user_id), team_id=None)
 
@@ -94,7 +87,7 @@ class _Loaders:
     def resolver(self) -> GrantResolver:
         return GrantResolver(
             object(),
-            object(),
+            UserApiKeyCache(),
             load_user=self.load_user,
             load_team=self.load_team,
             load_membership=self.load_membership,
@@ -210,18 +203,20 @@ async def test_resolve_identity_lets_loader_errors_surface():
         await loaders.resolver().resolve_identity(UserLookup(user_id=USER_ID), team_id=None)
 
 
-class _UnreachableMembershipPrisma:
-    class db:
-        class litellm_teammembership:
-            @staticmethod
-            async def find_unique(where: dict[str, dict[str, str]], include: dict[str, bool]) -> None:
-                raise httpx.ConnectError("All connection attempts failed")
-
-
-async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded():
+async def test_resolve_marks_a_membership_read_that_hits_a_db_outage_as_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team_membership=FakeTeamMembershipStore(
+                rows={(USER_ID, TEAM_ID): httpx.ConnectError("All connection attempts failed")}
+            )
+        ),
+    )
     loaders = _Loaders(user=_user(), team=_team())
     resolver = GrantResolver(
-        _UnreachableMembershipPrisma(),
+        cast("PrismaClient", object()),
         UserApiKeyCache(),
         load_user=loaders.load_user,
         load_team=loaders.load_team,

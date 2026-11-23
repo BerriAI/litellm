@@ -7,7 +7,7 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar, Final, cast
 
 import httpx
@@ -54,8 +54,8 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -76,7 +76,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params: dict,  # mutable-ok: matches the base chat transform signature
         litellm_params: dict,  # mutable-ok: matches the base chat transform signature
         headers: dict,  # mutable-ok: matches the base chat transform signature
-    ) -> dict:  # mutable-ok: the handler sends this body straight to httpx
+    ) -> dict[str, object]:  # mutable-ok: the handler sends this body straight to httpx
         request: Final[dict[str, object]] = super().transform_request(  # mutable-ok: base transform returns a dict
             model=model,
             messages=messages,
@@ -97,7 +97,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         aws_region_name: Final = self._get_aws_region_name(
@@ -156,7 +156,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: dict,
-        messages: list,
+        messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -182,7 +182,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.iter_bytes(response.iter_bytes())
+        completion_stream: Final = custom_stream_decoder.iter_bytes(
+            response.iter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -201,7 +203,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_base: str,
         headers: dict,
         data: dict,
-        messages: list,
+        messages: Sequence[object],
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -231,7 +233,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
+        completion_stream: Final = custom_stream_decoder.aiter_bytes(
+            response.aiter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

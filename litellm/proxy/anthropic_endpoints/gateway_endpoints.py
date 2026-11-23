@@ -418,14 +418,14 @@ async def oauth_token(
         return await _handle_device_code_grant(device_code if isinstance(device_code, str) else None)
 
     if grant_type == _REFRESH_TOKEN_GRANT:
-        from litellm.proxy.proxy_server import master_key, user_api_key_cache
+        from litellm.proxy.proxy_server import master_key, mcp_state_cache
 
         refresh_token: Final = form.get("refresh_token")
         return await refresh_proxy_credential(
             refresh_token=refresh_token if isinstance(refresh_token, str) else None,
             client_id=CLAUDE_CODE_CLIENT_ID,
             master_key=master_key,
-            cache=user_api_key_cache,
+            cache=mcp_state_cache,
             mint_proxy_credential=mint_proxy_credential,
         )
 
@@ -441,7 +441,7 @@ async def oauth_revoke(request: Request) -> Response:
     if not _is_gateway_enabled():
         return _oauth_error_response(_OAuthError(status_code=404, error="not_found"))
 
-    from litellm.proxy.proxy_server import master_key, user_api_key_cache
+    from litellm.proxy.proxy_server import master_key, mcp_state_cache
 
     form: Final = await request.form()
     token: Final = form.get("token")
@@ -450,7 +450,7 @@ async def oauth_revoke(request: Request) -> Response:
             _OAuthError(status_code=400, error="invalid_request", description="token is required")
         )
     return await revoke_session_refresh_token(
-        token=token, client_id=CLAUDE_CODE_CLIENT_ID, master_key=master_key, cache=user_api_key_cache
+        token=token, client_id=CLAUDE_CODE_CLIENT_ID, master_key=master_key, cache=mcp_state_cache
     )
 
 

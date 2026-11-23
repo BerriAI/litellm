@@ -12,7 +12,7 @@ from typing import Final
 import pytest
 
 from litellm.rust_bridge._native import NativeInstalled, NativeModelCostMap, NativeRejected
-from litellm.rust_bridge.host.model_cost import AliasedCostEntry
+from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 
 
 def _install(document: dict[str, dict[str, object]]) -> NativeInstalled:
@@ -146,13 +146,21 @@ class TestAliasOfRows:
         assert result["model-latest"] is result["model"]
         assert result["model"] == _row(input_cost_per_token=1e-06)
 
-    @pytest.mark.parametrize(
-        "pointer", [{"alias_of": "ghost"}, {"alias_of": "model", "mode": "chat"}], ids=["no-target", "other-fields"]
-    )
-    def test_an_alias_of_row_the_catalog_cannot_serve_is_dropped(self, pointer: dict[str, object]):
-        result = _installed({"model": _row(), "model-latest": pointer})
+    def test_an_alias_of_row_whose_target_is_not_a_model_is_dropped(self):
+        result = _installed({"model": _row(), "model-latest": {"alias_of": "ghost"}})
 
         assert list(result) == ["model"]
+
+    def test_an_alias_of_row_that_carries_other_fields_is_served_as_its_target(self):
+        result = _installed(
+            {
+                "model": _row(input_cost_per_token=1e-06),
+                "model-latest": {"alias_of": "model", "input_cost_per_token": 9e-06},
+            }
+        )
+
+        assert result["model-latest"] is result["model"]
+        assert result["model-latest"]["input_cost_per_token"] == 1e-06
 
     def test_the_model_count_is_every_key_the_document_serves(self):
         installed: Final = _install(

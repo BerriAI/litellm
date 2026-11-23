@@ -1,0 +1,111 @@
+mod support;
+
+use std::{sync::Arc, time::Duration};
+
+use axum::body::to_bytes;
+use litellm_cache_memory::InMemoryCache;
+use litellm_cache_response::{
+    CacheKeyInput, ResponseCache, ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
+};
+use rstest::rstest;
+use serde_json::{Value, json};
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+#[rstest]
+#[case::complete(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn messages_share_native_cache(
+    #[case] stream: bool,
+    #[values("s-maxage", "s-max-age")] max_age: &str,
+) {
+    let path = "/v1/messages";
+    let model = "anthropic/test-model";
+    let upstream = MockServer::start().await;
+    let provider_body = json!({"id":"message-1", "model":"test-model", "type":"message", "role":"assistant", "content":[{"type":"text","text":"hello"}], "stop_reason":"end_turn", "usage":{"input_tokens":1,"output_tokens":1}});
+    let events = "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let template = if stream {
+        ResponseTemplate::new(200).set_body_raw(events, "text/event-stream")
+    } else {
+        ResponseTemplate::new(200).set_body_json(provider_body)
+    };
+    Mock::given(method("POST"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let cache: Arc<dyn ResponseCacheService> = Arc::new(
+        ResponseCache::new(Arc::new(InMemoryCache::new(
+            Some(100),
+            Some(Duration::from_secs(60)),
+        )))
+        .with_config(ResponseCacheConfig {
+            namespace: "gateway-test".into(),
+            max_entry_bytes: 4096,
+        }),
+    );
+    let app = support::app_with_cache(model, &upstream.uri(), cache.clone());
+    let request = json!({"model":"public/model", "messages":[{"role":"user","content":"hello"}], "max_tokens":16, "stream":stream, "cache":{(max_age):600}});
+    let first = support::post(app.clone(), path, request.clone()).await;
+    assert_eq!(first.status(), 200);
+    assert!(!first.headers().contains_key("x-litellm-cache-key"));
+    let first = to_bytes(first.into_body(), 4096).await.unwrap();
+    let second = support::post(app.clone(), path, request.clone()).await;
+    assert_eq!(second.status(), 200);
+    let cache_key = second.headers().get("x-litellm-cache-key").unwrap().clone();
+    assert!(!cache_key.as_bytes().is_empty());
+    let stored = cache
+        .lookup(
+            &ResponseCacheRequest::new(CacheKeyInput {
+                preset: Some(cache_key.to_str().unwrap().into()),
+                ..Default::default()
+            }),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        stored.is_some(),
+        "the header must identify the stored entry"
+    );
+    let second = to_bytes(second.into_body(), 4096).await.unwrap();
+    if stream {
+        assert_eq!(first, events);
+        assert_eq!(second, first);
+    } else {
+        assert_eq!(
+            serde_json::from_slice::<Value>(&first).unwrap(),
+            serde_json::from_slice::<Value>(&second).unwrap()
+        );
+    }
+    let bypass_request = Value::Object(
+        request
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.clone(),
+                    if name == "cache" {
+                        json!({"no-cache": true, "no-store": true})
+                    } else {
+                        value.clone()
+                    },
+                )
+            })
+            .collect(),
+    );
+    let bypassed = support::post(app.clone(), path, bypass_request).await;
+    assert_eq!(bypassed.status(), 200);
+    assert!(!bypassed.headers().contains_key("x-litellm-cache-key"));
+    to_bytes(bypassed.into_body(), 4096).await.unwrap();
+    let restored = support::post(app, path, request).await;
+    assert_eq!(restored.status(), 200);
+    assert_eq!(
+        restored.headers().get("x-litellm-cache-key"),
+        Some(&cache_key)
+    );
+    assert_eq!(to_bytes(restored.into_body(), 4096).await.unwrap(), second);
+}

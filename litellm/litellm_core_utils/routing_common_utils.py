@@ -38,7 +38,6 @@ _V = TypeVar("_V")
 
 MID_STREAM_CONTINUATION_KWARG: Final = "_mid_stream_continuation"
 ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors", MID_STREAM_CONTINUATION_KWARG})
-_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _DEPLOYMENT_ROWS_ADAPTER: Final[TypeAdapter[tuple[Mapping[str, object], ...]]] = TypeAdapter(
     tuple[Mapping[str, object], ...]
 )
@@ -215,30 +214,6 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
-def resolve_served_model(
-    model: str,
-    model_alias_map: object,
-    key_aliases: object,
-    model_group_alias: object,
-) -> str:
-    """Model the request preparation serves for `model`.
-
-    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
-    """
-    global_aliases: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
-    )
-    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
-    after_global: Final = global_target if isinstance(global_target, str) else model
-    key_alias_mapping: Final = (
-        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
-    )
-    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
-    after_key: Final = key_target if isinstance(key_target, str) else after_global
-    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
-    return router_target if router_target is not None else after_key
-
-
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -255,6 +230,15 @@ def truncate_fallback_error_detail(detail: str) -> str:
     return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
 
 
+ROUTER_OUTCOME_LEAD: Final = "\n\nLiteLLM: model group '"
+FALLBACK_ALSO_FAILED: Final = " also failed: "
+
+
+def carries_fallback_failure(message: str) -> bool:
+    _, lead, outcome = message.partition(ROUTER_OUTCOME_LEAD)
+    return bool(lead) and FALLBACK_ALSO_FAILED in outcome
+
+
 def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
     """User-facing explanation appended when a request fails and no fallback chain matches its model group."""
     requested: Final = " -> ".join(lookup_groups)
@@ -263,7 +247,7 @@ def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Se
         f" Fallbacks are configured for: {', '.join(configured)}." if configured else " No fallbacks are configured."
     )
     return (
-        f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
+        f"{ROUTER_OUTCOME_LEAD}{requested}' failed with the error above and no fallback model group was found "
         f"for it, so the request was not retried on another model.{configured_text}"
         " Add a fallbacks entry for that model group (Router fallbacks or proxy router_settings.fallbacks)"
         " to retry on another model."
@@ -277,7 +261,7 @@ def format_fallback_outcome_message(
     skipped: Sequence[SkippedFallbackTarget] = (),
 ) -> str:
     """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
-    lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
+    lead: Final = f"{ROUTER_OUTCOME_LEAD}{model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
 
@@ -299,11 +283,15 @@ def format_fallback_outcome_message(
     over_budget_targets: Final = tuple(
         dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.OVER_BUDGET)
     )
+    rate_limited_targets: Final = tuple(
+        dict.fromkeys(target.target for target in skipped if target.reason is FallbackSkipReason.RATE_LIMITED)
+    )
     attempted_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in attempted_targets)
     not_authorized_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in not_authorized_targets)
     over_budget_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in over_budget_targets)
+    rate_limited_text: Final = ", ".join(str(mask_sensitive_structure(target)) for target in rate_limited_targets)
     attempted_failure: Final = (
-        (f"Fallback to {attempted_text} also failed: {fallback_failure_detail}",)
+        (f"Fallback to {attempted_text}{FALLBACK_ALSO_FAILED}{fallback_failure_detail}",)
         if fallback_failure_detail and attempted_targets
         else ()
     )
@@ -323,7 +311,15 @@ def format_fallback_outcome_message(
         if over_budget_targets
         else ()
     )
-    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence
+    rate_limited_sentence: Final = (
+        (
+            f"Fallback to {rate_limited_text} was skipped because the caller is over its per-model rate limit for "
+            f"{'it' if len(rate_limited_targets) == 1 else 'them'}.",
+        )
+        if rate_limited_targets
+        else ()
+    )
+    sentences: Final = attempted_failure + not_authorized_sentence + over_budget_sentence + rate_limited_sentence
     if sentences:
         return f"{lead} {' '.join(sentences)}"
 
@@ -414,9 +410,10 @@ def filter_team_based_models(
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
     request_team_id: Final = get_request_team_id(request_kwargs)
     if request_team_id is None and is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
-        requested_model: Final = (
+        requested_model_value: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )
+        requested_model: Final = requested_model_value if isinstance(requested_model_value, str) else None
         candidate_deployments: Final = tuple(
             (deployment.get("model_name"), deployment.get("model_info") or {}) for deployment in healthy_deployments
         )
@@ -693,5 +690,5 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
 
 def _owner_team(deployment: Mapping[str, object]) -> object:
     """The team a deployment belongs to (``model_info.team_id``), or None."""
-    model_info: Final = deployment.get("model_info")
-    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return model_info.get("team_id") if model_info is not None else None

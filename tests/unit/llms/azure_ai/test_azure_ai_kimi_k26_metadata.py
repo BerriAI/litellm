@@ -14,7 +14,7 @@ def use_local_model_cost_map():
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
     import litellm
-    from litellm.rust_bridge.host.model_cost import publish
+    from litellm.litellm_core_utils.model_cost_table import publish
 
     original_model_cost = litellm.model_cost
     litellm.model_cost = json.loads(

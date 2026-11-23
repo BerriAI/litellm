@@ -32,6 +32,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
 from litellm.models.budget import CUSTOMER_ONLY_BUDGET_FIELDS
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -41,7 +42,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -61,6 +62,8 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
     prepare_object_permission_upsert,
     reject_ambiguous_mcp_tool_permission_keys,
+    reject_app_grant_change,
+    reject_clearing_app_grants,
 )
 from litellm.proxy.management_helpers.ptu_share_guard import raise_if_teams_hold_ptu_shares
 from litellm.proxy.management_helpers.utils import (
@@ -206,7 +209,19 @@ class _ObjectPermissionTxClient(Protocol):
 
 
 class _BudgetTxClient(Protocol):
-    async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> "PrismaBudgetTable | None": ...
+    async def update(
+        self, *, where: Mapping[str, object], data: Mapping[str, object]
+    ) -> "PrismaBudgetTable | None": ...
+
+
+class _OrganizationTxClient(Protocol):
+    async def update(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+        include: Mapping[str, object] | None = None,
+    ) -> "PrismaOrganizationTable | None": ...
 
 
 class _TransactionTables(Protocol):
@@ -217,7 +232,7 @@ class _TransactionTables(Protocol):
     def litellm_budgettable(self) -> "_BudgetTxClient": ...
 
     @property
-    def litellm_organizationtable(self) -> "_OrganizationTableClient": ...
+    def litellm_organizationtable(self) -> "_OrganizationTxClient": ...
 
 
 class _TransactionManager(Protocol):
@@ -228,6 +243,7 @@ class _TransactionManager(Protocol):
         exc_type: type[BaseException] | None,
         exc_value: BaseException | None,
         traceback: "TracebackType | None",
+        /,
     ) -> bool | None: ...
 
 
@@ -396,6 +412,7 @@ async def new_organization(
     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the organization.
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: *Optional[float]* - Max budget for org
+    - rollover_max_budget: *Optional[float]* - Does not enable rollover for organization spend. Leave unset for organization budgets.
     - tpm_limit: *Optional[int]* - Max tpm limit for org
     - rpm_limit: *Optional[int]* - Max rpm limit for org
     - tpd_limit: *Optional[int]* - Max tokens per day stored on the org budget. Batch submissions enforce tpd_limit at the key, team and end user scopes only.
@@ -494,6 +511,9 @@ async def new_organization(
         except Exception:
             pass
 
+    from litellm.proxy.management_helpers.utils import validate_scalar_budget_attachment
+
+    await validate_scalar_budget_attachment(prisma_client, data.budget_id)
     if data.budget_id is None:
         """
         Every organization needs a budget attached.
@@ -524,6 +544,7 @@ async def new_organization(
     object_permission_id: Final = await _set_object_permission(
         data=data,
         prisma_client=prisma_client,
+        can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
     )
 
     """
@@ -554,7 +575,7 @@ async def new_organization(
             set_object_metadata_field(
                 object_data=organization_row,
                 field_name=field,
-                value=getattr(data, field),
+                value=attribute_or_none(data, field),
             )
 
     new_organization_row: Final = _STR_OBJECT_DICT_ADAPTER.validate_python(
@@ -682,6 +703,7 @@ async def resolve_organization_daily_activity_scope(
 async def _set_object_permission(
     data: NewOrganizationRequest,
     prisma_client: PrismaClient | None,
+    can_grant_apps: bool = False,
 ) -> str | None:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the organization.
@@ -693,6 +715,7 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
+        reject_app_grant_change(data.object_permission.apps, None, can_grant_apps)
         await reject_ambiguous_mcp_tool_permission_keys(
             new_mcp_tool_permissions=data.object_permission.mcp_tool_permissions,
             existing_mcp_tool_permissions=None,
@@ -801,6 +824,7 @@ async def update_organization(
         updated_organization_row = await handle_update_object_permission(
             data_json=updated_organization_row,
             existing_organization_row=existing_organization_row,
+            can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
         )
 
     budget_fields: Final = {
@@ -838,6 +862,7 @@ async def update_organization(
 async def handle_update_object_permission(
     data_json: dict[str, object],
     existing_organization_row: _ObjectPermissionRow,
+    can_grant_apps: bool = False,
 ) -> dict[str, object]:
     """
     Handle the update of object permission for an organization.
@@ -853,6 +878,7 @@ async def handle_update_object_permission(
         data_json=data_json,
         existing_object_permission_id=existing_organization_row.object_permission_id,
         prisma_client=prisma_client,
+        can_grant_apps=can_grant_apps,
     )
 
     # Add the object_permission_id to data_json if one was created/updated
@@ -972,11 +998,20 @@ async def update_organization_v2(
     }
 
     object_permission_cleared: Final = "object_permission" in present_fields and data.object_permission is None
+    can_grant_apps: Final = user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+    await reject_clearing_app_grants(
+        existing_object_permission_id=(
+            existing_organization_row.object_permission_id if object_permission_cleared else None
+        ),
+        can_grant_apps=can_grant_apps,
+        prisma_client=prisma_client,
+    )
     object_permission_upsert: Final = (
         await prepare_object_permission_upsert(
             new_object_permission=data.object_permission.model_dump(exclude_none=True),
             existing_object_permission_id=existing_organization_row.object_permission_id,
             prisma_client=prisma_client,
+            can_grant_apps=can_grant_apps,
         )
         if data.object_permission is not None
         else None

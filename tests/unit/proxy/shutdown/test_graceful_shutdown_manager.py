@@ -6,14 +6,113 @@ in-flight work is done (bounded by GRACEFUL_SHUTDOWN_TIMEOUT) rather than
 sleeping for a fixed worst-case duration.
 """
 
+import asyncio
+import signal
 import time
+from typing import Final, Literal
+from unittest.mock import AsyncMock
 
 import pytest
+from uvicorn import Config
 
 from litellm.proxy.shutdown.graceful_shutdown_manager import (
     DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
     GracefulShutdownManager,
 )
+from litellm.proxy.shutdown.recycling_uvicorn_server import DEFAULT_RECYCLE_DRAIN_TIMEOUT, RecyclingUvicornServer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome", "signal_timeout", "recycle_timeout"),
+    [
+        ("finish", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("finish", DEFAULT_RECYCLE_DRAIN_TIMEOUT, 0),
+        ("signal before drain", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("signal during drain", 0, DEFAULT_RECYCLE_DRAIN_TIMEOUT),
+        ("recycle deadline", 0, 0),
+    ],
+)
+async def test_recycling_drains_in_flight_tasks_until_the_recycle_or_signal_deadline(
+    outcome: Literal["finish", "signal before drain", "signal during drain", "recycle deadline"],
+    signal_timeout: int,
+    recycle_timeout: int,
+) -> None:
+    draining: Final = asyncio.Event()
+    release_request: Final = asyncio.Event()
+
+    class ObservedServer(RecyclingUvicornServer):
+        async def _wait_tasks_to_complete(self) -> None:
+            draining.set()
+            await super()._wait_tasks_to_complete()
+
+    server: Final = ObservedServer(
+        Config("unused:app", limit_max_requests=1, timeout_graceful_shutdown=signal_timeout),
+        recycle_drain_timeout=recycle_timeout,
+    )
+    server.servers = []
+    server.lifespan = AsyncMock()
+    server.server_state.total_requests = 1
+
+    async def respond() -> None:
+        await release_request.wait()
+
+    request: Final = asyncio.create_task(respond())
+    server.server_state.tasks.add(request)
+    request.add_done_callback(server.server_state.tasks.discard)
+
+    if outcome == "signal before drain":
+        server.handle_exit(signal.SIGTERM, None)
+    shutdown: Final = asyncio.create_task(server.shutdown())
+    drain_started: Final = asyncio.create_task(draining.wait())
+    try:
+        if outcome in ("finish", "signal during drain"):
+            await asyncio.wait((shutdown, drain_started), timeout=5, return_when=asyncio.FIRST_COMPLETED)
+            assert draining.is_set() and not request.done()
+            if outcome == "finish":
+                release_request.set()
+            else:
+                server.handle_exit(signal.SIGTERM, None)
+        await asyncio.wait_for(shutdown, timeout=5)
+        (result,) = await asyncio.gather(request, return_exceptions=True)
+        if outcome == "finish":
+            assert result is None
+        else:
+            assert isinstance(result, asyncio.CancelledError)
+    finally:
+        request.cancel()
+        drain_started.cancel()
+        shutdown.cancel()
+        await asyncio.gather(request, drain_started, shutdown, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_recycling_keeps_notifying_the_worker_supervisor_until_requests_finish() -> None:
+    notified: Final = asyncio.Event()
+    server: Final = RecyclingUvicornServer(
+        Config(
+            "unused:app",
+            limit_max_requests=1,
+            timeout_graceful_shutdown=0,
+            callback_notify=AsyncMock(side_effect=notified.set),
+        )
+    )
+    server.servers = []
+    server.lifespan = AsyncMock()
+    server.server_state.total_requests = 1
+
+    async def respond() -> None:
+        await notified.wait()
+
+    request: Final = asyncio.create_task(respond())
+    server.server_state.tasks.add(request)
+    request.add_done_callback(server.server_state.tasks.discard)
+    try:
+        await asyncio.wait_for(server.shutdown(), timeout=5)
+        assert await request is None
+    finally:
+        request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
 
 
 @pytest.fixture(autouse=True)
@@ -85,9 +184,7 @@ def test_timeout_falls_back_on_garbage(monkeypatch):
 @pytest.mark.asyncio
 async def test_returns_immediately_when_already_drained():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=10, count_fn=lambda: 0
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=10, count_fn=lambda: 0)
     assert drained == 0
     assert time.monotonic() - start < 0.5
 
@@ -95,18 +192,14 @@ async def test_returns_immediately_when_already_drained():
 @pytest.mark.asyncio
 async def test_waits_until_counter_reaches_zero_then_returns_drained_count():
     count_fn = _counter_that_drains_after(calls_before_zero=3)
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=10, count_fn=count_fn
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=10, count_fn=count_fn)
     assert drained == 3
 
 
 @pytest.mark.asyncio
 async def test_times_out_when_counter_never_drains():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=0.3, count_fn=lambda: 2
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=0.3, count_fn=lambda: 2)
     elapsed = time.monotonic() - start
     assert 0.3 <= elapsed < 2.0
     assert drained == 0
@@ -115,9 +208,7 @@ async def test_times_out_when_counter_never_drains():
 @pytest.mark.asyncio
 async def test_zero_timeout_does_not_block():
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=0, count_fn=lambda: 5
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=0, count_fn=lambda: 5)
     assert time.monotonic() - start < 0.2
     assert drained == 5
 
@@ -127,9 +218,7 @@ async def test_exclude_self_treats_one_inflight_as_drained():
     """The /health/drain request counts itself, so a steady count of 1 must be
     treated as fully drained rather than timing out."""
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=5, exclude_self=True, count_fn=lambda: 1
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=5, exclude_self=True, count_fn=lambda: 1)
     assert time.monotonic() - start < 0.5
     assert drained == 0
 
@@ -163,9 +252,7 @@ async def test_second_drain_is_a_noop_so_window_is_not_doubled():
     await GracefulShutdownManager.wait_for_drain(timeout=0.2, count_fn=lambda: 1)
 
     start = time.monotonic()
-    drained = await GracefulShutdownManager.wait_for_drain(
-        timeout=5, count_fn=lambda: 1
-    )
+    drained = await GracefulShutdownManager.wait_for_drain(timeout=5, count_fn=lambda: 1)
     assert time.monotonic() - start < 0.1
     assert drained == 0
 

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -13,13 +14,13 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     strip_litellm_response_only_fields,
     unpack_legacy_defs,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE, warn_dropped_reasoning
 from litellm.litellm_core_utils.url_utils import join_api_base
-from litellm.rust_bridge.host.model_cost import ModelCostVersion, model_cost_version
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -63,6 +64,10 @@ _JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _STR: Final = TypeAdapter(str)
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _FunctionFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _map_reasoning_effort(value: object) -> object:
@@ -718,7 +723,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
         """
         if tool_calls is not None and message.content is not None and message.tool_calls is None:
             try:
-                function: Final = Function(**json.loads(message.content))
+                function: Final = Function(**_FunctionFields(**_JSON_DICT.validate_python(json.loads(message.content))))
                 if function.name != RESPONSE_FORMAT_TOOL_NAME and function.name in [
                     tool["function"]["name"] for tool in tool_calls
                 ]:

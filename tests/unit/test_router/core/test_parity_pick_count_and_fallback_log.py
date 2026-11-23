@@ -6,7 +6,7 @@ fallbacks of ``async_function_with_fallbacks_common_utils``).
 """
 
 import logging
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from typing import Final
 
 import openai
@@ -28,6 +28,7 @@ from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
     auth_error,
     content_policy,
+    context_window,
     deployment,
     embedding_response,
     rate_limit,
@@ -235,18 +236,21 @@ async def test_the_outcome_message_of_a_failed_chain_stays_out_of_the_log(
 
 
 @pytest.mark.asyncio
-async def test_a_content_policy_list_without_the_group_logs_before_its_outcome_message(
-    make_core: MakeCore, host: ScriptedHost, router_errors: list[str]
+@pytest.mark.parametrize(
+    ("error", "field"),
+    [(context_window, "context_window_fallbacks"), (content_policy, "content_policy_fallbacks")],
+    ids=["context-window", "content-policy"],
+)
+async def test_an_error_specific_list_without_the_group_and_no_general_chain_logs_nothing(
+    make_core: MakeCore, host: ScriptedHost, router_errors: list[str], error: Callable[[], Exception], field: str
 ) -> None:
     show_router_debug(host)
-    host.answer("openai/a", content_policy())
-    core: Final = build(make_core, content_policy_fallbacks=[{"b": ["c"]}], disable_cooldowns=True)
+    host.answer("openai/a", error())
+    core: Final = build(make_core, **{field: [{"b": ["c"]}]}, disable_cooldowns=True)
 
-    error: Final = await _fails(core)
+    _ = await _fails(core)
 
-    (logged,) = _fallback_logs(router_errors)
-    assert logged.endswith(NO_COOLDOWNS)
-    assert len(logged) < len(f"{LOG_HEAD}{error}{NO_COOLDOWNS}")
+    assert _fallback_logs(router_errors) == []
 
 
 @pytest.mark.asyncio

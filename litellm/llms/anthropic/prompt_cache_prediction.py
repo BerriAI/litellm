@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import reduce
 from itertools import accumulate, groupby
 from types import MappingProxyType
@@ -16,6 +16,7 @@ from pydantic import ConfigDict, Field, JsonValue, StrictInt, TypeAdapter, Valid
 
 import litellm
 from litellm.caching.dual_cache import DualCache
+from litellm.exceptions import AuthenticationError, ServiceUnavailableError
 from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -35,8 +36,12 @@ from litellm.router_strategy.auto_router.baseline_request import (
 )
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
-from litellm.types.utils import ModelResponse
-from litellm.utils import supports_thinking_cache_preservation
+from litellm.types.utils import API_KEY_UPSTREAM_PARAMS, AdminApiKeySecretReference, ModelResponse
+from litellm.utils import (
+    aresolve_api_key_secret_reference,
+    resolve_api_key_secret_reference_without_fetch,
+    supports_thinking_cache_preservation,
+)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
@@ -208,6 +213,7 @@ class UnsupportedCachePlan:
         "invalid_cache_ttl_order",
         "unsupported_thinking_cache_semantics",
         "token_count_unavailable",
+        "uncountable_system_or_tools_prefix",
         "inconsistent_prefix_token_count",
     ]
 
@@ -583,7 +589,10 @@ async def count_cache_plan(
     counts: Final = tuple(
         await asyncio.gather(*(token_counter(model, api_key, marker.prefix_body) for marker in plan.breakpoints))
     )
-    if any(value is None for value in counts):
+    failed: Final = tuple(marker for marker, value in zip(plan.breakpoints, counts, strict=True) if value is None)
+    if failed and all(not marker.prefix_body.get("messages") for marker in failed):
+        return UnsupportedCachePlan("uncountable_system_or_tools_prefix")
+    if failed:
         return UnsupportedCachePlan("token_count_unavailable")
     known: Final = tuple(value for value in counts if value is not None)
     if any(value < 0 for value in (total, *known)) or any(
@@ -626,6 +635,7 @@ class UnsupportedPredictionTarget:
         "unsupported_provider_endpoint",
         "unsupported_provider",
         "unsupported_provider_credentials",
+        "provider_credentials_timeout",
     ]
 
 
@@ -635,6 +645,61 @@ def resolve_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget 
 
 def resolve_baseline_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
     return _resolve_prediction_target(params, allow_configured_endpoint=True)
+
+
+async def aresolve_prediction_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    return await _with_secret_behind_api_key_reference(params, resolve_prediction_target(params))
+
+
+async def aresolve_baseline_prediction_target(
+    params: LiteLLM_Params,
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    return await _with_secret_behind_api_key_reference(params, resolve_baseline_prediction_target(params))
+
+
+def resolve_prediction_target_without_fetch(
+    params: LiteLLM_Params,
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    target: Final = resolve_prediction_target(params)
+    if isinstance(target, UnsupportedPredictionTarget) or not isinstance(params.api_key, AdminApiKeySecretReference):
+        return target
+    try:
+        return _with_provider_secret(
+            target,
+            resolve_api_key_secret_reference_without_fetch(
+                params.api_key, model=params.model, llm_provider="anthropic", upstream=_secret_upstream(params)
+            ),
+        )
+    except (AuthenticationError, ServiceUnavailableError):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+
+
+async def _with_secret_behind_api_key_reference(
+    params: LiteLLM_Params, target: NativePredictionTarget | UnsupportedPredictionTarget
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    if isinstance(target, UnsupportedPredictionTarget) or not isinstance(params.api_key, AdminApiKeySecretReference):
+        return target
+    try:
+        return _with_provider_secret(
+            target,
+            await aresolve_api_key_secret_reference(
+                params.api_key, model=params.model, llm_provider="anthropic", upstream=_secret_upstream(params)
+            ),
+        )
+    except (AuthenticationError, ServiceUnavailableError):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+
+
+def _secret_upstream(params: LiteLLM_Params) -> Mapping[str, object]:
+    return MappingProxyType({"model": params.model, **params.model_dump(include=set(API_KEY_UPSTREAM_PARAMS))})
+
+
+def _with_provider_secret(
+    target: NativePredictionTarget, secret: str | None
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    if secret is None or not _supported_provider_key(secret):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+    return replace(target, api_key=secret)
 
 
 def prepare_native_baseline_body(request: Mapping[str, object], model: str) -> Mapping[str, JsonValue] | None:

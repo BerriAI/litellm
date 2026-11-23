@@ -92,7 +92,7 @@ class VertexAIAwsWifAuth:
         aws_params_copy: Final = dict(aws_params)  # avoid mutating caller's dict
 
         def _get_aws_credentials():
-            return base_aws.get_credentials(**aws_params_copy)
+            return base_aws.get_credentials(litellm_params=None, **aws_params_copy)
 
         # Create the custom supplier with a lazy credentials provider
         supplier: Final = AwsCredentialsSupplier(

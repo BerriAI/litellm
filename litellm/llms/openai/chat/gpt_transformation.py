@@ -8,15 +8,21 @@ import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextvars import ContextVar
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast, overload
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast, overload
 from urllib.parse import urlparse
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    drops_unsupported_params,
+    map_finish_reason,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -42,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
+    with_only_content_part_prompt_cache_breakpoints,
     without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -147,6 +154,14 @@ _CHOICE_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
+class _ModelResponseStreamFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+class _SupportsGetWithDefault(Protocol):
+    def get(self, key: str, default: str, /) -> object: ...
+
+
 def _litellm_params_str(litellm_params: Mapping[str, object] | None, key: str) -> str | None:
     value: Final = litellm_params.get(key) if litellm_params is not None else None
     return value if isinstance(value, str) else None
@@ -225,16 +240,16 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -299,11 +314,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         If any supported_openai_params are in non_default_params, add them to optional_params, so they are use in API call
 
@@ -562,6 +577,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Whether a target that does not read OpenAI's full breakpoint dialect still takes a content part's
+        ``prompt_cache_breakpoint`` under drop_params."""
+        return False
+
     def _messages_and_tools_in_cache_mark_dialect(
         self,
         model: str,
@@ -598,6 +618,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
         drop_params: Final = _drops_params(litellm_params)
         drops_breakpoints: Final = not reads_breakpoints and drop_params
+        keeps_content_part_breakpoints: Final = drops_breakpoints and self._keeps_content_part_prompt_cache_breakpoints(
+            model, litellm_params
+        )
         renamed: Final = (
             [
                 AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(
@@ -606,6 +629,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 for message in messages
             ]
             if reads_breakpoints
+            else [with_only_content_part_prompt_cache_breakpoints(message) for message in messages]
+            if keeps_content_part_breakpoints
             else [without_prompt_cache_breakpoints(message) for message in messages]
             if drops_breakpoints
             else list(messages)
@@ -646,7 +671,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_api_base: Final = litellm_params.get("api_base")
         sanitize: Final = (
             flatten_combinators_and_drop_non_python_regex_patterns
-            if self._targets_openai_hosted_endpoint(provider, raw_api_base if isinstance(raw_api_base, str) else None)
+            if self._targets_openai_hosted_endpoint(
+                provider if isinstance(provider, str) else None,
+                raw_api_base if isinstance(raw_api_base, str) else None,
+            )
             else drop_non_python_regex_patterns
         )
         sanitized: Final = [
@@ -808,7 +836,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 convert_tool_call_to_json_mode=json_mode,
             ):
                 # to support response_format on claude models
-                json_mode_content_str: str | None = str(new_tool_calls[0]["function"].get("arguments", "")) or None
+                tool_call_function = require_attributes(
+                    subscript(new_tool_calls[0], "function"), _SupportsGetWithDefault, "get"
+                )
+                json_mode_content_str: str | None = str(tool_call_function.get("arguments", "")) or None
                 if json_mode_content_str is not None:
                     translated_message = Message(content=json_mode_content_str)
                     finish_reason = "stop"
@@ -1054,7 +1085,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
         return choices
 
     @staticmethod
-    def _extract_error_from_chunk(chunk: dict) -> tuple[str, int] | None:
+    def _extract_error_from_chunk(chunk: Mapping[str, object]) -> tuple[str, int] | None:
         """OpenAI-compatible backends (vLLM, sglang) can return an HTTP 200
         stream whose body carries an error payload, e.g.
         ``data: {"error": {"message": "...", "code": 400}}``."""
@@ -1086,7 +1117,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
-            kwargs: Final[dict[str, Any]] = {
+            kwargs: Final[dict[str, object]] = {
                 "id": chunk.get("id"),
                 "system_fingerprint": fingerprint,
                 "object": "chat.completion.chunk",
@@ -1099,6 +1130,6 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:
                 kwargs["service_tier"] = service_tier
-            return ModelResponseStream(**kwargs)
+            return ModelResponseStream(**_ModelResponseStreamFields(**kwargs))
         except Exception as e:
             raise e

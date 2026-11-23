@@ -21,8 +21,10 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 )
 from litellm.proxy.common_utils.prompt_cache_prediction import has_request_transforms, predict_arm
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401  # legacy module exports
-    PROXY_MaxParallelRequestsHandler_v3,
+    ParallelRequestLimiterHook,
+    PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    request_capacity,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -41,13 +43,13 @@ class _CallerSettings(LiteLLMBaseModel):
 
 
 def _capacity_counter(
-    limiter: PROXY_MaxParallelRequestsHandler_v3,
+    limiter: ParallelRequestLimiterHook,
     caller: UserAPIKeyAuth,
     model_name: str,
     request_data: Mapping[str, object],
 ) -> TokenCounter:
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
-        async with limiter.request_capacity(caller, model_name, request_data=request_data):
+        async with request_capacity(limiter, caller, model_name, request_data=request_data):
             return await count_prompt_tokens(model, api_key, body)
 
     return count
@@ -116,7 +118,7 @@ async def predict_cache_cost(
         or not caller
         or unsupported_transform
         or unsupported_headers
-        or not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3)
+        or not isinstance(limiter, ParallelRequestLimiterHook)
     ):
         reason: Final = (
             "unsupported_provider_headers"

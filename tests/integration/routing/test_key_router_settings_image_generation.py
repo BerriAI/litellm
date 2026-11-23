@@ -23,10 +23,16 @@ IMAGE_RESPONSE: Final = {
     "output_format": None,
     "quality": None,
     "size": None,
+    "svg_usage": None,
     "usage": {
         "total_tokens": 0,
         "input_tokens": 0,
-        "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+        "input_tokens_details": {
+            "image_tokens": 0,
+            "text_tokens": 0,
+            "cached_tokens": 0,
+            "cached_tokens_details": None,
+        },
         "output_tokens": 0,
     },
 }

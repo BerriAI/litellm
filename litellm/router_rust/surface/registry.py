@@ -3,7 +3,7 @@
 """
 ``HostRegistry``: the Rust core's live ``model_list`` and the indexes ``registry()`` reads.
 
-router-core builds the deployments (``litellm-rust/crates/router-core/src/build.rs``): it walks
+router-core builds the deployments (``litellm/rust/crates/router-core/src/build.rs``): it walks
 the list, decides which values are ``os.environ/`` secret references, assigns the id of a
 deployment that declares none and adds one deployment per ``organization``. What needs live Python
 objects is a host step this registry answers, one deployment at a time (``_answer_build_step``):
@@ -61,7 +61,9 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
+from litellm.cost_calculator import base_model_for_pricing, bedrock_profile_pricing, cost_map_key_declared_prices
 from litellm.litellm_core_utils.access_windows import access_windows_config_error
+from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, without
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import (
@@ -96,7 +98,7 @@ from litellm.litellm_core_utils.routing_groups import apply_routing_group_priori
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
 from litellm.redis.stores.connection import connect
-from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore
+from litellm.redis.stores.router_usage import RouterUsage, RouterUsageStore, UsageCounter
 from litellm.responses.bridge_check import keep_registered_mode
 from litellm.router_api import RouterRegistry, deployment_id
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET
@@ -119,6 +121,7 @@ from litellm.types.router import (
     RoutingGroup,
     RoutingPlugin,
     TaggedPreRoutingStrategy,
+    holds_secret_pointer,
     validate_litellm_params_strictly,
 )
 from litellm.types.utils import (
@@ -127,17 +130,16 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
-    is_server_derived_pricing_key,
     shared_backend_model_info,
 )
 from litellm.utils import (
     ModelInfoLookupMiss,
+    base_fields_replaced_by,
     catalog_with_runtime_registrations,
     get_potential_model_names,
     get_secret,
     lookup_model_info_for_registration,
     model_cost_registration_key,
-    model_info_with_pricing_overrides,
 )
 
 if TYPE_CHECKING:
@@ -215,6 +217,7 @@ class _Build:
     entries: dict[int, _BuildEntry] = dataclasses.field(default_factory=dict)  # mutable-ok: filled in step order
     # `add`: the deployment to add, and the entry it is stored as.
     deployment: Deployment | None = None
+    replace_existing: bool = False
     stored: UntypedEntry | None = None
     # The deployment the build is on, its provider and its data-source values.
     pending: Deployment | None = None
@@ -338,10 +341,11 @@ def _inherited_off_peak_base_rates(
     backend_entry: Final = _backend_cost_entry(host, backend_model, provider)
     if backend_entry is None:
         return {}
+    superseded: Final = base_fields_replaced_by(model_info)
     return {
         field: copy.deepcopy(value)
         for field, value in backend_entry.items()
-        if model_info.get(field) is None and value is not None
+        if model_info.get(field) is None and value is not None and field not in superseded
     }
 
 
@@ -403,19 +407,21 @@ def _search_tool_support(deployment: Mapping[str, object]) -> bool | None:
 
 def cost_map_backend_model(deployment: Deployment) -> str:
     """The model a deployment's prices are inherited from (``_cost_map_backend_model``)."""
-    model_info_base_model: Final = deployment.model_info.base_model
-    if isinstance(model_info_base_model, str) and model_info_base_model:
+    model_info_base_model: Final = base_model_for_pricing(deployment.model_info.base_model)
+    if model_info_base_model:
         return model_info_base_model
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
-    params_base_model: Final = params.get("base_model")
-    if isinstance(params_base_model, str) and params_base_model:
+    params_base_model: Final = base_model_for_pricing(params.get("base_model"))
+    if params_base_model:
         return params_base_model
     model: Final = deployment.litellm_params.model
     invoked_model: Final = params.get("model_id")
     if isinstance(invoked_model, str) and invoked_model and _bedrock_profile(params, model):
         profile_model: Final = invoked_model if invoked_model.startswith("bedrock/") else f"bedrock/{invoked_model}"
-        profile_info: Final = lookup_model_info_for_registration(model=profile_model, custom_llm_provider="bedrock")
-        if not isinstance(profile_info, ModelInfoLookupMiss):
+        profile_info: Final = lookup_model_info_for_registration(
+            model=invoked_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+        )
+        if not isinstance(profile_info, ModelInfoLookupMiss) and cost_map_key_declared_prices(profile_info["key"]):
             return profile_model
     return model
 
@@ -433,31 +439,35 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
     provider: Final = deployment.model_info.pricing_provider or deployment.litellm_params.custom_llm_provider
     params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment.litellm_params.model_dump(exclude_none=True))
     priced: Final = {**declared, **custom_pricing}
-    profile_pricing: Final[Mapping[str, object]] = (
-        _bedrock_profile_pricing(backend_model, priced)
-        if params.get("model_id")
+    profile_backend: Final = bool(
+        params.get("model_id")
         and backend_model != deployment.litellm_params.model
         and _bedrock_profile(params, deployment.litellm_params.model)
-        else {}
+    )
+    profile_pricing: Final[Mapping[str, object]] = (
+        _bedrock_profile_pricing(backend_model, priced) if profile_backend else {}
+    )
+    rates_model: Final = (
+        deployment.litellm_params.model if profile_backend and contains_bedrock_arn(backend_model) else backend_model
     )
     with_profile: Final = {**priced, **profile_pricing}
-    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, backend_model, provider)}
+    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, rates_model, provider)}
     cached: Final = (
-        {**off_peak, **_inherited_cache_pricing(host, off_peak, backend_model, provider)}
+        {**off_peak, **_inherited_cache_pricing(host, off_peak, rates_model, provider)}
         if off_peak.get("input_cost_per_token") is not None
         else off_peak
     )
-    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, backend_model, provider)}
-    return {**tiers, **_inherited_tiered_output_rate(host, tiers, backend_model, provider)}
+    tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
+    return {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:
-    profile_info: Final = lookup_model_info_for_registration(model=backend_model, custom_llm_provider="bedrock")
+    profile_info: Final = lookup_model_info_for_registration(
+        model=backend_model.removeprefix("bedrock/"), custom_llm_provider="bedrock"
+    )
     if isinstance(profile_info, ModelInfoLookupMiss):
         return {}
-    explicit_info: Final = _MODEL_INFO_ADAPTER.validate_python(priced)
-    priced_info: Final = model_info_with_pricing_overrides(profile_info, explicit_info)  # pyright: ignore[reportArgumentType]  # the explicit model_info, as the core passes it
-    return {key: value for key, value in priced_info.items() if is_server_derived_pricing_key(key)}
+    return bedrock_profile_pricing(profile_info["key"], _MODEL_INFO_ADAPTER.validate_python(priced))
 
 
 def _backend_cost_map_keys(model: str, custom_llm_provider: str | None) -> tuple[str, ...]:
@@ -696,6 +706,21 @@ def _index_key(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
+GroupMembers: TypeAlias = tuple[tuple[object, object], ...]
+GroupCounters: TypeAlias = tuple[object, str, tuple[tuple[UsageCounter, ...], ...]]
+
+
+def _members_of(model_list: Sequence[Mapping[str, object]] | None) -> GroupMembers | None:
+    if model_list is None:
+        return None
+    return tuple((_field(entry, "model_info", "id"), _field(entry, "litellm_params", "model")) for entry in model_list)
+
+
+def _field(entry: Mapping[str, object], section: str, key: str) -> object:
+    held: Final = entry.get(section)
+    return held.get(key) if isinstance(held, Mapping) else None
+
+
 def _round_trips(value: object) -> bool:
     """Whether JSON reads ``value`` back equal to itself."""
     try:
@@ -786,6 +811,8 @@ class HostRegistry(HostModelInfo):
         # `zero_cost()`: the per-deployment zero-cost lookup the auth checks fill, emptied with the
         # group info caches.
         self._zero_cost_cache: dict[str, bool] = {}  # mutable-ok: the auth checks write into it
+        self._group_members_cache: dict[str, tuple[object, GroupMembers | None]] = {}  # mutable-ok: by model group
+        self._group_counters_cache = {}
         # The routing cache usage reads come from; RustCore sets it to the one its Rust core writes.
         self._core_cache: DualCache = DualCache()
         # The tpm/rpm store usage reads come from; RustCore sets it to the one its Rust core writes.
@@ -938,6 +965,7 @@ class HostRegistry(HostModelInfo):
         self._core_cached_deployment_model_info.cache_clear()  # pyright: ignore[reportFunctionMemberAccess]  # an lru_cache
         self.cached_deployment_tracks_usage.cache_clear()  # pyright: ignore[reportFunctionMemberAccess]  # an lru_cache
         self._zero_cost_cache.clear()
+        self._group_members_cache.clear()
         self._routing_group_rows = None
 
     def set_routing_groups(self, groups: Sequence[RoutingGroup]) -> None:
@@ -1007,12 +1035,13 @@ class HostRegistry(HostModelInfo):
             raise RuntimeError("the host registry builds deployments through its Rust core")
         for entry in entries:
             refuse_wide_numbers(entry)
-        self._core_model_list.begin_build(replacing=install == "replace")
-        try:
-            self.build_runner(entries, build.path, resolve_secrets, install, partial(self._answer_shown, build))
-        finally:
-            self._core_model_list.end_build()
-            self._drop_removed_live_values()
+        with self._deployment_index_lock:
+            self._core_model_list.begin_build(replacing=install == "replace")
+            try:
+                self.build_runner(entries, build.path, resolve_secrets, install, partial(self._answer_shown, build))
+            finally:
+                self._core_model_list.end_build()
+                self._drop_removed_live_values()
         if build.failure is not None:
             # router-core served what it built before the entry that raised (`set_model_list`
             # cleared the list first), so the router is left as the Python core leaves it.
@@ -1103,7 +1132,12 @@ class HostRegistry(HostModelInfo):
         found, written into the entry's params."""
         entry: Final = self._build_entry(build, index)
         references: Final = tuple(as_str_mapping(ref) or {} for ref in refs)
-        values: Final = tuple(get_secret(str(reference["name"])) for reference in references)
+        values: Final = tuple(
+            str(reference["name"])
+            if holds_secret_pointer(str(reference["key"]))
+            else get_secret(str(reference["name"]))
+            for reference in references
+        )
         entry.litellm_params.update(
             {str(reference["key"]): value for reference, value in zip(references, values, strict=True)}
         )
@@ -1220,7 +1254,11 @@ class HostRegistry(HostModelInfo):
         deployment: Final = build.deployment
         if deployment is None:
             raise RuntimeError("an add build holds its deployment")
-        if deployment.model_info.id and self._core_has_model_id(deployment.model_info.id):
+        if (
+            not build.replace_existing
+            and deployment.model_info.id
+            and self._core_has_model_id(deployment.model_info.id)
+        ):
             return {"skip": True}
         declared_params: Final = deployment.litellm_params.model_dump(exclude_none=True)
         warn_on_provider_credential_mismatch(model_name=deployment.model_name, litellm_params=declared_params)
@@ -1273,7 +1311,9 @@ class HostRegistry(HostModelInfo):
         deployment: Final = build.pending
         if deployment is None:
             raise RuntimeError("an added step follows a validated deployment")
-        self._register_deployment(deployment, build.provider, build.data_source_values)
+        self._register_deployment(
+            deployment, build.provider, build.data_source_values, replace_existing=build.replace_existing
+        )
         build.pending = None  # rebind-ok: the build's state, which each step advances
         build.data_source_values = ()  # rebind-ok: the build's state, which each step advances
         self._invalidate_model_group_info_cache()
@@ -1319,6 +1359,8 @@ class HostRegistry(HostModelInfo):
         deployment: Deployment,
         custom_llm_provider: str | None,
         data_source_values: Sequence[tuple[int, str, str]],
+        *,
+        replace_existing: bool,
     ) -> None:
         """``_add_deployment`` after the provider: its data-source values, pass-through
         credentials and pre-routing strategies (router-core registers its names and patterns)."""
@@ -1366,7 +1408,7 @@ class HostRegistry(HostModelInfo):
         if custom_llm_provider is not None:
             self._initialize_deployment_for_pass_through(deployment, custom_llm_provider)
         if self.strategies is not None:
-            self.strategies.register(deployment)
+            self.strategies.register(deployment, replace_existing=replace_existing)
 
     def _initialize_deployment_for_pass_through(self, deployment: Deployment, custom_llm_provider: str) -> None:
         """Register vertex credentials for a pass-through deployment (``_initialize_deployment_for_pass_through``)."""
@@ -1395,7 +1437,10 @@ class HostRegistry(HostModelInfo):
 
     def add_deployment(self, deployment: Deployment) -> Deployment | None:
         """Add one deployment unless its id exists (``add_deployment``), built by router-core."""
-        build: Final = _Build(path="add", deployment=deployment)
+        return self._install_deployment(deployment, replace_existing=False)
+
+    def _install_deployment(self, deployment: Deployment, *, replace_existing: bool) -> Deployment | None:
+        build: Final = _Build(path="add", deployment=deployment, replace_existing=replace_existing)
         self._run_build(build, [deployment.to_json(exclude_none=True)], resolve_secrets=False, install="upsert")
         if build.result is None:
             return None
@@ -1410,61 +1455,37 @@ class HostRegistry(HostModelInfo):
         on_router: Final = self._core_get_deployment(model_id=model_id)
         served: Final = without_model_capability_flags(deployment)
         try:
+            if (
+                on_router is not None
+                and deployment.model_name == on_router.model_name
+                and served.litellm_params == on_router.litellm_params
+                and deployment.model_info == on_router.model_info
+            ):
+                return None
+            self._install_deployment(deployment, replace_existing=True)
             if on_router is not None:
-                if (
-                    deployment.model_name == on_router.model_name
-                    and served.litellm_params == on_router.litellm_params
-                    and deployment.model_info == on_router.model_info
-                ):
-                    return None
-                with self._deployment_index_lock:
-                    removal_idx: Final = self.model_id_to_deployment_index_map.get(model_id)
-                    if removal_idx is not None:
-                        removed: Final = self._core_model_list[removal_idx]  # pyright: ignore[reportArgumentType]  # raises IndexError for a position past the list, as the pop does
-                        self._remove(model_id)
-                        withdraw_shared_capabilities(
-                            self._host, removed, deployment.to_json(exclude_none=True), self._served_by_live_routers()
-                        )
+                withdraw_shared_capabilities(
+                    self._host,
+                    on_router.to_json(exclude_none=True),
+                    deployment.to_json(exclude_none=True),
+                    self._served_by_live_routers(),
+                )
                 if self.strategies is not None:
-                    self.strategies.release(on_router)
-                self._on_change()
-            self.add_deployment(deployment=deployment)
+                    self.strategies.release(on_router, replaced=True)
             if self.strategies is not None:
                 self.strategies.upserted(deployment, on_router)
         except Exception as e:
             if not self.ignore_invalid_deployments:
                 raise
             verbose_router_logger.warning(
-                "Error upserting deployment %s (id=%s): %s. Dropping it and continuing with other deployments.",
+                "Error upserting deployment %s (id=%s): %s. Keeping its previous deployment, if any.",
                 deployment.model_name,
                 deployment.model_info.id,
                 e,
             )
-            self._restore_deployment_after_failed_upsert(on_router, model_id)
             return None
         else:
             return deployment
-
-    def _restore_deployment_after_failed_upsert(self, previous: Deployment | None, model_id: str) -> None:
-        if previous is None or self._core_has_model_id(model_id):
-            return
-        try:
-            if self.strategies is None:
-                self.add_deployment(deployment=previous)
-            else:
-                self.strategies.without_capability_limit(lambda: self.add_deployment(deployment=previous))
-            verbose_router_logger.info(
-                "Restored deployment %s (id=%s); it keeps serving its previous configuration.",
-                previous.model_name,
-                model_id,
-            )
-        except Exception as restore_error:  # noqa: BLE001  # best-effort restore: a second failure must not abort the reload
-            verbose_router_logger.warning(
-                "Could not restore previously served deployment %s (id=%s) after the failed upsert: %s",
-                previous.model_name,
-                model_id,
-                restore_error,
-            )
 
     def _live_handle(self) -> "RouterCoreHandle | None":
         return None if self.handle_lookup is None else self.handle_lookup()
@@ -1898,6 +1919,21 @@ class HostRegistry(HostModelInfo):
 
             return sum(len(held(member)) for member in group.models) > 1
 
+    def _group_members(self, model_group: str) -> GroupMembers | None:
+        # An alias or a wildcard name reads state the registry version does not cover: those list every time.
+        handle: Final = self._live_handle()
+        if handle is None or _index_key(model_group) is None or model_group in (self._core_model_group_alias or {}):
+            return _members_of(self._core_get_model_list(model_name=model_group))
+        stamp: Final = (handle, handle.registry_version(), self._registry_version)
+        cached: Final = self._group_members_cache.get(model_group)
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        members: Final = _members_of(self._core_get_model_list(model_name=model_group))
+        if len(self._group_members_cache) >= DEFAULT_MAX_LRU_CACHE_SIZE:
+            self._group_members_cache.clear()
+        self._group_members_cache[model_group] = (stamp, members)
+        return members
+
     def _core_get_model_list_from_model_alias(
         self, model_name: str | None = None
     ) -> list[UntypedEntry]:  # mutable-ok: a fresh list
@@ -2081,7 +2117,11 @@ class HostRegistry(HostModelInfo):
         candidates: Final = team_models or global_models
         if not candidates:
             return None
-        return Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        deployment: Final = Deployment(**candidates[0])  # a pattern router holds stored entry dicts
+        live: Final = self.live_params(deployment.model_info.id)
+        if not live:
+            return deployment
+        return deployment.model_copy(update={"litellm_params": deployment.litellm_params.model_copy(update=live)})
 
     def _core_get_credential_deployment(self, model_id: str, team_id: str | None = None) -> Deployment | None:
         deployment: Final = (

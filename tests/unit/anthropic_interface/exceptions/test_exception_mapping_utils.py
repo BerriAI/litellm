@@ -258,3 +258,48 @@ class TestAnthropicErrorSseFrame:
             "type": "error",
             "error": {"type": "api_error", "message": "upstream unavailable"},
         }
+
+
+THREAD_NOT_FOUND_UPSTREAM: Final = json.dumps(
+    {
+        "type": "error",
+        "error": {
+            "type": "not_found_error",
+            "message": "No thread state was found for the requested `previous_message_id`.",
+            "details": {"error_code": "thread_not_found"},
+        },
+        "request_id": "req_upstream",
+    }
+)
+
+
+class TestEmbeddedErrorDetails:
+    def test_a_wrapped_upstream_error_keeps_its_details_next_to_the_wrapped_message(self) -> None:
+        wrapped: Final = (
+            f"litellm.NotFoundError: AnthropicException - {THREAD_NOT_FOUND_UPSTREAM}\n\n"
+            "LiteLLM: model group 'haiku' failed with the error above. No fallback was attempted."
+        )
+        response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(status_code=404, raw_message=wrapped)
+        assert response["error"]["details"] == {"error_code": "thread_not_found"}
+        assert response["error"]["type"] == "not_found_error"
+        assert response["error"]["message"] == wrapped
+
+    def test_the_error_event_of_a_failed_stream_carries_the_same_details(self) -> None:
+        wrapped: Final = f"litellm.NotFoundError: AnthropicException - {THREAD_NOT_FOUND_UPSTREAM}"
+        frame: Final = anthropic_error_sse_frame(404, wrapped)
+        assert frame.error_response["error"]["details"] == {"error_code": "thread_not_found"}
+
+    @pytest.mark.parametrize(
+        "raw_message",
+        (
+            "plain text with a { brace and no json",
+            'litellm.BadRequestError: OpenAIException - {"error": {"message": "bad", "type": "invalid_request_error"}}',
+            'AnthropicException - {"type": "error", "error": {"type": "api_error", "message": "no details here"}}',
+        ),
+        ids=("no_json", "openai_shape", "anthropic_without_details"),
+    )
+    def test_a_message_without_anthropic_details_gets_no_details_key(self, raw_message: str) -> None:
+        response: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=400, raw_message=raw_message
+        )
+        assert "details" not in response["error"]
