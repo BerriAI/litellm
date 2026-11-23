@@ -6,6 +6,7 @@ import copy
 import json
 import logging
 import re
+from collections.abc import AsyncIterator, Sequence
 from itertools import chain
 from typing import Final, Literal
 from unittest.mock import patch
@@ -4174,8 +4175,15 @@ def _generate_content_frame(*candidate_parts: list[dict[str, object]]) -> bytes:
     return f"data: {json.dumps({'candidates': candidates})}\r\n\r\n".encode()
 
 
+_THOUGHT_SIGNATURE: Final = {"thoughtSignature": "c2lnbmF0dXJl"}
+
+
 def _gemini_function_call(name: str) -> dict[str, object]:
-    return {"functionCall": {"name": name, "args": {"path": "/tmp/report.txt"}}, "thoughtSignature": "c2lnbmF0dXJl"}
+    return {"functionCall": {"name": name, "args": {"path": "/tmp/report.txt"}}}
+
+
+def _signed(part: dict[str, object]) -> dict[str, object]:
+    return {**part, **_THOUGHT_SIGNATURE}
 
 
 def _generate_content_request() -> dict[str, object]:
@@ -4186,8 +4194,8 @@ def _generate_content_request() -> dict[str, object]:
     }
 
 
-def _joined_text(chunks: list[bytes | str]) -> str:
-    return "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
+def _joined_text(chunks: Sequence[object]) -> str:
+    return "".join(chunk.decode() if isinstance(chunk, bytes) else str(chunk) for chunk in chunks)
 
 
 def _event_parts(event: str) -> tuple[dict[str, object], ...]:
@@ -4195,11 +4203,24 @@ def _event_parts(event: str) -> tuple[dict[str, object], ...]:
     return tuple(chain.from_iterable(candidate["content"]["parts"] for candidate in candidates))
 
 
+def _stream_parts(chunks: Sequence[object]) -> tuple[dict[str, object], ...]:
+    events: Final = (event for event in _joined_text(chunks).split("\r\n\r\n") if event)
+    return tuple(chain.from_iterable(map(_event_parts, events)))
+
+
 _DENIED_IN_A_LATER_FRAME: Final = [
     _generate_content_frame([{"text": "Deleting it"}]),
-    _generate_content_frame([_gemini_function_call("delete_file")]),
+    _generate_content_frame([_signed(_gemini_function_call("delete_file"))]),
 ]
-_DENIED_FRAME: Final = _generate_content_frame([_gemini_function_call("get_weather"), _gemini_function_call("delete_file")])
+_DENIED_FRAME: Final = _generate_content_frame(
+    [_signed(_gemini_function_call("get_weather")), _gemini_function_call("delete_file")]
+)
+_DENIED_FIRST_CALL: Final = _signed(_gemini_function_call("delete_file"))
+_COMPACT_SIGNED_ALLOWED_FRAME: Final = (
+    b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather"},'
+    b'"thoughtSignature":"c2lnbmF0dXJl"}]}}]}\r\n\r\n'
+)
+_COMPACT_ALLOWED_FRAME: Final = b'data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather"}}]}}]}\r\n\r\n'
 
 
 class TestToolPermissionGuardrailGenerateContentStream:
@@ -4218,8 +4239,8 @@ class TestToolPermissionGuardrailGenerateContentStream:
             guardrail_name="gemini-rewrite", rules=rules, default_action="deny", on_disallowed_action="rewrite"
         )
 
-    async def _drain(self, guardrail, chunks):
-        async def _stream():
+    async def _drain(self, guardrail: ToolPermissionGuardrail, chunks: Sequence[object]) -> list[object]:
+        async def _stream() -> AsyncIterator[object]:
             for chunk in chunks:
                 yield chunk
 
@@ -4242,7 +4263,10 @@ class TestToolPermissionGuardrailGenerateContentStream:
                 id="text",
             ),
             pytest.param(
-                [_generate_content_frame([{"text": "Checking"}]), _generate_content_frame([_gemini_function_call("get_weather")])],
+                [
+                    _generate_content_frame([{"text": "Checking"}]),
+                    _generate_content_frame([_signed(_gemini_function_call("get_weather"))]),
+                ],
                 id="allowed-call",
             ),
             pytest.param(
@@ -4310,9 +4334,75 @@ class TestToolPermissionGuardrailGenerateContentStream:
         first, rewritten, last, after_last = _joined_text(delivered).split("\r\n\r\n")
         assert (first, last, after_last) == (sent[0].decode().removesuffix("\r\n\r\n"), sent[2].decode().removesuffix("\r\n\r\n"), "")
         allowed_call, denial = _event_parts(rewritten)
-        assert allowed_call == _gemini_function_call("get_weather")
+        assert allowed_call == _signed(_gemini_function_call("get_weather"))
         assert list(denial) == ["text"]
         assert "deny_delete" in denial["text"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks",
+        [
+            pytest.param([_generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("get_weather")])], id="same-frame"),
+            pytest.param(
+                [
+                    _generate_content_frame([_DENIED_FIRST_CALL]),
+                    _generate_content_frame([_gemini_function_call("get_weather")]),
+                ],
+                id="later-frame",
+            ),
+        ],
+    )
+    async def test_rewrite_moves_a_denied_first_call_signature_to_the_first_kept_call(self, chunks):
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        denial, allowed_call = _stream_parts(delivered)
+        assert list(denial) == ["text"]
+        assert "deny_delete" in denial["text"]
+        assert allowed_call == _signed(_gemini_function_call("get_weather"))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            pytest.param(
+                _generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("delete_file")]), id="every-call-denied"
+            ),
+            pytest.param(
+                _generate_content_frame([_DENIED_FIRST_CALL], [_gemini_function_call("get_weather")]),
+                id="kept-call-in-another-candidate",
+            ),
+        ],
+    )
+    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(self, frame):
+        delivered: Final = await self._drain(self.rewriting, [frame])
+
+        signed_denial, other_part = _stream_parts(delivered)
+        assert signed_denial == {"text": signed_denial["text"], **_THOUGHT_SIGNATURE}
+        assert "deny_delete" in signed_denial["text"]
+        assert _THOUGHT_SIGNATURE.keys().isdisjoint(other_part)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks, untouched",
+        [
+            pytest.param(
+                [_COMPACT_SIGNED_ALLOWED_FRAME, _generate_content_frame([_gemini_function_call("delete_file")])],
+                0,
+                id="signed-kept-call-first",
+            ),
+            pytest.param(
+                [_generate_content_frame([_gemini_function_call("delete_file")]), _COMPACT_ALLOWED_FRAME],
+                1,
+                id="unsigned-denied-call-first",
+            ),
+        ],
+    )
+    async def test_rewrite_leaves_a_frame_without_a_changed_part_byte_for_byte(self, chunks, untouched):
+        delivered: Final = await self._drain(self.rewriting, chunks)
+
+        frames: Final = _joined_text(delivered).split("\r\n\r\n")
+        assert frames[untouched] == chunks[untouched].decode().removesuffix("\r\n\r\n")
+        assert "deny_delete" in frames[1 - untouched]
 
     @pytest.mark.asyncio
     async def test_rewrite_keeps_the_other_candidates_of_the_denied_frame(self):

@@ -1765,7 +1765,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 for tool_call, error in denials
             }
         )
-        rewritten: Final = generate_content_sse_with_parts_replaced(sse_text, texts)
+        rewritten: Final = generate_content_sse_with_parts_replaced(sse_text, calls, texts)
         return (rewritten.encode() if any(isinstance(chunk, bytes) for chunk in source_chunks) else rewritten,)
 
     def _anthropic_stream_to_deliver(

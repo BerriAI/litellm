@@ -222,10 +222,12 @@ class StreamedFunctionCall:
     location: PartLocation
     name: str
     args: Mapping[str, object]
+    part: Mapping[str, object]
 
 
 _FUNCTION_CALL_FIELDS: Final = ("functionCall", "function_call")
 _FUNCTION_CALL_KEYS: Final = frozenset({"id", "name", "args"})
+_THOUGHT_SIGNATURE_FIELDS: Final = ("thoughtSignature", "thought_signature")
 _NO_ARGS: Final[Mapping[str, object]] = MappingProxyType({})
 _StreamedCalls: TypeAlias = tuple[StreamedFunctionCall, ...]
 
@@ -237,7 +239,7 @@ def _all_calls(results: Iterable[_StreamedCalls | None]) -> _StreamedCalls | Non
     return tuple(chain.from_iterable(result for result in collected if result is not None))
 
 
-def _function_call(location: PartLocation, value: object) -> StreamedFunctionCall | None:
+def _function_call(location: PartLocation, part: Mapping[str, object], value: object) -> StreamedFunctionCall | None:
     fields: Final = as_str_mapping(value)
     if fields is None or not fields.keys() <= _FUNCTION_CALL_KEYS:
         return None
@@ -246,7 +248,7 @@ def _function_call(location: PartLocation, value: object) -> StreamedFunctionCal
     args: Final = _NO_ARGS if raw_args is None else as_str_mapping(raw_args)
     if not isinstance(name, str) or args is None:
         return None
-    return StreamedFunctionCall(location=location, name=name, args=args)
+    return StreamedFunctionCall(location=location, name=name, args=args, part=part)
 
 
 def _part_function_calls(location: PartLocation, part: object) -> _StreamedCalls | None:
@@ -258,7 +260,7 @@ def _part_function_calls(location: PartLocation, part: object) -> _StreamedCalls
         case ():
             return ()
         case (function_call,):
-            call: Final = _function_call(location, function_call)
+            call: Final = _function_call(location, fields, function_call)
             return None if call is None else (call,)
         case _:
             return None
@@ -335,12 +337,46 @@ def generate_content_sse_function_calls(sse_text: str) -> _StreamedCalls | None:
     return _all_calls(_sse_line_function_calls(index, line) for index, line in enumerate(lines))
 
 
-def _part_or_text(location: PartLocation, part: object, texts: Mapping[PartLocation, str]) -> object:
-    text: Final = texts.get(location)
-    return part if text is None else {"text": text}
+def _thought_signature(part: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: part[key] for key in _THOUGHT_SIGNATURE_FIELDS if key in part}
 
 
-def _candidate_with_texts(line: int, position: int, candidate: object, texts: Mapping[PartLocation, str]) -> object:
+def _calls_by_candidate(calls: _StreamedCalls) -> tuple[_StreamedCalls, ...]:
+    positions: Final = frozenset(call.location.candidate for call in calls)
+    return tuple(tuple(call for call in calls if call.location.candidate == position) for position in positions)
+
+
+def _signature_handoff(
+    candidate_calls: _StreamedCalls, texts: Mapping[PartLocation, str]
+) -> tuple[StreamedFunctionCall, StreamedFunctionCall] | None:
+    first: Final = candidate_calls[0]
+    kept: Final = next((call for call in candidate_calls if call.location not in texts), None)
+    if kept is None or first.location not in texts or not _thought_signature(first.part):
+        return None
+    return first, kept
+
+
+def _replacement_parts(
+    calls: _StreamedCalls, texts: Mapping[PartLocation, str]
+) -> Mapping[PartLocation, Mapping[str, object]]:
+    handoffs: Final = tuple(filter(None, (_signature_handoff(group, texts) for group in _calls_by_candidate(calls))))
+    moved: Final = frozenset(source.location for source, _ in handoffs)
+    as_text: Final = {
+        call.location: (
+            {"text": texts[call.location]}
+            if call.location in moved
+            else {"text": texts[call.location], **_thought_signature(call.part)}
+        )
+        for call in calls
+        if call.location in texts
+    }
+    signed: Final = {target.location: {**target.part, **_thought_signature(source.part)} for source, target in handoffs}
+    return MappingProxyType({**as_text, **signed})
+
+
+def _candidate_with_parts(
+    line: int, position: int, candidate: object, replacements: Mapping[PartLocation, Mapping[str, object]]
+) -> object:
     fields: Final = as_str_mapping(candidate)
     parts: Final = None if fields is None else _candidate_parts(fields)
     content: Final = None if fields is None else as_str_mapping(fields.get("content"))
@@ -350,15 +386,13 @@ def _candidate_with_texts(line: int, position: int, candidate: object, texts: Ma
         **fields,
         "content": {
             **content,
-            "parts": [
-                _part_or_text(PartLocation(line, position, index), part, texts) for index, part in enumerate(parts)
-            ],
+            "parts": [replacements.get(PartLocation(line, position, index), part) for index, part in enumerate(parts)],
         },
     }
 
 
-def _line_with_texts(index: int, line: str, texts: Mapping[PartLocation, str]) -> str:
-    if not any(location.line == index for location in texts):
+def _line_with_parts(index: int, line: str, replacements: Mapping[PartLocation, Mapping[str, object]]) -> str:
+    if not any(location.line == index for location in replacements):
         return line
     body: Final = _without_line_break(line)
     payload: Final = _data_payload(body) if body.startswith("data:") else None
@@ -369,16 +403,25 @@ def _line_with_texts(index: int, line: str, texts: Mapping[PartLocation, str]) -
     rewritten: Final = {
         **response,
         "candidates": [
-            _candidate_with_texts(index, position, candidate, texts) for position, candidate in enumerate(candidates)
+            _candidate_with_parts(index, position, candidate, replacements)
+            for position, candidate in enumerate(candidates)
         ],
     }
     return f"data: {json.dumps(rewritten)}{line.removeprefix(body)}"
 
 
-def generate_content_sse_with_parts_replaced(sse_text: str, texts: Mapping[PartLocation, str]) -> str:
-    """The stream with the part at each location replaced by a text part, every other byte kept."""
+def generate_content_sse_with_parts_replaced(
+    sse_text: str, calls: _StreamedCalls, texts: Mapping[PartLocation, str]
+) -> str:
+    """The stream with each of ``calls`` at a location in ``texts`` replaced by that text part, every other byte kept.
+
+    A replaced call's thought signature stays on its text part, except that a turn's replaced first call hands it
+    to the first call kept after it, since Gemini 3 signs only a turn's first call and answers 400 to a next turn
+    whose first call is unsigned.
+    """
+    replacements: Final = _replacement_parts(calls, texts)
     return "".join(
-        _line_with_texts(index, line, texts) for index, line in enumerate(split_sse_lines_keepends(sse_text))
+        _line_with_parts(index, line, replacements) for index, line in enumerate(split_sse_lines_keepends(sse_text))
     )
 
 
