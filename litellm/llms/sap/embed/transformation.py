@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Final, Literal
 
@@ -88,9 +89,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         super().__init__()
         self._access_token_data = {}
         self.token_creator, self.base_url, self.resource_group = get_token_creator()
+        self._request_authorization: str | None = None
 
     @property
-    def headers(self) -> dict:
+    def headers(self) -> dict[str, str]:
         access_token: Final = self.token_creator()
         # headers for completions and embeddings requests
         headers: Final = {
@@ -101,10 +103,17 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
-    def _get_from_ai_core(self, client: httpx.Client, path: str) -> httpx.Response:
-        response: Final = client.get(join_api_base(self.base_url, path), headers=self.headers)
+    def _get_with_current_token(self, client: httpx.Client, path: str) -> httpx.Response:
+        request_headers: Final = self.headers
+        response: Final = client.get(join_api_base(self.base_url, path), headers=request_headers)
         if response.status_code == 401:
-            self.token_creator.invalidate()
+            self.token_creator.invalidate(request_headers["Authorization"])
+        return response
+
+    def _get_from_ai_core(self, client: httpx.Client, path: str) -> httpx.Response:
+        first_try: Final = self._get_with_current_token(client, path)
+        response: Final = self._get_with_current_token(client, path) if first_try.status_code == 401 else first_try
+        if response.status_code == 401:
             raise GenAIHubOrchestrationError(status_code=401, message=response.text)
         return response
 
@@ -129,8 +138,8 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
     def get_error_class(self, error_message, status_code, headers):
-        if status_code == 401:
-            self.token_creator.invalidate()
+        if status_code == 401 and self._request_authorization is not None:
+            self.token_creator.invalidate(self._request_authorization)
         return GenAIHubOrchestrationError(status_code, error_message)
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -152,6 +161,21 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
         return self.headers
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: BaseConfig.sign_request returns a dict
+        authorization: Final = self.headers["Authorization"]
+        self._request_authorization = authorization
+        return {**headers, "Authorization": authorization}, None
 
     def get_complete_url(
         self,

@@ -1,11 +1,19 @@
 import json
+import threading
+import time
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from typing import Final
 
 import httpx
 import pytest
 
 import litellm
 import litellm.llms.sap.credentials as sap_credentials
+from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+from litellm.llms.sap.embed.transformation import GenAIHubEmbeddingConfig
+from tests.unit.llms.sap.conftest import MockAICore
 
 _T0 = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -182,60 +190,103 @@ def test_vcap_services_that_is_not_an_object_is_rejected(monkeypatch, vcap_servi
 
 
 @pytest.mark.parametrize("expires_in", [43200, 3000], ids=["12-hour-token", "50-minute-token"])
-def test_token_is_shared_across_token_creators_while_fresh(aicore, expires_in):
+def test_token_is_shared_across_token_creators_while_fresh(aicore: MockAICore, expires_in: int) -> None:
     aicore.token.respond(json={"access_token": "mock-token", "expires_in": expires_in})
 
-    def clock():
+    def clock() -> datetime:
         return _T0
 
-    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+    tokens: Final = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
 
     assert tokens == ("Bearer mock-token",) * 3
     assert aicore.token.call_count == 1
 
 
-def test_reused_token_is_replaced_once_time_moves_into_refresh_buffer(aicore):
+def test_reused_token_is_replaced_once_time_moves_into_refresh_buffer(aicore: MockAICore) -> None:
     aicore.token.side_effect = [
         httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
         httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
     ]
-    call_times = iter((_T0, _T0 + timedelta(hours=10), _T0 + timedelta(hours=11, minutes=30)))
+    call_times: Final = iter((_T0, _T0 + timedelta(hours=10), _T0 + timedelta(hours=11, minutes=30)))
 
-    def clock():
+    def clock() -> datetime:
         return next(call_times)
 
-    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+    tokens: Final = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
 
     assert tokens == ("Bearer first", "Bearer first", "Bearer second")
     assert aicore.token.call_count == 2
 
 
-def test_each_service_key_keeps_its_own_token(aicore):
+def test_each_service_key_keeps_its_own_token(aicore: MockAICore) -> None:
     aicore.token.side_effect = [
         httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
         httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
     ]
-    service_key = json.loads(litellm.sap_service_key)
-    first_creator = sap_credentials.get_token_creator(service_key)[0]
-    second_creator = sap_credentials.get_token_creator({**service_key, "clientid": "other-client"})[0]
+    service_key: Final = json.loads(litellm.sap_service_key)
+    first_creator: Final = sap_credentials.get_token_creator(service_key)[0]
+    second_creator: Final = sap_credentials.get_token_creator({**service_key, "clientid": "other-client"})[0]
 
-    tokens = (first_creator(), second_creator(), first_creator(), second_creator())
+    tokens: Final = (first_creator(), second_creator(), first_creator(), second_creator())
 
     assert tokens == ("Bearer first", "Bearer second", "Bearer first", "Bearer second")
     assert aicore.token.call_count == 2
 
 
-def test_short_lived_token_is_replaced_halfway_through_its_lifetime(aicore):
+def test_short_lived_token_is_replaced_halfway_through_its_lifetime(aicore: MockAICore) -> None:
     aicore.token.side_effect = [
         httpx.Response(200, json={"access_token": "first", "expires_in": 3000}),
         httpx.Response(200, json={"access_token": "second", "expires_in": 3000}),
     ]
-    call_times = iter((_T0, _T0 + timedelta(minutes=25), _T0 + timedelta(minutes=26)))
+    call_times: Final = iter((_T0, _T0 + timedelta(minutes=25), _T0 + timedelta(minutes=26)))
 
-    def clock():
+    def clock() -> datetime:
         return next(call_times)
 
-    tokens = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
+    tokens: Final = tuple(sap_credentials.get_token_creator(clock=clock)[0]() for _ in range(3))
 
     assert tokens == ("Bearer first", "Bearer first", "Bearer second")
     assert aicore.token.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "make_config", [GenAIHubOrchestrationConfig, GenAIHubEmbeddingConfig], ids=["chat", "embedding"]
+)
+def test_a_late_rejection_of_a_replaced_token_keeps_the_new_token(
+    aicore: MockAICore, make_config: Callable[[], GenAIHubOrchestrationConfig | GenAIHubEmbeddingConfig]
+) -> None:
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "first", "expires_in": 0}),
+        httpx.Response(200, json={"access_token": "second", "expires_in": 43200}),
+    ]
+    slow_request: Final = make_config()
+    slow_request.sign_request({}, {}, {}, aicore.deployment_url)
+    make_config().sign_request({}, {}, {}, aicore.deployment_url)
+
+    slow_request.get_error_class("Unauthorized", 401, {})
+
+    assert make_config().sign_request({}, {}, {}, aicore.deployment_url)[0]["Authorization"] == "Bearer second"
+    assert aicore.token.call_count == 2
+
+
+def test_requests_waiting_on_a_failing_token_fetch_share_its_error(aicore: MockAICore) -> None:
+    def slow_outage(request: httpx.Request) -> httpx.Response:
+        time.sleep(0.3)
+        return httpx.Response(503, text="Service Unavailable")
+
+    aicore.token.side_effect = slow_outage
+    token_creator: Final = sap_credentials.get_token_creator()[0]
+    concurrent_requests: Final = 4
+    start: Final = threading.Barrier(concurrent_requests)
+
+    def request_token(_: int) -> str:
+        start.wait()
+        with pytest.raises(RuntimeError) as failure:
+            token_creator()
+        return str(failure.value)
+
+    with ThreadPoolExecutor(max_workers=concurrent_requests) as pool:
+        errors: Final = tuple(pool.map(request_token, range(concurrent_requests)))
+
+    assert errors == ("Token request failed: Service Unavailable",) * concurrent_requests
+    assert aicore.token.call_count == 1

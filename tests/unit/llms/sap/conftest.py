@@ -1,6 +1,7 @@
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Final
 
 import httpx
 import pytest
@@ -16,14 +17,14 @@ class MockAICore:
     deployments: respx.Route
 
     def reject_token(self, route: respx.Route, authorization: str) -> None:
-        accepted = route.return_value
+        accepted: Final = route.return_value
         route.side_effect = lambda request: (
             httpx.Response(401, text="Unauthorized") if request.headers["Authorization"] == authorization else accepted
         )
 
 
 @pytest.fixture
-def aicore(respx_mock, monkeypatch) -> MockAICore:
+def aicore(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch) -> MockAICore:
     for var in (
         "AICORE_CLIENT_ID",
         "AICORE_CLIENT_SECRET",
@@ -38,8 +39,8 @@ def aicore(respx_mock, monkeypatch) -> MockAICore:
     monkeypatch.setenv("AICORE_HOME", "notexist")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
-    host = f"https://{uuid.uuid4().hex}.mock-sap.com"
-    service_key = {
+    host: Final = f"https://{uuid.uuid4().hex}.mock-sap.com"
+    service_key: Final = {
         "clientid": "mock-client",
         "clientsecret": "mock-secret",
         "url": f"{host}/auth",
@@ -47,9 +48,9 @@ def aicore(respx_mock, monkeypatch) -> MockAICore:
     }
     monkeypatch.setattr(litellm, "sap_service_key", json.dumps(service_key))
 
-    base_url = f"{host}/api/v2"
-    deployment_url = f"{base_url}/inference/deployments/orchestration"
-    deployments = respx_mock.get(f"{base_url}/lm/deployments").respond(
+    base_url: Final = f"{host}/api/v2"
+    deployment_url: Final = f"{base_url}/inference/deployments/orchestration"
+    deployments: Final = respx_mock.get(f"{base_url}/lm/deployments").respond(
         json={
             "resources": [
                 {

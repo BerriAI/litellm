@@ -156,6 +156,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._request_authorization: str | None = None
 
     def run_env_setup(self, service_key: str | None = None) -> None:
         try:
@@ -187,14 +188,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group
 
-    def _invalidate_rejected_token(self) -> None:
-        if self.token_creator is not None:
-            self.token_creator.invalidate()
+    def _invalidate_rejected_token(self, authorization: str | None) -> None:
+        if self.token_creator is not None and authorization is not None:
+            self.token_creator.invalidate(authorization)
+
+    def _get_with_current_token(self, path: str) -> httpx.Response:
+        request_headers: Final = self.headers
+        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=request_headers)
+        if response.status_code == 401:
+            self._invalidate_rejected_token(request_headers["Authorization"])
+        return response
 
     def _get_from_ai_core(self, path: str) -> httpx.Response:
-        response: Final = litellm.module_level_client.get(join_api_base(self.base_url, path), headers=self.headers)
+        first_try: Final = self._get_with_current_token(path)
+        response: Final = self._get_with_current_token(path) if first_try.status_code == 401 else first_try
         if response.status_code == 401:
-            self._invalidate_rejected_token()
             raise GenAIHubOrchestrationError(status_code=401, message=response.text)
         return response
 
@@ -218,7 +226,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
     ) -> BaseLLMException:
         if status_code == 401:
-            self._invalidate_rejected_token()
+            self._invalidate_rejected_token(self._request_authorization)
         return super().get_error_class(error_message, status_code, headers)
 
     @classmethod
@@ -276,6 +284,21 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         if api_key:
             self.run_env_setup(api_key)
         return self.headers
+
+    def sign_request(
+        self,
+        headers: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        request_data: Mapping[str, object],
+        api_base: str,
+        api_key: str | None = None,
+        model: str | None = None,
+        stream: bool | None = None,
+        fake_stream: bool | None = None,
+    ) -> tuple[dict[str, object], bytes | None]:  # mutable-ok: BaseConfig.sign_request returns a dict
+        authorization: Final = self.headers["Authorization"]
+        self._request_authorization = authorization
+        return {**headers, "Authorization": authorization}, None
 
     def get_complete_url(
         self,

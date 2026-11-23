@@ -445,19 +445,32 @@ class OAuthTokenCache:
         self._lock: Final = Lock()
         self._token: str | None = None
         self._refresh_at: datetime | None = None
+        self._failed_fetches = 0
+        self._last_fetch_error: Exception | None = None
 
     def __call__(self) -> str:
+        failed_fetches_before_waiting: Final = self._failed_fetches
         with self._lock:
             now: Final = self._clock()
             if self._token is not None and self._refresh_at is not None and now <= self._refresh_at:
                 return self._token
-            token, lifetime = self._fetch_token()
+            if self._last_fetch_error is not None and self._failed_fetches != failed_fetches_before_waiting:
+                raise self._last_fetch_error
+            try:
+                token, lifetime = self._fetch_token()
+            except Exception as err:
+                self._failed_fetches += 1
+                self._last_fetch_error = err
+                raise
+            self._last_fetch_error = None
             self._token = token
             self._refresh_at = now + lifetime - min(self._expiry_buffer, lifetime / 2)
             return token
 
-    def invalidate(self) -> None:
+    def invalidate(self, rejected_token: str) -> None:
         with self._lock:
+            if self._token != rejected_token:
+                return
             self._token = None
             self._refresh_at = None
 
