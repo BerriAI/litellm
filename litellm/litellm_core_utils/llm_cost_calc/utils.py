@@ -906,7 +906,11 @@ def billed_cache_read_rate(quote: NativeQuote, usage: Usage) -> float:
 
 
 def billed_quantities(usage: Usage) -> NativeTokenUsage:
-    """What ``usage`` bills on each meter, the counts the provider reported once their overlap is removed."""
+    """How much of each type of token ``usage`` used, with the overlap between them factored out.
+
+    See ``NativeTokenUsage`` in ``litellm/rust_bridge/_native.pyi`` and ``Meter`` in
+    ``litellm/rust/crates/cost/src/price/meter.rs`` for the types that exist.
+    """
     prompt: Final = _billed_prompt_tokens(usage)
     completion: Final = _billed_completion_tokens(usage)
     classified_cached_tokens: Final = (

@@ -9,7 +9,7 @@ use crate::usage::{DurationMeter, Usage};
 
 /// Prices one online call from its prompt and completion tokens, prompt characters, input images,
 /// input audio and video time and queries. No other field of `usage` is read. Each side is summed
-/// in the order main sums it, so the two totals equal main's to the last bit
+/// in a fixed order so the totals match the Python calculator it replaced to the last bit
 pub fn calculate(
     prices: &Prices,
     adjustments: &Adjustments,
