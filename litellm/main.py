@@ -2014,6 +2014,14 @@ def _validate_vispark_api_key(provider: str | None, api_key: str | None, model: 
         )
 
 
+def _validate_modapi_api_key(provider: str | None, api_key: str | None, model: str, has_client: bool = False) -> None:
+    # Without this, a missing MODAPI_API_KEY falls through to the OpenAI key fallback below and sends that key to ModAPI.
+    if provider == "modapi" and not api_key and not has_client:
+        raise litellm.AuthenticationError(
+            message="Set MODAPI_API_KEY or pass api_key", llm_provider="modapi", model=model
+        )
+
+
 def _complete_text_completion_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2917,6 +2925,13 @@ def _complete_custom_openai(
     # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
     api_base = _resolve_openai_api_base(api_base)
     _validate_vispark_api_key(
+        custom_llm_provider,
+        api_key,
+        model,
+        has_client=isinstance(client, (openai.OpenAI, openai.AsyncOpenAI))
+        and not get_secret_bool("EXPERIMENTAL_OPENAI_BASE_LLM_HTTP_HANDLER"),
+    )
+    _validate_modapi_api_key(
         custom_llm_provider,
         api_key,
         model,

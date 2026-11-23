@@ -310,6 +310,23 @@ def test_modapi_chat_completion_request():
     assert response.choices[0].message.content == "Hello from ModAPI"
 
 
+def test_modapi_missing_key_does_not_fall_back_to_openai_key(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("MODAPI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key-must-not-leak")
+    monkeypatch.setattr(litellm, "api_key", None)
+    monkeypatch.setattr(litellm, "openai_key", None)
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
+        with pytest.raises(litellm.AuthenticationError, match="MODAPI_API_KEY"):
+            litellm.completion(
+                model="modapi/gpt-4.1-nano",
+                messages=[{"role": "user", "content": "Say hello"}],
+                max_retries=0,
+            )
+
+    assert route.call_count == 0
+
+
 def test_modapi_text_completion_is_bridged_to_chat_completions():
     with respx.mock() as upstream:
         route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
