@@ -98,11 +98,11 @@ class ParallelAISearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs: object,
-    ) -> dict[str, str]:
+        **kwargs,
+    ) -> dict:
         resolved_api_key: Final = self.resolve_server_api_key(
             caller_api_key=api_key,
             caller_api_base=api_base,
@@ -119,9 +119,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: Mapping[str, object],
-        data: Mapping[str, object] | Sequence[Mapping[str, object]] | None = None,
-        **kwargs: object,
+        optional_params: dict,
+        data: dict | list[dict] | None = None,
+        **kwargs,
     ) -> str:
         resolved_api_base: Final = api_base or get_secret_str("PARALLEL_AI_API_BASE") or self.PARALLEL_AI_API_BASE
 
@@ -134,8 +134,8 @@ class ParallelAISearchConfig(BaseSearchConfig):
         self,
         query: str | list[str],
         optional_params: dict,
-        **kwargs: object,
-    ) -> dict[str, object]:
+        **kwargs,
+    ) -> dict:
         """
         Transform Search request to Parallel AI v1 API format.
 
@@ -230,7 +230,7 @@ class ParallelAISearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs: object,
+        **kwargs,
     ) -> SearchResponse:
         """
         Transform Parallel AI v1 API response to LiteLLM unified SearchResponse format.
