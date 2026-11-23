@@ -104,6 +104,9 @@ def test_is_pure_asgi_not_base_http_middleware():
         ("/v1beta/models/gemini-2.5-pro:streamGenerateContent", (BillableCategory.LLM, ":streamGenerateContent")),
         # SpendLogs-producing routes surfaced by the route-inventory audit
         ("/v1/search", (BillableCategory.LLM, "/search")),
+        ("/v1/tools/search", (BillableCategory.LLM, "/search")),
+        ("/v1/fetch", (BillableCategory.LLM, "/fetch")),
+        ("/v1/tools/fetch", (BillableCategory.LLM, "/fetch")),
         ("/v1/vector_stores/vs_1/search", (BillableCategory.LLM, "/search")),
         ("/opensearch/docs/_search", (BillableCategory.LLM, "/opensearch")),
         ("/v1/rag/query", (BillableCategory.LLM, "/rag/query")),
