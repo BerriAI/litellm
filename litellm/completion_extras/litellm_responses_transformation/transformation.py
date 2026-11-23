@@ -358,6 +358,10 @@ def _reasoning_items_from_output_items(output_items: Sequence[object]) -> tuple[
     )
 
 
+def _holds_only_reasoning_items(output_items: Sequence[object]) -> bool:
+    return 0 < len(output_items) == len(_reasoning_items_from_output_items(output_items))
+
+
 _TOOL_SEARCH_ITEM_TYPES: Final = frozenset({"tool_search_call", "tool_search_output"})
 _TOOL_SEARCH_REPLAY_ITEM_TYPES: Final = frozenset({"reasoning", *_TOOL_SEARCH_ITEM_TYPES})
 _TOOL_SEARCH_ITEMS_KEY: Final = "tool_search_items"
@@ -1610,13 +1614,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
         )
 
-        if (
-            len(choices) == 0
-            and raw_response.status == "completed"
-            and len(output_items) > 0
-            and len(_reasoning_items_from_output_items(output_items)) == len(output_items)
-        ):
-            # The model reasoned and ended the turn with no text or tool call
+        if len(choices) == 0 and raw_response.status == "completed" and _holds_only_reasoning_items(output_items):
             choices.append(self._build_empty_choice(output_items, "stop"))
 
         if len(choices) == 0 and not response_is_incomplete:
