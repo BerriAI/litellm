@@ -247,6 +247,33 @@ async def test_key_info_self_access_requires_a_real_matching_key(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+async def test_admin_can_read_key_info_without_a_personal_key(role: LitellmUserRoles) -> None:
+    auth: Final = UserAPIKeyAuth(api_key=None, user_id=None, user_role=role)
+    stored_key: Final = LiteLLM_VerificationToken(token="other-key-hash", user_id=None)
+
+    assert await _can_user_query_key_info(user_api_key_dict=auth, key=stored_key.token, key_info=stored_key) is True
+
+
+@pytest.mark.asyncio
+async def test_assigned_owner_can_read_key_info_without_a_caller_key() -> None:
+    auth: Final = UserAPIKeyAuth(api_key=None, user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+    stored_key: Final = LiteLLM_VerificationToken(token="other-key-hash", user_id="alice")
+
+    assert await _can_user_query_key_info(user_api_key_dict=auth, key=stored_key.token, key_info=stored_key) is True
+
+
+@pytest.mark.asyncio
+async def test_matching_key_allows_self_access_when_the_owner_is_someone_else() -> None:
+    auth: Final = UserAPIKeyAuth(api_key="caller-key-hash", user_id="caller", user_role=LitellmUserRoles.INTERNAL_USER)
+    stored_key: Final = LiteLLM_VerificationToken(token="caller-key-hash", user_id="other-owner")
+
+    assert (
+        await _can_user_query_key_info(user_api_key_dict=auth, key=stored_key.token, key_info=stored_key) is True
+    )
+
+
+@pytest.mark.asyncio
 async def test_impersonated_key_info_requires_an_explicit_key() -> None:
     auth: Final = UserAPIKeyAuth(user_id="subject").model_copy(update={"impersonated_by": "service-user"})
 
