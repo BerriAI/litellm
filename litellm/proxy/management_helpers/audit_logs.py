@@ -157,7 +157,7 @@ def _build_audit_log_payload(
     )
 
 
-def _audit_log_task_done_callback(task: asyncio.Task) -> None:
+def _audit_log_task_done_callback(task: asyncio.Task[object]) -> None:
     """Log exceptions from audit log callback tasks so they don't slip through silently."""
     try:
         exc: Final = task.exception()
