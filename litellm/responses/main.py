@@ -1605,6 +1605,7 @@ def responses(
             if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
                 _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
             return litellm_completion_transformation_handler.response_api_handler(
+                (previous_response_id,) if previous_response_id else (),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
