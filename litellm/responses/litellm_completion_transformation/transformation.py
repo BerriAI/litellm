@@ -42,7 +42,7 @@ from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.hidden_params import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.factory import is_same_tool_call
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.common_utils import supports_anthropic_cache_control
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
@@ -133,20 +134,23 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
-from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .reasoning_items import (
+    decode_thinking_blocks,
+    encode_thinking_blocks,
+    is_verifiable_thinking_block,
+    mint_reasoning_item_id,
+)
 from .tool_search import (
     CompletionRoute,
     answers_tool_search,
     anthropic_tool_search_chat_tool,
     build_tool_search_call,
-    chat_config_builds_anthropic_request,
     has_server_tool_search,
     holds_tool_search_use,
     is_anthropic_tool_search_chat_tool,
     is_anthropic_tool_search_use,
     is_server_tool_search_tool,
     provider_builds_anthropic_request,
-    provider_chat_config,
     request_runs_tool_search,
     route_runs_tool_search,
     tool_search_call_ids,
@@ -314,13 +318,13 @@ SessionMessage: TypeAlias = (
 )
 
 
-def _with_each_call_made_once(
-    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
-) -> Sequence[SessionMessage]:
-    return without_repeated_tool_calls(
-        messages,
-        keep_stored_arguments=partial(_target_may_bind_reasoning_to_earlier_turns, model, custom_llm_provider),
-    )
+def _made_with_signed_thinking(message: SessionMessage) -> bool:
+    blocks: Final = filter(None, map(as_str_mapping, parts_of(message_field(message, "thinking_blocks"))))
+    return any(map(is_verifiable_thinking_block, blocks))
+
+
+def _with_each_call_made_once(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(messages, keep_stored_arguments=_made_with_signed_thinking)
 
 
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
@@ -397,18 +401,6 @@ def _target_keeps_item_marks(model: str, custom_llm_provider: str | None, drop_p
     if custom_llm_provider == "databricks":
         return "claude" in model.lower()
     return custom_llm_provider == "bedrock" and _bedrock_target_keeps_item_marks(model, drop_params)
-
-
-def _target_may_bind_reasoning_to_earlier_turns(model: str, custom_llm_provider: str | None) -> bool:
-    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-
-    if "claude" in model.lower():
-        return True
-    try:
-        chat_config: Final = provider_chat_config(model, custom_llm_provider)
-    except litellm.BadRequestError:
-        return False
-    return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
 
 
 def _refuses_marks_on_tool_blocks(model: str, custom_llm_provider: str | None) -> bool:
@@ -1119,7 +1111,7 @@ class LiteLLMCompletionResponsesConfig:
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         tools: Final = litellm_completion_request.get("tools") or []
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=_with_each_call_made_once(combined_messages, model, provider),
+            messages=_with_each_call_made_once(combined_messages),
             tools=tools,
         )
 

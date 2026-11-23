@@ -177,20 +177,26 @@ def _with_arguments(call: object, repeated: _MadeCall | None) -> object:
     return _with_field(call, "function", _with_field(function, "arguments", repeated.arguments))
 
 
-def _with_calls_whole(message: _MessageT, index: int, dropped: Mapping[tuple[int, str], _MadeCall]) -> _MessageT:
+def _with_calls_whole(
+    message: _MessageT,
+    index: int,
+    dropped: Mapping[tuple[int, str], _MadeCall],
+    keep_stored_arguments: Callable[[_MessageT], bool],
+) -> _MessageT:
     calls: Final = _calls(message)
     made: Final = tuple((index, _call_key(message_field(call, "id"))) for call in calls)
     if dropped.keys().isdisjoint(made):
         return message
-    return _with_field(
+    whole: Final = _with_field(
         message,
         "tool_calls",
         [_with_arguments(call, dropped.get(key)) for call, key in zip(calls, made)],
     )
+    return message if whole == message or keep_stored_arguments(message) else whole
 
 
 def without_repeated_tool_calls(
-    messages: Sequence[_MessageT], *, keep_stored_arguments: Callable[[], bool]
+    messages: Sequence[_MessageT], *, keep_stored_arguments: Callable[[_MessageT], bool]
 ) -> tuple[_MessageT, ...]:
     steps: Final = accumulate(enumerate(messages), _next_step, initial=_Step(_NO_CALLS, _NO_CALLS))
     repeated: Final = tuple(step.repeated for step in islice(steps, 1, None))
@@ -198,6 +204,4 @@ def without_repeated_tool_calls(
         {(call.made_by, key): call for key, call in chain.from_iterable(calls.items() for calls in repeated)}
     )
     kept: Final = tuple((index, message) for index, (message, calls) in enumerate(zip(messages, repeated)) if not calls)
-    as_stored: Final = tuple(message for _, message in kept)
-    whole: Final = tuple(_with_calls_whole(message, index, dropped) for index, message in kept)
-    return as_stored if whole == as_stored or keep_stored_arguments() else whole
+    return tuple(_with_calls_whole(message, index, dropped, keep_stored_arguments) for index, message in kept)

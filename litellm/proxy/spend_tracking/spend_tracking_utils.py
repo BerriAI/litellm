@@ -25,6 +25,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_SPEND_LOG_MODEL_NAME_LENGTH,
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
     MCP_SPEND_LOG_MODEL_PREFIX,
     NON_INFERENCE_CALL_TYPES,
     REDACTED_BY_LITELM_STRING,
@@ -1152,6 +1153,7 @@ _SENSITIVE_REQUEST_BODY_KEYS: Final = frozenset({"secret_fields"})
 _REQUEST_BODY_CREDENTIAL_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset({"apikey"}))
 _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_tool_use"})
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
+_REPLAYED_RESPONSE_CALL_TYPES: Final = frozenset({"responses", "aresponses", "_aresponses_websocket"})
 
 
 def _is_request_body_credential(key: str, value: object) -> bool:
@@ -1171,13 +1173,20 @@ def _is_spend_log_content(parent: Mapping[str, object], key: str) -> bool:
     )
 
 
-def _stored_whole(value: object, sanitized: Callable[[object], object]) -> object:
+def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
+    return truncated_for_db(value, max(max_string_length_prompt_in_db, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB))
+
+
+def _stored_whole(value: object, sanitized: Callable[[object], object], max_string_length_prompt_in_db: int) -> object:
     if isinstance(value, str):
-        return value
+        return _provider_signed_for_db(value, max_string_length_prompt_in_db)
     items: Final = as_object_list(value)
     if items is None:
         return sanitized(value)
-    return [item if isinstance(item, str) else sanitized(item) for item in items]
+    return [
+        _provider_signed_for_db(item, max_string_length_prompt_in_db) if isinstance(item, str) else sanitized(item)
+        for item in items
+    ]
 
 
 def _sanitize_request_body_for_spend_logs_payload(
@@ -1185,7 +1194,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
-    keep_replayed_provider_state: bool = False,
+    keep_provider_signed_fields: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -1210,7 +1219,7 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_replayed_provider_state
+                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_provider_signed_fields
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
@@ -1221,8 +1230,10 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _stored_value(key: str, value: object) -> object:
         if mask_credentials and _is_request_body_credential(key, value):
             return REDACTED_BY_LITELM_STRING
-        if keep_replayed_provider_state and is_provider_signed(request_body, key, value):
-            return _stored_whole(value, partial(_sanitize_value, mask_credentials=mask_credentials))
+        if keep_provider_signed_fields and is_provider_signed(request_body, key, value):
+            return _stored_whole(
+                value, partial(_sanitize_value, mask_credentials=mask_credentials), max_string_length_prompt_in_db
+            )
         return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
 
     return {k: _stored_value(k, v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
@@ -1859,7 +1870,8 @@ def _get_response_for_spend_logs_payload(
             response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
-            {"response": response_obj}, keep_replayed_provider_state=not redacted
+            {"response": response_obj},
+            keep_provider_signed_fields=not redacted and payload.get("call_type") in _REPLAYED_RESPONSE_CALL_TYPES,
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)
