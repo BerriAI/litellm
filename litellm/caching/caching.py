@@ -951,6 +951,7 @@ class Cache:
                             kwargs["ttl"] = v
 
                 cached_data: Final = {"timestamp": time.time(), "response": result}
+                kwargs["reset_ttl"] = True
                 return cache_key, cached_data, kwargs
             else:
                 raise Exception("cache key is None")

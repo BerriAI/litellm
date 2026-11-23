@@ -187,7 +187,8 @@ class InMemoryCache(BaseCache):
                 return
 
             self.cache_dict[key] = value
-            if self.allow_ttl_override(key):  # if ttl is not set, set it to default ttl
+            reset_ttl: Final = bool(kwargs.get("reset_ttl") or kwargs.get("overwrite_ttl"))
+            if reset_ttl or self.allow_ttl_override(key):  # if ttl is not set or reset requested, set it
                 if "ttl" in kwargs and kwargs["ttl"] is not None:
                     self.ttl_dict[key] = self._clock() + float(kwargs["ttl"])
                     heapq.heappush(self.expiration_heap, (self.ttl_dict[key], key))
@@ -203,9 +204,9 @@ class InMemoryCache(BaseCache):
     ):
         for cache_key, cache_value in cache_list:
             if ttl is not None:
-                self.set_cache(key=cache_key, value=cache_value, ttl=ttl)
+                self.set_cache(key=cache_key, value=cache_value, ttl=ttl, **kwargs)
             else:
-                self.set_cache(key=cache_key, value=cache_value)
+                self.set_cache(key=cache_key, value=cache_value, **kwargs)
 
     async def async_set_cache_sadd(self, key, value: Sequence[object], ttl: float | None):
         """

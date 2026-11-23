@@ -162,6 +162,27 @@ def test_in_memory_cache_ttl_allow_override():
     assert new_ttl_time != initial_ttl_time
 
 
+def test_in_memory_cache_ttl_reset():
+    """
+    Check that when reset_ttl=True (or overwrite_ttl=True) is passed,
+    the TTL of an existing unexpired key is updated.
+    """
+    now = [1_000.0]
+    cache = InMemoryCache(clock=lambda: now[0])
+
+    cache.set_cache(key="test-key", value="val-1", ttl=600)
+    assert cache.ttl_dict["test-key"] == 1_600.0
+
+    now[0] = 1_050.0
+    # Without reset_ttl, existing key's TTL is preserved
+    cache.set_cache(key="test-key", value="val-2", ttl=10)
+    assert cache.ttl_dict["test-key"] == 1_600.0
+
+    # With reset_ttl=True, existing key's TTL is reset to the new value
+    cache.set_cache(key="test-key", value="val-3", ttl=10, reset_ttl=True)
+    assert cache.ttl_dict["test-key"] == 1_060.0
+
+
 def test_in_memory_cache_max_size_with_ttl():
     """
     Test that max_size_in_memory is respected even when all items have long TTLs.

@@ -1612,6 +1612,33 @@ async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> N
     assert async_ttl_first.id == async_ttl_second.id
 
 
+def test_in_memory_cache_refresh_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    now = [1_000_000.0]
+    cache = Cache(type=LiteLLMCacheType.LOCAL)
+    in_memory = InMemoryCache(clock=lambda: now[0])
+    cache.cache = in_memory
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    messages = [{"role": "user", "content": f"ttl-refresh-{uuid.uuid4().hex}"}]
+
+    # Initial call: cached with default TTL (600s)
+    r1 = completion(model="gpt-4o-mini", messages=messages, mock_response="v1")
+    assert r1.choices[0].message.content == "v1"
+    key = next(iter(in_memory.ttl_dict))
+    assert in_memory.ttl_dict[key] - now[0] == in_memory.default_ttl
+
+    # Refresh with per-request TTL=10s
+    r2 = completion(model="gpt-4o-mini", messages=messages, mock_response="v2", cache={"no-cache": True, "ttl": 10})
+    assert r2.choices[0].message.content == "v2"
+    assert in_memory.ttl_dict[key] - now[0] == 10.0
+
+    # Advance clock past the new TTL
+    now[0] += 60.0
+    r3 = completion(model="gpt-4o-mini", messages=messages, mock_response="v3")
+    assert r3.choices[0].message.content == "v3"
+    assert r3._hidden_params.get("cache_hit") is not True
+
+
 @pytest.mark.asyncio
 async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()
