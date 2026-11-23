@@ -13865,7 +13865,8 @@
         "toolSearch": "Tool Search",
         "networkSettings": "Network Settings",
         "submitted": "Submitted MCPs",
-        "liveConnections": "Live Connections"
+        "liveConnections": "Live Connections",
+        "eventSubscriptions": "Event Subscriptions"
       },
       "searchPlaceholder": "Search by name, alias, URL, or ID",
       "resultCount": "{{shown}} of {{total}} servers",
@@ -14803,6 +14804,62 @@
         "calling": "Calling Tool...",
         "callAgain": "Call Again",
         "call": "Call Tool"
+      }
+    },
+    "eventSubscriptionsTab": {
+      "next": "Next page",
+      "previous": "Previous page",
+      "title": "Event subscriptions",
+      "description": "Webhook subscriptions the gateway relays from upstream MCP servers to clients. Push and poll subscriptions last only as long as a request and are not listed.",
+      "refresh": "Refresh",
+      "loading": "Loading event subscriptions...",
+      "loadError": "Could not load event subscriptions",
+      "empty": "No webhook event subscriptions yet.",
+      "regionLabel": "Webhook event subscriptions",
+      "noExpiry": "No expiry",
+      "columns": {
+        "event": "Event",
+        "server": "Server",
+        "arguments": "Arguments",
+        "callback": "Callback host",
+        "status": "Status",
+        "owner": "Owner",
+        "lastDelivery": "Last delivery",
+        "lastError": "Last error",
+        "expires": "Expires",
+        "actions": "Actions"
+      },
+      "status": {
+        "pending": "Pending",
+        "active": "Active",
+        "suspended": "Suspended",
+        "terminated": "Terminated"
+      },
+      "failure": {
+        "connection_refused": "Connection refused",
+        "timeout": "Timed out",
+        "tls_error": "TLS error",
+        "http_4xx": "Client error (4xx)",
+        "http_5xx": "Server error (5xx)",
+        "challenge_failed": "Verification failed"
+      },
+      "test": {
+        "label": "Send test event",
+        "ariaLabel": "Send a signed test event to subscription {{id}}",
+        "delivered": "Test event delivered (HTTP {{status}})",
+        "failed": "Test event was not delivered",
+        "httpStatus": "The callback answered HTTP {{status}}"
+      },
+      "terminate": {
+        "label": "Terminate",
+        "ariaLabel": "Terminate subscription {{id}}",
+        "error": "Could not terminate the subscription"
+      },
+      "confirm": {
+        "title": "Terminate this subscription?",
+        "body": "The client receives a terminated notice for {{event}} and the gateway ends the upstream subscription.",
+        "cancel": "Cancel",
+        "confirm": "Terminate"
       }
     }
   },

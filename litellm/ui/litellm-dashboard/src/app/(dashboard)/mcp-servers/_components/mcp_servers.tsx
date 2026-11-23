@@ -22,6 +22,7 @@ import {
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useQueryState } from "nuqs";
+import { useUrlTab } from "@/hooks/useUrlTab";
 import { useTranslation } from "react-i18next";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
@@ -29,6 +30,7 @@ import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPGatewaySessionsTab } from "./MCPGatewaySessionsTab";
+import { MCPEventSubscriptionsTab } from "./MCPEventSubscriptionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
 import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
@@ -56,6 +58,14 @@ import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "@/components/networking";
 
 const ALL_FILTER_VALUE = "all";
+const SERVER_TABS = ["servers", "toolsets", "connect"];
+const ADMIN_TABS = [...SERVER_TABS, "semantic-filter", "tool-search", "network-settings", "submitted"];
+const PROXY_ADMIN_TABS = [...ADMIN_TABS, "connections", "event-subscriptions"];
+
+function serverTabs(role: string | null) {
+  if (!role || isProxyAdminTierRole(role)) return PROXY_ADMIN_TABS;
+  return isAdminRole(role) ? ADMIN_TABS : SERVER_TABS;
+}
 
 export type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
 
@@ -177,7 +187,12 @@ function DeleteServerDialog({
   );
 }
 
+const canManageLiveGatewayState = (role: string | null, viewOnly: boolean): boolean =>
+  role !== null && isProxyAdminRole(role) && !viewOnly;
+
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
+  const canManageLiveState = canManageLiveGatewayState(userRole, isViewOnly);
+  const [tab, setTab] = useUrlTab(serverTabs(userRole), "servers", "mcpTab");
   const { t } = useTranslation();
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
@@ -566,7 +581,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           }}
           accessToken={accessToken}
         />
-        <Tabs defaultValue="servers" className="w-full gap-6">
+        <Tabs value={tab} onValueChange={setTab} className="w-full gap-6">
           <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
             <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.servers.tabs.allServers")}
@@ -597,9 +612,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
               </>
             )}
             {isProxyAdminTierRole(userRole) && (
-              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.liveConnections")}
-              </TabsTrigger>
+              <>
+                <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.liveConnections")}
+                </TabsTrigger>
+                <TabsTrigger value="event-subscriptions" className="flex-none rounded-none px-4 py-2">
+                  {t("mcpServers.servers.tabs.eventSubscriptions")}
+                </TabsTrigger>
+              </>
             )}
           </TabsList>
           <TabsContent value="servers" keepMounted>
@@ -798,12 +818,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
             </>
           )}
           {isProxyAdminTierRole(userRole) && (
-            <TabsContent value="connections">
-              <MCPGatewaySessionsTab
-                accessToken={accessToken}
-                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
-              />
-            </TabsContent>
+            <>
+              <TabsContent value="connections">
+                <MCPGatewaySessionsTab accessToken={accessToken} canTerminate={canManageLiveState} />
+              </TabsContent>
+              <TabsContent value="event-subscriptions">
+                <MCPEventSubscriptionsTab accessToken={accessToken} />
+              </TabsContent>
+            </>
           )}
         </Tabs>
 
