@@ -3010,7 +3010,7 @@ _TEAM_PUBLIC_NAMESAKE: Final = _namesake_deployment(
 @pytest.mark.parametrize(
     "routing,allowed",
     [("specific_deployment", True), ("wildcard", False), ("default_deployment", False), ("pass_through", False)]
-    + [("team_public_name", False), ("key_alias", False)],
+    + [("team_public_name", False), ("key_alias", False), ("unrelated_wildcard", True)],
 )
 def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_deployments(
     routing: str, allowed: bool
@@ -3018,6 +3018,8 @@ def test_a_litellm_model_name_grants_nothing_when_routing_would_not_pick_its_dep
     router: Final = (
         _namesake_router({"model_name": "openai/*", "litellm_params": {"model": "openai/*", "api_key": "fake"}})
         if routing == "wildcard"
+        else _namesake_router({"model_name": "anthropic/*", "litellm_params": {"model": "anthropic/*", "api_key": "fake"}})
+        if routing == "unrelated_wildcard"
         else _namesake_router(_TEAM_PUBLIC_NAMESAKE)
         if routing == "team_public_name"
         else _namesake_router(pass_through=routing == "pass_through")

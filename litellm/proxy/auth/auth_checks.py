@@ -5083,9 +5083,17 @@ def _owning_team_names_for_team_deployment(
 def _routes_to_deployments_by_litellm_model(model: str, llm_router: Router, team_id: str | None) -> bool:
     from litellm.proxy.route_llm_request import RouterModelRoute, model_route
 
-    return model not in litellm.model_alias_map and model_route(model, llm_router, team_id) == RouterModelRoute(
-        "specific_deployment"
-    )
+    if model in litellm.model_alias_map:
+        return False
+    match model_route(model, llm_router, team_id):
+        case RouterModelRoute(kind="specific_deployment"):
+            return True
+        case RouterModelRoute(kind="default_or_wildcard"):
+            return llm_router.settings().default_deployment is None and not llm_router.registry().deployments(
+                model, source="wildcard", team_id=team_id
+            )
+        case _:
+            return False
 
 
 class _ModelInfoAccessGroups(BaseModel):
