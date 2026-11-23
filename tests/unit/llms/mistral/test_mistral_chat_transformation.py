@@ -2153,3 +2153,92 @@ def test_mistral_api_chat_leaves_n_out_of_the_body() -> None:
     )
 
     assert "n" not in optional_params
+
+
+COPILOT_FOLLOW_UP_TURN: Final = (
+    {"role": "system", "content": "You are an AI programming assistant.", "metadata": {"source": "client"}},
+    {"role": "user", "content": "Read main.py", "metadata": {"source": "client"}},
+    {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{"id": "call00001", "type": "function", "function": {"name": "read_file", "arguments": "{}"}}],
+        "cot_id": "cot_7f3a1c2e9b",
+        "cot_summary": "The user wants the file contents.",
+    },
+    {"role": "tool", "content": "print('hi')", "tool_call_id": "call00001", "name": "read_file", "metadata": {}},
+    {"role": "assistant", "content": "It prints hi.", "cot_id": "cot_8e4b2d3f0c"},
+    {"role": "user", "content": "Now make it print bye."},
+    {"role": "assistant", "content": "print(", "prefix": True},
+)
+
+
+def _transform_copilot_turn(litellm_params: dict[str, object]) -> Sequence[Mapping[str, object]]:
+    request: Final = MistralConfig().transform_request(
+        model="mistral-small-latest",
+        messages=cast(list[AllMessageValues], copy.deepcopy(list(COPILOT_FOLLOW_UP_TURN))),
+        optional_params={},
+        litellm_params=litellm_params,
+        headers={},
+    )
+    return cast(Sequence[Mapping[str, object]], request["messages"])
+
+
+@pytest.mark.parametrize(
+    "litellm_params", [{"drop_params": True}, {"drop_params": True, "api_base": AZURE_HOSTED_MISTRAL_API_BASE}]
+)
+def test_mistral_sends_only_the_message_fields_its_schema_accepts_under_drop_params(
+    litellm_params: dict[str, object],
+) -> None:
+    sent: Final = _transform_copilot_turn(litellm_params)
+
+    assert [sorted(message) for message in sent] == [
+        ["content", "role"],
+        ["content", "role"],
+        ["role", "tool_calls"],
+        ["content", "name", "role", "tool_call_id"],
+        ["content", "role"],
+        ["content", "role"],
+        ["content", "prefix", "role"],
+    ]
+
+
+def test_mistral_honors_the_global_drop_params_for_message_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    assert "cot_id" not in json.dumps(_transform_copilot_turn({}))
+
+
+@pytest.mark.parametrize("litellm_params", [{}, {"api_base": "https://codestral.mistral.ai/v1"}])
+def test_mistral_api_rejects_unaccepted_message_fields_without_drop_params(litellm_params: dict[str, object]) -> None:
+    import litellm
+
+    with pytest.raises(litellm.UnsupportedParamsError) as rejection:
+        _transform_copilot_turn(litellm_params)
+
+    assert rejection.value.status_code == 400
+    assert "['cot_id', 'cot_summary', 'metadata']" in str(rejection.value)
+    assert "drop_params" in str(rejection.value)
+
+
+def test_mistral_compatible_host_receives_unaccepted_message_fields_unchanged_without_drop_params() -> None:
+    sent: Final = _transform_copilot_turn({"api_base": AZURE_HOSTED_MISTRAL_API_BASE})
+
+    assert sent[2]["cot_id"] == "cot_7f3a1c2e9b"
+    assert sent[2]["cot_summary"] == "The user wants the file contents."
+    assert sent[0]["metadata"] == {"source": "client"}
+
+
+def test_mistral_api_takes_a_null_unaccepted_message_field_without_drop_params() -> None:
+    messages: Final = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]},
+        {"role": "assistant", "content": "A pixel.", "refusal": None, "audio": None},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+    request: Final = MistralConfig().transform_request(
+        model="mistral-small-latest", messages=messages, optional_params={}, litellm_params={}, headers={}
+    )
+
+    assert request["messages"][1] == {"role": "assistant", "content": "A pixel."}
