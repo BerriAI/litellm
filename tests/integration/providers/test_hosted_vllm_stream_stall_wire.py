@@ -299,14 +299,14 @@ def cooldown_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Cooldown
         pytest.param("chat", _BRIDGED, "pause_after_content", id="chat-bridged-to-responses"),
     ),
 )
-def test_a_deployment_whose_stream_stalls_stays_out_of_cooldown(
+def test_a_deployment_whose_stream_stalls_is_cooled_down(
     cooldown_rig: _CooldownRig, endpoint: Endpoint, backend: str, shape: Shape
 ) -> None:
     with _peer(shape) as wire, cooldown_rig.gateway.scenario() as scenario:
         group, identity = _deployment(scenario, wire, backend)
         response: Final = _streamed(cooldown_rig.gateway, endpoint, group)
         error: Final = _failure_row(cooldown_rig.gateway, _ROWS, (group,))
-        assert not cooled(cooldown_rig.cache, identity), (error, response.text)
+        assert eventually(lambda: cooled(cooldown_rig.cache, identity), bool, _ROW_SECONDS), (error, response.text)
 
 
 @_OWNED_PROXY

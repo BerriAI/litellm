@@ -4,23 +4,16 @@ from typing import Final
 
 import pytest
 from codex.harness import CodexHarness
-from codex.setups import ModelSetup, with_expected_failures
+from codex.setups import SETUPS, ModelSetup
 from e2e_config import unique_marker
 
 pytestmark = pytest.mark.e2e
 
 COMPACT_AFTER_TOKENS: Final = 500
 PADDING: Final = "".join(f"line {number}: the quick brown fox jumps over the lazy dog\n" for number in range(400))
-BRIDGE_IGNORES_COMPACTION: Final = (
-    "LiteLLM's Responses-to-chat bridge ignores Codex's compaction_trigger item, so Codex gets no"
-    " compaction back and fails the turn"
-)
 
 
-@pytest.mark.parametrize(
-    "deployment",
-    with_expected_failures({"claude_bedrock": BRIDGE_IGNORES_COMPACTION, "vertex_ai": BRIDGE_IGNORES_COMPACTION}),
-)
+@pytest.mark.parametrize("deployment", SETUPS)
 class TestCodexAutoCompaction:
     def test_remembers_a_value_after_the_gateway_compacts_the_session(
         self, codex: CodexHarness, setup: ModelSetup
@@ -33,6 +26,7 @@ class TestCodexAutoCompaction:
             cwd=workspace,
             compact_after_tokens=COMPACT_AFTER_TOKENS,
         )
+        assert first.exit_code == 0, first
         assert first.thread_id is not None, first
         (workspace / "secret.txt").unlink()
         second: Final = codex.resume(
@@ -42,5 +36,6 @@ class TestCodexAutoCompaction:
             cwd=workspace,
             compact_after_tokens=COMPACT_AFTER_TOKENS,
         )
+        assert second.exit_code == 0, second
         assert any(compaction.remote for compaction in codex.compactions(first.thread_id)), (first, second)
         assert marker in second.answer, second

@@ -7,6 +7,7 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_message_delta_fields,
     anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
+    collapse_pure_text_chunks,
     has_unreadable_json_event,
     is_anthropic_sse_stream,
     is_raw_sse_stream,
@@ -214,6 +215,70 @@ def test_stream_cut_off_by_an_upstream_error_assembles_its_text_only_through_the
     assert not choice.message.tool_calls, "a tool call whose input the upstream cut off is not a call the client can run"
 
 
+TOOL_USE_STREAM: Final = (
+    *ANTHROPIC_STREAM[:5],
+    _frame(
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_ls", "name": "Bash", "input": {}},
+        },
+    ),
+    _frame(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}},
+    ),
+    _frame("content_block_stop", {"type": "content_block_stop", "index": 1}),
+    _frame(
+        "message_delta",
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 5}},
+    ),
+    _frame("message_stop", {"type": "message_stop"}),
+)
+
+
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        b"data: 5\n\n",
+        b"event: ping\ndata: null\n\n",
+        b'data: "x"\n\n',
+        b"data: [1]\n\n",
+        b"data: some words\n\n",
+        b"data: " + b"9" * 5000 + b"\n\n",
+        b"data: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n",
+    ],
+    ids=["number", "null", "string", "array", "not-json", "huge-number", "deep-array"],
+)
+def test_assembling_a_tool_use_stream_skips_a_data_line_that_is_not_a_json_object(non_object_frame: bytes):
+    assembled: Final = assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], non_object_frame, *TOOL_USE_STREAM[3:]))
+
+    assert assembled is not None
+    choice: Final = assembled.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "Hello there"
+    assert [(call.function.name, call.function.arguments) for call in choice.message.tool_calls or []] == [
+        ("Bash", '{"command": "ls"}')
+    ]
+
+
+@pytest.mark.parametrize(
+    "undecodable_object_frame",
+    [
+        b"data: " + b'{"a": ' * 100_000 + b"1" + b"}" * 100_000 + b"\n\n",
+        b'event: ping\ndata: {"type": "ping", "n": ' + b"9" * 5000 + b"}\n\n",
+    ],
+    ids=["deep-object", "huge-number-in-object"],
+)
+def test_assembling_refuses_a_stream_with_an_object_event_too_deep_or_too_long_to_decode(
+    undecodable_object_frame: bytes,
+):
+    assert (
+        assemble_anthropic_sse_stream((*TOOL_USE_STREAM[:3], undecodable_object_frame, *TOOL_USE_STREAM[3:])) is None
+    )
+
+
 @pytest.mark.parametrize(
     "chunks",
     [GOOGLE_STREAM, INVALID_UTF8, (ANTHROPIC_ERROR,), ()],
@@ -313,6 +378,20 @@ def test_line_separators_inside_a_json_string_do_not_make_frames():
     assert anthropic_sse_error_events((frame,)) == ()
 
 
+@pytest.mark.parametrize(
+    "payload, unreadable",
+    [
+        (b"[" * 100_000 + b"]" * 100_000, True),
+        (b'{"a": ' * 100_000 + b"1" + b"}" * 100_000, True),
+        (b'{"type": "ping", "n": ' + b"9" * 5000 + b"}", True),
+        (b"not json", False),
+    ],
+    ids=["deep-array", "deep-object", "huge-number-in-object", "not-json"],
+)
+def test_json_too_deep_or_too_long_to_decode_counts_as_unreadable(payload: bytes, unreadable: bool):
+    assert has_unreadable_json_event((b"event: ping\ndata: " + payload + b"\n\n",)) is unreadable
+
+
 @pytest.mark.parametrize("name", ["error\u2028", "error\u0085", "error\x0b", "error\x0c", "error\x1c", " error"])
 def test_event_name_no_client_reads_as_error_is_no_error_event(name: str):
     assert anthropic_sse_error_events((f"event: {name}\n\n".encode(),)) == ()
@@ -379,3 +458,24 @@ def test_assembly_through_an_upstream_error_reads_past_the_error_frame(error_fra
     chunks: Final = (*ANTHROPIC_STREAM[:4], error_frame)
 
     assert assemble_anthropic_sse_stream(chunks, through_upstream_error=True) is not None
+
+
+def test_collapsing_a_text_run_rejects_a_delta_whose_text_is_not_a_string():
+    chunks: Final = (
+        _frame(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        _frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _frame(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": 7}},
+        ),
+        _frame("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    )
+
+    with pytest.raises(TypeError, match="sequence item 1: expected str instance, int found"):
+        collapse_pure_text_chunks(chunks)

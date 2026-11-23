@@ -1,9 +1,19 @@
 import json
 from typing import Final
 
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
+
 import litellm
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
 from litellm.types.llms.databricks import GenericStreamingChunk
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _StreamChunkFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
@@ -100,7 +110,11 @@ class CodestralTextCompletionConfig(OpenAITextCompletionConfig):
                 "finish_reason": finish_reason,
             }
 
-        original_chunk: Final = litellm.ModelResponseStream(**chunk_data_dict)
+        original_chunk: Final = litellm.ModelResponseStream(
+            **_StreamChunkFields(
+                **keyword_arguments(_DECODED_JSON.validate_python(chunk_data_dict), litellm.ModelResponseStream)
+            )
+        )
         _choices: Final = chunk_data_dict.get("choices", []) or []
         if len(_choices) == 0:
             return {

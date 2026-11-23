@@ -69,7 +69,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
 from litellm.proxy.utils import PrismaClient, get_custom_url
 from litellm.repositories.chunked_in import find_many_in
 from litellm.types.agents import (
@@ -220,14 +220,14 @@ def _redact_sensitive_agent_fields(
     virtual-key, header and kill-switch fields stripped entirely. The original
     objects are not modified.
     """
-    from litellm.proxy.proxy_server import general_settings, jwt_handler
+    from litellm.proxy.proxy_server import general_settings, litellm_jwtauth
 
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
         copy.jwt_auth_configured = bool(
             general_settings.get("enable_jwt_auth")
-            and (agent.identity is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
+            and (agent.identity is not None or litellm_jwtauth.agent_id_jwt_field)
         )
         if not is_admin:
             copy.static_headers = None
@@ -394,10 +394,12 @@ async def resolve_agent_daily_activity_scope(
         prisma_client=prisma_client,
     )
 
-    agent_records: Final = (
-        await agents_table(prisma_client).find_many(where={})
+    agent_records: Final = await unless_database_fails(
+        agents_table(prisma_client).find_many(where={})
         if resolved_agent_ids is None
-        else await find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids)
+        else find_many_in(agents_table(prisma_client), "agent_id", resolved_agent_ids),
+        (),
+        "its agent names",
     )
     agent_metadata: Final[Mapping[str, dict[str, object]]] = MappingProxyType(
         {agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records}
@@ -551,16 +553,15 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 
 
 def _trusted_agent_issuers() -> tuple[str, ...]:
-    from litellm.proxy.proxy_server import general_settings, jwt_handler
+    from litellm.proxy.proxy_server import general_settings, litellm_jwtauth
 
     if not general_settings.get("enable_jwt_auth"):
         return ()
-    configured: Final = jwt_handler.litellm_jwtauth.issuers or ()
+    configured: Final = litellm_jwtauth.issuers or ()
     issuer: Final = os.getenv("JWT_ISSUER")
+    audience: Final = litellm_jwtauth.audience or os.getenv("JWT_AUDIENCE")
     global_issuers: Final = (
-        (issuer,)
-        if issuer and os.getenv("JWT_AUDIENCE") and not any(item.issuer == issuer for item in configured)
-        else ()
+        (issuer,) if issuer and audience and not any(item.issuer == issuer for item in configured) else ()
     )
     return (
         tuple(item.issuer for item in configured if item.audience and not item.disable_audience_validation)
