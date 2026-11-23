@@ -8,8 +8,14 @@ from typing import Any, Final, Protocol, cast
 from pydantic import TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items, require_attributes
-from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params, served_from_cache
+from litellm.litellm_core_utils.hidden_params import (
+    get_hidden_params,
+    get_or_create_hidden_params,
+    served_from_cache,
+    set_hidden_params,
+)
 from litellm.litellm_core_utils.litellm_logging import BilledRoundsSpend
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.llms.anthropic.common_utils import anthropic_server_call_fields, anthropic_server_tool_calls
@@ -82,6 +88,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     StreamingChoices,
     TextCompletionResponse,
+    Usage,
 )
 
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
@@ -1647,21 +1654,47 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def bill_failure_after_earlier_rounds(self, earlier: BilledRoundsSpend) -> None:
         self.litellm_custom_stream_wrapper.bill_failure_after_earlier_rounds(earlier)
 
+    def _with_usage_of_every_streamed_chunk(self, built: ModelResponse, messages: Sequence[object]) -> ModelResponse:
+        try:
+            every_chunk: Final = stream_chunk_builder(
+                chunks=self.litellm_custom_stream_wrapper.chunks,
+                messages=messages,
+                logging_obj=self.litellm_logging_obj,
+            )
+        except Exception as e:  # noqa: BLE001  # the bill built from the relayed chunks still stands
+            verbose_logger.debug("Billing a cut stream from its relayed chunks, the full rebuild failed: %s", e)
+            return built
+        usage: Final[object] = getattr(every_chunk, "usage", None)
+        if not isinstance(usage, Usage):
+            return built
+        billed: Final = built.model_copy(update={"usage": usage})
+        set_hidden_params(
+            billed,
+            {
+                **(get_hidden_params(built) or {}),
+                "response_cost": (get_hidden_params(every_chunk) or {}).get("response_cost"),
+            },
+        )
+        return billed
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream.
-        Built from the chat completion chunks relayed so far, so the usage is what
-        stream_chunk_builder counts for them.
+        The output is built from the chat completion chunks relayed so far (none yet means no output), and the usage
+        from every chunk the provider sent, so a usage-only chunk such as Anthropic's
+        message_start bills its input count instead of LiteLLM's estimate.
         """
-        if self.completed_response is not None or not self.collected_chat_completion_chunks:
+        relayed_or_kept: Final = self.collected_chat_completion_chunks or self.litellm_custom_stream_wrapper.chunks
+        if self.completed_response is not None or not relayed_or_kept:
             return None
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
+            input=self.request_input,
+            responses_api_request=dict(self.responses_api_request),
+            only_since_compaction=True,
+        )
         built: Final = stream_chunk_builder(
-            chunks=self.collected_chat_completion_chunks,
-            messages=LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
-                input=self.request_input,
-                responses_api_request=dict(self.responses_api_request),
-                only_since_compaction=True,
-            ),
+            chunks=relayed_or_kept,
+            messages=messages,
             logging_obj=self.litellm_logging_obj,
         )
         if not isinstance(built, ModelResponse):
@@ -1669,7 +1702,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_response: Final = (
             LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(  # pyright: ignore[reportUnknownMemberType]  # the transformer's signature is partially untyped
                 request_input=self.request_input,
-                chat_completion_response=built,
+                chat_completion_response=self._with_usage_of_every_streamed_chunk(built, messages),
                 responses_api_request=self.responses_api_request,
             )
         )
