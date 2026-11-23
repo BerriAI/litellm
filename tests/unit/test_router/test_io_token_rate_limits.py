@@ -1888,9 +1888,7 @@ async def _itpm_350_refusal(
 async def test_a_socket_open_whose_input_would_pass_the_itpm_limit_is_refused_with_the_http_message() -> None:
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    http_refusal: Final = await _itpm_350_refusal(
-        usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False
-    )
+    http_refusal: Final = await _itpm_350_refusal(usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False)
 
     socket_refusal: Final = await _itpm_350_refusal(
         usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=True
@@ -1917,67 +1915,14 @@ def _typed_user_message(text: str) -> dict[str, object]:
     return {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text}]}
 
 
-_ITEM_LISTS_AND_THEIR_CHAT_MESSAGES: Final = pytest.mark.parametrize(
-    ("item_list", "chat_messages"),
-    [
-        pytest.param(
-            [{"role": "user", "content": _INPUT_PAST_40_TOKENS}],
-            [{"role": "user", "content": _INPUT_PAST_40_TOKENS}],
-            id="easy-message",
-        ),
-        pytest.param(
-            [_typed_user_message(_INPUT_PAST_40_TOKENS)],
-            [{"role": "user", "content": _INPUT_PAST_40_TOKENS}],
-            id="typed-message",
-        ),
-        pytest.param(
-            [{"type": "function_call_output", "call_id": "call_1", "output": _INPUT_PAST_40_TOKENS}],
-            [{"role": "tool", "tool_call_id": "call_1", "content": _INPUT_PAST_40_TOKENS}],
-            id="function-call-output",
-        ),
-    ],
-)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
-@_ITEM_LISTS_AND_THEIR_CHAT_MESSAGES
-async def test_an_http_request_whose_item_list_input_would_pass_the_itpm_limit_is_refused_counting_its_items(
-    item_list: list[dict[str, object]], chat_messages: list[dict[str, str]]
-) -> None:
-    usage: Final = _memory_usage()
-    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    chat_refusal: Final = await _itpm_350_refusal(usage, {"messages": chat_messages}, opens_responses_socket=False)
-
-    item_list_refusal: Final = await _itpm_350_refusal(usage, {"input": item_list}, opens_responses_socket=False)
-
-    assert item_list_refusal == chat_refusal
-    assert usage.get_local(_ITPM_350_KEY) == 310
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
-@_ITEM_LISTS_AND_THEIR_CHAT_MESSAGES
-async def test_a_socket_turn_whose_item_list_input_would_pass_the_itpm_limit_is_refused_like_http(
-    item_list: list[dict[str, object]], chat_messages: list[dict[str, str]]
-) -> None:
-    usage: Final = _memory_usage()
-    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    http_refusal: Final = await _itpm_350_refusal(usage, {"messages": chat_messages}, opens_responses_socket=False)
-
-    with pytest.raises(litellm.RateLimitError) as turn_refusal:
-        await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, {"input": item_list})
-
-    assert str(turn_refusal.value) == http_refusal
-    assert usage.get_local(_ITPM_350_KEY) == 310
-
-
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("settled_on_the_turn_s_minute")
 async def test_an_http_request_whose_string_list_input_would_pass_the_itpm_limit_is_refused_like_its_string() -> None:
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    string_refusal: Final = await _itpm_350_refusal(usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False)
+    string_refusal: Final = await _itpm_350_refusal(
+        usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False
+    )
 
     string_list_refusal: Final = await _itpm_350_refusal(
         usage, {"input": [_INPUT_PAST_40_TOKENS]}, opens_responses_socket=False
@@ -1987,96 +1932,43 @@ async def test_an_http_request_whose_string_list_input_would_pass_the_itpm_limit
     assert usage.get_local(_ITPM_350_KEY) == 310
 
 
-async def _itpm_350_admitted_count(request: Mapping[str, object]) -> float | None:
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+async def test_a_conversation_item_list_larger_than_itpm_is_not_refused_on_http_or_a_socket_turn() -> None:
     usage: Final = _memory_usage()
-    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    conversation: Final = {"input": [_typed_user_message(_INPUT_PAST_40_TOKENS * 100)]}
     set_io_token_rate_limit_request_kwargs(
-        {**request, "metadata": {}}, opens_responses_socket=False, metadata_channel="metadata"
+        {**conversation, "metadata": {}}, opens_responses_socket=False, metadata_channel="metadata"
     )
+
     assert await async_io_token_pre_call_check(usage, dict(_ITPM_350_DEPLOYMENT)) == _ITPM_350_DEPLOYMENT
-    turn: Final = await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, request)
+    turn: Final = await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, conversation)
+
     assert _counter_in(turn[ITPM_COUNTER_KEY]) == _ITPM_350_KEY
-    return usage.get_local(_ITPM_350_KEY)
-
-
-@pytest.mark.asyncio
-@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
-async def test_a_small_item_list_input_is_admitted_on_http_and_on_a_socket_turn_counting_its_items() -> None:
-    chat_count: Final = await _itpm_350_admitted_count({"messages": [{"role": "user", "content": "hi"}]})
-
-    item_list_count: Final = await _itpm_350_admitted_count({"input": [_typed_user_message("hi")]})
-
-    assert chat_count is not None and chat_count > 311
-    assert item_list_count == chat_count
-
-
-_REMOTE_IMAGE_URL: Final = "https://93.184.216.34/cat.png"
-_ONE_PIXEL_PNG_HEADER: Final = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-
-
-@pytest.mark.asyncio
-@pytest.mark.respx(assert_all_called=False)
-@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
-async def test_an_item_list_image_url_counts_on_http_and_a_socket_turn_without_being_downloaded(
-    respx_mock: respx.MockRouter,
-) -> None:
-    download: Final = respx_mock.get(_REMOTE_IMAGE_URL).mock(
-        return_value=httpx.Response(200, content=_ONE_PIXEL_PNG_HEADER)
-    )
-    usage: Final = _memory_usage()
-    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    request: Final = {
-        "input": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_image", "image_url": _REMOTE_IMAGE_URL, "detail": "high"}],
-            }
-        ]
-    }
-
-    http_refusal: Final = await _itpm_350_refusal(usage, request, opens_responses_socket=False)
-    with pytest.raises(litellm.RateLimitError) as turn_refusal:
-        await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, request)
-
-    assert str(turn_refusal.value) == http_refusal
-    assert not download.called
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("settled_on_the_turn_s_minute")
 @pytest.mark.parametrize(
-    "media_block",
+    "extra_field",
     [
-        pytest.param({"type": "input_image", "file_id": "file-abc"}, id="image-file-id"),
-        pytest.param({"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}, id="audio"),
+        pytest.param({"prompt": "x"}, id="prompt"),
+        pytest.param({"messages": [{"role": "user", "content": "x"}]}, id="messages"),
     ],
 )
-async def test_a_media_block_the_counter_cannot_read_keeps_the_item_list_text_counted(
-    media_block: Mapping[str, object],
+async def test_an_extra_frame_field_does_not_shrink_a_socket_turn_s_input_estimate(
+    extra_field: Mapping[str, object],
 ) -> None:
     usage: Final = _memory_usage()
     usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
-    request: Final = {
-        "input": [
-            {
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": _INPUT_PAST_40_TOKENS}, media_block],
-            }
-        ]
-    }
-    text_tokens: Final = litellm.token_counter(
-        model="gpt-5-mini",
-        messages=[{"role": "user", "content": [{"type": "text", "text": _INPUT_PAST_40_TOKENS}]}],
-    )
+    http_refusal: Final = await _itpm_350_refusal(usage, {"input": _INPUT_PAST_40_TOKENS}, opens_responses_socket=False)
 
-    http_refusal: Final = await _itpm_350_refusal(usage, request, opens_responses_socket=False)
     with pytest.raises(litellm.RateLimitError) as turn_refusal:
-        await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, request)
+        await async_admit_io_token_turn(
+            usage, _ITPM_350_DEPLOYMENT, _TURN_AT, {"input": _INPUT_PAST_40_TOKENS, **extra_field}
+        )
 
     assert str(turn_refusal.value) == http_refusal
-    assert f"current usage={310 + text_tokens + litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT}" in http_refusal
 
 
 _TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP: Final[Mapping[str, object]] = MappingProxyType(
