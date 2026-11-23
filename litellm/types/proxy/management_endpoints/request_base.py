@@ -3,7 +3,7 @@ from typing import Any  # noqa: TID251  # metadata and models stay Any so existi
 
 from pydantic import ConfigDict, field_validator
 
-from litellm.models.team import BudgetLimitEntry
+from litellm.models.budget import BudgetLimitList
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 
@@ -42,7 +42,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     rpm_limit: int | None = None
 
     budget_duration: str | None = None
-    budget_limits: list[BudgetLimitEntry] | None = None  # multiple concurrent budget windows
+    budget_limits: BudgetLimitList | None = None
     allowed_cache_controls: list[object] | None = []
     config: dict[object, object] | None = {}
     permissions: dict[object, object] | None = {}

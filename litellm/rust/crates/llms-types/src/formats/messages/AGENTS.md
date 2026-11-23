@@ -10,6 +10,11 @@
   - framing the stream differently (AWS event stream on Bedrock instead of SSE)
   - rejecting fields or discriminators (DeepSeek rejects `type: custom` tools and billing system blocks)
   - Handle these in the provider adapter, never by loosening or forking a type here
+- `streaming::MessagesStreamEvent` is the one exception to that: it is read off streams that pass through from any host, so it keeps what it cannot name instead of rejecting it
+  - An unknown event type, or a known one that does not read as its variant, rides in `Other` as it was sent
+  - An unknown delta type rides in `Recognized::Unrecognized`
+  - Every field of the `message_start` message and an error's `message` are optional
+  - Only an event without a text `type` is rejected
 - Request and response bodies, messages, content blocks, tools, usage and stream-event payloads live here
   - Web-search results, encrypted-content fields and thinking configuration are data here
   - Flattening results, stripping encrypted content, choosing thinking budgets and requiring betas are provider policy in `llms`
@@ -22,4 +27,5 @@
 - https://platform.claude.com/docs/en/api/messages/create.md
 - https://platform.claude.com/docs/en/api/beta/messages/create.md
 - https://platform.claude.com/docs/en/build-with-claude/streaming.md
+- https://platform.claude.com/docs/en/api/errors
 - https://platform.claude.com/docs/en/build-with-claude/context-editing

@@ -3624,7 +3624,9 @@ class TestMultiPodBatchCostClaim:
             assert metadata["user_api_key_app_id"] == "app-created"
             assert metadata["user_api_key_customer_org_id"] == "customer-created"
             assert metadata["user_api_key_customer_member_id"] == "member-created"
-            assert json.loads(metadata["user_api_key_customer_budget_scopes"]) == [scope]
+            assert json.loads(metadata["user_api_key_customer_budget_scopes"]) == [
+                {**scope, "soft_budget_duration": None}
+            ]
         else:
             assert metadata.get("user_api_key_app_id") is None
             assert metadata.get("user_api_key_customer_org_id") is None

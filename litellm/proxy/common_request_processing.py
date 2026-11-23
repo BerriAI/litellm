@@ -62,6 +62,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SEMANTIC_CACHE_SCOPE_HEADER,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -88,6 +89,7 @@ from litellm.litellm_core_utils.cloud_storage_security import (
 )
 from litellm.litellm_core_utils.core_helpers import (
     FinishEvidence,
+    attribute_or_none,
     finish_evidence_of,
     finite_cost,
     get_or_create_metadata_bucket,
@@ -111,6 +113,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    is_str_keyed_dict,
     object_items,
     object_mapping,
 )
@@ -216,12 +219,13 @@ from litellm.types.extraction import ExtractionResponse
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.router import RouterRateLimitError
 from litellm.types.router_weights import RouterWeights, validate_router_weights
+from litellm.types.semantic_cache import semantic_cache_policy
 
 _LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
-_ResponseT: Final = TypeVar("_ResponseT")
-_ChunkT: Final = TypeVar("_ChunkT")
-_ProcessedT: Final = TypeVar("_ProcessedT")
+_ResponseT = TypeVar("_ResponseT")
+_ChunkT = TypeVar("_ChunkT")
+_ProcessedT = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -446,11 +450,22 @@ def should_return_raw_model_name(request_data: Mapping[str, object]) -> bool:
 _should_return_raw_model_name: Final = should_return_raw_model_name
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object] | None) -> None:
-    if target_metadata is None:
+def _apply_client_disconnect_metadata(target_metadata: object) -> None:
+    if not is_str_keyed_dict(target_metadata):
         return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
+
+
+def _apply_client_disconnect_to_logged_metadata(params: dict[str, object]) -> None:
+    if params.get("metadata") is None:
+        params["metadata"] = {}  # rebind-ok: the spend logger reads the marker from this shared request dict
+    metadata: Final = params["metadata"]
+    if is_str_keyed_dict(metadata):
+        _apply_client_disconnect_metadata(metadata)
+    litellm_metadata: Final = params.get("litellm_metadata")
+    if is_str_keyed_dict(litellm_metadata) and litellm_metadata:
+        _apply_client_disconnect_metadata(litellm_metadata)
 
 
 async def _record_streaming_client_disconnect_if_needed(
@@ -470,34 +485,13 @@ async def _record_streaming_client_disconnect_if_needed(
 
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
-        litellm_params: Final = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _lp_metadata = litellm_params.get("metadata")
-        if _lp_metadata is None:
-            _lp_metadata = {}
-            litellm_params["metadata"] = _lp_metadata
-        _apply_client_disconnect_metadata(_lp_metadata)
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details.setdefault("litellm_params", {}))
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details)
 
-        _mcd_metadata = logging_obj.model_call_details.get("metadata")
-        if _mcd_metadata is None:
-            _mcd_metadata = {}
-            logging_obj.model_call_details["metadata"] = _mcd_metadata
-        _apply_client_disconnect_metadata(_mcd_metadata)
-
-    _rd_metadata = request_data.get("metadata")
-    if _rd_metadata is None:
-        _rd_metadata = {}
-        request_data["metadata"] = _rd_metadata
-    _apply_client_disconnect_metadata(_rd_metadata)
-
-    _rd_litellm_params = request_data.get("litellm_params")
-    if _rd_litellm_params is None:
-        _rd_litellm_params = {}
-        request_data["litellm_params"] = _rd_litellm_params
-    _rd_lp_metadata = _rd_litellm_params.get("metadata")
-    if _rd_lp_metadata is None:
-        _rd_lp_metadata = {}
-        _rd_litellm_params["metadata"] = _rd_lp_metadata
-    _apply_client_disconnect_metadata(_rd_lp_metadata)
+    _apply_client_disconnect_to_logged_metadata(request_data)
+    if request_data.get("litellm_params") is None:
+        request_data["litellm_params"] = {}
+    _apply_client_disconnect_to_logged_metadata(request_data["litellm_params"])
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
@@ -586,7 +580,7 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
-    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    partial_responses_event: Final = await asyncio.to_thread(partial_responses_incomplete_event_on_disconnect, response)
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
@@ -841,6 +835,41 @@ class _ClosesAsync(Protocol):
     def aclose(self) -> Awaitable[object]: ...
 
 
+class _DeferredLoggingSlot(Protocol):
+    enqueue_deferred_logging: Callable[[], None] | None
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object = None, /) -> object: ...
+
+
+def _truthy_get(container: object, key: str) -> object:
+    return require_attributes(container, _SupportsGet, "get").get(key) if container else None
+
+
+def _model_info_id(model_info: object) -> object:
+    return require_attributes(model_info, _SupportsGet, "get").get("id", None) if model_info else None
+
+
+def _params_model_id(litellm_params: object) -> object:
+    params: Final = require_attributes(litellm_params, _SupportsGet, "get")
+    direct_model_id: Final = _model_info_id(params.get("model_info"))
+    if direct_model_id:
+        return direct_model_id
+    return _model_info_id(_truthy_get(params.get("metadata"), "model_info"))
+
+
+def _logging_obj_model_id(logging_obj: object) -> object:
+    litellm_params: Final = attribute_or_none(logging_obj, "litellm_params")
+    params_model_id: Final = _params_model_id(litellm_params) if litellm_params else None
+    if params_model_id:
+        return params_model_id
+    call_kwargs: Final = attribute_or_none(logging_obj, "kwargs")
+    if not call_kwargs:
+        return params_model_id
+    return _params_model_id(require_attributes(call_kwargs, _SupportsGet, "get").get("litellm_params", {}))
+
+
 def serialize_http_exception_detail(
     detail: object,
 ) -> tuple[str, dict | None]:
@@ -1035,7 +1064,7 @@ async def _authorize_response_file_search_vector_stores(
         )
 
 
-async def _resolve_per_request_model_group_alias(
+async def resolve_per_request_model_group_alias(
     requested_model: object,
     router_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1068,6 +1097,14 @@ async def _resolve_per_request_model_group_alias(
     return target
 
 
+def saved_router_weights(router_settings: Mapping[str, object]) -> RouterWeights | None:
+    try:
+        return validate_router_weights(router_settings.get("weights"))
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
+        return None
+
+
 async def hierarchical_router_settings_updates(
     requested_model: object,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1097,16 +1134,9 @@ async def hierarchical_router_settings_updates(
     # If router_settings found (from key or team), apply them
     # Pass settings as per-request overrides instead of creating a new Router
     # This avoids expensive Router instantiation on each request
-    def validated_router_weights() -> RouterWeights | None:
-        try:
-            return validate_router_weights(router_settings.get("weights"))
-        except ValidationError:
-            verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
-            return None
-
-    router_weights: Final = validated_router_weights()
+    router_weights: Final = saved_router_weights(router_settings)
     alias_target: Final = (
-        await _resolve_per_request_model_group_alias(
+        await resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings=router_settings,
             user_api_key_dict=user_api_key_dict,
@@ -1286,7 +1316,7 @@ async def _parse_event_data_for_error(
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
-            data: Final[object] = orjson.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(orjson.loads(json_str))
             if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
                 error_code_raw: Final = data["error"].get("code")
                 error_code: int | None = None
@@ -1338,7 +1368,7 @@ def _extract_error_from_sse_chunk(event_line: str | bytes, data_payload: SseData
             return default_error
 
         try:
-            data: Final[object] = orjson.loads(json_str)
+            data: Final = _DECODED_JSON.validate_python(orjson.loads(json_str))
             if isinstance(data, dict) and "error" in data:
                 error_obj: Final = data["error"]
                 if isinstance(error_obj, dict):
@@ -1561,6 +1591,20 @@ class _RenderedBody(Protocol):
 class _CarriesStatusCode(Protocol):
     @property
     def status_code(self) -> int: ...
+
+
+class _CarriesResponseHeaders(Protocol):
+    @property
+    def headers(self) -> Mapping[str, str]: ...
+
+
+class _CarriesProviderResponseHeaders(Protocol):
+    @property
+    def litellm_response_headers(self) -> Mapping[str, str] | None: ...
+
+
+def _response_headers_of(source: object) -> Mapping[str, str] | None:
+    return source.headers if has_attributes(source, _CarriesResponseHeaders, "headers") else None
 
 
 def _openai_late_failure_frames(exc: Exception) -> tuple[str, ...]:
@@ -2914,7 +2958,7 @@ class ProxyBaseLLMRequestProcessing:
         *,
         user_api_key_dict: UserAPIKeyAuth,
         call_id: str | None = None,
-        model_id: str | None = None,
+        model_id: object = None,
         cache_key: str | None = None,
         api_base: str | None = None,
         version: str | None = None,
@@ -2991,6 +3035,9 @@ class ProxyBaseLLMRequestProcessing:
             **{k: str(v) for k, v in kwargs.items()},
         }
         if request_data:
+            cache_policy: Final = semantic_cache_policy(request_data)
+            if cache_policy is not None:
+                headers[SEMANTIC_CACHE_SCOPE_HEADER] = cache_policy.scope
             remaining_tokens_header: Final = get_remaining_tokens_and_requests_from_request_data(dict(request_data))
             headers.update(remaining_tokens_header)
 
@@ -3916,8 +3963,14 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
-        client_model: Final = get_client_requested_model(request) or self.data.get("model")
-        requested_model_from_client: Final[str | None] = client_model if isinstance(client_model, str) else None
+        body_model_missing: Final = object()
+        body_model: Final = self.data.get("model", body_model_missing)
+        requested_model_from_client: Final[str | None] = get_client_requested_model(request) or (
+            body_model if isinstance(body_model, str) else None
+        )
+        path_model_for_response: Final = (
+            model if route_type == "acompletion" and body_model is body_model_missing else None
+        )
         self._debug_log_request_payload()
 
         if skip_pre_call_logic:
@@ -4082,7 +4135,7 @@ class ProxyBaseLLMRequestProcessing:
                     )
 
                 if route_type == "allm_passthrough_route":
-                    upstream_response_headers: Final = getattr(response, "headers", None)
+                    upstream_response_headers: Final = _response_headers_of(response)
                     streaming_headers: Final = (
                         ProxyBaseLLMRequestProcessing._merge_passthrough_streaming_headers(
                             response_headers=upstream_response_headers,
@@ -4339,10 +4392,11 @@ class ProxyBaseLLMRequestProcessing:
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
-        if requested_model_from_client:
+        response_model: Final = requested_model_from_client or path_model_for_response
+        if response_model:
             response = _override_openai_response_model(  # rebind-ok: a frozen response comes back as a copy
                 response_obj=response,
-                requested_model=requested_model_from_client,
+                requested_model=response_model,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
                 return_raw_model_name=should_return_raw_model_name(self.data),
             )
@@ -4997,7 +5051,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _flush_deferred_async_logging(
-        logging_obj: Any,
+        logging_obj: object,
         exception_raised: bool,
     ) -> None:
         """
@@ -5021,7 +5075,9 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
+        if not has_attributes(logging_obj, _DeferredLoggingSlot, "enqueue_deferred_logging"):
+            return
+        _enqueue_fn: Final = logging_obj.enqueue_deferred_logging
         if _enqueue_fn is None:
             return
         logging_obj.enqueue_deferred_logging = None
@@ -5327,8 +5383,12 @@ class ProxyBaseLLMRequestProcessing:
         headers = getattr(failure, "headers", None) or {}
         if not headers:
             _response: Final = attribute_of(failure, "response")
-            _response_headers: Final = getattr(_response, "headers", None) if _response is not None else None
-            _provider_headers: Final = _response_headers or getattr(failure, "litellm_response_headers", None)
+            _response_headers: Final = _response_headers_of(_response)
+            _provider_headers: Final = _response_headers or (
+                failure.litellm_response_headers
+                if has_attributes(failure, _CarriesProviderResponseHeaders, "litellm_response_headers")
+                else None
+            )
             if _provider_headers:
                 headers = get_response_headers(dict(_provider_headers))
         headers.update(custom_headers)
@@ -6003,47 +6063,17 @@ class ProxyBaseLLMRequestProcessing:
             return None
         return {**obj, "usage": {**usage, "cost": cost_val}}
 
-    def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> str | None:
+    def maybe_get_model_id(self, _logging_obj: LiteLLMLoggingObj | None) -> object:
         """
         Get model_id from logging object or request metadata.
 
         The router sets model_info.id when selecting a deployment. This tries multiple locations
         where the ID might be stored depending on the request lifecycle stage.
         """
-        model_id = None
-        if _logging_obj:
-            # 1. Try getting from litellm_params (updated during call)
-            if hasattr(_logging_obj, "litellm_params") and _logging_obj.litellm_params:
-                # First check direct model_info path (set by router.py with selected deployment)
-                model_info = _logging_obj.litellm_params.get("model_info") or {}
-                model_id = model_info.get("id", None)
-
-                # Fallback to nested metadata path
-                if not model_id:
-                    metadata = _logging_obj.litellm_params.get("metadata") or {}
-                    model_info = metadata.get("model_info") or {}
-                    model_id = model_info.get("id", None)
-
-            # 2. Fallback to kwargs (initial)
-            if not model_id:
-                _kwargs: Final = getattr(_logging_obj, "kwargs", None)
-                if _kwargs:
-                    litellm_params: Final = _kwargs.get("litellm_params", {})
-                    # First check direct model_info path
-                    model_info = litellm_params.get("model_info") or {}
-                    model_id = model_info.get("id", None)
-
-                    # Fallback to nested metadata path
-                    if not model_id:
-                        metadata = litellm_params.get("metadata") or {}
-                        model_info = metadata.get("model_info") or {}
-                        model_id = model_info.get("id", None)
-
-        # 3. Final fallback to the request metadata the router updates in place with the selected deployment
-        if not model_id:
-            model_id = self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
-
-        return model_id
+        logged_model_id: Final = _logging_obj_model_id(_logging_obj) if _logging_obj else None
+        if logged_model_id:
+            return logged_model_id
+        return self._metadata_model_id("litellm_metadata") or self._metadata_model_id("metadata")
 
     def _metadata_model_id(self, metadata_key: str) -> str | None:
         match self.data.get(metadata_key):

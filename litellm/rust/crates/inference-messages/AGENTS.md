@@ -12,3 +12,4 @@
 - Per-call dependencies are grouped in `litellm_inference::context::CallContext`. `handler::execute` explicitly sequences the provider call build in Python's handler order, cache lookup, provider execution, result acceptance (`CallContext::result_ready`), and cache storage
 - Preserve the order of validation, normalization, caller-requested parameter removal, and provider transformation when that order affects observable behavior
 - Test provider dispatch, auth precedence, header handling, transformations, and responses through behavior, not source structure
+- `tests/messages/conformance.rs` runs every native provider through the same cases against goldens recorded from main. Never hand-edit a golden. Rerun with `LITELLM_UPDATE_GOLDENS=1` only for an intended wire change, and review the diff

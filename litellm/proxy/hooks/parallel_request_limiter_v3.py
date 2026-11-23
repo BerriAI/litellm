@@ -45,6 +45,11 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
 from litellm.exceptions import ServiceUnavailableError
+from litellm.google_genai.adapters.transformation import (
+    generate_content_body_to_completion,
+    google_genai_config_field,
+    google_genai_request_config,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -965,22 +970,6 @@ def _mcp_scope(user_api_key_dict: UserAPIKeyAuth | None, server: MCPServer) -> M
     }
 
 
-_GOOGLE_GENAI_CONFIG_FIELDS: Final = ("config", "generationConfig", "generation_config")
-
-
-def _google_genai_config_field(data: object) -> str | None:
-    if not isinstance(data, Mapping):
-        return None
-    return next((field for field in _GOOGLE_GENAI_CONFIG_FIELDS if data.get(field)), None)
-
-
-def _google_genai_request_config(data: object) -> object:
-    config_field: Final = _google_genai_config_field(data)
-    if config_field is None or not isinstance(data, Mapping):
-        return None
-    return data[config_field]
-
-
 def _parse_output_cap_value(raw_value: object) -> int | None:
     if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float, str)):
         return None
@@ -1036,7 +1025,7 @@ def _extraction_input_text(data: Mapping[str, object]) -> str:
 
 def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config: Final = _google_genai_request_config(data)
+        config: Final = google_genai_request_config(data)
         google_cap_values: Final = tuple(
             parsed
             for field in ("maxOutputTokens", "max_output_tokens")
@@ -1098,26 +1087,10 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
-    config: Final = _google_genai_request_config(data)
-    contents: Final = data.get("contents") if isinstance(data, dict) else None
-    if (
-        not isinstance(data, dict)
-        or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES
-        or not isinstance(contents, (dict, list))
-    ):
+    if not isinstance(data, dict) or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
         return None
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-
-    return GoogleGenAIAdapter().translate_generate_content_to_completion(
-        model=data.get("model") if isinstance(data.get("model"), str) else "",
-        contents=contents,
-        config=config if isinstance(config, dict) else None,
-        systemInstruction=data.get("systemInstruction"),
-        system_instruction=data.get("system_instruction"),
-        tools=data.get("tools"),
-        toolConfig=data.get("toolConfig"),
-        tool_config=data.get("tool_config"),
-    )
+    model: Final = data.get("model")
+    return generate_content_body_to_completion(body=data, model=model if isinstance(model, str) else "")
 
 
 def _has_explicit_output_cap(data: object, call_type: str | None) -> bool:
@@ -1464,7 +1437,7 @@ def no_max_tokens_output_floor(
 
 
 def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
-    config: Final = _google_genai_request_config(data) if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES else None
+    config: Final = google_genai_request_config(data) if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES else None
     if not isinstance(data, Mapping):
         return 1
     candidate_values: Final = (
@@ -1483,7 +1456,7 @@ def get_output_candidate_count(data: object, call_type: str | None = None) -> in
 
 
 def write_implicit_output_cap(data: object, call_type: str | None, effective_cap: int) -> bool:
-    google_config_field: Final = _google_genai_config_field(data) or "config"
+    google_config_field: Final = google_genai_config_field(data) or "config"
     if not isinstance(data, dict):
         return False
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:

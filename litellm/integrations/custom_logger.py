@@ -23,7 +23,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -336,7 +335,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
@@ -570,7 +569,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item
 
