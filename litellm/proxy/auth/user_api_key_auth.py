@@ -2037,7 +2037,7 @@ async def _core_outcome(
 async def user_api_key_auth_builder(
     request: Request,
     api_key: str,
-    azure_api_key_header: str,
+    azure_api_key_header: str | None,
     anthropic_api_key_header: str | None,
     google_ai_studio_api_key_header: str | None,
     azure_apim_header: str | None,
@@ -3485,7 +3485,7 @@ def _seed_request_destinations(user_api_key_dict: UserAPIKeyAuth, request: Reque
 async def user_api_key_auth(
     request: Request,
     api_key: str = fastapi.Security(api_key_header),
-    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
+    azure_api_key_header: str | None = fastapi.Security(azure_api_key_header),
     anthropic_api_key_header: str | None = fastapi.Security(anthropic_api_key_header),
     google_ai_studio_api_key_header: str | None = fastapi.Security(google_ai_studio_api_key_header),
     azure_apim_header: str | None = fastapi.Security(azure_apim_header),
