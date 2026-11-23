@@ -2,12 +2,13 @@
 Transformation logic for Hosted VLLM rerank
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._uuid import uuid
 from litellm.exceptions import UnsupportedParamsError
@@ -30,6 +31,35 @@ from litellm.types.rerank import (
 )
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _HostedVLLMRerankUsage(TypedDict):
+    total_tokens: NotRequired[ReadOnly[int | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _HostedVLLMRerankDocument(TypedDict):
+    text: NotRequired[ReadOnly[object]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _HostedVLLMRerankResult(TypedDict):
+    index: NotRequired[ReadOnly[int | float | str]]
+    relevance_score: NotRequired[ReadOnly[int | float | str]]
+    document: NotRequired[ReadOnly[_HostedVLLMRerankDocument | None]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _HostedVLLMRerankPayload(TypedDict):
+    id: NotRequired[ReadOnly[str | None]]
+    usage: NotRequired[ReadOnly[_HostedVLLMRerankUsage]]
+    results: NotRequired[ReadOnly[Sequence[_HostedVLLMRerankResult] | None]]
+    meta: NotRequired[ReadOnly[object]]
+
+
+_RERANK_PAYLOAD: Final = TypeAdapter(_HostedVLLMRerankPayload)
+_RAW_RESULTS: Final = TypeAdapter(Sequence[object])
 
 
 class HostedVLLMRerankError(BaseLLMException):
@@ -57,7 +87,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
@@ -70,7 +100,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
             return api_base
         raise ValueError("api_base must be provided for Hosted VLLM rerank")
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -86,7 +116,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -98,7 +128,7 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for Hosted VLLM rerank
         """
@@ -131,16 +161,16 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             api_key = get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
 
-        default_headers: Final = {
+        default_headers: Final[dict[str, object]] = {
             "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
@@ -156,28 +186,30 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for Hosted VLLM rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for Hosted VLLM rerank")
 
         truncation: Final = HostedVLLMRerankTruncationParams.model_validate(optional_rerank_params)
-        rerank_request: Final = RerankRequest(
-            model=model,
-            query=optional_rerank_params["query"],
-            documents=optional_rerank_params["documents"],
-            top_n=optional_rerank_params.get("top_n", None),
-            rank_fields=optional_rerank_params.get("rank_fields", None),
-            return_documents=optional_rerank_params.get("return_documents", None),
-            instruction=optional_rerank_params.get("instruction", None),
-            max_tokens_per_doc=truncation.max_tokens_per_doc,
-            truncate_prompt_tokens=truncation.truncate_prompt_tokens,
-            truncation_side=truncation.truncation_side,
-            max_tokens_per_query=truncation.max_tokens_per_query,
+        rerank_request: Final = RerankRequest.model_validate(
+            {
+                "model": model,
+                "query": optional_rerank_params["query"],
+                "documents": optional_rerank_params["documents"],
+                "top_n": optional_rerank_params.get("top_n", None),
+                "rank_fields": optional_rerank_params.get("rank_fields", None),
+                "return_documents": optional_rerank_params.get("return_documents", None),
+                "instruction": optional_rerank_params.get("instruction", None),
+                "max_tokens_per_doc": truncation.max_tokens_per_doc,
+                "truncate_prompt_tokens": truncation.truncate_prompt_tokens,
+                "truncation_side": truncation.truncation_side,
+                "max_tokens_per_query": truncation.max_tokens_per_query,
+            }
         )
         return rerank_request.model_dump(exclude_none=True)
 
@@ -188,9 +220,9 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Process response from Hosted VLLM rerank API
@@ -205,7 +237,8 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return HostedVLLMRerankError(message=error_message, status_code=status_code, headers=headers)
 
-    def _transform_response(self, response: dict) -> RerankResponse:
+    def _transform_response(self, raw_response: Mapping[str, object]) -> RerankResponse:
+        response: Final = _RERANK_PAYLOAD.validate_python(raw_response)
         # Extract usage information
         usage_data: Final = response.get("usage", {})
         _billed_units: Final = RerankBilledUnits(total_tokens=usage_data.get("total_tokens", 0))
@@ -213,17 +246,17 @@ class HostedVLLMRerankConfig(BaseRerankConfig):
         rerank_meta: Final = RerankResponseMeta(billed_units=_billed_units, tokens=_tokens)
 
         # Extract results
-        _results: Final[list[dict] | None] = response.get("results")
+        _results: Final = response.get("results")
 
         if _results is None:
-            raise ValueError(f"No results found in the response={response}")
+            raise ValueError(f"No results found in the response={raw_response}")
 
         rerank_results: Final[list[RerankResponseResult]] = []
 
-        for result in _results:
+        for result, raw_result in zip(_results, _RAW_RESULTS.validate_python(raw_response.get("results"))):
             # Validate required fields exist
-            if not all(key in result for key in ["index", "relevance_score"]):
-                raise ValueError(f"Missing required fields in the result={result}")
+            if "index" not in result or "relevance_score" not in result:
+                raise ValueError(f"Missing required fields in the result={raw_result}")
 
             # Get document data if it exists
             document_data = result.get("document", {})
