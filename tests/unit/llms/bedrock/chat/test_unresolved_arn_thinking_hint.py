@@ -91,8 +91,19 @@ def test_profile_arn_without_base_model_names_base_model_when_bedrock_rejects_en
         (_PROFILE_ARN, _OTHER_UNSUPPORTED_FIELD, {}),
         (_NAMED_MODEL, _ENABLED_THINKING_REJECTION, {}),
         (_PROFILE_ARN, _ENABLED_THINKING_REJECTION, {"base_model": "us.anthropic.claude-opus-4-8"}),
+        (
+            _CONVERSE_LIKE_PROFILE_ARN,
+            _ENABLED_THINKING_REJECTION,
+            {"api_base": "https://bedrock-like.example.com", "base_model": "us.anthropic.claude-opus-4-8"},
+        ),
     ],
-    ids=["other_thinking_400", "other_unsupported_field", "named_model", "profile_arn_with_base_model"],
+    ids=[
+        "other_thinking_400",
+        "other_unsupported_field",
+        "named_model",
+        "profile_arn_with_base_model",
+        "converse_like_profile_arn_with_base_model",
+    ],
 )
 @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
 def test_bedrock_400_keeps_its_message_without_the_hint(
