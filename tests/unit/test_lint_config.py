@@ -207,3 +207,10 @@ def test_mistake_in_included_section_that_replaces_a_root_section_is_attributed_
         'config.yaml:17: error: router_settings.routing_strategy: unknown strategy "simple-shufle", '
         'did you mean "simple-shuffle"? (in an included file)'
     ]
+
+
+def test_included_model_list_that_is_not_a_list_is_attributed_to_the_include(tmp_path: Path) -> None:
+    (tmp_path / "models.yaml").write_text("model_list:\n  model_name: extra\n", encoding="utf-8")
+    assert _lint(
+        tmp_path, VALID.replace('  fallbacks: [{"chat": ["backup"]}]\n', "") + "include:\n  - models.yaml\n"
+    ) == ["config.yaml:16: error: model_list: must be a list of model entries (in an included file)"]

@@ -396,8 +396,10 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
     root: Final = str(config_path.resolve())
     entries: Final = tuple((entry, root) for entry in _sequence(config.get("include")) or () if isinstance(entry, str))
     locations: Final = _included_files(entries, frozenset(), root)
-    included_keys: Final = itertools.chain.from_iterable(_included_keys(location) for location in locations)
-    replaced: Final = frozenset(key for key in included_keys if not isinstance(config.get(key), list))
+    included_items: Final = itertools.chain.from_iterable(_included_items(location) for location in locations)
+    replaced: Final = frozenset(
+        key for key, value in included_items if not (isinstance(config.get(key), list) and isinstance(value, list))
+    )
     located: Final = (_located(found, lines, replaced, "include" in config) for found in lint_config(merged, environ))
     included_duplicates: Final = itertools.chain.from_iterable(
         _included_duplicates(location, lines.get(("include",))) for location in locations
@@ -407,8 +409,8 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
     )
 
 
-def _included_keys(location: str) -> tuple[str, ...]:
-    return tuple(_mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or ())
+def _included_items(location: str) -> tuple[tuple[str, object], ...]:
+    return tuple((_mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or {}).items())
 
 
 def _located(found: Finding, lines: Mapping[PathKey, int], replaced: frozenset[str], has_includes: bool) -> Finding:
