@@ -69,7 +69,7 @@ def principal_of(caller: UserAPIKeyAuth | None) -> str | None:
 def holds_webhooks(caller: UserAPIKeyAuth | None) -> bool:
     from litellm.proxy.mcp_server.auth.user_api_key_auth_mcp import is_mcp_admitted_user_subject
 
-    if caller is None:
+    if caller is None or caller.end_user_id or caller.agent_id:
         return False
     return stored_key_hash(caller) is not None or (is_mcp_admitted_user_subject(caller) and bool(caller.user_id))
 
