@@ -15,6 +15,7 @@ from litellm.proxy.guardrails.guardrail_hooks.reco import (
     RecoGuardrail,
     initialize_guardrail,
 )
+from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.reco import (
     RecoConfigModel,
@@ -393,6 +394,35 @@ class TestRecoGuardrailApiKey:
 
         with pytest.raises(ValueError, match="reco_tenant_id or api_key"):
             initialize_guardrail(litellm_params, {"guardrail_name": "prod-reco"})
+
+    @pytest.mark.asyncio
+    async def test_stored_guardrail_with_unset_api_key_reference_keeps_tenant_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("RECO_TEST_MISSING_API_KEY", raising=False)
+        stored_params: Final = {
+            "guardrail": "reco",
+            "mode": "pre_call",
+            "api_key": "os.environ/RECO_TEST_MISSING_API_KEY",
+            "optional_params": {"reco_tenant_id": _TENANT_ID, "api_base": "https://edge1.us.reco.ai"},
+        }
+        handler: Final = InMemoryGuardrailHandler()
+        handler.initialize_guardrail(
+            {"guardrail_id": "stored-reco-id", "guardrail_name": "stored-reco", "litellm_params": stored_params},
+            source="db",
+        )
+        callback: Final = handler.guardrail_id_to_custom_guardrail["stored-reco-id"]
+        assert isinstance(callback, RecoGuardrail)
+
+        headers: Final = await _headers_sent_to_reco(callback)
+
+        assert headers["X-Reco-Tenant-Id"] == _TENANT_ID
+        assert "x-api-key" not in headers
+
+    @pytest.mark.parametrize("api_key", ["tok\r\nX-Injected: 1", "tok\u00e9n"], ids=["crlf", "non-ascii"])
+    def test_api_key_unusable_as_header_value_is_rejected(self, api_key: str) -> None:
+        with pytest.raises(ValueError, match="printable ASCII"):
+            RecoGuardrail(api_base="https://edge1.us.reco.ai", api_key=api_key)
 
     @pytest.mark.asyncio
     async def test_token_under_optional_params_is_never_sent(self) -> None:

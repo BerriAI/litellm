@@ -48,7 +48,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     reco_params: Final = RecoOptionalParams.model_validate(
         {field_name: value for field_name, value in configured if value is not None}
     )
-    api_key: Final = _first_configured("api_key", ({"api_key": litellm_params.api_key},))
+    raw_litellm_params: Final = guardrail.get("litellm_params")
+    api_key: Final = _first_configured(
+        "api_key",
+        (raw_litellm_params if isinstance(raw_litellm_params, Mapping) else {}, {"api_key": litellm_params.api_key}),
+    )
     if sources[0].get("api_key") is not None:
         verbose_proxy_logger.warning(
             "Reco guardrail '%s': optional_params.api_key is ignored. Set api_key at the top level of litellm_params",

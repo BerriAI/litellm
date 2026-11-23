@@ -37,6 +37,8 @@ class RecoGuardrail(GenericGuardrailAPI):
             raise ValueError("reco_tenant_id or api_key is required for the Reco guardrail")
         if not api_base:
             raise ValueError("api_base is required for the Reco guardrail")
+        if api_key and not (api_key.isascii() and api_key.isprintable()):
+            raise ValueError("api_key for the Reco guardrail must contain only printable ASCII characters")
 
         tenant_header: Final = {"X-Reco-Tenant-Id": validate_reco_tenant_id(reco_tenant_id)} if reco_tenant_id else {}
 
