@@ -1682,18 +1682,23 @@ def _bound_row(client_id: str, provider: str = "microsoft_entra") -> LiteLLM_Age
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["create", "patch", "put", "delete"])
-async def test_every_binding_write_forgets_the_cached_old_and_new_bindings_on_this_pod(
+async def test_every_binding_write_forgets_the_cached_old_and_new_bindings_on_each_worker(
     monkeypatch: pytest.MonkeyPatch, operation: str
 ) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.redis.stores.auth_cache import AuthObject
+    from tests.unit.redis.stores.cache_invalidation_double import Worker, channel
 
     cache: Final = UserApiKeyCache()
+    peer: Final = UserApiKeyCache()
+    invalidation, _ = channel(Worker(peer))
+    monkeypatch.setattr(proxy_server.proxy_config, "cache_invalidation", invalidation)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
     clients: Final = ("old-client", "new-client", "another-agent")
-    for bound_client in clients:
-        await cache.async_set_cache(key=AuthObject.agent_identity("microsoft_entra", "tenant", bound_client), value="agent-123")
+    for worker in (cache, peer):
+        for bound_client in clients:
+            worker.set_cache(AuthObject.agent_identity("microsoft_entra", "tenant", bound_client), "agent-123")
     registry: Final = AgentRegistry()
     client: Final = MagicMock()
     client.db.litellm_agentstable.find_unique = AsyncMock(return_value=_bound_row("old-client"))
@@ -1722,11 +1727,12 @@ async def test_every_binding_write_forgets_the_cached_old_and_new_bindings_on_th
         "put": {"old-client", "new-client"},
         "delete": {"old-client"},
     }[operation]
-    for bound_client in clients:
-        cached: Final[object] = await cache.async_get_cache(
-            key=AuthObject.agent_identity("microsoft_entra", "tenant", bound_client)
-        )
-        assert (cached is None) is (bound_client in forgotten), bound_client
+    for worker in (cache, peer):
+        actual = {
+            client_id: worker.get_cache(AuthObject.agent_identity("microsoft_entra", "tenant", client_id))
+            for client_id in clients
+        }
+        assert actual == {client_id: None if client_id in forgotten else "agent-123" for client_id in clients}
 
 
 @pytest.mark.asyncio
