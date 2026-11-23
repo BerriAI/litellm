@@ -57,7 +57,7 @@ def gateway_name(server: MCPServer, upstream_name: str) -> str:
 
 def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None:
     for current_only in (True, False):
-        matches: Final = tuple(
+        if matches := tuple(
             (len(match[0]), ResolvedEvent(target=server, upstream_name=match[1], gateway_name=name))
             for server in servers
             if (
@@ -67,8 +67,7 @@ def resolve(name: str, servers: tuple[EventServer, ...]) -> ResolvedEvent | None
                 )
             )
             is not None
-        )
-        if matches:
+        ):
             return max(matches, key=lambda item: item[0])[1]
     return None
 
