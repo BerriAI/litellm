@@ -31,12 +31,12 @@ const SUBSCRIPTION: MCPEventSubscription = {
   created_at: null,
 };
 
-function renderTab(searchParams = "") {
+function renderTab(canManage: boolean, searchParams = "") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <NuqsTestingAdapter searchParams={searchParams} hasMemory>
       <QueryClientProvider client={client}>
-        <MCPEventSubscriptionsTab accessToken="sk-admin" />
+        <MCPEventSubscriptionsTab accessToken="sk-admin" canManage={canManage} />
       </QueryClientProvider>
     </NuqsTestingAdapter>,
   );
@@ -50,7 +50,7 @@ describe("MCPEventSubscriptionsTab", () => {
   });
 
   it("reads a bookmarked subscription page and requests the previous page", async () => {
-    renderTab("?subscriptionOffset=500");
+    renderTab(false, "?subscriptionOffset=500");
     await userEvent.click(await screen.findByRole("button", { name: "Previous page" }));
     await screen.findByText("build.failed");
     expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 500, 1);
@@ -62,14 +62,14 @@ describe("MCPEventSubscriptionsTab", () => {
     networking.fetchMCPEventSubscriptions.mockResolvedValue({
       subscriptions: [{ ...SUBSCRIPTION, event_name: "deploy.done" }],
     });
-    renderTab();
+    renderTab(false);
     await userEvent.click(await screen.findByRole("button", { name: "Next page" }));
     expect(await screen.findByText("deploy.done")).toBeInTheDocument();
     expect(networking.fetchMCPEventSubscriptions).toHaveBeenCalledWith("sk-admin", 7, 1);
   });
 
   it("lists webhook subscriptions with their arguments, callback host and last error", async () => {
-    renderTab();
+    renderTab(false);
     const row = await screen.findByRole("row", { name: /build.failed/ });
     expect(within(row).getByText("repo=acme/web")).toBeInTheDocument();
     expect(within(row).getByText("hooks.example.com")).toBeInTheDocument();
@@ -77,9 +77,25 @@ describe("MCPEventSubscriptionsTab", () => {
     expect(screen.queryByRole("button", { name: /Terminate subscription/ })).not.toBeInTheDocument();
   });
 
+  it("terminates a subscription after confirmation", async () => {
+    const user = userEvent.setup();
+    renderTab(true);
+    await user.click(await screen.findByRole("button", { name: "Terminate subscription sub_1" }));
+    await user.click(screen.getByRole("button", { name: "Terminate" }));
+    expect(networking.terminateMCPEventSubscription).toHaveBeenCalledWith("sk-admin", "sub_1");
+  });
+
+  it("sends a signed test event and reports the callback status", async () => {
+    const user = userEvent.setup();
+    renderTab(true);
+    await user.click(await screen.findByRole("button", { name: "Send a signed test event to subscription sub_1" }));
+    expect(await screen.findByText("Test event delivered (HTTP 200)")).toBeInTheDocument();
+    expect(networking.sendMCPEventTestDelivery).toHaveBeenCalledWith("sk-admin", "sub_1");
+  });
+
   it("shows an empty state when nothing is subscribed", async () => {
     networking.fetchMCPEventSubscriptions.mockResolvedValue({ subscriptions: [] });
-    renderTab();
+    renderTab(true);
     expect(await screen.findByText("No webhook event subscriptions yet.")).toBeInTheDocument();
   });
 });

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { fetchMCPEventSubscriptions } from "@/components/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
+import { SubscriptionActions } from "./SubscriptionActions";
 import { argumentsSummary } from "./eventSubscriptionView";
 
 const subscriptionKeys = createQueryKeys("mcpEventSubscriptions");
@@ -31,7 +32,13 @@ const columns = [
   "expires",
 ] as const;
 
-export function MCPEventSubscriptionsTab({ accessToken }: { accessToken: string | null }) {
+export function MCPEventSubscriptionsTab({
+  accessToken,
+  canManage,
+}: {
+  accessToken: string | null;
+  canManage: boolean;
+}) {
   const { t } = useTranslation();
   const [offset, setOffset] = useQueryState("subscriptionOffset", offsetParser);
   const { data, error, isLoading, isFetching, refetch } = useQuery({
@@ -56,6 +63,7 @@ export function MCPEventSubscriptionsTab({ accessToken }: { accessToken: string 
               {columns.map((column) => (
                 <TableHead key={column}>{t(`mcpServers.eventSubscriptionsTab.columns.${column}`)}</TableHead>
               ))}
+              {canManage && <TableHead>{t("mcpServers.eventSubscriptionsTab.columns.actions")}</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -72,6 +80,11 @@ export function MCPEventSubscriptionsTab({ accessToken }: { accessToken: string 
                   {row.last_error ? t(`mcpServers.eventSubscriptionsTab.failure.${row.last_error}`) : "-"}
                 </TableCell>
                 <TableCell>{row.refresh_before ?? t("mcpServers.eventSubscriptionsTab.noExpiry")}</TableCell>
+                {canManage && accessToken && (
+                  <TableCell>
+                    <SubscriptionActions subscription={row} accessToken={accessToken} />
+                  </TableCell>
+                )}
               </TableRow>
             ))}
           </TableBody>

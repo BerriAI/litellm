@@ -823,7 +823,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 <MCPGatewaySessionsTab accessToken={accessToken} canTerminate={canManageLiveState} />
               </TabsContent>
               <TabsContent value="event-subscriptions">
-                <MCPEventSubscriptionsTab accessToken={accessToken} />
+                <MCPEventSubscriptionsTab accessToken={accessToken} canManage={canManageLiveState} />
               </TabsContent>
             </>
           )}
