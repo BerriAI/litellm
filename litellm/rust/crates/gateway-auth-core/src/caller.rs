@@ -197,7 +197,7 @@ mod tests {
     #[rstest]
     fn the_master_key_is_an_admin_with_no_row() {
         let master = Identity::<Stored>::Key(KeyIdentity::MasterKey {
-            hash: Token::new("sk-master").hash(),
+            hash: Token::new("sk-master").hash().unwrap(),
             end_user: "end-user".to_owned(),
         });
 

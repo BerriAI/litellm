@@ -1,6 +1,8 @@
 mod jwt;
 mod key;
 
+use litellm_error::Source;
+
 pub(crate) use jwt::InvalidCredentials;
 pub use jwt::{
     AgentIdentityFailure, AssertionRejection, ClaimDenial, JwtDenial, KeyError, KeyFailure,
@@ -30,6 +32,8 @@ pub enum Error {
     /// request another way. No read treats it as absent.
     #[error("the auth host does not serve this request")]
     HostDeclined,
+    #[error("OpenSSL could not hash the credential")]
+    Hash(#[source] Source),
 }
 
 impl Error {
@@ -48,9 +52,11 @@ impl Error {
     pub fn is_host_failure(&self) -> bool {
         match self {
             Self::HostFailed | Self::HostDeclined => true,
-            Self::PremiumRequired(_) | Self::Key(_) | Self::Jwt(_) | Self::BudgetExceeded(_) => {
-                false
-            }
+            Self::PremiumRequired(_)
+            | Self::Key(_)
+            | Self::Jwt(_)
+            | Self::BudgetExceeded(_)
+            | Self::Hash(_) => false,
         }
     }
 }

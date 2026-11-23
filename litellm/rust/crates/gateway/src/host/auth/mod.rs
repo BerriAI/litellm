@@ -118,7 +118,7 @@ pub fn auth(config: &Config, keys: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
     let settings = settings(config, keys.is_some());
     let host = NativeAuthHost {
         keys,
-        master: master_key(config).map(|key| Token::new(key.clone()).hash()),
+        master: master_key(config).and_then(|key| Token::new(key.clone()).hash().ok()),
     };
     let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
@@ -637,7 +637,7 @@ mod tests {
                 key.key.models().to_vec(),
             ),
             (
-                Some(&Token::new(VIRTUAL_KEY).hash()),
+                Some(&Token::new(VIRTUAL_KEY).hash().unwrap()),
                 LitellmRole::InternalUser,
                 expires.map(|at| at.parse::<Timestamp>().unwrap()),
                 models.iter().map(|model| (*model).to_owned()).collect(),
@@ -824,7 +824,7 @@ mod tests {
     }
 
     fn stored_hash() -> String {
-        Token::new(VIRTUAL_KEY).hash().to_string()
+        Token::new(VIRTUAL_KEY).hash().unwrap().to_string()
     }
 
     /// How long `redis` keeps its entry for [`VIRTUAL_KEY`], or a negative number with none.

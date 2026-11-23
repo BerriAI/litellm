@@ -20,7 +20,7 @@ use support::{MASTER_KEY, Served, asking, send_as};
 
 /// The hash a key's row is stored under, which names the key in every counter.
 fn hash_token(token: &str) -> String {
-    Token::new(token).hash().to_string()
+    Token::new(token).hash().unwrap().to_string()
 }
 
 const KEY: &str = "sk-limited";

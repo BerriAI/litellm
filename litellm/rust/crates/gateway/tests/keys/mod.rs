@@ -63,7 +63,7 @@ impl Held {
         let mut row: Value = serde_json::from_str(PLAIN).unwrap();
         let fields = row.as_object_mut().unwrap();
         fields.extend(
-            json!({"token": Token::new(token).hash().as_str()})
+            json!({"token": Token::new(token).hash().unwrap().as_str()})
                 .as_object()
                 .unwrap()
                 .clone(),

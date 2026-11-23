@@ -101,6 +101,7 @@ impl Error {
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
             Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
+            Self::Hash(_) => plain(self),
             Self::HostFailed | Self::HostDeclined => return None,
         })
     }

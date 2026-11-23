@@ -1321,7 +1321,7 @@ const VIRTUAL_KEY: &str = "sk-cached-virtual-key";
 /// A key as Python's auth cache holds it, cut down to the fields the gateway cannot do without.
 fn python_cached_key() -> Value {
     json!({
-        "token": litellm_gateway_auth_core::Token::new(VIRTUAL_KEY).hash().to_string(), "soft_budget_cooldown": false,
+        "token": litellm_gateway_auth_core::Token::new(VIRTUAL_KEY).hash().unwrap().to_string(), "soft_budget_cooldown": false,
         "spend": 0.0, "total_spend": 0.0, "models": [], "aliases": {}, "config": {},
         "permissions": {}, "metadata": {}, "model_spend": {}, "model_max_budget": {},
         "budget_fallbacks": {}, "team_models": [], "team_blocked": false, "expires": null,
@@ -1351,6 +1351,7 @@ async fn asking_behind_the_auth_cache(
     if let Some(cached) = cached {
         let hash = litellm_gateway_auth_core::Token::new(VIRTUAL_KEY)
             .hash()
+            .unwrap()
             .to_string();
         redis
             .cli(&["SET", &hash, &cached.to_string()])
