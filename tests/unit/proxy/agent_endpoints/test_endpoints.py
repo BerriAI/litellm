@@ -1804,3 +1804,55 @@ def test_invalid_identity_and_untrusted_tenant_cannot_be_registered(
     with pytest.raises(HTTPException, match=message) as failure:
         agent_endpoints._validate_managed_identity_request(request)
     assert failure.value.status_code == 400
+
+
+def test_okta_identity_providers_list_only_opted_in_issuers_with_audience(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import JWTIssuerConfig, LiteLLM_JWTAuth
+
+    issuers: Final = [
+        JWTIssuerConfig(issuer="https://b.okta.example", audience="api", agent_identity_provider="okta", okta_org="b"),
+        JWTIssuerConfig(
+            issuer="https://a.okta.example/oauth2/aus1", audience="api", agent_identity_provider="okta", okta_org="a"
+        ),
+        JWTIssuerConfig(issuer="https://login.example/v2.0", audience="api"),
+    ]
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth(issuers=issuers))
+    monkeypatch.setattr(proxy_server, "general_settings", {"enable_jwt_auth": True})
+
+    response: Final = client.get("/v1/agents/identity/providers/okta")
+
+    assert response.status_code == 200
+    assert response.json() == ["https://a.okta.example/oauth2/aus1", "https://b.okta.example"]
+    assert _make_app_with_role(LitellmUserRoles.INTERNAL_USER).get("/v1/agents/identity/providers/okta").status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("issuer", "status", "message"),
+    [
+        pytest.param(
+            "https://acme.okta.example/oauth2/aus1", 400, "agent_identity_provider: okta first", id="not_opted_in"
+        ),
+        pytest.param("https://acme.okta.example/path/aus1", 422, "string_pattern_mismatch", id="not_okta"),
+    ],
+)
+def test_okta_identity_that_cannot_resolve_is_refused_before_registration(
+    monkeypatch: pytest.MonkeyPatch, issuer: str, status: int, message: str
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_JWTAuth
+
+    database: Final = MagicMock()
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    monkeypatch.setattr(proxy_server, "litellm_jwtauth", LiteLLM_JWTAuth())
+    body: Final = {
+        "agent_name": "okta-agent",
+        "agent_card_params": {},
+        "identity": {"provider": "okta", "issuer": issuer, "client_id": "0oa1"},
+    }
+
+    response: Final = client.post("/v1/agents", json=body)
+
+    assert response.status_code == status, response.text
+    assert message in response.text
+    database.db.litellm_agentstable.create.assert_not_called()

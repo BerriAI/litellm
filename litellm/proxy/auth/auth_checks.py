@@ -185,6 +185,7 @@ from litellm.router import Router
 from litellm.router_api import RegistryReader
 from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.proxy.agent_identity import AgentStamp
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
@@ -4285,6 +4286,7 @@ class ExperimentalUIJWTToken:
         team_model_aliases: Mapping[str, str] | None = None,
         max_budget: float | None = None,
         allowed_routes: Sequence[str] | None = None,
+        agent: AgentStamp | None = None,
     ) -> str:
         """
         Generate a JWT token for CLI authentication with configurable expiration.
@@ -4345,6 +4347,8 @@ class ExperimentalUIJWTToken:
             user_role=LitellmUserRoles(user_info.user_role),
             is_session_token=True,
             allowed_routes=list(allowed_routes) if allowed_routes is not None else None,
+            agent_id=agent.agent_id if agent is not None else None,
+            agent_binding_revision=agent.binding_revision if agent is not None else None,
         )
 
         return encrypt_bearer_token(valid_token.model_dump_json(exclude_none=True), prefix=LITELLM_SESSION_TOKEN_PREFIX)

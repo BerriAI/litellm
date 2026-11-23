@@ -1,6 +1,7 @@
 import enum
 import json
 import os
+import re
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType as MappingProxyType  # noqa: PLC0414  # public re-export
@@ -78,7 +79,7 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo
-from litellm.types.proxy.agent_identity import ManagedAgentContext
+from litellm.types.proxy.agent_identity import OKTA_ISSUER_PATTERN, ManagedAgentContext
 from litellm.types.proxy.auth.special_headers import (
     SpecialHeaders as SpecialHeaders,  # noqa: PLC0414  # public re-export
 )
@@ -4012,6 +4013,7 @@ class SpendLogsMetadata(TypedDict):
     billing_agent_id: ReadOnly[NotRequired[str | None]]
     agent_execution_mode: ReadOnly[NotRequired[str | None]]
     verified_human_user_id: ReadOnly[NotRequired[str | None]]
+    agent_actor_chain: ReadOnly[NotRequired[str | None]]
     autorouter_baseline_observation: ReadOnly[str | None]
     """
     Specific metadata k,v pairs logged to spendlogs for easier cost tracking
@@ -5128,8 +5130,33 @@ class JWTIssuerConfig(LiteLLMBaseModel):
         default=None,
         description="Issuer-specific policy when the virtual key claim has no mapping. Falls back to the global policy.",
     )
+    agent_identity_provider: Literal["okta"] | None = Field(
+        default=None,
+        description="Set to okta to let this issuer's tokens authenticate Okta-bound agents.",
+    )
+    okta_org: str | None = Field(
+        default=None,
+        description="The Okta org this issuer belongs to. Required with agent_identity_provider: okta.",
+    )
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def validate_okta_agent_issuer(self) -> "JWTIssuerConfig":
+        if self.agent_identity_provider != "okta":
+            if self.okta_org is not None:
+                raise ValueError("okta_org needs agent_identity_provider: okta")
+            return self
+        if not re.fullmatch(OKTA_ISSUER_PATTERN, self.issuer):
+            raise ValueError(
+                f"agent_identity_provider: okta needs an Okta issuer (https://{{domain}} or "
+                f"https://{{domain}}/oauth2/{{id}}), got {self.issuer}"
+            )
+        if self.disable_audience_validation:
+            raise ValueError("agent_identity_provider: okta needs audience validation")
+        if not self.okta_org:
+            raise ValueError("agent_identity_provider: okta needs okta_org")
+        return self
 
     @model_validator(mode="after")
     def validate_audience_configured(self) -> "JWTIssuerConfig":

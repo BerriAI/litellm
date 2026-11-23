@@ -1,11 +1,12 @@
 import { AgentIdentityFields } from "./AgentIdentityFields";
-import { withAgentIdentity } from "./agent_identity";
+import { isBoundIdentityProvider, withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { toast } from "@/lib/toast";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { Bot, Check, CircleCheck, Key, LayoutGrid } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import CreatedKeyDisplay from "@/components/shared/CreatedKeyDisplay";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
@@ -57,6 +58,18 @@ import AccessGroupSelector from "@/components/common_components/AccessGroupSelec
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import i18n from "@/i18n/i18n";
+
+const skipKeyLabel = (t: TFunction, provider: unknown): string => {
+  if (provider === "microsoft_entra") return t("agents.addForm.assignKey.skip.entra");
+  if (provider === "okta") return t("agents.addForm.assignKey.skip.okta");
+  return t("agents.addForm.assignKey.skip.later");
+};
+
+const noKeyMessage = (t: TFunction, provider: unknown): string => {
+  if (provider === "microsoft_entra") return t("agents.addForm.ready.entraConfigured");
+  if (provider === "okta") return t("agents.addForm.ready.oktaConfigured");
+  return t("agents.addForm.ready.noKey");
+};
 
 const CUSTOM_AGENT_TYPE = "custom";
 
@@ -299,7 +312,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
 
   const buildAgentData = (values: AgentFormValues): AgentRequestPayload | null => {
     if (agentType === CUSTOM_AGENT_TYPE) {
-      if (values.identity_provider === "microsoft_entra") return { agent_name: values.agent_name };
+      if (isBoundIdentityProvider(values.identity_provider)) return { agent_name: values.agent_name };
       return {
         agent_name: values.agent_name,
         agent_card_params: {
@@ -984,6 +997,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         {form.getValues("identity_provider") === "microsoft_entra" && (
           <p className="mb-4 text-sm text-muted-foreground">{t("agents.addForm.assignKey.entraNotice")}</p>
         )}
+        {form.getValues("identity_provider") === "okta" && (
+          <p className="mb-4 text-sm text-muted-foreground">{t("agents.addForm.assignKey.oktaNotice")}</p>
+        )}
         <RadioGroup
           value={keyAssignOption}
           onValueChange={(value) => setKeyAssignOption(value as "create_new" | "existing_key" | "skip")}
@@ -1078,9 +1094,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             className="text-sm text-muted-foreground underline hover:text-foreground"
             onClick={() => setKeyAssignOption("skip")}
           >
-            {form.getValues("identity_provider") === "microsoft_entra"
-              ? t("agents.addForm.assignKey.skip.entra")
-              : t("agents.addForm.assignKey.skip.later")}
+            {skipKeyLabel(t, form.getValues("identity_provider"))}
           </button>
         </div>
       </div>
@@ -1111,11 +1125,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
         </p>
       )}
       {!createdKeyValue && !assignedKeyAlias && keyAssignOption === "skip" && (
-        <p className="mt-2 text-sm text-muted-foreground">
-          {form.getValues("identity_provider") === "microsoft_entra"
-            ? t("agents.addForm.ready.entraConfigured")
-            : t("agents.addForm.ready.noKey")}
-        </p>
+        <p className="mt-2 text-sm text-muted-foreground">{noKeyMessage(t, form.getValues("identity_provider"))}</p>
       )}
     </div>
   );

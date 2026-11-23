@@ -187,5 +187,6 @@ async def _virtual_key(host: PythonAuthHost, token: UserAPIKeyAuth, context: Rus
         start_time=host.call().start_time,
     )
     authenticated.via_virtual_key = True
+    authenticated.managed_agent_context = token.managed_agent_context
     host.call().request.state.requires_key_model_check = True
     return authenticated
