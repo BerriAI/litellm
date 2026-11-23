@@ -37,7 +37,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
 )
 from litellm.litellm_core_utils.batch_utils import BATCH_COST_REQUEST_ID_SUFFIX
-from litellm.litellm_core_utils.core_helpers import finite_cost, single_log_line
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost, require_attributes, single_log_line
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -58,7 +58,7 @@ from litellm.proxy._types import (
     SpendUpdateQueueItem,
     ToolDiscoveryQueueItem,
 )
-from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, project_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
@@ -99,6 +99,8 @@ from litellm.proxy.spend_tracking.savings import (
 )
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
+from litellm.proxy.spend_tracking.spend_logs_ledger_setting import spend_logs_ledger_enabled
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.prisma_protocols import BatchTable
 from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.proxy.auth.customer_hierarchy import (
@@ -308,6 +310,32 @@ class _SpendBatch(Protocol):
     @property
     def litellm_modelaccessgroupbudgettable(self) -> BatchTable: ...
 
+    @property
+    def litellm_customerorganizationtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customerteamtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_customermembertable(self) -> BatchTable: ...
+
+
+class _AppSpendBatch(Protocol):
+    @property
+    def litellm_appgrouptable(self) -> BatchTable: ...
+
+    @property
+    def litellm_appgroupcustomerorgtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_apptable(self) -> BatchTable: ...
+
+    @property
+    def litellm_appcustomerorgtable(self) -> BatchTable: ...
+
+    @property
+    def litellm_appcustomermembertable(self) -> BatchTable: ...
+
 
 _EntitySpendTable: TypeAlias = Literal[
     "litellm_tagtable", "litellm_agentstable", "litellm_modelaccessgroupbudgettable", "litellm_projecttable"
@@ -373,6 +401,8 @@ class _DailySpendCommit(Protocol[_DailySpendTransactionT]):
 
 
 _SpendTableName = Literal[
+    "app_group_list_transactions",
+    "app_group_customer_org_list_transactions",
     "app_list_transactions",
     "app_customer_org_list_transactions",
     "app_customer_member_list_transactions",
@@ -403,6 +433,8 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
     "tag_list_transactions",
     "model_access_group_list_transactions",
     "agent_list_transactions",
+    "app_group_list_transactions",
+    "app_group_customer_org_list_transactions",
     "app_list_transactions",
     "app_customer_org_list_transactions",
     "app_customer_member_list_transactions",
@@ -416,43 +448,69 @@ _SPEND_TABLE_COMMIT_ORDER: Final[tuple[_SpendTableName, ...]] = (
 class _CustomerHierarchyLevel:
     transactions: _SpendTableName
     table: str
-    prisma_table: str
+    batch_table: Callable[[_SpendBatch], BatchTable]
     id_column: str
     customer_column: str | None = None
 
 
 _CUSTOMER_HIERARCHY_LEVELS: Final = (
-    _CustomerHierarchyLevel("app_list_transactions", "LiteLLM_AppTable", "litellm_apptable", "app_id"),
+    _CustomerHierarchyLevel(
+        "app_group_list_transactions",
+        "LiteLLM_AppGroupTable",
+        lambda batcher: require_attributes(batcher, _AppSpendBatch, "litellm_appgrouptable").litellm_appgrouptable,
+        "app_group_id",
+    ),
+    _CustomerHierarchyLevel(
+        "app_group_customer_org_list_transactions",
+        "LiteLLM_AppGroupCustomerOrgTable",
+        lambda batcher: (
+            require_attributes(
+                batcher, _AppSpendBatch, "litellm_appgroupcustomerorgtable"
+            ).litellm_appgroupcustomerorgtable
+        ),
+        "app_group_id",
+        "customer_org_id",
+    ),
+    _CustomerHierarchyLevel(
+        "app_list_transactions",
+        "LiteLLM_AppTable",
+        lambda batcher: require_attributes(batcher, _AppSpendBatch, "litellm_apptable").litellm_apptable,
+        "app_id",
+    ),
     _CustomerHierarchyLevel(
         "app_customer_org_list_transactions",
         "LiteLLM_AppCustomerOrgTable",
-        "litellm_appcustomerorgtable",
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomerorgtable").litellm_appcustomerorgtable
+        ),
         "app_id",
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
         "app_customer_member_list_transactions",
         "LiteLLM_AppCustomerMemberTable",
-        "litellm_appcustomermembertable",
+        lambda batcher: (
+            require_attributes(batcher, _AppSpendBatch, "litellm_appcustomermembertable").litellm_appcustomermembertable
+        ),
         "app_id",
         "customer_member_id",
     ),
     _CustomerHierarchyLevel(
         "customer_org_list_transactions",
         "LiteLLM_CustomerOrganizationTable",
-        "litellm_customerorganizationtable",
+        lambda batcher: batcher.litellm_customerorganizationtable,
         "customer_org_id",
     ),
     _CustomerHierarchyLevel(
         "customer_team_list_transactions",
         "LiteLLM_CustomerTeamTable",
-        "litellm_customerteamtable",
+        lambda batcher: batcher.litellm_customerteamtable,
         "customer_team_id",
     ),
     _CustomerHierarchyLevel(
         "customer_member_list_transactions",
         "LiteLLM_CustomerMemberTable",
-        "litellm_customermembertable",
+        lambda batcher: batcher.litellm_customermembertable,
         "customer_member_id",
     ),
 )
@@ -544,7 +602,7 @@ def _is_billed_retry_attempt(metadata: SpendLogsMetadata) -> bool:
 
 
 def _timed_request_duration_ms(
-    payload: dict | SpendLogsPayload,
+    payload: Mapping[str, object],
     request_status: Literal["success", "failure"],
     is_internal_call: bool,
 ) -> int | None:
@@ -752,8 +810,8 @@ def _served_model_access_groups(
     deployment: Final = router.registry().deployment_dict(served_model_id)
     if deployment is None:
         return None
-    model_info: Final = deployment.get("model_info")
-    if not isinstance(model_info, Mapping):
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    if model_info is None:
         return None
     declared: Final = model_info.get("access_groups")
     if not isinstance(declared, (list, tuple)):
@@ -862,7 +920,7 @@ class DBSpendUpdateWriter:
         proxy_settings: Final = cast(  # cast-ok: proxy settings use string keys
             Mapping[str, object], general_settings
         )
-        use_ledger: Final = proxy_settings.get("use_spend_logs_ledger", True) is not False
+        use_ledger: Final = spend_logs_ledger_enabled(proxy_settings)
         request_fields: Final = _SPEND_METADATA_ADAPTER.validate_python(kwargs or {})
         customer_hierarchy: Final = customer_hierarchy_ids_from_request(request_fields)
         if kwargs is not None:
@@ -912,40 +970,46 @@ class DBSpendUpdateWriter:
                 payload["team_id"] = team_id
 
             if use_ledger:
-                from litellm.accounting.snapshot import build_accounting_payload
+                from litellm.proxy.spend_tracking.rust_spend_log_rows import LedgerRowInput, ledger_columns
 
-                if not _is_settle_once_cost_row(payload):
-                    payload["accounting_delivery_id"] = uuid.uuid4().hex
-                payload["accounting_payload"] = build_accounting_payload(
+                columns: Final = ledger_columns(
                     payload,
-                    entities={
-                        "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
-                        "user": user_id,
-                        "end_user": end_user_id,
-                        "team_id": team_id,
-                        "organization_id": org_id,
-                        "project_id": project_id,
-                        **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
-                        "agent_id": payload["agent_id"],
-                        "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
-                    },
-                    model_access_groups=debitable_model_access_groups(
-                        get_request_model_access_groups(request_fields), payload["model_id"], llm_router
-                    ),
-                    windows=await accounting_window_keys(
-                        hashed_token,
-                        team_id,
-                        customer_counters
-                        if customer_counters is not None
-                        else await customer_accounting_counters(
-                            customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                    LedgerRowInput(
+                        billable_cost=billable_cost,
+                        delivery_id=uuid.uuid4().hex,
+                        entities={
+                            "api_key": _persistable_api_key(hashed_token, payload.get("api_key") or ""),
+                            "user": user_id,
+                            "end_user": end_user_id,
+                            "team_id": team_id,
+                            "organization_id": org_id,
+                            "project_id": project_id,
+                            **(customer_hierarchy.entities() if customer_hierarchy is not None else {}),
+                            "agent_id": payload["agent_id"],
+                            "proxy_budget_name": litellm_proxy_budget_name if litellm.max_budget > 0 else None,
+                        },
+                        model_access_groups=debitable_model_access_groups(
+                            get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                         ),
-                        user_id=user_id,
-                    )
-                    if billable_cost
-                    else (),
-                    router=get_llm_router,
+                        windows=await accounting_window_keys(
+                            hashed_token,
+                            team_id,
+                            customer_counters
+                            if customer_counters is not None
+                            else await customer_accounting_counters(
+                                customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                            ),
+                            user_id=user_id,
+                        )
+                        if billable_cost
+                        else (),
+                        router=get_llm_router,
+                    ),
                 )
+                payload["spend"] = columns["spend"]
+                if columns["accounting_delivery_id"] is not None:
+                    payload["accounting_delivery_id"] = columns["accounting_delivery_id"]
+                payload["accounting_payload"] = columns["accounting_payload"]
             keep_spend_logs: Final = disable_spend_logs is False and not (
                 "status" in payload
                 and payload["status"] == "failure"
@@ -1023,6 +1087,36 @@ class DBSpendUpdateWriter:
             )
             return True
 
+    async def record_after_ledger_row(
+        self,
+        payload: SpendLogsPayload,
+        prisma_client: "PrismaClient | None",
+        kwargs: Mapping[str, object],
+        completion_response: object,
+        hashed_token: str | None,
+        team_id: str | None,
+        billable_cost: float,
+        spend_logs_kept: bool,
+        claimed: bool,
+    ) -> None:
+        if claimed and prisma_client is not None:
+            await _track_guardrail_usage_of_cost_row(payload, prisma_client, not spend_logs_kept)
+        await self._enqueue_autorouter_turn_transaction(
+            payload=payload, prisma_client=prisma_client, spend_logs_kept=spend_logs_kept
+        )
+        await self._record_session_spend(hashed_token, billable_cost, _SPEND_METADATA_ADAPTER.validate_python(kwargs))
+        if spend_logs_kept:
+            await self._enqueue_tool_usage_transaction(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+                payload=payload,
+                completion_response=completion_response,
+                prisma_client=prisma_client,
+                kwargs=dict(kwargs),
+            )
+        self._record_request_error_safely(payload=payload, prisma_client=prisma_client)
+        self._enqueue_tool_registry_upsert(  # pyright: ignore[reportUnknownMemberType]  # the step takes the untyped kwargs dict
+            kwargs=dict(kwargs), completion_response=completion_response, hashed_token=hashed_token, team_id=team_id
+        )
+
     async def _record_session_spend(
         self, api_key: str | None, spend: float, request_fields: Mapping[str, object]
     ) -> None:
@@ -1074,7 +1168,7 @@ class DBSpendUpdateWriter:
         is owned by its delivery row, keyed by its cost row id, in every logging mode, and a
         $0 poll records no delivery so it cannot block the poll that carries the cost.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -1138,7 +1232,7 @@ class DBSpendUpdateWriter:
         made and the row still has to end up carrying it. The row stops matching the moment it carries a charge, so it is one poll that
         takes it over and charges, and every later one reads the charge and charges nothing.
         """
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.repositories.spend_logs_repository import SpendLogsRepository
 
         request_id: Final = payload["request_id"]
         if payload["spend"] <= 0:
@@ -1173,13 +1267,14 @@ class DBSpendUpdateWriter:
         payload: SpendLogsPayload,
         completion_response: object,
         prisma_client: "PrismaClient | None",
-        kwargs: "dict | None" = None,
+        kwargs: "Mapping[str, object] | None" = None,
     ) -> None:
         try:
             if prisma_client is None:
                 return
             from litellm.proxy.db.spend_log_tool_index import (
                 build_tool_usage_transaction,
+                logged_full_tool_names,
             )
 
             transaction: Final = build_tool_usage_transaction(
@@ -1190,6 +1285,7 @@ class DBSpendUpdateWriter:
                 total_tokens=payload["total_tokens"],
                 completion_response=completion_response,
                 realtime_tool_calls=_CALL_KWARG_VALUE.validate_python((kwargs or {}).get("realtime_tool_calls")),
+                full_names=logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {})),
             )
             if transaction is None:
                 return
@@ -1225,30 +1321,28 @@ class DBSpendUpdateWriter:
             if not metadata_raw:
                 return
             metadata: Final = _SPEND_METADATA_ADAPTER.validate_json(metadata_raw)
-            routing_decision: Final = metadata.get("routing_decision")
-            if not isinstance(routing_decision, Mapping) or not routing_decision:
+            routing_decision: Final = as_str_mapping(metadata.get("routing_decision"))
+            if not routing_decision:
                 return
             from litellm.proxy.db.autorouter_session_rollup import (
                 build_autorouter_turn_transaction,
             )
 
-            usage_object_raw: Final = metadata.get("usage_object")
-            cost_breakdown: Final = metadata.get("cost_breakdown")
-            savings_estimate: Final = metadata.get("autorouter_savings_estimate")
+            usage_object: Final = as_str_mapping(metadata.get("usage_object"))
+            cost_breakdown: Final = as_str_mapping(metadata.get("cost_breakdown"))
+            savings_estimate: Final = as_str_mapping(metadata.get("autorouter_savings_estimate"))
             savings_spend: Final = compute_savings_spend(
                 model=payload.get("model"),
                 custom_llm_provider=payload.get("custom_llm_provider"),
                 compression_saved_tokens=0,
                 gateway_injected_cache=marks_gateway_injection(metadata, payload.get("model_id")),
                 routing_decision=routing_decision,
-                usage_object=usage_object_raw if isinstance(usage_object_raw, dict) else None,
+                usage_object=usage_object,
                 model_id=payload.get("model_id"),
                 llm_router=get_llm_router,
-                cost_breakdown=cost_breakdown if isinstance(cost_breakdown, Mapping) else None,
+                cost_breakdown=cost_breakdown,
                 recorded_autorouter_savings=metadata.get("autorouter_savings"),
-                recorded_autorouter_savings_estimate=(
-                    savings_estimate if isinstance(savings_estimate, Mapping) else None
-                ),
+                recorded_autorouter_savings_estimate=savings_estimate,
                 billed_at=payload.get("endTime"),
             )
             transaction: Final = build_autorouter_turn_transaction(
@@ -1393,6 +1487,9 @@ class DBSpendUpdateWriter:
             _metadata: Final = _litellm_params.get("metadata") or {}
             key_alias = _metadata.get("user_api_key_alias") or None
             user_agent: Final = _metadata.get("user_agent") or None
+            from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+            full_names: Final = logged_full_tool_names(_CALL_KWARG_VALUE.validate_python(kwargs or {}))
 
             def _enqueue(tool_name: str, origin: str = "user_defined") -> None:
                 self.tool_discovery_queue.add_update(
@@ -1423,8 +1520,8 @@ class DBSpendUpdateWriter:
                     continue
                 fn = tool_def.get("function") or {}
                 name = fn.get("name") if isinstance(fn, dict) else None
-                if name:
-                    _enqueue(name)
+                if isinstance(name, str) and name:
+                    _enqueue(full_names.get(name, name))
 
             # --- Tools from Anthropic /messages pass-through request body
             #     (Anthropic format: tools[].name, no "function" wrapper) ---
@@ -1440,9 +1537,7 @@ class DBSpendUpdateWriter:
                     _enqueue(name)
 
             # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
-
-            for tool_name in response_tool_call_names(completion_response):
+            for tool_name in response_tool_call_names(completion_response, full_names):
                 _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug("_enqueue_tool_registry_upsert error (non-blocking): %s", e)
@@ -2156,6 +2251,7 @@ class DBSpendUpdateWriter:
                         await DBSpendUpdateWriter._commit_window_spend_updates(
                             prisma_client=prisma_client,
                             window_spend_transactions=window_spend_update_transactions,
+                            proxy_logging_obj=proxy_logging_obj,
                         )
                     except Exception as e:
                         if not db_write_failure_is_requeue_safe(e):
@@ -2329,6 +2425,7 @@ class DBSpendUpdateWriter:
             await DBSpendUpdateWriter._commit_window_spend_updates(
                 prisma_client=prisma_client,
                 window_spend_transactions=window_spend_update_transactions,
+                proxy_logging_obj=proxy_logging_obj,
             )
         except Exception as e:  # noqa: BLE001  # the increments go back on the queue; the rest of the flush must run
             if db_write_failure_is_requeue_safe(e):
@@ -2414,6 +2511,7 @@ class DBSpendUpdateWriter:
     async def _commit_window_spend_updates(
         prisma_client: PrismaClient,
         window_spend_transactions: Sequence[WindowSpendTransaction],
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> None:
         """
         Commit per-budget-window spend increments to LiteLLM_BudgetWindowSpend.
@@ -2427,10 +2525,15 @@ class DBSpendUpdateWriter:
             commit_window_spend_updates,
         )
 
-        await commit_window_spend_updates(
+        committed: Final = await commit_window_spend_updates(
             prisma_client=prisma_client,
             transactions=window_spend_transactions,
+            capture_spend=proxy_logging_obj is not None and bool(CustomerBudgetAlerting.callbacks()),
         )
+        if proxy_logging_obj is not None:
+            await CustomerBudgetAlerting.detect_committed_windows(
+                committed, prisma_client, proxy_logging_obj.internal_usage_cache.dual_cache
+            )
 
     async def _drain_and_commit_daily_tag_spend_from_redis(
         self,
@@ -2529,7 +2632,9 @@ class DBSpendUpdateWriter:
                 for item in contributions:
                     if item.table == "LiteLLM_TeamMembership":
                         await user_api_key_cache.async_delete_cache(
-                            key=f"team_membership:{dict(item.key)['user_id']}:{dict(item.key)['team_id']}"
+                            key=AuthObject.team_membership_reservation(
+                                user_id=dict(item.key)["user_id"], team_id=dict(item.key)["team_id"]
+                            ).key
                         )
 
     async def apply_accounting_entities(
@@ -2748,8 +2853,9 @@ class DBSpendUpdateWriter:
                 if user_api_key_cache is not None:
                     with service_target(AUTH_OBJECTS_TARGET):
                         for user_id, team_id in team_memberships_to_invalidate:
-                            cache_key = f"team_membership:{user_id}:{team_id}"
-                            await user_api_key_cache.async_delete_cache(key=cache_key)
+                            await user_api_key_cache.async_delete_cache(
+                                key=AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key
+                            )
                             verbose_proxy_logger.debug(
                                 "Invalidated team membership cache for user_id=%s, team_id=%s", user_id, team_id
                             )
@@ -2943,7 +3049,7 @@ class DBSpendUpdateWriter:
                 tx.batch_() as batcher,
             ):
                 for entity_id, response_cost in sorted(transactions.items()):
-                    getattr(batcher, level.prisma_table).update_many(
+                    level.batch_table(batcher).update_many(
                         where=_customer_spend_where(level, entity_id),
                         data={"spend": {"increment": response_cost}},
                     )
@@ -2969,7 +3075,7 @@ class DBSpendUpdateWriter:
         if user_api_key_cache is None:
             return
         for project_id in project_ids:
-            await user_api_key_cache.async_delete_cache(key=project_cache_key(project_id))
+            await user_api_key_cache.async_delete_cache(key=AuthObject.project(project_id).key)
 
     @staticmethod
     async def _update_entity_spend_in_db(
@@ -3678,6 +3784,7 @@ class DBSpendUpdateWriter:
             "customer_member_id": member_id,
             "customer_team_id": team_id,
             "customer_org_id": org_id,
+            "app_group_id": customer_hierarchy.app_group_id or "",
         }
         attributed: Final[DailyCustomerMemberSpendTransaction] = (
             {**transaction, "app_id": customer_hierarchy.app_id} if customer_hierarchy.app_id else transaction

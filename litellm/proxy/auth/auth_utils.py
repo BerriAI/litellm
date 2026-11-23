@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     extract_nested_form_metadata,
     read_request_path_params,
     resolve_inference_model,
+    safe_get_request_parsed_body,
 )
 from litellm.proxy.pricing_currency import PRICING_CURRENCY_FIELD
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -113,6 +114,12 @@ def mark_invalid_virtual_key_error(exception: ProxyException, is_invalid_virtual
     )
     setattr(marked_exception, INVALID_VIRTUAL_KEY_ERROR_MARKER, True)
     return marked_exception
+
+
+def bearer_credential(authorization: str) -> str | None:
+    scheme, _, credential = authorization.partition(" ")
+    token: Final = credential.strip()
+    return token if scheme.lower() == "bearer" and token else None
 
 
 def get_request_ip_address(request: Request, use_x_forwarded_for: bool | None = False) -> str | None:
@@ -619,6 +626,7 @@ def _reject_secret_reference_in(params: Mapping[str, object]) -> None:
         )
 
 
+_BANNED_EXTRA_BODY_PARAMS: Final[tuple[str, ...]] = (*_BANNED_REQUEST_BODY_PARAMS, "fallbacks")
 _BANNED_METADATA_PARAMS: Final[tuple[str, ...]] = tuple(
     param for param in _BANNED_REQUEST_BODY_PARAMS if param not in _BANNED_PARAMS_ALLOWED_IN_METADATA
 )
@@ -1047,6 +1055,7 @@ def is_request_body_safe(
                 general_settings,
                 llm_router,
                 manages_deployments=manages_deployments,
+                banned_params=_BANNED_EXTRA_BODY_PARAMS if nested_key == "extra_body" else _BANNED_REQUEST_BODY_PARAMS,
                 opt_in_groups=opt_in_groups,
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
@@ -1088,6 +1097,16 @@ def is_request_body_safe(
                 defer_model_checks=defer_model_checks,
                 defer_s3_buckets=defer_s3_buckets,
             )
+            _check_banned_params(
+                _fallbacks_only(_coerce_metadata_to_dict(target.get("extra_body")) or {}),
+                general_settings,
+                llm_router,
+                manages_deployments=manages_deployments,
+                banned_params=("fallbacks",),
+                opt_in_groups=opt_in_groups,
+                defer_model_checks=defer_model_checks,
+                defer_s3_buckets=defer_s3_buckets,
+            )
             target_model = target.get("model")
             if isinstance(target_model, str):
                 _reject_url_valued_fallback_target(target_model)
@@ -1115,6 +1134,10 @@ def is_request_body_safe(
         reject_api_key_secret_reference(user_config_params)
         _reject_user_config_secret_references(user_config_params)
     return True
+
+
+def _fallbacks_only(extra_body: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in extra_body.items() if key == "fallbacks"})
 
 
 def _reject_user_config_secret_references(litellm_params: Mapping[str, object]) -> None:
@@ -1241,6 +1264,19 @@ def enforce_team_s3_bucket_allowlist(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"Authentication Error, {rejection}")
 
 
+def request_fields_for_body_check(request: Request, request_data: Mapping[str, object]) -> Mapping[str, object]:
+    """A user-defined pass-through forwards its query string verbatim to the admin-set target, so query-only
+    fields there are not client-side overrides. Without the parsed-body cache, provenance is unknown."""
+    if not request_dispatched_to_pass_through_endpoint(request):
+        return request_data
+    body: Final[Mapping[str, object] | None] = safe_get_request_parsed_body(request)
+    if body is None:
+        return request_data
+    return MappingProxyType(
+        {key: value for key, value in request_data.items() if key in body or key not in request.query_params}
+    )
+
+
 async def pre_db_read_auth_checks(
     request: Request,
     request_data: dict,
@@ -1271,7 +1307,7 @@ async def pre_db_read_auth_checks(
     )
     request.state.deferred_model_body_check = defer_model_checks  # rebind-ok: hand state to auth
     is_request_body_safe(
-        request_body=request_data,
+        request_body=request_fields_for_body_check(request, request_data),
         general_settings=general_settings,
         llm_router=llm_router,
         model=request_data.get("model") or _model_from_route_path(route) or "",
@@ -1708,10 +1744,9 @@ def get_key_model_rpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_rpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_rpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_rpm_limit
     if model_name is not None:
@@ -1740,10 +1775,9 @@ def get_key_model_tpm_limit(
         return key_own_limit
 
     # 3. Fallback to team metadata
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("model_tpm_limit")
-        if team_limit is not None:
-            return team_limit
+    team_limit: Final = get_team_model_tpm_limit(user_api_key_dict)
+    if team_limit is not None:
+        return team_limit
 
     # 4. Fallback to deployment default_api_key_tpm_limit
     if model_name is not None:
@@ -1929,6 +1963,7 @@ _ADMIN_ONLY_METADATA_KEYS: Final = (
     *ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     TEAM_S3_BUCKET_ALLOWLIST_METADATA_KEY,
     MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
 )
 _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -1937,6 +1972,9 @@ _ADMIN_ONLY_METADATA_REASONS: Final[Mapping[str, str]] = MappingProxyType(
         ),
         MODEL_LIMIT_MAX_BORROW_MULTIPLE_METADATA_KEY: (
             "It caps how far the holder borrows idle model capacity, so the holder cannot raise or remove it."
+        ),
+        REQUIRED_CUSTOMER_HEADERS_SETTING: (
+            "It requires customer identity headers, so the holder cannot remove the policy."
         ),
     }
 )
@@ -2074,12 +2112,7 @@ def get_key_mcp_rpm_limit(
         if result is not None:
             return result
 
-    if user_api_key_dict.team_metadata:
-        team_limit: Final = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
-        if team_limit is not None:
-            return team_limit
-
-    return None
+    return get_team_mcp_rpm_limit(user_api_key_dict)
 
 
 def get_team_mcp_rpm_limit(
@@ -2270,7 +2303,7 @@ def is_sso_provider_fully_configured() -> bool:
     return _is_google_ready() or _is_microsoft_ready() or _is_generic_oauth_ready() or _is_saml_ready()
 
 
-def get_customer_user_header_from_mapping(user_id_mapping) -> list | None:
+def get_customer_user_header_from_mapping(user_id_mapping: object) -> list | None:
     """Return the header_name mapped to CUSTOMER role, if any (dict-based)."""
     if not user_id_mapping:
         return None
@@ -2405,7 +2438,7 @@ def get_end_user_id_from_request_body(
         if user_id_str:
             return user_id_str
 
-    def _as_dict(value: object) -> dict:
+    def _as_dict(value: object) -> Mapping[str, object]:
         # metadata / litellm_metadata can arrive as JSON strings from
         # multipart/form-data or extra_body; coerce so string-encoded
         # payloads can't evade end-user attribution.
@@ -2477,6 +2510,7 @@ _MODEL_ROUTING_SESSION_MODEL_ROUTE_MARKERS: Final = (
     "/realtime/client_secrets",
     "/realtime/translations/client_secrets",
     "/realtime/calls",
+    "/live/sessions",
 )
 _MODEL_ROUTING_ID_FIELDS: Final = (
     "file_id",
@@ -2833,6 +2867,8 @@ def get_model_from_request(
     """
     if request_dispatched_to_pass_through_endpoint(request):
         return None
+    if route in LiteLLMRoutes.compliance_check_routes.value:
+        return None
 
     handler_request_data: Final = _MODEL_REQUEST_DATA.validate_python(request_data)
     handler_path_params: Final = read_request_path_params(request) if request is not None else path_params
@@ -2869,10 +2905,11 @@ def get_model_from_request(
     return model
 
 
-_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit"]
+_HandlerModelKind: TypeAlias = Literal["completion", "image_generation", "image_edit", "path"]
 _MODEL_REQUEST_DATA: Final = TypeAdapter(Mapping[str, object])
 _HANDLER_MODEL_ROUTES: Final[tuple[tuple[re.Pattern[str], str, _HandlerModelKind], ...]] = (
-    (re.compile(r"^(?:/v1beta)?/models/(.+):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):(?:generateContent|streamGenerateContent)$"), "model_name", "completion"),
+    (re.compile(r"^(?:/v1beta)?/models/(.*):countTokens$"), "model_name", "path"),
     (re.compile(r"^/openai/deployments/(.+)/images/generations$"), "model", "image_generation"),
     (re.compile(r"^/openai/deployments/(.+)/images/edits$"), "model", "image_edit"),
 )
@@ -2899,7 +2936,7 @@ def _handler_selected_model(
         path_model if isinstance(path_model, str) and path_model else route_model,
         kind=kind,
     )
-    return model if isinstance(model, str) and model else route_model
+    return model if isinstance(model, str) and model else route_model or None
 
 
 def _model_from_route_path(route: str) -> str | None:
@@ -2913,8 +2950,8 @@ def _model_from_route_path(route: str) -> str | None:
     if route.lower().startswith("/vertex"):
         vertex_model: Final = re.search(r"/models/([^:]+)", route)
         return vertex_model.group(1) if vertex_model else None
-    google_model: Final = re.search(r"/(?:v1beta|beta)/models/([^:]+):", route) or re.search(
-        r"^/models/([^:]+):", route
+    google_model: Final = re.search(r"/(?:v1beta|beta)/models/(.+):[A-Za-z]+$", route) or re.search(
+        r"^/models/(.+):[A-Za-z]+$", route
     )
     return google_model.group(1) if google_model else None
 

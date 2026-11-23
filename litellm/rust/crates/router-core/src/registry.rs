@@ -8,7 +8,7 @@ use std::{
 };
 
 use litellm_python_compat::{json, repr::float_repr, truthy::json_truthy};
-use litellm_router_types::{LitellmParams, Spelled};
+use litellm_router_types::{LitellmParams, RoutingGroupSpec, Spelled};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -36,17 +36,6 @@ pub struct DeploymentSpec {
     /// read from a config or an `apply`.
     #[serde(skip)]
     pub provider: Option<String>,
-}
-
-/// `routing_groups`: a named subset of model groups sharing a routing strategy.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct RoutingGroupSpec {
-    pub group_name: String,
-    pub models: Vec<String>,
-    pub routing_strategy: crate::config::RoutingStrategy,
-    /// A priority group's member priorities, served as each member's `order`.
-    #[serde(default)]
-    pub model_priorities: Option<BTreeMap<String, i64>>,
 }
 
 /// The `model_info` fields the router reads; every other key stays in [`Self::raw`].
@@ -211,6 +200,19 @@ impl Deployment {
         }
     }
 
+    /// The deployment's own `litellm_params.num_retries`, written as a count or as its digits.
+    /// A call to the deployment carries it, so it is the retry budget of a level whose first
+    /// attempt failed here, and of a stream this deployment served.
+    pub fn num_retries(&self) -> Option<u32> {
+        match self.raw_params.get("num_retries")? {
+            Value::Number(count) => count.as_u64().and_then(|count| u32::try_from(count).ok()),
+            Value::String(digits) if digits.chars().all(|digit| digit.is_ascii_digit()) => {
+                digits.parse().ok()
+            }
+            _ => None,
+        }
+    }
+
     /// `get_deployment_order`: `litellm_params.order`, else `model_info.order`, which is where a
     /// team model added through the API keeps it. Neither is validated as an int, so a bool, a
     /// whole float and a numeric string are read as the level they compare as.
@@ -240,16 +242,38 @@ impl Deployment {
         self.model_info.raw.get("mode").and_then(Value::as_str) == Some("batch")
     }
 
-    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
-    /// its `custom_llm_provider`, else its model's provider prefix.
-    pub(crate) fn cannot_run_batches(&self) -> bool {
+    fn is_azure(&self) -> bool {
         let provider = self.params.custom_llm_provider.as_deref().or_else(|| {
             self.params
                 .model
                 .split_once('/')
                 .map(|(provider, _)| provider)
         });
-        matches!(provider, Some("azure" | "azure_ai")) && !self.is_batch_capable()
+        matches!(provider, Some("azure" | "azure_ai"))
+    }
+
+    /// `_cannot_run_batches`: an Azure (or Azure AI) deployment not declared batch-capable, by
+    /// its `custom_llm_provider`, else its model's provider prefix.
+    pub(crate) fn cannot_run_batches(&self) -> bool {
+        self.is_azure() && !self.is_batch_capable()
+    }
+
+    pub(crate) fn serves_only_batches(&self) -> bool {
+        self.is_azure() && self.is_batch_capable()
+    }
+
+    /// Whether `peer` could take this deployment's place: on a batch or file call (`batch_call`)
+    /// any peer can, while on every other call a deployment serving only batches stands in only
+    /// for another deployment serving only batches.
+    pub(crate) fn shares_calls_with(&self, peer: &Deployment, batch_call: bool) -> bool {
+        batch_call || self.serves_only_batches() || !peer.serves_only_batches()
+    }
+
+    pub(crate) fn peers_in(&self, group: &[Arc<Deployment>], batch_call: bool) -> usize {
+        group
+            .iter()
+            .filter(|peer| self.shares_calls_with(peer, batch_call))
+            .count()
     }
 
     pub(crate) fn supports_web_search(&self) -> bool {
@@ -988,7 +1012,7 @@ impl Registry {
     pub fn resolve_routing_group_strategy(
         &self,
         group_name: &str,
-    ) -> Option<crate::config::RoutingStrategy> {
+    ) -> Option<litellm_router_types::RoutingStrategy> {
         self.routing_groups
             .iter()
             .find(|group| group.group_name == group_name)
@@ -1013,7 +1037,7 @@ impl Registry {
     }
 
     /// The group `model_group_alias` rewrites `name` to.
-    pub(crate) fn alias_of(&self, name: &str) -> Option<&str> {
+    pub fn alias_of(&self, name: &str) -> Option<&str> {
         self.aliases.get(name).map(String::as_str)
     }
 
@@ -1276,6 +1300,20 @@ mod tests {
             "model_name": model_name, "litellm_params": params, "model_info": info,
         }))
         .unwrap()
+    }
+
+    #[rstest]
+    #[case::a_count(json!({"model": "a/b", "num_retries": 2}), Some(2))]
+    #[case::digits(json!({"model": "a/b", "num_retries": "3"}), Some(3))]
+    #[case::unset(json!({"model": "a/b"}), None)]
+    #[case::digits_with_a_sign(json!({"model": "a/b", "num_retries": "+3"}), None)]
+    fn a_deployments_own_num_retries_is_a_count_or_its_digits(
+        #[case] params: Value,
+        #[case] expected: Option<u32>,
+    ) {
+        let deployment = Deployment::from_spec(spec("primary", params, json!({}))).unwrap();
+
+        assert_eq!(deployment.num_retries(), expected);
     }
 
     #[rstest]

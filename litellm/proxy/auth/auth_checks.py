@@ -58,6 +58,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -67,7 +69,6 @@ from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_ManagedVectorStoresTable,
     LiteLLM_ObjectPermissionTable,
-    LiteLLM_OrganizationMembershipTable,
     LiteLLM_OrganizationTable,
     LiteLLM_ProjectTableCachedObj,
     LiteLLM_TagTable,
@@ -75,7 +76,6 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
-    LiteLLM_VerificationTokenView,
     LiteLLMRoutes,
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -106,11 +106,13 @@ from litellm.proxy.auth.model_access_denied import (
     model_access_denied_client_message,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+from litellm.proxy.common_utils.budget_alerts import parse_budget_alert_recipients as _parse_email_list
+from litellm.proxy.common_utils.cache_invalidation_pubsub import (
     broadcast_evictions,
+    evict_and_broadcast,
     evict_local,
     evict_shared,
-    publish_auth_cache_invalidation,
+    publish_cache_invalidation,
 )
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.customer_usage import customer_usage_key_fields, customer_usage_requested
@@ -130,18 +132,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     NO_TEAM_MEMBERSHIP_SENTINEL,
     TAG_REGISTRY_OVERFLOW_SENTINEL,
     UserApiKeyCache,
-    budget_windows_absent_cache_key,
-    end_user_cache_key,
-    end_user_restricted_registry_cache_key,
     get_management_object_ttl,
-    model_access_group_cache_key,
-    model_access_group_registry_cache_key,
-    object_permission_cache_key,
-    project_cache_key,
-    tag_cache_key,
-    tag_registry_cache_key,
-    team_membership_auth_cache_key,
-    team_membership_reservation_cache_key,
 )
 from litellm.proxy.db.db_lookup_gate import bounded_db_lookup, db_lookup_gate
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
@@ -153,6 +144,7 @@ from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.carried_budget_state import carry_organization_budget_state
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     SPEND_COUNTERS_TARGET,
     end_user_counter,
@@ -186,12 +178,12 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.tag_repository import TagRepository
 from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.user_repository import NewUserDefaults, UserRepository, unstored_default_keys
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.router import Router
 from litellm.router_api import RegistryReader
-from litellm.rust_bridge._native import NativeDatabaseFailure, jwt_key_mapping_cache_key
+from litellm.rust_bridge._native import NativeDatabaseFailure
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
@@ -222,24 +214,10 @@ else:
     Span = Any
 
 
-class _PrismaModelDumpRow(Protocol):
-    def model_dump(self) -> Mapping[str, object]: ...
-
-
 class _PrismaVectorStoreRow(Protocol):
     def dict(self) -> Mapping[str, object]: ...
 
     def model_dump(self) -> Mapping[str, object]: ...
-
-    def __iter__(self) -> Iterator[tuple[str, object]]: ...
-
-
-class _PrismaUserRow(Protocol):
-    @property
-    def organization_memberships(self) -> Sequence[_PrismaModelDumpRow | None] | None: ...
-
-    @organization_memberships.setter
-    def organization_memberships(self, value: Sequence[_PrismaModelDumpRow] | None) -> None: ...
 
     def __iter__(self) -> Iterator[tuple[str, object]]: ...
 
@@ -322,10 +300,6 @@ def _vector_store_table(repo: _PrismaTableHolder[_PrismaVectorStoreRow]) -> _Pri
     return _DeadlineBoundedTable(repo.table, "vector_store")
 
 
-def _user_table(repo: _PrismaTableHolder[_PrismaUserRow]) -> _PrismaAuthTable[_PrismaUserRow]:
-    return _DeadlineBoundedTable(repo.table, "user")
-
-
 GrantLayer = Literal["key", "team", "user"]
 
 
@@ -351,14 +325,14 @@ def _member_allowed_models(membership: _TeamMembershipModelScope) -> Sequence[st
 
 
 class _RawCacheRead(Protocol):
-    async def async_get_cache(self, *, key: str, local_only: bool = ...) -> object: ...
+    async def async_get_cache(self, *, key: AuthObject, local_only: bool = ...) -> object: ...
 
 
 def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+def _typed_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return request_body
 
 
@@ -366,6 +340,7 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -389,6 +364,80 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
     return (
         team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
         is True
+    )
+
+
+def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
+    if not _metadata_is_mapping(scope):
+        return ()
+    return REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(
+        _TRACE_ID_METADATA_ADAPTER.validate_python(scope).get(REQUIRED_CUSTOMER_HEADERS_SETTING) or ()
+    )
+
+
+def _metadata_is_mapping(metadata: object) -> bool:
+    return isinstance(metadata, Mapping)
+
+
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
+
+
+def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
+
+
+def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ...]) -> str | None:
+    present: Final = frozenset(name.lower() for name, value in headers.items() if value.strip())
+    return next((header for header in required if header.lower() not in present), None)
+
+
+def _is_pass_through_route(route: str, request: Request | None) -> bool:
+    return RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+
+
+def _route_requires_customer_headers(route: str, request: Request | None) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route) or _is_pass_through_route(route, request)
+    ) and not RouteChecks.is_info_route(route)
+
+
+async def missing_required_customer_header(
+    request: Request | None,
+    route: str,
+    authenticated: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> str | None:
+    """The first header this route's required-customer-header policy needs that the request lacks, or None."""
+    from litellm.proxy import proxy_server
+
+    if not _route_requires_customer_headers(route, request):
+        return None
+    team: Final = (
+        await get_team_object(
+            team_id=authenticated.team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+        if authenticated.team_id is not None and authenticated.team_id != UI_TEAM_ID
+        else None
+    )
+    return _missing_customer_header(
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+        _required_customer_headers(
+            (
+                getattr(proxy_server, "general_settings", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
+            )
+        ),
     )
 
 
@@ -826,7 +875,9 @@ async def _run_project_checks(
         )
 
 
-def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
+def _enforce_user_param_check(
+    general_settings: Mapping[str, object], request: Request, request_body: Mapping[str, object], route: str
+) -> None:
     if not general_settings.get("enforce_user_param", False):
         return
 
@@ -842,7 +893,10 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
 
 def _reject_clientside_metadata_tags_check(
-    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+    general_settings: Mapping[str, object],
+    request_body: Mapping[str, object],
+    route: str,
+    request: Request | None = None,
 ) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
@@ -883,7 +937,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
             raise native.error()
 
 
-_GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
+_GUARDRAIL_MODIFICATION_KEYS: Final[tuple[str, ...]] = (
     "guardrails",
     "disable_global_guardrails",
     "disable_global_guardrail",
@@ -1262,7 +1316,7 @@ async def common_checks(
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
     global_proxy_spend: float | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
@@ -1473,10 +1527,7 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    pass_through_route: Final = RouteChecks.check_route_access(
-        route=route,
-        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
-    ) or request_dispatched_to_pass_through_endpoint(request)
+    pass_through_route: Final = _is_pass_through_route(route, request)
     headers_only: Final = (
         RouteChecks.check_route_access(
             route=route,
@@ -1524,6 +1575,33 @@ async def common_checks(
             type=ProxyErrorTypes.bad_request_error,
             param="trace_id",
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    required_customer_headers: Final = (
+        _required_customer_headers(
+            (
+                general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
+            )
+        )
+        if _route_requires_customer_headers(route, request)
+        else ()
+    )
+    missing_customer_header: Final = (
+        _missing_customer_header(
+            _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+            required_customer_headers,
+        )
+        if required_customer_headers
+        else None
+    )
+    if missing_customer_header is not None:
+        raise ProxyException(
+            message=f"Missing required customer header {missing_customer_header}",
+            type=ProxyErrorTypes.auth_error,
+            param=missing_customer_header,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     await can_agent_call_model(
@@ -1632,12 +1710,12 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            user_budget: Final = user_object.effective_max_budget()
+            if user_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
@@ -1679,6 +1757,7 @@ async def common_checks(
                     team_object=team_object,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    send_percentage_alerts=RouteChecks.runs_inference_checks(route=route),
                 ),
                 _team_multi_budget_check(team_object=team_object),
                 virtual_key_max_budget_check(
@@ -1928,7 +2007,7 @@ async def get_default_end_user_budget(
     if prisma_client is None or default_budget_id is None:
         return None
 
-    cache_key: Final = f"default_end_user_budget:{default_budget_id}"
+    cache_key: Final = AuthObject.default_end_user_budget(default_budget_id)
 
     # Check cache first
     cached_budget: Final = await user_api_key_cache.async_get_cache(
@@ -1994,7 +2073,7 @@ async def get_team_member_default_budget(
     if prisma_client is None:
         return None
 
-    cache_key: Final = f"team_member_default_budget:{budget_id}"
+    cache_key: Final = AuthObject.team_member_default_budget(budget_id)
 
     cached_budget: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
@@ -2032,8 +2111,11 @@ def resolve_effective_team_member_budget(
     member_budget: LiteLLM_BudgetTable | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
 ) -> float | None:
     if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
     if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
@@ -2180,7 +2262,7 @@ _MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK: Final = asyncio.Lock()
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cached_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     user_api_key_cache: UserApiKeyCache,
 ) -> frozenset[str] | None | _RegistryNotCached:
@@ -2196,7 +2278,7 @@ async def _cached_registry(
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_registry_answer(
-    cache_key: str,
+    cache_key: AuthObject,
     value: tuple[str, ...] | str,
     ttl: float,
     user_api_key_cache: UserApiKeyCache,
@@ -2205,11 +2287,11 @@ async def _cache_registry_answer(
     try:
         await user_api_key_cache.async_set_cache(key=cache_key, value=value, ttl=ttl)
     except Exception as e:  # noqa: BLE001  # best-effort cache write: auth must survive a cache backend error
-        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key, e)
+        verbose_proxy_logger.warning("Failed to cache registry %s: %s", cache_key.key, e)
 
 
 async def _fetch_and_cache_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     max_size: int,
     fetch_ids: Callable[[], Awaitable[tuple[str, ...]]],
@@ -2222,7 +2304,7 @@ async def _fetch_and_cache_registry(
         verbose_proxy_logger.warning(
             "Registry %s could not be loaded from the database, so per-id lookups will run and the "
             "registry query is suppressed for %ss: %s",
-            cache_key,
+            cache_key.key,
             REGISTRY_ERROR_NEGATIVE_CACHE_TTL,
             e,
         )
@@ -2253,7 +2335,7 @@ async def _fetch_and_cache_registry(
 
 
 async def _load_bounded_registry(
-    cache_key: str,
+    cache_key: AuthObject,
     overflow_sentinel: str,
     max_size: int,
     load_lock: asyncio.Lock,
@@ -2299,7 +2381,7 @@ async def _load_end_user_restricted_registry(
         )
 
     return await _load_bounded_registry(
-        cache_key=end_user_restricted_registry_cache_key(),
+        cache_key=AuthObject.end_user_restricted_registry(),
         overflow_sentinel=END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
         max_size=END_USER_RESTRICTED_REGISTRY_MAX_SIZE,
         load_lock=_END_USER_REGISTRY_LOAD_LOCK,
@@ -2379,7 +2461,7 @@ async def get_end_user_object(
     if end_user_id is None:
         return None
 
-    _key: Final = end_user_cache_key(end_user_id)
+    _key: Final = AuthObject.end_user(end_user_id)
 
     # Check cache first
     cached_user_obj: Final = await user_api_key_cache.async_get_cache(
@@ -2485,7 +2567,7 @@ async def resolve_and_validate_end_user_id(
         return raw_end_user_id
 
     has_default_budget: Final = bool(litellm.max_end_user_budget_id) or key_end_user_budget_id is not None
-    cache_key: Final = f"end_user_validation:{raw_end_user_id}"
+    cache_key: Final = AuthObject.end_user_validation(raw_end_user_id)
     cached: Final = await _raw_cache(user_api_key_cache).async_get_cache(key=cache_key)
     if cached == "valid":
         return raw_end_user_id
@@ -2564,7 +2646,7 @@ async def _load_tag_registry(
         )
 
     return await _load_bounded_registry(
-        cache_key=tag_registry_cache_key(),
+        cache_key=AuthObject.tag_registry(),
         overflow_sentinel=TAG_REGISTRY_OVERFLOW_SENTINEL,
         max_size=TAG_REGISTRY_MAX_SIZE,
         load_lock=_TAG_REGISTRY_LOAD_LOCK,
@@ -2580,10 +2662,13 @@ async def _load_model_access_group_registry(
     """The set of model access group names that have a row in ``LiteLLM_ModelAccessGroupBudgetTable``."""
 
     async def fetch_ids() -> tuple[str, ...]:
-        return await ModelAccessGroupBudgetRepository(prisma_client).names(MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1)
+        return await bounded_db_lookup(
+            ModelAccessGroupBudgetRepository(prisma_client).names(MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE + 1),
+            name="model_access_group_registry",
+        )
 
     return await _load_bounded_registry(
-        cache_key=model_access_group_registry_cache_key(),
+        cache_key=AuthObject.model_access_group_registry(),
         overflow_sentinel=MODEL_ACCESS_GROUP_REGISTRY_OVERFLOW_SENTINEL,
         max_size=MODEL_ACCESS_GROUP_REGISTRY_MAX_SIZE,
         load_lock=_MODEL_ACCESS_GROUP_REGISTRY_LOAD_LOCK,
@@ -2612,7 +2697,7 @@ async def _fetch_uncached_model_access_group_budgets(
         fetched: Final = tuple((budget.access_group_name, _model_access_group_budget(budget)) for budget in budgets)
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
-                key=model_access_group_cache_key(fetched_name),
+                key=AuthObject.model_access_group(fetched_name),
                 value=fetched_obj,
                 model_type=ModelAccessGroupBudget,
                 ttl=get_management_object_ttl(user_api_key_cache),
@@ -2656,7 +2741,7 @@ async def get_model_access_group_budgets_batch(
         (
             group,
             await user_api_key_cache.async_get_cache(
-                key=model_access_group_cache_key(group), model_type=ModelAccessGroupBudget
+                key=AuthObject.model_access_group(group), model_type=ModelAccessGroupBudget
             ),
         )
         for group in access_group_names
@@ -2696,7 +2781,7 @@ async def _fetch_uncached_tags(
         fetched: Final = tuple((tag.tag_name, tag) for tag in db_tags)
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
-                key=tag_cache_key(fetched_name),
+                key=AuthObject.tag(fetched_name),
                 value=fetched_obj,
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
@@ -2715,7 +2800,7 @@ async def _probe_and_fetch_tags(
     probed: Final = [
         (
             tag_name,
-            await user_api_key_cache.async_get_cache(key=tag_cache_key(tag_name), model_type=LiteLLM_TagTable),
+            await user_api_key_cache.async_get_cache(key=AuthObject.tag(tag_name), model_type=LiteLLM_TagTable),
         )
         for tag_name in tag_names
     ]
@@ -2843,7 +2928,7 @@ async def _fetch_team_membership_from_db(
         TeamMembershipRepository(prisma_client).find_with_budget(user_id, team_id, use_writer=use_writer),
         name="team_membership",
     )
-    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    _key: Final = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id)
     if membership is None:
         await user_api_key_cache.async_set_cache(
             key=_key,
@@ -2863,7 +2948,7 @@ async def _fetch_team_membership_from_db(
 async def _load_team_membership_on_cache_miss(
     user_id: str,
     team_id: str,
-    cache_key: str,
+    cache_key: AuthObject,
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
@@ -2903,7 +2988,7 @@ async def get_team_membership(
     if user_id is None or team_id is None:
         return None
 
-    _key: Final = team_membership_reservation_cache_key(user_id=user_id, team_id=team_id)
+    _key: Final = AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id)
 
     if check_db_only:
         if prisma_client is None:
@@ -3024,12 +3109,6 @@ def _email_fallback_links_any_user() -> bool:
     return str_to_bool(os.environ.get("LITELLM_EMAIL_FALLBACK_LINKS_ANY_USER")) is True
 
 
-async def _email_free_to_store(prisma_client: PrismaClient, user_email: str | None, user_id: str) -> str | None:
-    if user_email is None or await email_belongs_to_another_user(prisma_client, user_email, user_id):
-        return None
-    return user_email
-
-
 async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email: str, user_id: str) -> bool:
     if _email_fallback_links_any_user():
         return False
@@ -3060,7 +3139,7 @@ async def _backfill_null_user_email(
         return user_row
     updated_row: Final = user_row.model_copy(update={"user_email": stored_email})
     await user_api_key_cache.async_set_cache(
-        key=user_row.user_id,
+        key=AuthObject.user(user_row.user_id),
         value=updated_row,
         model_type=LiteLLM_UserTable,
         ttl=get_management_object_ttl(user_api_key_cache),
@@ -3094,7 +3173,7 @@ async def get_user_object(
     # check if in cache
     if not check_db_only:
         cached_user_obj: Final = await user_api_key_cache.async_get_cache(
-            key=user_id,
+            key=AuthObject.user(user_id),
             model_type=LiteLLM_UserTable,
         )
         if cached_user_obj is not None:
@@ -3138,51 +3217,43 @@ async def get_user_object(
             from litellm.proxy.management_helpers.utils import initial_budget_windows_json
 
             default_params: Final = _default_internal_user_params()
-            scalar_default_params: Final = {
-                key: value for key, value in default_params.items() if key not in ("teams", "available_teams")
-            }
-            new_user_email: Final = await _email_free_to_store(prisma_client, user_email, user_id)
-            new_user_params: Final[dict[str, Any]] = {
-                "user_id": user_id,
-                **({"user_email": new_user_email} if new_user_email is not None else {}),
-                **(
-                    {"sso_user_id": sso_user_id}
-                    if sso_user_id is not None and not _email_fallback_links_any_user()
-                    else {}
-                ),
-                **scalar_default_params,
-                **(
-                    {"budget_limits": initial_budget_windows_json(scalar_default_params["budget_limits"])}
-                    if "budget_limits" in scalar_default_params
-                    else {}
-                ),
-            }
-            if new_user_params.get("budget_duration") is not None and new_user_params.get("budget_reset_at") is None:
-                new_user_params["budget_reset_at"] = get_budget_reset_time(
-                    budget_duration=new_user_params["budget_duration"]
+            defaults: Final = NewUserDefaults.model_validate(default_params)
+            unstored: Final = unstored_default_keys(default_params)
+            if unstored:
+                verbose_proxy_logger.warning(
+                    "default_internal_user_params keys not stored on a user created at sign-in: %s",
+                    ", ".join(unstored),
                 )
-
-            response = await _user_table(UserRepository(prisma_client, use_writer=bool(check_db_only))).create(
-                data=new_user_params,
-                include={"organization_memberships": True},
+            inserted: Final = await UserRepository(prisma_client).insert_for_auth(
+                user_id,
+                sso_user_id=sso_user_id,
+                user_email=user_email,
+                links_any_user=_email_fallback_links_any_user(),
+                defaults=defaults,
+                budget_reset_at=(
+                    None
+                    if defaults.budget_duration is None
+                    else get_budget_reset_time(budget_duration=defaults.budget_duration)
+                ),
+                budget_limits_json=(
+                    initial_budget_windows_json(default_params["budget_limits"])
+                    if "budget_limits" in default_params
+                    else None
+                ),
             )
+            if inserted.user is None:
+                raise UserNotFoundError(user_id=user_id)
 
-            default_teams: Final = check_if_default_team_set()
+            default_teams: Final = check_if_default_team_set() if inserted.created else None
             if default_teams:
                 await add_new_user_to_default_team(
                     user_id=user_id,
-                    user_email=new_user_email,
+                    user_email=inserted.user.user_email,
                     user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
                     teams=default_teams,
                     prisma_client=prisma_client,
                 )
-            if response.organization_memberships is not None and len(response.organization_memberships) > 0:
-                response.organization_memberships = [
-                    LiteLLM_OrganizationMembershipTable.model_validate(membership.model_dump())
-                    for membership in response.organization_memberships
-                    if membership is not None
-                ]
-            _response = LiteLLM_UserTable.model_validate(dict(response))
+            _response = inserted.user
         elif _response is None:
             if should_check_db:
                 _update_last_db_access_time(
@@ -3202,7 +3273,7 @@ async def get_user_object(
 
         # save the user object to cache
         await user_api_key_cache.async_set_cache(
-            key=user_id,
+            key=AuthObject.user(user_id),
             value=_response,
             model_type=LiteLLM_UserTable,
             ttl=get_management_object_ttl(user_api_key_cache),
@@ -3233,7 +3304,7 @@ def _user_read_failure(user_id: str, error: Exception) -> Exception:
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _cache_management_object(
-    key: str,
+    key: AuthObject,
     value: BaseModel | Mapping[str, object],
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
@@ -3263,13 +3334,13 @@ async def cache_team_object(
     ## CACHE REFRESH TIME!
     team_table.last_refreshed_at = time.time()
 
-    key: Final = f"team_id:{team_id}"
+    key: Final = AuthObject.team(team_id)
     usage_cache: Final = None if proxy_logging_obj is None else proxy_logging_obj.internal_usage_cache.dual_cache
     # On a shared Redis the write below replaces the team entry and the alias DEL below removes the alias entry
     # for both caches, so the usage cache only has its own memory to clear.
     redis_shared: Final = usage_cache is not None and usage_cache.redis_cache is user_api_key_cache.redis_connection
 
-    await _invalidate_usage_cache_entry(usage_cache, key, redis_shared=redis_shared, stale="team object")
+    await _invalidate_usage_cache_entry(usage_cache, key.key, redis_shared=redis_shared, stale="team object")
 
     # team_id is the table primary key — guaranteed unique, safe to write.
     await _cache_management_object(
@@ -3294,7 +3365,7 @@ async def cache_team_object(
     # uniqueness (len(teams) > 1 raises HTTPException) before populating
     # the cache from a verified single row.
     if team_table.team_alias:
-        alias_key: Final = f"team_alias:{team_table.team_alias}"
+        alias_key: Final = AuthObject.team_alias(team_table.team_alias).key
         try:
             pipelined_delete: Final = user_api_key_cache.declare_delete(alias_key)
             if pipelined_delete is None:
@@ -3342,7 +3413,7 @@ async def await_inflight_team_membership_load(user_id: str, team_id: str) -> Non
     """Wait for a membership load already reading the DB, so a load that read the row before a
     write committed cannot re-cache the old row after the write's eviction."""
     inflight: Final[object] = _team_membership_inflight.pop(
-        team_membership_reservation_cache_key(user_id=user_id, team_id=team_id), None
+        AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id), None
     )
     if isinstance(inflight, asyncio.Task) and inflight is not asyncio.current_task():
         await asyncio.wait((inflight,))
@@ -3400,9 +3471,9 @@ async def invalidate_team_member_spend_state(
     first, so returning success would leave the old value authoritative for
     every worker despite the DB write having committed.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
-        publish_auth_cache_invalidation,
+        publish_cache_invalidation,
     )
 
     await await_inflight_team_membership_load(user_id=user_id, team_id=team_id)
@@ -3448,8 +3519,8 @@ async def invalidate_team_member_spend_state(
             value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
         )
-        await publish_auth_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
-        await publish_auth_cache_invalidation(
+        await publish_cache_invalidation(cache_key=spend_counter_key, new_value=new_spend, ttl=60)
+        await publish_cache_invalidation(
             cache_key=spend_db_floor_key,
             new_value=new_spend,
             ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
@@ -3457,8 +3528,8 @@ async def invalidate_team_member_spend_state(
 
     await evict_and_broadcast(
         cache_keys=(
-            team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
-            team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+            AuthObject.team_membership(team_id=team_id, user_id=user_id).key,
+            AuthObject.team_membership_reservation(user_id=user_id, team_id=team_id).key,
         ),
         user_api_key_cache=user_api_key_cache,
     )
@@ -3484,7 +3555,11 @@ async def delete_cache_team_object(
     rows are already gone, so letting an unreachable cache backend raise here would fail a request
     whose delete has committed.
     """
-    keys: Final = (f"team_id:{team_id}", *((f"team_alias:{team_alias}",) if team_alias else ()))
+    keys: Final = (
+        AuthObject.team(team_id).key,
+        *((AuthObject.team_alias(team_alias).key,) if team_alias else ()),
+        AuthObject.customer_app("team", team_id).key,
+    )
 
     for key in keys:
         try:
@@ -3500,7 +3575,7 @@ async def delete_cache_team_object(
                 key,
                 e,
             )
-        await publish_auth_cache_invalidation(cache_key=key)
+        await publish_cache_invalidation(cache_key=key)
 
 
 async def cache_key_object(
@@ -3509,7 +3584,7 @@ async def cache_key_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    key: Final = hashed_token
+    key: Final = AuthObject.virtual_key(hashed_token)
 
     ## CACHE REFRESH TIME
     user_api_key_obj.last_refreshed_at = time.time()
@@ -3562,21 +3637,20 @@ async def delete_cache_key_object(
             e,
         )
 
-    await publish_auth_cache_invalidation(cache_key=key)
-    await evict_budget_windows_absent_marker(
-        entity_type=Litellm_EntityType.KEY, entity_id=hashed_token, user_api_key_cache=user_api_key_cache
-    )
+    await publish_cache_invalidation(cache_key=key)
+    await evict_and_broadcast((AuthObject.customer_app_key_resource(hashed_token).key,), user_api_key_cache)
+    await evict_budget_windows_absent_marker(entity_type=Litellm_EntityType.KEY, entity_id=hashed_token)
 
 
 _delete_cache_key_object: Final = delete_cache_key_object
 
 
-async def evict_budget_windows_absent_marker(
-    entity_type: Litellm_EntityType, entity_id: str, user_api_key_cache: UserApiKeyCache
-) -> None:
+async def evict_budget_windows_absent_marker(entity_type: Litellm_EntityType, entity_id: str) -> None:
+    from litellm.proxy.proxy_server import budget_windows_absent_cache, budget_windows_absent_cache_key
+
     marker: Final = budget_windows_absent_cache_key(entity_type.value, entity_id)
-    evict_local(cache_keys=(marker,), user_api_key_cache=user_api_key_cache)
-    await publish_auth_cache_invalidation(cache_key=marker)
+    budget_windows_absent_cache.delete_cache(marker)
+    await publish_cache_invalidation(cache_key=marker)
 
 
 async def delete_cache_key_objects(
@@ -3600,14 +3674,15 @@ async def delete_cache_key_objects(
     an auth refill source, so its batch delete runs beside that chain and a hung Redis costs one
     bounded wait there instead of another in line.
     """
-    evict_local(cache_keys=hashed_tokens, user_api_key_cache=user_api_key_cache)
+    keys: Final = (*hashed_tokens, *(AuthObject.customer_app_key_resource(token).key for token in hashed_tokens))
+    evict_local(cache_keys=keys, user_api_key_cache=user_api_key_cache)
     usage_eviction: Final = (
         ()
         if proxy_logging_obj is None
         else (evict_shared(cache_keys=hashed_tokens, cache=proxy_logging_obj.internal_usage_cache.dual_cache),)
     )
     _ = await asyncio.gather(
-        _evict_auth_cache_then_broadcast(hashed_tokens=hashed_tokens, user_api_key_cache=user_api_key_cache),
+        _evict_auth_cache_then_broadcast(hashed_tokens=keys, user_api_key_cache=user_api_key_cache),
         *usage_eviction,
     )
 
@@ -3651,11 +3726,24 @@ class AccessGroupNotFoundError(HTTPException):
         )
 
 
+async def _find_team_retrying_a_lost_connection(
+    team_id: str, prisma_client: PrismaClient, *, use_writer: bool
+) -> LiteLLM_TeamTableCachedObj | None:
+    teams: Final = TeamRepository(prisma_client)
+    try:
+        return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+    except NativeDatabaseFailure as error:
+        if error.kind != "unreachable":
+            raise
+        verbose_proxy_logger.warning("Team read lost its database connection, retrying once: %s", error)
+    return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+
+
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> LiteLLM_TeamTableCachedObj | None:
     response: LiteLLM_TeamTableCachedObj | None = await bounded_db_lookup(
-        TeamRepository(prisma_client).find_with_model_aliases(team_id, use_writer=use_writer), name="team"
+        _find_team_retrying_a_lost_connection(team_id, prisma_client, use_writer=use_writer), name="team"
     )
 
     if response is None and team_id_upsert:
@@ -3749,13 +3837,12 @@ async def _get_team_object_from_user_api_key_cache(
 
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def get_team_object_from_cache(
-    key: str,
+    key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
 ) -> LiteLLM_TeamTableCachedObj | None:
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
-        parent_otel_span=parent_otel_span,
         model_type=LiteLLM_TeamTableCachedObj,
     )
     return decoded
@@ -3783,7 +3870,7 @@ async def read_team(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = f"team_id:{team_id}"
+    key: Final = AuthObject.team(team_id)
 
     if not check_db_only:
         cached_team_obj: Final = await get_team_object_from_cache(
@@ -3810,7 +3897,7 @@ async def read_team(
             proxy_logging_obj=proxy_logging_obj,
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
-            key=key,
+            key=key.key,
             team_id_upsert=team_id_upsert,
             use_writer=bool(check_db_only),
         )
@@ -3863,7 +3950,7 @@ async def cache_access_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> None:
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id)
     await user_api_key_cache.async_set_cache(
         key=key,
         value=access_group_table,
@@ -3881,7 +3968,7 @@ async def delete_cache_access_object(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging | None = None,
 ) -> None:
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id).key
 
     user_api_key_cache.delete_cache(key=key)
 
@@ -3914,7 +4001,7 @@ async def get_access_object(
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
-    key: Final = f"access_group_id:{access_group_id}"
+    key: Final = AuthObject.access_group(access_group_id)
 
     cached_access_obj: Final = (
         None
@@ -3988,7 +4075,7 @@ async def get_team_object_by_alias(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # Check cache first (keyed by alias)
-    cache_key: Final = f"team_alias:{team_alias}"
+    cache_key: Final = AuthObject.team_alias(team_alias)
 
     cached_team_obj: Final = await get_team_object_from_cache(
         key=cache_key,
@@ -4049,7 +4136,7 @@ async def get_team_object_by_alias(
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by team_id for consistency
-        team_id_cache_key: Final = f"team_id:{team_obj.team_id}"
+        team_id_cache_key: Final = AuthObject.team(team_obj.team_id)
         await user_api_key_cache.async_set_cache(
             key=team_id_cache_key,
             value=team_obj,
@@ -4097,7 +4184,7 @@ async def get_org_object_by_alias(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # Check cache first (keyed by alias)
-    cache_key: Final = f"org_alias:{org_alias}"
+    cache_key: Final = AuthObject.org_alias(org_alias)
     cached_org_obj: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_OrganizationTable,
@@ -4137,12 +4224,13 @@ async def get_org_object_by_alias(
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
         # Also cache by org_id for consistency
-        await user_api_key_cache.async_set_cache(
-            key=f"org_id:{org_obj.organization_id}",
-            value=org_obj,
-            model_type=LiteLLM_OrganizationTable,
-            ttl=DEFAULT_IN_MEMORY_TTL,
-        )
+        if org_obj.organization_id is not None:
+            await user_api_key_cache.async_set_cache(
+                key=AuthObject.org(org_obj.organization_id),
+                value=org_obj,
+                model_type=LiteLLM_OrganizationTable,
+                ttl=DEFAULT_IN_MEMORY_TTL,
+            )
 
         return org_obj
 
@@ -4286,33 +4374,76 @@ class ExperimentalUIJWTToken:
             raise Exception(f"Invalid hash key. Hash key={hashed_token}. Decrypted token={decrypted_token}. Error: {e}")
 
 
-async def fetch_key_object_from_db_with_reconnect(
+async def load_key_object(
     hashed_token: str,
     prisma_client: PrismaClient,
     parent_otel_span: Span | None,
     proxy_logging_obj: ProxyLogging | None,
     deadline_seconds: float | None = None,
     *,
+    user_api_key_cache: UserApiKeyCache,
     check_db_only: bool = False,
-) -> LiteLLM_VerificationTokenView | None:
+) -> UserAPIKeyAuth | None:
     """
-    The key's ``combined_view`` row from the Rust key store, which also resolves a hash rotated away from a key
-    within its grace period. The gate wait and the read share one deadline, so a stalled database fails the
-    request with ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer.
+    The key from the Rust key repository, which also resolves a hash rotated away from a key within its grace
+    period, with the object permission it points at nested, cached as ``cache_key_object`` caches it.
+
+    The gate wait and the read share one deadline, so a stalled database fails the request with
+    ``DBLookupDeadlineExceeded`` instead of parking it. ``check_db_only`` reads the writer and leaves the cache
+    as it is.
     """
-    return await bounded_db_lookup(
-        _fetch_key_view(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
+    found: Final = await bounded_db_lookup(
+        _fetch_key(hashed_token, prisma_client, proxy_logging_obj, use_writer=check_db_only),
         name="key",
         deadline_seconds=deadline_seconds,
     )
+    if found is None:
+        return None
+    key: Final = UserAPIKeyAuth.model_validate(
+        dict(
+            await _with_object_permission(
+                found, prisma_client, proxy_logging_obj, user_api_key_cache, check_db_only=check_db_only
+            )
+        )
+    )
+    if not check_db_only:
+        await cache_key_object(
+            hashed_token=hashed_token,
+            user_api_key_obj=key,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    return key
 
 
-_fetch_key_object_from_db_with_reconnect: Final = fetch_key_object_from_db_with_reconnect
+async def _with_object_permission(
+    key: Mapping[str, object],
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging | None,
+    user_api_key_cache: UserApiKeyCache,
+    *,
+    check_db_only: bool,
+) -> Mapping[str, object]:
+    """``key`` with the object permission it points at nested. The permission is read under its own deadline, after
+    the key's. ``get_object_permission`` answers None for a permission table that stalls or a row its model refuses,
+    which leaves a key the database answered for without it. A writer read must see the permission, so there it
+    raises instead and fails the read."""
+    object_permission_id: Final = key.get("object_permission_id")
+    if not isinstance(object_permission_id, str) or not object_permission_id:
+        return key
+    permission: Final = await get_object_permission(
+        object_permission_id=object_permission_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        check_db_only=check_db_only,
+    )
+    return key if permission is None else {**key, "object_permission": permission.model_dump(mode="json")}
 
 
-async def _fetch_key_view(
+async def _fetch_key(
     hashed_token: str, prisma_client: PrismaClient, proxy_logging_obj: ProxyLogging | None, *, use_writer: bool
-) -> LiteLLM_VerificationTokenView | None:
+) -> Mapping[str, object] | None:
     async with db_lookup_gate.current():
         try:
             return await VerificationTokenRepository(prisma_client).find_for_auth(hashed_token, use_writer=use_writer)
@@ -4343,7 +4474,8 @@ async def get_jwt_key_mapping_cache_keys_for_tokens(
         JWTKeyMappingRepository(prisma_client).mapped_claims(hashed_tokens), name="jwt_key_mapping"
     )
     return tuple(
-        jwt_key_mapping_cache_key(claim.jwt_claim_name, claim.jwt_claim_value, claim.jwt_issuer) for claim in claims
+        AuthObject.jwt_key_mapping(claim.jwt_claim_name, claim.jwt_claim_value, claim.jwt_issuer).key
+        for claim in claims
     )
 
 
@@ -4389,7 +4521,7 @@ async def get_key_object(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = hashed_token
+    key: Final = AuthObject.virtual_key(hashed_token)
 
     # Same flow as before: use cache only when we have a hit we can turn into UserAPIKeyAuth
     # (dict from Redis / model_dump, or UserAPIKeyAuth from in-memory). Otherwise fall through to DB.
@@ -4400,57 +4532,25 @@ async def get_key_object(
         return copy_user_api_key_auth_for_cache(user_api_key_obj=user_api_key_auth)
 
     if check_cache_only:
-        raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={key}.")
+        raise Exception(f"Key doesn't exist in cache + check_cache_only=True. key={hashed_token}.")
 
-    # else, check db
-    _valid_token: Final[BaseModel | None] = await fetch_key_object_from_db_with_reconnect(
+    # else, read the database, which caches the key it finds
+    _response: Final = await load_key_object(
         hashed_token=hashed_token,
         prisma_client=prisma_client,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
+        user_api_key_cache=user_api_key_cache,
         check_db_only=check_db_only,
     )
 
-    if _valid_token is None:
+    if _response is None:
         raise ProxyException(
             message=INVALID_API_KEY_ERROR_MESSAGE,
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,
         )
-
-    _response: Final = UserAPIKeyAuth.model_validate(_valid_token.model_dump(exclude_none=True))
-
-    # Load object_permission if object_permission_id exists but object_permission is not loaded
-    if _response.object_permission_id and (check_db_only or not _response.object_permission):
-        try:
-            _response.object_permission = await get_object_permission(
-                object_permission_id=_response.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                check_db_only=check_db_only,
-            )
-        except Exception as e:
-            if check_db_only:
-                raise
-            verbose_proxy_logger.debug(
-                "Failed to load object_permission for key with object_permission_id=%s: %s",
-                _response.object_permission_id,
-                e,
-            )
-
-    if check_db_only:
-        return _response
-
-    # save the key object to cache
-    await cache_key_object(
-        hashed_token=hashed_token,
-        user_api_key_obj=_response,
-        user_api_key_cache=user_api_key_cache,
-        proxy_logging_obj=proxy_logging_obj,
-    )
 
     return _response
 
@@ -4487,7 +4587,7 @@ async def get_object_permission(
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
 
     # check if in cache
-    key: Final = object_permission_cache_key(object_permission_id)
+    key: Final = AuthObject.object_permission(object_permission_id)
     deserialized_perm: Final = (
         None
         if check_db_only
@@ -4550,9 +4650,8 @@ async def get_managed_vector_store_rows_by_uuids(
     cache_misses: Final[list[str]] = []
 
     for uuid in uuids:
-        key = f"managed_vector_store_id:{uuid}"
         deserialized_vs = await user_api_key_cache.async_get_cache(
-            key=key,
+            key=AuthObject.managed_vector_store(uuid),
             model_type=LiteLLM_ManagedVectorStoresTable,
         )
         if deserialized_vs is not None:
@@ -4575,9 +4674,8 @@ async def get_managed_vector_store_rows_by_uuids(
         if not row_dict:
             continue
         cached_obj = LiteLLM_ManagedVectorStoresTable.model_validate(row_dict)
-        key = f"managed_vector_store_id:{cached_obj.vector_store_id}"
         await user_api_key_cache.async_set_cache(
-            key=key,
+            key=AuthObject.managed_vector_store(cached_obj.vector_store_id),
             value=cached_obj,
             model_type=LiteLLM_ManagedVectorStoresTable,
             ttl=get_management_object_ttl(user_api_key_cache),
@@ -4624,9 +4722,7 @@ async def get_org_object(
         return None
 
     # Use different cache key if budget table is included
-    cache_key = f"org_id:{org_id}"
-    if include_budget_table:
-        cache_key = f"org_id:{org_id}:with_budget"
+    cache_key: Final = AuthObject.org_with_budget(org_id) if include_budget_table else AuthObject.org(org_id)
 
     # check if in cache
     deserialized_org: Final = await user_api_key_cache.async_get_cache(
@@ -4657,15 +4753,11 @@ async def get_org_object(
     return _org_obj
 
 
-def _last_known_org_cache_key(org_id: str) -> str:
-    return f"org_id:{org_id}:with_budget:last_known"
-
-
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _keep_last_known_org(
     org: LiteLLM_OrganizationTable, org_id: str, user_api_key_cache: UserApiKeyCache
 ) -> None:
-    cache_key: Final = _last_known_org_cache_key(org_id)
+    cache_key: Final = AuthObject.org_with_budget_last_known(org_id)
     held_locally: Final = await user_api_key_cache.async_get_cache(
         key=cache_key, local_only=True, model_type=LiteLLM_OrganizationTable
     )
@@ -4703,7 +4795,7 @@ async def get_org_object_for_request(
             verbose_proxy_logger.debug("org lookup failed, continuing without org limits", exc_info=True)
             return None
         last_known_org: Final = await user_api_key_cache.async_get_cache(
-            key=_last_known_org_cache_key(org_id),
+            key=AuthObject.org_with_budget_last_known(org_id),
             model_type=LiteLLM_OrganizationTable,
         )
         if last_known_org is not None:
@@ -7113,15 +7205,6 @@ async def virtual_key_soft_budget_check(
 _virtual_key_soft_budget_check: Final = virtual_key_soft_budget_check
 
 
-def _parse_email_list(raw: str | Sequence[object] | None) -> list[str]:
-    """Parse emails from a list or comma-separated string."""
-    if isinstance(raw, list):
-        return [e.strip() for e in raw if isinstance(e, str) and e.strip()]
-    elif isinstance(raw, str):
-        return [e.strip() for e in raw.split(",") if e.strip()]
-    return []
-
-
 def _normalize_alert_emails(
     cfg: Mapping[str, str | Sequence[object] | None] | None,
 ) -> dict[str, list[str]]:
@@ -7244,13 +7327,12 @@ _TEAM_MEMBER_ALERT_CONFIG_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = Ty
 
 
 def _is_valid_alert_threshold_pct(pct: str) -> bool:
-    return pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
+    return pct.isascii() and pct.isdigit() and len(pct) <= 3 and 1 <= int(pct) <= 100
 
 
 def _alert_recipients(raw: object) -> Sequence[str] | None:
-    if isinstance(raw, (str, Sequence)):
-        return _parse_email_list(raw)
-    return None
+    emails: Final = _parse_email_list(raw)
+    return emails if isinstance(raw, (str, Sequence)) else None
 
 
 def _valid_alert_threshold_config(raw_config: object) -> Mapping[str, str | Sequence[object] | None] | None:
@@ -7292,6 +7374,74 @@ def team_member_max_budget_alert_check(
         organization_id=organization_id,
         user_email=user_email,
         event_group=Litellm_EntityType.TEAM_MEMBER,
+        max_budget_alert_emails=alert_email_config,
+    )
+    asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
+
+
+TEAM_MAX_BUDGET_ALERT_EMAILS_KEY: Final = "max_budget_alert_emails"
+_TEAM_ALERT_CONFIG_WRITE_ADAPTER: Final[TypeAdapter[Mapping[str, str | Sequence[str]]]] = TypeAdapter(
+    Mapping[str, str | Sequence[str]]
+)
+
+
+def _team_alert_threshold_error(pct: str, recipients: str | Sequence[str]) -> str | None:
+    if not (_is_valid_alert_threshold_pct(pct) and str(int(pct)) == pct):
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct!r} must be a whole number from 1 to 100"
+    emails: Final = _parse_email_list(recipients)
+    if not emails:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} threshold {pct} needs at least one recipient email"
+    return None
+
+
+def team_max_budget_alert_emails_error(raw_config: object, max_budget: float | None) -> str | None:
+    if raw_config is None:
+        return None
+    try:
+        config: Final = _TEAM_ALERT_CONFIG_WRITE_ADAPTER.validate_python(raw_config)
+    except ValidationError:
+        return (
+            f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} must map a whole-number percentage (1 to 100) "
+            "to a list of recipient emails"
+        )
+    if not config:
+        return None
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return f"{TEAM_MAX_BUDGET_ALERT_EMAILS_KEY} requires the team max_budget to be a positive number"
+    return next(
+        (error for pct, recipients in config.items() if (error := _team_alert_threshold_error(pct, recipients))),
+        None,
+    )
+
+
+def team_max_budget_alert_check(
+    team_id: str | None,
+    team_alias: str | None,
+    team_metadata: Mapping[str, object] | None,
+    max_budget: float | None,
+    proxy_logging_obj: ProxyLogging,
+    spend: float,
+) -> None:
+    if max_budget is None or not math.isfinite(max_budget) or max_budget <= 0:
+        return
+    if spend <= 0:
+        return
+    alert_email_config: Final = _merge_budget_alert_email_configs(
+        global_cfg=None,
+        per_key_cfg=_valid_alert_threshold_config(
+            team_metadata.get(TEAM_MAX_BUDGET_ALERT_EMAILS_KEY) if team_metadata else None
+        ),
+    )
+    if not alert_email_config:
+        return
+    if spend < max_budget * (min(int(pct) for pct in alert_email_config) / 100.0):
+        return
+    call_info: Final = CallInfo(
+        spend=spend,
+        max_budget=max_budget,
+        team_id=team_id,
+        team_alias=team_alias,
+        event_group=Litellm_EntityType.TEAM,
         max_budget_alert_emails=alert_email_config,
     )
     asyncio.create_task(proxy_logging_obj.budget_alerts(type="max_budget_alert", user_info=call_info))
@@ -7367,6 +7517,7 @@ async def _check_team_member_budget(
             member_budget=member_budget_row,
             team_default_budget=team_default_budget,
             now=now,
+            membership=loaded_membership,
         )
 
         if team_member_budget is not None:
@@ -7481,6 +7632,8 @@ async def team_max_budget_check(
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     proxy_logging_obj: ProxyLogging,
+    *,
+    send_percentage_alerts: bool = False,
 ) -> None:
     """
     Check if the team is over it's max budget.
@@ -7498,6 +7651,16 @@ async def team_max_budget_check(
             fallback_spend=team_object.spend or 0.0,
             max_budget=team_object.max_budget,
         )
+
+        if send_percentage_alerts:
+            team_max_budget_alert_check(
+                team_id=team_object.team_id,
+                team_alias=team_object.team_alias,
+                team_metadata=team_object.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_TeamTable.metadata is a bare dict
+                max_budget=team_object.max_budget,
+                proxy_logging_obj=proxy_logging_obj,
+                spend=spend,
+            )
 
         native: Final = _native_budget_decision(
             {
@@ -7796,7 +7959,7 @@ async def get_project_object(
         return None
 
     # Check cache first
-    cache_key: Final = project_cache_key(project_id)
+    cache_key: Final = AuthObject.project(project_id)
     deserialized_project: Final = await user_api_key_cache.async_get_cache(
         key=cache_key,
         model_type=LiteLLM_ProjectTableCachedObj,
@@ -7834,10 +7997,10 @@ async def delete_cached_project_object(
     Every endpoint that mutates litellm_projecttable must call this, or a stale project (e.g. a
     pre-update empty model allowlist) keeps being enforced until the TTL expires (LIT-3803).
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
     await evict_and_broadcast(
-        cache_keys=(project_cache_key(project_id),),
+        cache_keys=(AuthObject.project(project_id).key, AuthObject.customer_app("project", project_id).key),
         user_api_key_cache=user_api_key_cache,
     )
 
@@ -7942,7 +8105,7 @@ _organization_max_budget_check: Final = organization_max_budget_check
 
 
 async def _tag_max_budget_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -8489,7 +8652,7 @@ async def _cached_object_permission(
 
 
 async def vector_store_access_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,

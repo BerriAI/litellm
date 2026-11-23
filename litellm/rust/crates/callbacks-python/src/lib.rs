@@ -16,6 +16,8 @@ use serde_json::Value;
 mod hosted;
 pub mod payload;
 
+pub use hosted::{host_call_error, run_hosted};
+
 #[pyclass(frozen, name = "RustCallback")]
 pub struct RustCallback {
     callback: Arc<dyn ErasedCallback>,
@@ -133,6 +135,19 @@ impl RustCallback {
         })
     }
 
+    fn flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let callback = Arc::clone(&self.callback);
+        let render_loop = payload::running_loop(py);
+        run_async_value(py, async move {
+            payload::on_render_loop(
+                render_loop,
+                AssertUnwindSafe(async move { callback.flush().await }).catch_unwind(),
+            )
+            .await
+            .map_err(panic_error)
+        })
+    }
+
     #[pyo3(signature = (hook, fields, call, state, host, /))]
     fn start<'py>(
         &self,
@@ -149,13 +164,7 @@ impl RustCallback {
             .then(|| payload::running_loop(py))
             .flatten();
         Ok(Execution::new(
-            hosted::HostedExecution::new(
-                Arc::clone(&self.callback),
-                input,
-                state,
-                render_loop,
-                host,
-            ),
+            hosted::callback_execution(Arc::clone(&self.callback), input, state, render_loop, host),
             execution_steps,
         ))
     }

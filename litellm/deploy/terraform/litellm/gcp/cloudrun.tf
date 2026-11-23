@@ -103,7 +103,7 @@ locals {
     for k, v in var.backend_extra_env : { name = k, value = v }
   ]
 
-  backend_default_env_kv = [
+  model_store_env_kv = [
     { name = "STORE_MODEL_IN_DB", value = "true" },
   ]
   gateway_extra_secret_kv = [
@@ -169,7 +169,17 @@ locals {
     { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
   ] : []
 
-  gateway_env_kv      = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.billing_metrics_env_kv, local.gateway_extra_env_kv, local.proxy_config_env, local.metrics_env_kv, local.gateway_pool_env, local.collector_env_kv)
+  gateway_env_kv = concat(
+    local.shared_env_kv,
+    [for e in local.model_store_env_kv : e if !contains(concat(keys(var.gateway_extra_env), keys(var.gateway_extra_secrets)), e.name)],
+    local.gateway_otel_env_kv,
+    local.billing_metrics_env_kv,
+    local.gateway_extra_env_kv,
+    local.proxy_config_env,
+    local.metrics_env_kv,
+    local.gateway_pool_env,
+    local.collector_env_kv,
+  )
   gateway_env_secrets = concat(local.shared_env_secrets, local.otel_env_secrets, local.billing_metrics_env_secrets, local.gateway_extra_secret_kv)
 
   collector_env_kv_all = concat(
@@ -514,7 +524,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
+        for_each = concat(local.shared_env_kv, local.model_store_env_kv, local.backend_otel_env_kv, local.billing_metrics_env_kv, local.backend_extra_env_kv, local.proxy_config_env, local.metrics_env_kv)
         content {
           name  = env.value.name
           value = env.value.value

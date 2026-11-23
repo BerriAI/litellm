@@ -999,6 +999,7 @@ class TestProxyInitializationHelpers:
                 "general_settings": {
                     "database_url": "postgresql://test:test@localhost:5432/test",
                     "database_connection_pool_limit": 5,
+                    "use_spend_logs_ledger": False,
                     **timeout_config,
                 }
             }
@@ -3579,7 +3580,9 @@ def test_prisma_writer_gives_the_rust_pool_its_share_and_keeps_its_name(
     """The writer limit loses the Rust pool's share, which the worker reads back, and gets Prisma's
     application_name unless the operator named it. DIRECT_URL (migrations) keeps the whole configured limit."""
     config_path: Final = tmp_path / "config.yaml"
-    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+    config_path.write_text(
+        yaml.dump({"model_list": [], "general_settings": {**general_settings, "use_spend_logs_ledger": False}})
+    )
 
     captured: Final = _CAPTURED_URLS.validate_python(
         _run_server_and_capture_urls(
@@ -3620,6 +3623,67 @@ def test_a_writer_limit_with_no_room_for_the_rust_pool_refuses_to_start(
     assert "DATABASE_URL connection_limit" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "general_settings, expected_writer, expected_rust_writer, expected_line",
+    [
+        pytest.param(
+            {},
+            "6",
+            "4",
+            "1 worker(s) x (writer connection_limit 6 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_on_by_default",
+        ),
+        pytest.param(
+            {"database_connection_pool_limit": 30, "use_spend_logs_ledger": True},
+            "26",
+            "4",
+            "1 worker(s) x (writer connection_limit 26 + rust writer pool 4 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 80 connections",
+            id="ledger_on_with_a_configured_limit",
+        ),
+        pytest.param(
+            {"use_spend_logs_ledger": False},
+            "8",
+            "2",
+            "1 worker(s) x (writer connection_limit 8 + rust writer pool 2 + reader connection_limit 48"
+            " + rust reader pool 2) = up to 60 connections",
+            id="ledger_off",
+        ),
+    ],
+)
+def test_the_ledger_carves_two_more_rust_writer_connections_out_of_the_writer_limit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    general_settings: dict[str, object],
+    expected_writer: str,
+    expected_rust_writer: str,
+    expected_line: str,
+) -> None:
+    """The spend log writer writes only on the writer, so the reader keeps the base reserve."""
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.dump({"model_list": [], "general_settings": general_settings}))
+
+    captured: Final = _CAPTURED_URLS.validate_python(
+        _run_server_and_capture_urls(
+            str(config_path),
+            direct_url="postgresql://t:t@localhost:5432/t",
+            read_replica_url="postgresql://t:t@reader:5432/t?connection_limit=50",
+        )
+    )
+
+    def limit(name: str) -> list[str]:
+        return urlparse.parse_qs(urlparse.urlparse(captured[name]).query)["connection_limit"]
+
+    assert (limit("DATABASE_URL"), captured[RUST_WRITER_CONNECTIONS_ENV_VAR]) == (
+        [expected_writer],
+        expected_rust_writer,
+    )
+    assert (limit("DATABASE_URL_READ_REPLICA"), captured[RUST_READER_CONNECTIONS_ENV_VAR]) == (["48"], "2")
+    assert limit("DIRECT_URL") == ["30" if "database_connection_pool_limit" in general_settings else "10"]
+    assert expected_line in capsys.readouterr().out
+
+
 class TestReadReplicaConnectionParams:
     """The reader is a second Prisma client with its own pool. Without the
     configured params on DATABASE_URL_READ_REPLICA it sizes itself from Prisma's
@@ -3642,6 +3706,7 @@ class TestReadReplicaConnectionParams:
                         "database_socket_timeout": 120,
                         "database_disable_prepared_statements": True,
                         "database_statement_timeout": 60,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3676,6 +3741,7 @@ class TestReadReplicaConnectionParams:
                     "general_settings": {
                         "database_connection_pool_limit": 3,
                         "database_connection_pool_timeout": 20,
+                        "use_spend_logs_ledger": False,
                     },
                 }
             )
@@ -3710,7 +3776,12 @@ class TestReadReplicaConnectionParams:
     def test_writer_and_reader_each_give_their_own_rust_pool_its_share(self, tmp_path: Path) -> None:
         config_path: Final = tmp_path / "config.yaml"
         config_path.write_text(
-            yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 10}})
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 10, "use_spend_logs_ledger": False},
+                }
+            )
         )
 
         captured: Final = _CAPTURED_URLS.validate_python(
@@ -3732,7 +3803,14 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
@@ -3770,7 +3848,14 @@ class TestReadReplicaConnectionParams:
         import yaml
 
         config_path: Final = tmp_path / "config.yaml"
-        config_path.write_text(yaml.dump({"model_list": [], "general_settings": {"database_connection_pool_limit": 3}}))
+        config_path.write_text(
+            yaml.dump(
+                {
+                    "model_list": [],
+                    "general_settings": {"database_connection_pool_limit": 3, "use_spend_logs_ledger": False},
+                }
+            )
+        )
 
         _run_server_and_capture_urls(
             str(config_path),
@@ -3794,6 +3879,7 @@ class TestReadReplicaConnectionParams:
                     "model_list": [],
                     "general_settings": {
                         "database_connection_pool_limit": 3,
+                        "use_spend_logs_ledger": False,
                         "database_extra_connection_params": {
                             "options": "-c search_path=writer_schema",
                             "schema": "writer_schema",
@@ -4814,6 +4900,32 @@ def test_control_plane_cli_serves_the_real_app_with_uvicorn_options(monkeypatch:
     assert call["limit_concurrency"] == 250
     response: Final = TestClient(call["app"]).get("/healthz")
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
+
+
+@pytest.mark.parametrize(
+    ("argv", "env_timeout", "expected"),
+    [
+        ([], None, 95),
+        ([], "0", 0),
+        ([], "5", 5),
+        (["--keepalive_timeout", "0"], "5", 0),
+        (["--keepalive_timeout", "5"], "0", 5),
+    ],
+)
+def test_uvicorn_serves_the_effective_keepalive_timeout(
+    argv: list[str], env_timeout: str | None, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("DATABASE_URL", "DIRECT_URL", "KEEPALIVE_TIMEOUT", "LITELLM_RUST_FIRST"):
+        monkeypatch.delenv(name, raising=False)
+    if env_timeout is not None:
+        monkeypatch.setenv("KEEPALIVE_TIMEOUT", env_timeout)
+
+    with patch("uvicorn.run") as serve:
+        result: Final = CliRunner().invoke(run_server, ["--local", "--port", "45999", *argv])
+
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once()
+    assert serve.call_args.kwargs["timeout_keep_alive"] == expected
 
 
 def test_limit_concurrency_environment_reaches_control_plane_serve(

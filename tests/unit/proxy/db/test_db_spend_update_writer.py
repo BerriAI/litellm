@@ -25,6 +25,9 @@ from litellm._logging import verbose_proxy_logger
 from litellm._service_logger import ServiceTypes
 from litellm.constants import SPEND_ROLLUP_LOCK_TIMEOUT_MS
 from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import DailyTagSpendTransaction, Litellm_EntityType, SpendUpdateQueueItem
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.db_spend_update_writer import (
@@ -43,9 +46,16 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
 )
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 from litellm.proxy.spend_tracking.session_spend_total import SessionSpendTotals
+from litellm.proxy.spend_tracking.spend_event import (
+    SpendEvent,
+    build_spend_event,
+    decode_spend_event,
+    spend_event_callback_args,
+)
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.caching import RedisPipelineLpopOperation, RedisPipelineRpushOperation
+from litellm.types.utils import ModelResponse
 from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
@@ -285,6 +295,218 @@ def test_enqueue_tool_registry_upsert_reads_every_choice():
 
     enqueued = [c.args[0]["tool_name"] for c in db_writer.tool_discovery_queue.add_update.call_args_list]
     assert enqueued == ["tool_alpha", "tool_beta"]
+
+
+class _LoggedSuccesses(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: list[tuple[dict, object]] = []
+        self.hook_results: list[object] = []
+        self.logged: Final = asyncio.Event()
+
+    async def async_logging_hook(self, kwargs, result, call_type):
+        self.hook_results.append(result)
+        return kwargs, result
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.events.append((kwargs, response_obj))
+        self.logged.set()
+
+    async def last_event(self) -> tuple[dict, object]:
+        try:
+            await asyncio.wait_for(self.logged.wait(), timeout=60)
+        except TimeoutError as error:
+            raise AssertionError("no success event was logged") from error
+        return self.events[-1]
+
+
+def _called_tool_names(response: object) -> list[str]:
+    return [tool_call.function.name for tool_call in cast(ModelResponse, response).choices[0].message.tool_calls]
+
+
+async def _recorded_tool_names(kwargs: dict, response: object) -> tuple[set[str], tuple[str, ...]]:
+    db_writer = DBSpendUpdateWriter()
+    db_writer.tool_discovery_queue = MagicMock()
+    prisma = _tool_usage_prisma()
+    db_writer._enqueue_tool_registry_upsert(kwargs=kwargs, completion_response=response)
+    await db_writer._enqueue_tool_usage_transaction(_minimal_spend_payload(), response, prisma, kwargs)
+    registered: Final = {c.args[0]["tool_name"] for c in db_writer.tool_discovery_queue.add_update.call_args_list}
+    return registered, prisma.tool_usage_transactions[0].tool_names
+
+
+def _anthropic_tool_use_sse(tool_use: Mapping[str, object]) -> bytes:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_tool_call",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {**tool_use, "input": {}}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+    return b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+
+
+def _anthropic_calling_the_first_tool(sent_names: list[str]) -> Callable[[httpx.Request], httpx.Response]:
+    def reply(request: httpx.Request) -> httpx.Response:
+        body: Final = json.loads(request.content)
+        sent_names.extend(tool["name"] for tool in body["tools"])
+        tool_use: Final = {"type": "tool_use", "id": "toolu_1", "name": sent_names[0], "input": {"doc_id": "N-42"}}
+        if body.get("stream"):
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=_anthropic_tool_use_sse(tool_use),
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_tool_call",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [tool_use],
+                "stop_reason": "tool_use",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    return reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("offloaded", [False, True], ids=["in_process", "through_spend_event"])
+async def test_a_bridged_namespace_member_is_recorded_under_its_full_name(
+    offloaded: bool, stream: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    namespace: Final = "mcp__codex_apps__codex_document_control"
+    member: Final = "_get_document_tool_schemas"
+    full_name: Final = f"{namespace}__{member}"
+    logged: Final = _LoggedSuccesses()
+    sent_names: Final[list[str]] = []
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+
+    served: Final = await litellm.aresponses(
+        model="anthropic/claude-haiku-5-5",
+        input="Fetch document N-42",
+        stream=stream,
+        tools=[
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Docs tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": member,
+                        "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+                    }
+                ],
+            }
+        ],
+        api_key="sk-ant-fake",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_anthropic_calling_the_first_tool(sent_names))),
+        litellm_bridged_tool_names={truncate_tool_name(full_name): "spoofed"},
+    )
+    if stream:
+        _ = [event async for event in served]
+    kwargs, response = await logged.last_event()
+    assert len(sent_names) == 1 and sent_names[0] != full_name
+    assert _called_tool_names(response) == [full_name]
+    assert _called_tool_names(logged.hook_results[-1]) == [full_name]
+    assert full_name in json.dumps(kwargs["standard_logging_object"]["response"])
+    assert sent_names[0] not in json.dumps(kwargs["standard_logging_object"]["response"])
+    if offloaded:
+        now = datetime.now(timezone.utc)
+        event = decode_spend_event(build_spend_event(kwargs, response, now, now, store_bodies=False))
+        assert isinstance(event, SpendEvent)
+        callback_args = spend_event_callback_args(event)
+        kwargs, response = dict(callback_args.kwargs), callback_args.response_obj
+
+    assert await _recorded_tool_names(kwargs, response) == ({full_name}, (full_name,))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_value", [{"get_weather": "spoofed"}, 5], ids=["renaming_map", "not_a_map"])
+async def test_a_client_sent_tool_name_map_never_renames_tools_or_drops_spend(
+    client_value: object, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    logged: Final = _LoggedSuccesses()
+    sent_names: Final[list[str]] = []
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [logged])
+
+    await litellm.acompletion(
+        model="anthropic/claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Weather in Paris?"}],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            }
+        ],
+        api_key="sk-ant-fake",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_anthropic_calling_the_first_tool(sent_names))),
+        litellm_bridged_tool_names=client_value,
+    )
+    kwargs, response = await logged.last_event()
+    now = datetime.now(timezone.utc)
+    event = decode_spend_event(build_spend_event(kwargs, response, now, now, store_bodies=False))
+
+    assert sent_names == ["get_weather"]
+    assert _called_tool_names(response) == ["get_weather"]
+    assert await _recorded_tool_names(kwargs, response) == ({"get_weather"}, ("get_weather",))
+    assert isinstance(event, SpendEvent)
+    assert event.request_tool_names == ("get_weather",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_value", [{"get_weather": "spoofed"}, 5], ids=["renaming_map", "not_a_map"])
+async def test_a_tool_name_map_in_a_failed_request_body_never_renames_the_spend_event_or_tool_rows(
+    client_value: object,
+) -> None:
+    response: Final = ModelResponse(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+                    ],
+                }
+            }
+        ]
+    )
+    request_body: Final = {
+        "litellm_params": {},
+        "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+        "litellm_bridged_tool_names": client_value,
+    }
+    now = datetime.now(timezone.utc)
+    event: Final = decode_spend_event(build_spend_event(request_body, response, now, now, store_bodies=False))
+
+    assert isinstance(event, SpendEvent)
+    assert event.request_tool_names == ("get_weather",)
+    assert await _recorded_tool_names(request_body, response) == ({"get_weather"}, ("get_weather",))
 
 
 @pytest.mark.asyncio
@@ -1216,7 +1438,8 @@ async def test_update_customer_hierarchy_db_enqueues_one_increment_per_level():
 
 
 @pytest.mark.asyncio
-async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
+@pytest.mark.parametrize("app_group_id", (None, "group"))
+async def test_app_spend_flush_updates_global_and_composite_app_rows(app_group_id: str | None) -> None:
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyIds
 
     writer: Final = DBSpendUpdateWriter()
@@ -1225,6 +1448,7 @@ async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
         customer_team_id="team",
         customer_member_id="member:local",
         app_id="app",
+        app_group_id=app_group_id,
     )
     await writer._update_customer_hierarchy_db(response_cost=0.25, customer_hierarchy=ids, prisma_client=MagicMock())
     queued: Final = await writer.spend_update_queue.flush_all_updates_from_in_memory_queue()
@@ -1258,6 +1482,18 @@ async def test_app_spend_flush_updates_global_and_composite_app_rows() -> None:
     )
     batcher.litellm_appcustomermembertable.update_many.assert_called_once_with(
         where={"app_id": "app", "customer_member_id": "member:local"},
+        data={"spend": {"increment": 0.25}},
+    )
+    if app_group_id is None:
+        batcher.litellm_appgrouptable.update_many.assert_not_called()
+        batcher.litellm_appgroupcustomerorgtable.update_many.assert_not_called()
+        return
+    batcher.litellm_appgrouptable.update_many.assert_called_once_with(
+        where={"app_group_id": app_group_id},
+        data={"spend": {"increment": 0.25}},
+    )
+    batcher.litellm_appgroupcustomerorgtable.update_many.assert_called_once_with(
+        where={"app_group_id": app_group_id, "customer_org_id": "org"},
         data={"spend": {"increment": 0.25}},
     )
 

@@ -1305,6 +1305,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "thinking_on_by_default": {"type": "boolean"},
             "supports_mid_conversation_system": {"type": "boolean"},
             "supports_sampling_params": {"type": "boolean"},
+            "supports_search_tools_with_functions": {"type": "boolean"},
             "supports_output_config": {"type": "boolean"},
             "supports_speed": {"type": "boolean"},
             "supports_fast_mode": {"type": "boolean"},
@@ -1342,6 +1343,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                         "/v1/realtime/translations",
                         "/v1/realtime/translations/client_secrets",
                         "/v1/realtime/translations/calls",
+                        "/v1/live/sessions",
                         "/v1/images/variations",
                         "/v1/images/edits",
                         "/v1/batch",
@@ -8981,7 +8983,7 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
 
 def test_get_model_info_gemini(monkeypatch):
     """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    Check rate-limit metadata for supported non-video Gemini model families.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -8990,6 +8992,7 @@ def test_get_model_info_gemini(monkeypatch):
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
+            and "video" not in info.get("supported_output_modalities", [])
             and "gemma" not in model
             and "learnlm" not in model
             and "imagen" not in model
@@ -8999,6 +9002,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
+            and "genie" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -11495,6 +11499,19 @@ def test_get_valid_models_from_provider():
     valid_models = get_valid_models(custom_llm_provider="openai")
     assert len(valid_models) > 0
     assert "gpt-5-mini" in valid_models
+
+
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
 
 
 @pytest.mark.parametrize(

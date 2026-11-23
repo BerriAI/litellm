@@ -37,7 +37,7 @@ import hashlib
 import inspect
 import json
 import warnings
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -292,6 +292,7 @@ ROUTER_INIT_ARGS: Final[tuple[str, ...]] = (
     "fallback_rate_limit_check",
     "auto_router_capability_limit",
     "session_affinity_repin_on_failover",
+    "enable_cross_model_group_collision_check",
 )
 
 
@@ -1455,6 +1456,16 @@ _COPIED_SETTING_FIELDS: Final = (
 )
 
 
+class _SettingsHost(Protocol):
+    def _core_get_settings(self) -> Mapping[str, object]: ...
+
+    def _core_get_allowed_fails_from_policy(self, exception: Exception) -> int | None: ...
+
+    def _core_get_available_guardrail(self, name: str) -> "GuardrailTypedDict": ...
+
+    def _core_deployment_call_timeout(self, litellm_params: Mapping[str, object]) -> object: ...
+
+
 @dataclass(frozen=True)
 class RouterSettings:
     """
@@ -1497,7 +1508,7 @@ class RouterSettings:
     search_tools: "list[SearchToolTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     guardrail_list: "list[GuardrailTypedDict]" = None  # pyright: ignore[reportAssignmentType]  # unset only when built directly (see above)  # mutable-ok: the router's live list
     cache_responses: bool | None = None
-    _router: "Router | None" = field(default=None, repr=False, compare=False)
+    _router: _SettingsHost | None = field(default=None, repr=False, compare=False)
     _unset: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -1514,7 +1525,7 @@ class RouterSettings:
         # Each value is the Router's own ``_core_<field>`` attribute, typed as the field (or None when unset).
         return cls(**values, _router=router, _unset=unset)  # pyright: ignore[reportArgumentType]  # see above
 
-    def _owner(self, member: str) -> "Router":
+    def _owner(self, member: str) -> _SettingsHost:
         if self._router is None:
             raise AttributeError(f"'NoneType' object has no attribute {member!r}")
         return self._router
@@ -1682,7 +1693,23 @@ class RoutingObservers:
     slack_alerting_logger: "SlackAlerting | None" = None
 
 
-def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+class _ChangeHost(Protocol):
+    @property
+    def _registry_version(self) -> int: ...
+
+    @property
+    def _core_update_settings(self) -> Callable[..., None]: ...
+
+    def _core_upsert_deployment(self, deployment: "Deployment") -> "Deployment | None": ...
+
+    def _core_delete_deployment(self, id: str) -> "Deployment | None": ...
+
+    def _core_update_redis_cache(self, cache: "RedisCache") -> None: ...
+
+    async def _core_arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None: ...
+
+
+def apply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     if changes.refresh_model_info:
         raise TypeError("ChangeSet(refresh_model_info=True) needs aapply()")
     unknown: Final = sorted(set(changes.assign) - {*SETTING_FIELDS, *PLAIN_SETTING_ATTRIBUTES, *ASSIGNABLE_ALIASES})
@@ -1703,7 +1730,7 @@ def apply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
     return ApplyResult(version=router._registry_version, upserted=upserted, deleted=deleted)
 
 
-async def aapply_changes(router: "Router", changes: ChangeSet) -> ApplyResult:
+async def aapply_changes(router: _ChangeHost, changes: ChangeSet) -> ApplyResult:
     refresh: Final = changes.refresh_model_info
     result: Final = apply_changes(
         router,
@@ -1789,7 +1816,7 @@ class RoutingContext:
         return self._router is router or router.__dict__.get("_core") is self._router
 
     @property
-    def explicit_allowed_fails(self) -> int | None:
+    def explicit_allowed_fails(self) -> object:
         """``allowed_fails`` as the caller passed it, ``None`` when it came from the global default."""
         return self._router.explicit_allowed_fails
 
@@ -1799,7 +1826,7 @@ class RoutingContext:
         request_kwargs: dict[str, object] | None = None,  # mutable-ok: the selection cores take a dict
         *,
         kind: SelectKind = "pick",
-        messages: list[dict[str, str]] | None = None,  # mutable-ok: the selection cores take a list
+        messages: Sequence[Mapping[str, object]] | None = None,
         input: str | list[object] | None = None,  # mutable-ok: the selection cores take a list
         specific_deployment: bool | None = False,
         parent_otel_span: "Span | None" = None,
@@ -1916,10 +1943,14 @@ class RoutingContext:
     ) -> None:
         return self._router._update_kwargs_before_fallbacks(model, kwargs, metadata_variable_name)
 
-    def arm_cooldown_prefetch(self) -> None:
+    def arm_cooldown_prefetch(self, model: str | None = None) -> None:
+        """Every deployment's cooldowns, or only those a request for ``model`` may route to without a team (auth
+        arms this before it knows the caller's team)."""
         from litellm.router_utils.routing_read_batch import RoutingPrefetch
 
-        RoutingPrefetch.arm_cooldowns(self)
+        RoutingPrefetch.arm_cooldowns(
+            self, None if model is None else self.registry().names(model, kind="route_candidates")
+        )
 
     def arm_read_prefetch(
         self,

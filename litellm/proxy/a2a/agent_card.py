@@ -148,16 +148,15 @@ _DEFAULT_MODES: Final[list[str]] = ["text"]
 _DEFAULT_AGENT_VERSION: Final = "1.0.0"
 
 
-def _filter_capabilities(upstream_capabilities: object) -> dict[str, object]:
+def _filter_capabilities(upstream_capabilities: object) -> Mapping[str, object]:
     """Return a capabilities dict containing only allowlisted, truthy keys."""
-    if not isinstance(upstream_capabilities, dict):
+    capabilities: Final = as_str_mapping(upstream_capabilities)
+    if capabilities is None or not isinstance(upstream_capabilities, dict):
         return {}
-    return {
-        key: value for key, value in upstream_capabilities.items() if key in _ALLOWED_CAPABILITY_KEYS and bool(value)
-    }
+    return {key: value for key, value in capabilities.items() if key in _ALLOWED_CAPABILITY_KEYS and bool(value)}
 
 
-def _default_litellm_provider(proxy_base_url: str) -> dict[str, str]:
+def _default_litellm_provider(proxy_base_url: str) -> Mapping[str, str]:
     return {"organization": "LiteLLM Proxy", "url": proxy_base_url}
 
 

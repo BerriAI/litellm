@@ -53,9 +53,9 @@ CHAT_COMPLETIONS_SSE_BODY = (
 )
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
 @pytest.mark.parametrize("nested", [False, True])
-def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, str], nested: bool) -> None:
+def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
+    continuation: Final = {"conversation": "conv_prior"}
     forwarded: Final = {"extra_body": continuation} if nested else continuation
     kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -89,7 +89,7 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> No
 
 @pytest.mark.parametrize(
     "request_params",
-    [{}, {"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+    [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
 )
 @pytest.mark.parametrize("nested", [False, True])
 def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
@@ -120,30 +120,25 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
     [
-        ({}, {}, True),
+        ({}, {}, False),
         ({"store": False, "drop_params": True}, {"store": False}, False),
         ({"extra_body": {"store": False}, "drop_params": True}, {"store": False}, False),
-        ({"store": False, "additional_drop_params": ["store"]}, {}, True),
+        ({"store": False, "additional_drop_params": ["store"]}, {}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body.store"]}, {"store": False}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["store"]}, {"store": False}, False),
         ({"extra_body": {"store": False}, "additional_drop_params": ["extra_body"]}, {"store": False}, False),
-        ({"extra_body": {"store": None}}, {"store": None}, True),
+        ({"extra_body": {"store": None}}, {"store": None}, False),
         (
             {"store": False, "extra_body": {"conversation": "conv_prior"}},
             {"store": False, "conversation": "conv_prior"},
             True,
         ),
-        ({"store": True}, {"store": True}, True),
+        ({"store": True}, {"store": True}, False),
         ({"store": False}, {"store": False}, False),
         ({"extra_body": {"store": False}}, {"store": False}, False),
-        ({"store": False, "extra_body": {"store": True}}, {"store": True}, True),
+        ({"store": False, "extra_body": {"store": True}}, {"store": True}, False),
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
-        (
-            {"store": False, "previous_response_id": "resp_prior"},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
         (
             {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
             {"store": False},
@@ -153,15 +148,6 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
             {"store": False},
             False,
-        ),
-        (
-            {
-                "store": False,
-                "extra_body": {"previous_response_id": "resp_prior"},
-                "additional_drop_params": ["previous_response_id"],
-            },
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
         (
@@ -185,18 +171,13 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             False,
         ),
         (
-            {"store": False, "previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
-        (
             {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
             {"store": False, "conversation": "conv_prior"},
             True,
         ),
     ],
 )
-async def test_messages_system_input_requires_forwarded_store_false(
+async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
@@ -265,6 +246,39 @@ async def test_messages_system_input_requires_forwarded_store_false(
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
             user_input,
         ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
+)
+async def test_messages_rejects_previous_response_id_before_calling_the_provider(
+    request_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+            await litellm.anthropic.messages.acreate(
+                model="openai/responses/gpt-6.2-sol",
+                max_tokens=16,
+                system="Stable prefix",
+                messages=[{"role": "user", "content": "again"}],
+                api_key="sk-test",
+                cache={"no-cache": True},
+                **request_params,
+            )
+    assert not upstream.called
+    assert rejected.value.status_code == 400
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():

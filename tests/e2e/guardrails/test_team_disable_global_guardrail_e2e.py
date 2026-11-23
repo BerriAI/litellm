@@ -20,7 +20,7 @@ from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-3.8-flash"
 
 # A guardrail created via POST /guardrails is registered in-process immediately
 # on the worker that served the create call, but the proxy runs multiple

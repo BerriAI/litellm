@@ -33,12 +33,29 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from litellm.proxy.rust_forward.peer import ASGIApp
+
+    class _Import(Protocol):
+        def __call__(
+            self,
+            name: str,
+            globals: Mapping[str, object] | None = None,
+            locals: Mapping[str, object] | None = None,
+            fromlist: Sequence[str] | None = (),
+            level: int = 0,
+        ) -> types.ModuleType: ...
+
+
+def _interpreter_import() -> "_Import":
+    return builtins.__import__
+
 
 SDK_PACKAGE: Final = "litellm"
 CLI_PACKAGE: Final = "litellm.proxy.client"
 _INITIALIZATION_LOCK: Final = threading.RLock()
-_BUILTIN_IMPORT: Final = builtins.__import__
+_BUILTIN_IMPORT: Final = _interpreter_import()
 _IMPORT_MODULE: Final = importlib.import_module
 _LOADING_CLI_CODE: Final = contextvars.ContextVar("_LOADING_CLI_CODE", default=False)
 

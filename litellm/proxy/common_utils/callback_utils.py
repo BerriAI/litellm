@@ -14,6 +14,7 @@ from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     BAGGAGE_MAPPED_TAGS_METADATA_KEY,
+    CALLBACK_CONFIG_METADATA_SLOTS,
     CLIENT_OUTPUT_CEILING_METADATA_KEY,
     CONSUMED_REQUEST_TAGS_METADATA_KEY,
     MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH,
@@ -30,7 +31,12 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CALLBACK_VAR_NAMES, CommonProxyErrors, LiteLLMPromptInjectionParams
-from litellm.proxy.common_utils.callback_config_validation import object_sequence, string_keyed
+from litellm.proxy.common_utils.callback_config_validation import (
+    InvalidLoggingMetadata,
+    normalize_logging_entries,
+    object_sequence,
+    string_keyed,
+)
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -56,7 +62,7 @@ _CALLBACK_VAR_ENCRYPTED_PREFIX: Final = CALLBACK_VAR_ENCRYPTED_PREFIX
 # Metadata slots that hold operator-configured callback and secret-manager setup
 # (and therefore integration credentials). Resolved from UserAPIKeyAuth during
 # pre-call setup, never read back off the copies stamped into request metadata.
-_CALLBACK_CONFIG_SLOTS: Final = frozenset({"logging", "callback_settings", "secret_manager_settings"})
+_CALLBACK_CONFIG_SLOTS: Final = CALLBACK_CONFIG_METADATA_SLOTS
 
 blue_color_code: Final = "\033[94m"
 reset_color_code: Final = "\033[0m"
@@ -143,7 +149,7 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
 
 
 def initialize_callbacks_on_proxy(
-    value: Any,
+    value: object,
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
@@ -157,9 +163,14 @@ def initialize_callbacks_on_proxy(
     )
     from litellm.proxy.proxy_server import prisma_client
 
-    verbose_proxy_logger.debug("%sinitializing callbacks=%s on proxy%s", blue_color_code, value, reset_color_code)
+    verbose_proxy_logger.debug(
+        "%sinitializing callbacks=%s on proxy%s",
+        blue_color_code,
+        value,
+        reset_color_code,
+    )
     if isinstance(value, list):
-        imported_list: Final[list[Any]] = []
+        imported_list: Final[list[Callable[..., object] | str | CustomLogger]] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
             if callback == "customer_budget_webhook":
                 from litellm.integrations.customer_budget_webhook import CustomerBudgetWebhook
@@ -235,7 +246,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use Llama Guard" + CommonProxyErrors.not_premium_user.value)
 
                 llama_guard_object = _ENTERPRISE_LlamaGuard()
-                imported_list.append(llama_guard_object)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(llama_guard_object)
+                    )
+                )
             elif isinstance(callback, str) and callback == "hide_secrets":
                 try:
                     from litellm_enterprise.enterprise_callbacks.secret_detection import (
@@ -250,7 +265,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use secret hiding" + CommonProxyErrors.not_premium_user.value)
 
                 _secret_detection_object = _ENTERPRISE_SecretDetection()
-                imported_list.append(_secret_detection_object)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(_secret_detection_object)
+                    )
+                )
             elif isinstance(callback, str) and callback == "openai_moderations":
                 try:
                     from litellm.enterprise.enterprise_hooks.openai_moderation import (
@@ -314,7 +333,11 @@ def initialize_callbacks_on_proxy(
                     raise Exception("Trying to use Llm Guard" + CommonProxyErrors.not_premium_user.value)
 
                 llm_guard_moderation_obj = _ENTERPRISE_LLMGuard()
-                imported_list.append(llm_guard_moderation_obj)
+                imported_list.append(
+                    _loaded_callback_or_raise(
+                        entry=callback, loaded=_LOADED_CALLBACK.validate_python(llm_guard_moderation_obj)
+                    )
+                )
             elif isinstance(callback, str) and callback == "blocked_user_check":
                 try:
                     from litellm.enterprise.enterprise_hooks.blocked_user_list import (
@@ -431,10 +454,10 @@ def initialize_callbacks_on_proxy(
     else:
         litellm.callbacks = [
             _loaded_callback_or_raise(
-                entry=value,
+                entry=str(value),
                 loaded=_LOADED_CALLBACK.validate_python(
                     get_instance_fn(
-                        value=value,
+                        value=value,  # pyright: ignore[reportArgumentType]  # non-str fails as on main
                         config_file_path=config_file_path,
                     )
                 ),
@@ -740,13 +763,25 @@ def strip_callback_config(metadata: dict[str, object] | None) -> dict[str, objec
     return {k: v for k, v in metadata.items() if k not in _CALLBACK_CONFIG_SLOTS}
 
 
-def encrypt_callback_vars(metadata: object) -> object:
+def encrypt_callback_vars(metadata: object, *, logging_references_approved: bool = False) -> object:
     """Return a deep copy of metadata with callback_vars values encrypted at rest.
 
     Idempotent: a value that already decrypts cleanly is left unchanged so
     round-trips through edit forms don't double-encrypt.
     """
-    return _transform_callback_vars(metadata, _encrypt_if_plaintext)
+    fields: Final = string_keyed(metadata)
+    if not isinstance(metadata, dict):
+        return metadata
+    if not isinstance(fields.get("logging"), str):
+        return _transform_callback_vars(fields, _encrypt_if_plaintext)
+    entries: Final = normalize_logging_entries(fields["logging"])
+    if isinstance(entries, InvalidLoggingMetadata):
+        return _transform_callback_vars(fields, _encrypt_if_plaintext)
+    if fields["logging"] == "":
+        return _transform_callback_vars(fields, _encrypt_if_plaintext)
+    if not logging_references_approved and any("litellm_credential_name" in entry for entry in entries):
+        return _transform_callback_vars(fields, _encrypt_if_plaintext)
+    return _transform_callback_vars({**fields, "logging": list(entries)}, _encrypt_if_plaintext)
 
 
 def decrypt_callback_vars(metadata: object) -> Any:
@@ -766,17 +801,29 @@ def decrypted_logging_entries(metadata: object) -> object:
 
 
 def key_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | None:
-    entries: Final = decrypted_logging_entries(metadata)
+    entries: Final = stored_logging_entries(metadata)
     if entries is None:
         return None
-    return tuple(resolved for entry in _logging_objects(entries) if (resolved := _with_credential(entry)) is not None)
+    return tuple(resolved for entry in entries if (resolved := _with_credential(entry)) is not None)
+
+
+def stored_logging_entries(metadata: object) -> tuple[Mapping[str, object], ...] | None:
+    entries: Final = decrypted_logging_entries(metadata)
+    return None if entries is None else _logging_objects(entries)
 
 
 def _logging_objects(entries: object) -> tuple[Mapping[str, object], ...]:
-    items: Final = () if entries in ("", {}) else object_sequence(entries)
-    if items is None or not all(isinstance(item, Mapping) for item in items):
-        raise TypeError(f"key metadata.logging must be a list of objects, got {type(entries).__name__}")
-    return tuple(string_keyed(item) for item in items)
+    items: Final = normalize_logging_entries(entries, skip_invalid=True)
+    if isinstance(items, InvalidLoggingMetadata):
+        verbose_proxy_logger.warning("Ignoring invalid metadata.logging, expected a list of objects")
+        return ()
+    if isinstance(entries, str):
+        if any("litellm_credential_name" in item for item in items):
+            verbose_proxy_logger.warning(
+                "Ignoring credential references in legacy string metadata.logging; admin reapproval is required"
+            )
+        return tuple(item for item in items if "litellm_credential_name" not in item)
+    return items
 
 
 def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None:
@@ -799,18 +846,40 @@ def _with_credential(entry: Mapping[str, object]) -> Mapping[str, object] | None
 
 
 def _transform_callback_vars(metadata: object, transform: Callable[[str, object], object]) -> object:
+    fields: Final = string_keyed(metadata)
     if not isinstance(metadata, dict):
         return metadata
-    out: Final = copy.deepcopy(metadata)
-    logging_entries: Final = out.get("logging")
-    if isinstance(logging_entries, list):
-        for entry in logging_entries:
-            if isinstance(entry, dict) and isinstance(entry.get("callback_vars"), dict):
-                entry["callback_vars"] = {k: transform(k, v) for k, v in entry["callback_vars"].items()}
+    out: Final = copy.deepcopy(fields)
     callback_settings: Final = out.get("callback_settings")
-    if isinstance(callback_settings, dict) and isinstance(callback_settings.get("callback_vars"), dict):
-        callback_settings["callback_vars"] = {k: transform(k, v) for k, v in callback_settings["callback_vars"].items()}
-    return out
+    settings_fields: Final = string_keyed(callback_settings)
+    return {
+        **out,
+        **(
+            {
+                "logging": [
+                    _transform_callback_entry(entry, transform) for entry in object_sequence(out["logging"]) or ()
+                ]
+            }
+            if isinstance(out.get("logging"), list)
+            else {}
+        ),
+        **(
+            {"callback_settings": _transform_callback_entry(settings_fields, transform)}
+            if isinstance(callback_settings, Mapping)
+            else {}
+        ),
+    }
+
+
+def _transform_callback_entry(entry: object, transform: Callable[[str, object], object]) -> object:
+    if not isinstance(entry, Mapping):
+        return entry
+    fields: Final = string_keyed(entry)
+    variables: Final = fields.get("callback_vars")
+    variable_fields: Final = string_keyed(variables)
+    if not isinstance(variables, Mapping):
+        return entry
+    return {**fields, "callback_vars": {key: transform(key, value) for key, value in variable_fields.items()}}
 
 
 def is_sensitive_callback_key(
