@@ -902,7 +902,14 @@ async def video_extension(
 
     data: Final = await read_request_body(request=request)
     requested: Final = VideoRequestRoute.model_validate(data)
-    data["video_id"] = video_reference_to_id(data.pop("video", None))
+    uploaded_video: Final = data.pop("video", None)
+    if isinstance(uploaded_video, StarletteUploadFile):
+        video_files: Final = await batch_to_bytesio((uploaded_video,))
+        if video_files:
+            data["video"] = video_files[0]
+        data["video_id"] = ""
+    else:
+        data["video_id"] = video_reference_to_id(uploaded_video)
 
     decoded: Final = decode_video_id_with_provider(data["video_id"])
     provider_from_id: Final = decoded.get("custom_llm_provider")
