@@ -126,7 +126,7 @@ class RerankResponse(LiteLLMBaseModel):
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
