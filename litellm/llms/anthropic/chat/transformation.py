@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -280,25 +280,18 @@ def _is_json_object(value: object) -> bool:
     return isinstance(value, Mapping)
 
 
-def _thinking_block_items(value: object) -> tuple[object, ...] | None:
-    if not isinstance(value, Collection) or isinstance(value, (str, bytes, bytearray, Mapping)):
-        return None
-    return tuple(cast(Collection[object], value))  # cast-ok: isinstance above proved it is a Collection
-
-
-def _is_unsized_iterable(value: object) -> bool:
-    return isinstance(value, Iterable) and not isinstance(value, Collection)
+def _is_non_list_thinking_blocks(value: object) -> bool:
+    return isinstance(value, (int, float)) or (
+        (isinstance(value, (str, bytes, bytearray)) or _is_json_object(value)) and bool(value)
+    )
 
 
 def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
-    if thinking_blocks is None or _is_unsized_iterable(thinking_blocks):
-        return ()
-    blocks: Final = _thinking_block_items(thinking_blocks)
-    if blocks is None:
+    if _is_non_list_thinking_blocks(thinking_blocks):
         return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
     return tuple(
         (f"messages[{index}].thinking_blocks[{position}]", block, "an object")
-        for position, block in enumerate(blocks)
+        for position, block in enumerate(parts_of(thinking_blocks))
         if not _is_json_object(block)
     )
 
@@ -321,17 +314,50 @@ def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicErro
 
 def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
     thinking_blocks: Final = message_field(message, "thinking_blocks")
-    if message_field(message, "role") != "assistant" or not _thinking_blocks_faults(0, thinking_blocks):
+    if not _thinking_blocks_faults(0, thinking_blocks):
         return message
-    blocks: Final = _thinking_block_items(thinking_blocks)
-    if blocks is not None:
-        kept: Final = tuple(block for block in blocks if _is_json_object(block))
-        return cast(  # cast-ok: dict spread keeps message shape
-            AllMessageValues, {**message, "thinking_blocks": kept}
+    if _is_non_list_thinking_blocks(thinking_blocks):
+        return cast(  # cast-ok: dropping one key keeps message shape
+            AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
         )
-    return cast(  # cast-ok: dropping one key keeps message shape
-        AllMessageValues, {key: value for key, value in message.items() if key != "thinking_blocks"}
+    kept: Final = tuple(block for block in parts_of(thinking_blocks) if _is_json_object(block))
+    return cast(  # cast-ok: dict spread keeps message shape
+        AllMessageValues, {**message, "thinking_blocks": kept}
     )
+
+
+def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
+    blocks: Final = chain.from_iterable(parts_of(message_field(message, "content")) for message in messages)
+    return not all(callable(getattr(block, "get", None)) for block in blocks)
+
+
+def _translation_or_error(
+    translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
+    conversation: Sequence[AllMessageValues],
+) -> Sequence[AllAnthropicPassThroughMessageValues] | TypeError:
+    try:
+        return translate(conversation)
+    except TypeError as error:
+        return error
+
+
+def translated_without_malformed_thinking_blocks(
+    translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
+    conversation: Sequence[AllMessageValues],
+    messages: Sequence[object],
+    drop_params: bool,
+) -> Sequence[AllAnthropicPassThroughMessageValues] | AnthropicError:
+    translation: Final = _translation_or_error(translate, conversation)
+    if not isinstance(translation, TypeError) and not _has_unreadable_content_block(translation):
+        return translation
+    thinking_blocks_error: Final = malformed_thinking_blocks_error(messages)
+    if thinking_blocks_error is None:
+        if isinstance(translation, TypeError):
+            raise translation
+        return translation
+    if not drop_params:
+        return thinking_blocks_error
+    return translate(tuple(without_malformed_thinking_blocks(message) for message in conversation))
 
 
 def _tool_type(tool: object) -> str | None:
@@ -500,13 +526,13 @@ _ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingPro
 def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
     enum_values: Final = schema.get("enum")
-    enum_items: Final = parts_of(enum_values)
     declared_type: Final = schema.get("type")
     if not isinstance(enum_values, list) or declared_type is None:
         return False
     if isinstance(declared_type, list):
         return True
     check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
+    enum_items: Final = cast(list[object], enum_values)  # cast-ok: isinstance above proved it is a list
     return check is not None and not all(check(value) for value in enum_items)
 
 
@@ -2598,23 +2624,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
         drop_params: Final = drops_unsupported_params(litellm_params.get("drop_params"))
-        thinking_blocks_error: Final = None if drop_params else malformed_thinking_blocks_error(messages)
-        if thinking_blocks_error is not None:
-            raise thinking_blocks_error
-        replayable_messages: Final = (
-            [without_malformed_thinking_blocks(message) for message in messages] if drop_params else messages
-        )
         translated_messages: Final = (
             list(
                 AnthropicCacheControlHook.prompt_cache_breakpoints_as_capped_cache_control(
-                    replayable_messages,
+                    messages,
                     drop_params,
                     cache_control_count,
                     lambda: AnthropicCacheControlHook.count_chat_external_cache_breakpoints(optional_params),
                 )
             )
             if self.translates_prompt_cache_breakpoint(model)
-            else replayable_messages
+            else messages
         )
         capped_messages: Final = (
             list(
@@ -2716,11 +2736,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             raise field_error from error
         # Format rest of message according to anthropic guidelines
         try:
-            anthropic_messages = anthropic_messages_pt(
-                model=model,
-                messages=list(self._with_pdf_links_formatted(conversation)),
-                llm_provider=self._resolved_provider,
-                drop_params=drop_params,
+            translation: Final = translated_without_malformed_thinking_blocks(
+                lambda turns: anthropic_messages_pt(
+                    model=model,
+                    messages=list(self._with_pdf_links_formatted(turns)),
+                    llm_provider=self._resolved_provider,
+                    drop_params=drop_params,
+                ),
+                conversation,
+                messages,
+                drop_params,
             )
         except Exception as e:
             conversion_field_error: Final = non_string_message_field_error(messages, e)
@@ -2728,6 +2753,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 status_code=400,
                 message=f"{e}\nReceived Messages={request_messages}",
             )  # don't use verbose_logger.exception, if exception is raised
+        if isinstance(translation, AnthropicError):
+            raise translation
+        anthropic_messages = list(translation)
 
         self.update_headers_with_optional_anthropic_beta(
             headers=headers, optional_params=optional_params, messages=anthropic_messages
