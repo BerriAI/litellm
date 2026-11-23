@@ -708,10 +708,9 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
 
 def anthropic_sse_events_before_upstream_error(all_chunks: Sequence[str | bytes]) -> Sequence[str | bytes]:
     """The stream without its upstream ``error`` events, so what arrived before the failure still assembles."""
-    if not _error_events(_joined_sse_stream(all_chunks) or ""):
-        return all_chunks
-    events: Final = chain.from_iterable(map(split_sse_chunk_into_events, all_chunks))
-    return tuple(event for event in events if not _is_error_event(event))
+    events: Final = tuple(chain.from_iterable(map(split_sse_chunk_into_events, all_chunks)))
+    received: Final = tuple(event for event in events if not _is_error_event(event))
+    return all_chunks if len(received) == len(events) else received
 
 
 @dataclass(frozen=True, slots=True)
