@@ -188,6 +188,10 @@ class _CostMapDeprecation(TypedDict):
 _COST_MAP_DEPRECATION: Final = TypeAdapter(_CostMapDeprecation)
 
 
+def is_in_cost_map(cost_map_key: str) -> bool:
+    return cost_map_key in litellm.model_cost  # pyright: ignore[reportUnknownMemberType]  # untyped cost map JSON
+
+
 def is_cost_map_model_past_deprecation_date(cost_map_key: str) -> bool:
     return is_past_deprecation_date(
         _COST_MAP_DEPRECATION.validate_python(

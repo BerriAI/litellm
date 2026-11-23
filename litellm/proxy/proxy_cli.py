@@ -30,7 +30,7 @@ from litellm.constants import (
     DEFAULT_NUM_WORKERS_LITELLM_PROXY,
     DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
 )
-from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date
+from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date, is_in_cost_map
 from litellm.litellm_core_utils.url_utils import is_local_host
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
@@ -44,6 +44,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from openai import OpenAI
 
     from litellm.proxy.control_plane.main import Tls
     from litellm.proxy.rust_forward.peer import ASGIApp
@@ -297,31 +298,49 @@ _PROXY_KEY_HINT: Final = "--test and --health send LITELLM_MASTER_KEY as the key
 _HEALTH_CHECK_TIMEOUT: Final = httpx.Timeout(5.0, read=None)
 
 
-def _proxy_api_key(host: str) -> str:
+@dataclass(frozen=True, slots=True)
+class _ProxyTarget:
+    base_url: str
+    api_key: str
+    trust_env: bool
+
+
+def _proxy_target(host: str, port: int) -> _ProxyTarget:
+    is_local: Final = is_local_host(host)
     master_key: Final = os.getenv("LITELLM_MASTER_KEY")
-    return master_key if master_key and is_local_host(host) else "My API Key"
+    return _ProxyTarget(
+        base_url=str(httpx.URL(scheme="http", host=host, port=port)),
+        api_key=master_key if master_key and is_local else "My API Key",
+        trust_env=not is_local,
+    )
+
+
+def _proxy_error(response: httpx.Response) -> click.ClickException:
+    hint: Final = f". {_PROXY_KEY_HINT}" if response.status_code in (401, 403) else ""
+    return click.ClickException(
+        f"{response.request.method} {response.url} answered {response.status_code}: {response.text}{hint}"
+    )
 
 
 def _raise_for_proxy_error(response: httpx.Response) -> None:
-    if not response.is_error:
-        return
-    hint: Final = f". {_PROXY_KEY_HINT}" if response.status_code in (401, 403) else ""
-    raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}{hint}")
+    if response.is_error:
+        raise _proxy_error(response)
 
 
 def _is_retired(listed_model: str) -> bool:
     provider, _, provider_model = listed_model.partition("/")
-    cost_map_keys: Final = (
-        (listed_model, provider_model) if provider_model and provider in litellm.provider_list else (listed_model,)
+    checks_bare_name: Final = (
+        bool(provider_model) and provider in litellm.provider_list and not is_in_cost_map(listed_model)
     )
-    return any(is_cost_map_model_past_deprecation_date(key) for key in cost_map_keys)
+    return is_cost_map_model_past_deprecation_date(provider_model if checks_bare_name else listed_model)
 
 
-def _pick_test_model(api_base: str, api_key: str) -> str:
+def _pick_test_model(target: _ProxyTarget) -> str:
     response: Final = httpx.get(
-        url=f"{api_base}/v1/models",
+        url=f"{target.base_url}/v1/models",
         params={"return_wildcard_routes": "true"},
-        headers={"Authorization": f"Bearer {api_key}"},
+        headers={"Authorization": f"Bearer {target.api_key}"},
+        trust_env=target.trust_env,
     )
     _raise_for_proxy_error(response)
     named_models: Final = itertools.takewhile(
@@ -331,8 +350,41 @@ def _pick_test_model(api_base: str, api_key: str) -> str:
         listed["id"] for listed in named_models if listed.get("mode") in (None, "chat", "responses")
     )
     if not chat_models:
-        raise click.ClickException(f"the proxy at {api_base} lists no chat model by name, pass one with --model")
+        raise click.ClickException(f"the proxy at {target.base_url} lists no chat model by name, pass one with --model")
     return next((model for model in chat_models if not _is_retired(model)), chat_models[0])
+
+
+def _send_test_requests(client: "OpenAI", request_model: str) -> None:
+    response: Final = client.chat.completions.create(
+        model=request_model,
+        messages=[
+            {
+                "role": "user",
+                "content": "this is a test request, write a short poem",
+            }
+        ],
+    )
+    click.echo(f"\nLiteLLM: response from proxy {response}")
+
+    print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")
+
+    stream_response: Final = client.chat.completions.create(
+        model=request_model,
+        messages=[
+            {
+                "role": "user",
+                "content": "this is a test request, write a short poem",
+            }
+        ],
+        stream=True,
+    )
+    for chunk in stream_response:
+        click.echo(f"LiteLLM: streaming response from proxy {chunk}")
+    print("\n making completion request to proxy")
+    completion_response: Final = client.completions.create(
+        model=request_model, prompt="this is a test request, write a short poem"
+    )
+    print(completion_response)
 
 
 class _GunicornSettings(Protocol):
@@ -356,10 +408,12 @@ class ProxyInitializationHelpers:
     @staticmethod
     def run_health_check(host: str, port: int):
         print("\nLiteLLM: Health Testing models in config")
+        target: Final = _proxy_target(host, port)
         response: Final = httpx.get(
-            url=f"http://{host}:{port}/health",
-            headers={"Authorization": f"Bearer {_proxy_api_key(host)}"},
+            url=f"{target.base_url}/health",
+            headers={"Authorization": f"Bearer {target.api_key}"},
             timeout=_HEALTH_CHECK_TIMEOUT,
+            trust_env=target.trust_env,
         )
         _raise_for_proxy_error(response)
         print(json.dumps(response.json(), indent=4))
@@ -409,42 +463,18 @@ class ProxyInitializationHelpers:
     def run_test_chat_completion(host: str, port: int, model: str | None) -> None:
         import openai
 
-        api_base: Final = f"http://{host}:{port}"
-        api_key: Final = _proxy_api_key(host)
-        request_model: Final = model or _pick_test_model(api_base, api_key)
+        target: Final = _proxy_target(host, port)
+        request_model: Final = model or _pick_test_model(target)
         click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
-        client: Final = openai.OpenAI(api_key=api_key, base_url=api_base)
-
-        response: Final = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
+        client: Final = openai.OpenAI(
+            api_key=target.api_key,
+            base_url=target.base_url,
+            http_client=openai.DefaultHttpxClient(trust_env=target.trust_env),
         )
-        click.echo(f"\nLiteLLM: response from proxy {response}")
-
-        print(f"\n LiteLLM: Making a test ChatCompletions + streaming r equest to proxy. Model={request_model}")
-
-        stream_response: Final = client.chat.completions.create(
-            model=request_model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": "this is a test request, write a short poem",
-                }
-            ],
-            stream=True,
-        )
-        for chunk in stream_response:
-            click.echo(f"LiteLLM: streaming response from proxy {chunk}")
-        print("\n making completion request to proxy")
-        completion_response: Final = client.completions.create(
-            model=request_model, prompt="this is a test request, write a short poem"
-        )
-        print(completion_response)
+        try:
+            _send_test_requests(client, request_model)
+        except openai.APIStatusError as error:
+            raise _proxy_error(error.response) from error
 
     _run_test_chat_completion = run_test_chat_completion
 
