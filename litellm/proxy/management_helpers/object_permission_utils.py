@@ -27,7 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.repositories.table_repositories import MCPServerRepository, RepositoryTransaction
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -80,6 +80,9 @@ async def attach_object_permission_to_dict(
 
 
 _INHERITED_SCOPE: Final = "mcp_event_scope_inherited"
+_MCP_TOOL_SCOPE: Final = frozenset(
+    ("mcp_servers", "mcp_access_groups", "mcp_tool_permissions", "mcp_toolsets", "blocked_tools")
+)
 
 
 def with_stored_key_scope(row: dict[str, object]) -> dict[str, object]:
@@ -92,10 +95,25 @@ def with_stored_key_scope(row: dict[str, object]) -> dict[str, object]:
     return row
 
 
+def _key_scope_fields(fields: Mapping[str, object], *, first_write: bool) -> dict[str, bool]:
+    if _MCP_TOOL_SCOPE.intersection(fields):
+        return {_INHERITED_SCOPE: False}
+    if first_write and set(fields) == {"mcp_event_permissions"} and fields["mcp_event_permissions"] is not None:
+        return {_INHERITED_SCOPE: True}
+    return {}
+
+
 @dataclass(frozen=True, slots=True)
 class ObjectPermissionUpsert:
     object_permission_id: str
     record: dict[str, object]
+
+    async def write(self, prisma_client: PrismaClient | RepositoryTransaction) -> str:
+        row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
+            where={"object_permission_id": self.object_permission_id},
+            data={"create": self.record, "update": self.record},
+        )
+        return row.object_permission_id
 
 
 async def prepare_object_permission_upsert(
@@ -103,6 +121,8 @@ async def prepare_object_permission_upsert(
     existing_object_permission_id: str | None,
     prisma_client: PrismaClient,
     can_grant_apps: bool = False,
+    *,
+    is_key: bool = False,
 ) -> ObjectPermissionUpsert:
     """
     Validate the supplied grants before any dependent writes. The update includes only supplied fields
@@ -122,19 +142,21 @@ async def prepare_object_permission_upsert(
         else {}
     )
     reject_app_grant_change(new_object_permission.get("apps"), existing_fields.get("apps"), can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=new_object_permission.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
-        prisma_client=prisma_client,
-    )
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=new_object_permission.get(field),
+            existing_mcp_tool_permissions=existing_fields.get(field),
+            prisma_client=prisma_client,
+            field=field,
+        )
     record: Final[dict[str, object]] = {
-        **{
-            key: safe_dumps(value) if key in ("mcp_event_permissions", "mcp_tool_permissions") else value
-            for key, value in new_object_permission.items()
-            if key != _INHERITED_SCOPE and (can_grant_apps or key != "apps")
-        },
-        "object_permission_id": object_permission_id,
+        key: safe_dumps(value) if key in ("mcp_event_permissions", "mcp_tool_permissions") else value
+        for key, value in new_object_permission.items()
+        if key != _INHERITED_SCOPE and (can_grant_apps or key != "apps")
     }
+    if is_key:
+        record.update(_key_scope_fields(new_object_permission, first_write=existing_object_permission_id is None))
+    record["object_permission_id"] = object_permission_id
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
 
@@ -196,17 +218,7 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
-    created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
-        where={"object_permission_id": upsert.object_permission_id},
-        data={
-            "create": upsert.record,
-            "update": upsert.record,
-        },
-    )
-
-    verbose_proxy_logger.debug("created_object_permission_row: %s", created_object_permission_row)
-
-    return created_object_permission_row.object_permission_id
+    return await upsert.write(prisma_client)
 
 
 async def invalidate_cached_object_permissions(
@@ -229,6 +241,8 @@ async def set_object_permission(
     data_json: dict[str, object],
     prisma_client: PrismaClient | None,
     can_grant_apps: bool = False,
+    *,
+    is_key: bool = False,
 ) -> dict[str, object]:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the key/team.
@@ -244,19 +258,23 @@ async def set_object_permission(
 
     # Clean data: exclude None values and object_permission_id
     clean_data: Final[dict[str, object]] = {
-        k: v for k, v in permission_data.items() if v is not None and k != "object_permission_id"
+        k: v
+        for k, v in permission_data.items()
+        if v is not None and k not in ("object_permission_id", _INHERITED_SCOPE)
     }
 
     reject_app_grant_change(clean_data.get("apps"), None, can_grant_apps)
-    await reject_ambiguous_mcp_tool_permission_keys(
-        new_mcp_tool_permissions=clean_data.get("mcp_tool_permissions"),
-        existing_mcp_tool_permissions=None,
-        prisma_client=prisma_client,
-    )
-
-    # Serialize mcp_tool_permissions to JSON string for GraphQL compatibility
-    if "mcp_tool_permissions" in clean_data:
-        clean_data["mcp_tool_permissions"] = safe_dumps(clean_data["mcp_tool_permissions"])
+    for field in ("mcp_tool_permissions", "mcp_event_permissions"):
+        await reject_ambiguous_mcp_tool_permission_keys(
+            new_mcp_tool_permissions=clean_data.get(field),
+            existing_mcp_tool_permissions=None,
+            prisma_client=prisma_client,
+            field=field,
+        )
+        if field in clean_data:
+            clean_data[field] = safe_dumps(clean_data[field])
+    if is_key:
+        clean_data.update(_key_scope_fields(clean_data, first_write=True))
 
     created_permission: Final = await ObjectPermissionRepository(prisma_client).table.create(data=clean_data)
 
@@ -367,6 +385,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
     new_mcp_tool_permissions: object,
     existing_mcp_tool_permissions: object,
     prisma_client: PrismaClient | None,
+    field: str = "mcp_tool_permissions",
 ) -> None:
     """
     A name or alias shared by several MCP servers cannot key ``mcp_tool_permissions``:
@@ -395,8 +414,9 @@ async def reject_ambiguous_mcp_tool_permission_keys(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail={
             "error": (
-                f"Ambiguous mcp_tool_permissions key: {collisions}. "
-                "Key tool permissions by server_id when servers share a name or alias."
+                f"Ambiguous {field} key: {collisions}. "
+                f"Key {'event' if field == 'mcp_event_permissions' else 'tool'} permissions by server_id "
+                "when servers share a name or alias."
             )
         },
     )
@@ -679,6 +699,8 @@ def _extract_requested_mcp_server_ids(
     Includes:
     - mcp_servers list
     - Keys from mcp_tool_permissions
+
+    mcp_event_permissions only narrow event types on servers granted elsewhere, so their keys grant nothing.
     """
     if not object_permission or not isinstance(object_permission, dict):
         return set()
