@@ -138,11 +138,21 @@ def test_empty_text_document_never_becomes_an_empty_text_block(
     assert result["messages"] == [{"role": "user", "content": expected}]
 
 
+@pytest.mark.parametrize("in_tool_result", [False, True])
 @pytest.mark.parametrize("cache_fields", [{}, {"cache_control": {"type": "ephemeral"}}])
-def test_turn_of_only_empty_text_documents_keeps_non_empty_content(cache_fields: dict[str, object]) -> None:
+def test_content_of_only_empty_text_documents_stays_non_empty(
+    cache_fields: dict[str, object], in_tool_result: bool
+) -> None:
     document: Final = {"type": "document", "source": {"type": "text", "data": ""}}
+    documents: Final = [document, {**document, **cache_fields}]
+    placeholder: Final = [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, **cache_fields}]
     messages: Final = [
-        {"role": "user", "content": [document, {**document, **cache_fields}]},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": documents}]
+            if in_tool_result
+            else documents,
+        },
         {"role": "assistant", "content": "The file is empty."},
         {"role": "user", "content": "Thanks"},
     ]
@@ -154,7 +164,12 @@ def test_turn_of_only_empty_text_documents_keeps_non_empty_content(cache_fields:
         headers={},
     )
     assert result["messages"] == [
-        {"role": "user", "content": [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, **cache_fields}]},
+        {
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "tool_1", "content": placeholder}]
+            if in_tool_result
+            else placeholder,
+        },
         *messages[1:],
     ]
 
@@ -174,8 +189,18 @@ _QUESTION: Final = {"type": "text", "text": "What is in this file?"}
             [{**_QUESTION, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
         ),
         (
-            [{"type": "tool_result", "tool_use_id": "tool_1", "content": [_CACHED_EMPTY_DOCUMENT]}, _QUESTION],
-            [{"type": "tool_result", "tool_use_id": "tool_1", "content": [], **_CACHED}, _QUESTION],
+            [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "tool_1",
+                    "content": [{"type": "text", "text": "Notes"}, _CACHED_EMPTY_DOCUMENT],
+                },
+                _QUESTION,
+            ],
+            [
+                {"type": "tool_result", "tool_use_id": "tool_1", "content": [{"type": "text", "text": "Notes", **_CACHED}]},
+                _QUESTION,
+            ],
         ),
     ],
 )
@@ -633,7 +658,7 @@ def test_github_copilot_config_disables_anthropic_beta_filtering():
     # filter, the handler would have run it and dropped every value, since
     # github_copilot has no mapping. Prove that here so a regression that flips
     # should_filter back on is caught as the silent feature breakage it causes.
-    stripped = update_headers_with_filtered_beta(headers=dict(headers), provider="github_copilot")
+    stripped = update_headers_with_filtered_beta(headers={**headers}, provider="github_copilot")
     assert "anthropic-beta" not in stripped
 
 
