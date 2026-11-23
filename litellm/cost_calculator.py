@@ -2395,7 +2395,7 @@ def completion_cost(
                     total_time=total_time,
                 )
                 model_for_discount = custom_priced_request_model or (
-                    model.removeprefix("ai21/") if model is not None and idx >= len(potential_model_names) else model
+                    model.removeprefix("ai21/") if idx >= len(potential_model_names) else model
                 )
                 if (
                     not caller_set_prices
