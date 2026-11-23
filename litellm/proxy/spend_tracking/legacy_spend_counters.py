@@ -59,7 +59,7 @@ async def increment_spend_counters_batched(
     user_id: str | None,
     response_cost: float | None,
     org_id: str | None,
-    budget_reservation: dict[str, object] | None,
+    budget_reservation: dict | None,
     end_user_id: str | None,
     tags: list[str] | None,
     request_started_at: datetime | None,
