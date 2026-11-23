@@ -9,8 +9,8 @@ use litellm_callbacks::{
 };
 use litellm_callbacks_parallel_request_limiter::{
     Backend, CapSettings, Ctx, Descriptor, Engine, EnqueuedReservation, EnqueuedScope,
-    EstimateRequest, IoReservation, LimiterState, Op, Outcome, ParallelRequestLimiter, PolicyFacts,
-    REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition, Stash,
+    EstimateRequest, IoReservation, LimiterState, Op, Outcome, ParallelRequestLimiter, Policy,
+    PolicyFacts, REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition, Stash,
     TokenRateLimitType, Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic,
     tokens_for_request,
 };
@@ -648,7 +648,10 @@ impl NativeParallelRequestLimiter {
         let limiter = Arc::clone(&self.limiter);
         let in_memory = !limiter.engine().has_redis();
         limiter_admission(py, in_memory, async move {
-            limiter.engine().release_slots(&acquisition).await;
+            limiter
+                .engine()
+                .release_slots(&acquisition, Policy::default())
+                .await;
             Ok(())
         })
     }

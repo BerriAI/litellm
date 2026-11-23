@@ -118,6 +118,7 @@ pub struct KeyLimits {
     pub user_tpm_limit: Option<Scalar>,
     pub team_rpm_limit: Option<Scalar>,
     pub team_tpm_limit: Option<Scalar>,
+    pub team_max_parallel_requests: Option<Scalar>,
     pub team_member_rpm_limit: Option<Scalar>,
     pub team_member_tpm_limit: Option<Scalar>,
     pub end_user_rpm_limit: Option<Scalar>,

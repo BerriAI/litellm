@@ -24,6 +24,7 @@ pub struct AuthFacts {
     pub team_id: Value,
     pub team_rpm_limit: Value,
     pub team_tpm_limit: Value,
+    pub team_max_parallel_requests: Value,
     pub team_member_rpm_limit: Value,
     pub team_member_tpm_limit: Value,
     pub end_user_id: Value,
@@ -143,16 +144,22 @@ pub fn auth_descriptors(facts: &AuthFacts) -> Result<AuthDescriptors, Arithmetic
             ),
         ));
     }
-    if truthy(&facts.team_id) && either_set(&facts.team_rpm_limit, &facts.team_tpm_limit) {
-        leading.push(descriptor(
-            "team",
-            facts.team_id.clone(),
-            limits(
-                &facts.team_rpm_limit,
-                &facts.team_tpm_limit,
-                &facts.window_size,
-            ),
-        ));
+    if truthy(&facts.team_id)
+        && (either_set(&facts.team_rpm_limit, &facts.team_tpm_limit)
+            || !facts.team_max_parallel_requests.is_null())
+    {
+        let mut rate_limit = limits(
+            &facts.team_rpm_limit,
+            &facts.team_tpm_limit,
+            &facts.window_size,
+        );
+        if !facts.team_max_parallel_requests.is_null() {
+            rate_limit.insert(
+                "max_parallel_requests".to_owned(),
+                facts.team_max_parallel_requests.clone(),
+            );
+        }
+        leading.push(descriptor("team", facts.team_id.clone(), rate_limit));
     }
     if truthy(&facts.user_id)
         && either_set(&facts.team_member_rpm_limit, &facts.team_member_tpm_limit)
@@ -329,5 +336,27 @@ mod tests {
             vec![json!({"key": "organization", "value": "", "rate_limit": {
                 "requests_per_unit": 3, "tokens_per_unit": null, "window_size": 60}})]
         );
+    }
+
+    #[rstest::rstest]
+    #[case::parallel_only(json!(null), json!(4), json!({"key": "team", "value": "team-a", "rate_limit": {
+        "requests_per_unit": null, "tokens_per_unit": null, "max_parallel_requests": 4, "window_size": 60}}))]
+    #[case::parallel_with_rpm(json!(10), json!(4), json!({"key": "team", "value": "team-a", "rate_limit": {
+        "requests_per_unit": 10, "tokens_per_unit": null, "max_parallel_requests": 4, "window_size": 60}}))]
+    #[case::rpm_only(json!(10), json!(null), json!({"key": "team", "value": "team-a", "rate_limit": {
+        "requests_per_unit": 10, "tokens_per_unit": null, "window_size": 60}}))]
+    fn a_team_descriptor_carries_the_team_parallel_limit(
+        #[case] team_rpm_limit: Value,
+        #[case] team_max_parallel_requests: Value,
+        #[case] expected: Value,
+    ) {
+        let facts = AuthFacts {
+            team_id: json!("team-a"),
+            team_rpm_limit,
+            team_max_parallel_requests,
+            window_size: json!(60),
+            ..AuthFacts::default()
+        };
+        assert_eq!(auth_descriptors(&facts).unwrap().leading, vec![expected]);
     }
 }

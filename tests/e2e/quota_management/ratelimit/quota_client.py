@@ -8,9 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from proxy_client import ProxyClient
-from e2e_http import StreamingResponse
+from e2e_http import StreamingResponse, unwrap
 from e2e_metadata import step
-from models import ChatBody, ChatMessage
+from models import ChatBody, ChatMessage, TeamData, TeamInfoParams, TeamInfoResponse
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,6 +28,29 @@ class QuotaClient:
                 max_tokens=max_tokens,
             ),
         )
+
+    @step('Send a streaming /chat/completions request to {model} with the prompt "{content}"')
+    def stream_chat(self, key: str, model: str, content: str, *, max_tokens: int) -> StreamingResponse:
+        return self.proxy.chat_stream(
+            key,
+            ChatBody(
+                model=model,
+                messages=[ChatMessage(role="user", content=content)],
+                max_tokens=max_tokens,
+                stream=True,
+            ),
+        )
+
+    @step("Read the team back from /team/info")
+    def team_info(self, team_id: str) -> TeamData:
+        return unwrap(
+            self.proxy.transport.get(
+                "/team/info",
+                headers=self.proxy.management_headers(),
+                params=TeamInfoParams(team_id=team_id),
+                response_type=TeamInfoResponse,
+            )
+        ).team_info
 
 
 def build_client(proxy: ProxyClient) -> QuotaClient:

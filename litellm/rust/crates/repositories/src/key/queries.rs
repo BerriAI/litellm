@@ -74,6 +74,7 @@ pub struct KeyView {
     pub team_alias: Option<String>,
     pub team_tpm_limit: Option<i64>,
     pub team_rpm_limit: Option<i64>,
+    pub team_max_parallel_requests: Option<i32>,
     pub team_tpd_limit: Option<i64>,
     pub team_max_budget: Option<f64>,
     pub team_soft_budget: Option<f64>,
@@ -200,8 +201,8 @@ mod tests {
         .await?;
         execute(
             tx,
-            r#"INSERT INTO "LiteLLM_TeamTable" (team_id, team_alias, models, blocked, max_budget, members_with_roles, metadata)
-               VALUES ('kv-team', 'Team KV', ARRAY['gpt-4o'], true, 12.0,
+            r#"INSERT INTO "LiteLLM_TeamTable" (team_id, team_alias, models, blocked, max_budget, max_parallel_requests, members_with_roles, metadata)
+               VALUES ('kv-team', 'Team KV', ARRAY['gpt-4o'], true, 12.0, 3,
                        '[{"user_id": "kv-user", "role": "user"}, {"user_id": "other", "role": "admin"}, {"user_id": "kv-user", "role": "admin"}]',
                        '{"tier": "gold"}')"#,
             &[],
@@ -259,6 +260,7 @@ mod tests {
                     .ok(),
             )
         );
+        assert_eq!(view.team_max_parallel_requests, Some(3));
         Ok(())
     }
 

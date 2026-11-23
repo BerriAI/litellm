@@ -3820,6 +3820,7 @@ dependencies = [
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
  "rstest",
  "serde",
  "serde_json",

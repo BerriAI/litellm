@@ -834,6 +834,40 @@ async def test_new_team_persists_tpd_limit(mock_db_client, mock_admin_auth):
 
 
 @pytest.mark.asyncio
+async def test_new_team_persists_max_parallel_requests(mock_db_client, mock_admin_auth: UserAPIKeyAuth):
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(return_value=MagicMock(id="model123"))
+
+    team_create_result = MagicMock(team_id="team-parallel")
+    team_create_result.model_dump.return_value = {"team_id": "team-parallel", "max_parallel_requests": 4}
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    _wire_team_create_tx(mock_db_client)
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(return_value=team_create_result)
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    await new_team(
+        data=NewTeamRequest(team_alias="parallel-team", max_parallel_requests=4),
+        http_request=MagicMock(spec=Request),
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    assert mock_team_create.call_args.kwargs["data"]["max_parallel_requests"] == 4
+
+
+@pytest.mark.asyncio
 async def test_new_team_with_mcp_tool_permissions(mock_db_client, mock_admin_auth):
     """
     Test that /team/new correctly handles mcp_tool_permissions in object_permission.
@@ -8611,6 +8645,55 @@ async def test_update_team_persists_tpd_limit(disable_audit_logging_for_mocked_t
         written = mock_prisma.db.litellm_teamtable.update.call_args.kwargs["data"]
         assert written["tpd_limit"] == 250000
         assert "rpm_limit" not in written
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("max_parallel_requests", [4, None], ids=["set", "explicit_null_clears"])
+async def test_update_team_writes_max_parallel_requests(
+    disable_audit_logging_for_mocked_team, max_parallel_requests: int | None
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    with (
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.prisma_client"
+        ) as mock_prisma,
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.user_api_key_cache"
+        ) as mock_cache,
+        patch(  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: stubs the audit write so the test observes only the team column written
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ),
+    ):
+        existing_team = MagicMock(team_id="team-parallel", organization_id=None, model_id=None)
+        existing_team.model_dump.return_value = {"team_id": "team-parallel", "organization_id": None}
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing_team)
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+        mock_cache.async_get_cache = AsyncMock(return_value=None)
+        mock_cache.async_set_cache = AsyncMock()
+        updated_team = MagicMock(team_id="team-parallel", organization_id=None, litellm_model_table=None)
+        updated_team.model_dump.return_value = {
+            "team_id": "team-parallel",
+            "organization_id": None,
+            "max_parallel_requests": max_parallel_requests,
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=updated_team)
+
+        await update_team(
+            data=UpdateTeamRequest(team_id="team-parallel", max_parallel_requests=max_parallel_requests),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"),
+        )
+
+        written = mock_prisma.db.litellm_teamtable.update.call_args.kwargs["data"]
+        assert "max_parallel_requests" in written
+        assert written["max_parallel_requests"] == max_parallel_requests
 
 
 @pytest.mark.asyncio

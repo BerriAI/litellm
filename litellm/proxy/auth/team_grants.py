@@ -58,6 +58,7 @@ class TeamGrants(TypedDict, total=False):
     team_alias: ReadOnly[str | None]
     team_tpm_limit: ReadOnly[int | None]
     team_rpm_limit: ReadOnly[int | None]
+    team_max_parallel_requests: ReadOnly[int | None]
     team_tpd_limit: ReadOnly[int | None]
     team_max_budget: ReadOnly[float | None]
     team_soft_budget: ReadOnly[float | None]
@@ -80,6 +81,7 @@ _TEAM_GRANT_AUTH_FIELDS: Final[frozenset[str]] = frozenset(
         "team_alias",
         "team_tpm_limit",
         "team_rpm_limit",
+        "team_max_parallel_requests",
         "team_tpd_limit",
         "team_max_budget",
         "team_soft_budget",
@@ -186,6 +188,7 @@ def team_grants(
         team_alias=team_object.team_alias,
         team_tpm_limit=team_object.tpm_limit,
         team_rpm_limit=team_object.rpm_limit,
+        team_max_parallel_requests=team_object.max_parallel_requests,
         team_tpd_limit=team_object.tpd_limit,
         team_max_budget=team_object.max_budget,
         team_soft_budget=team_object.soft_budget,
