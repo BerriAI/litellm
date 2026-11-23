@@ -180,7 +180,7 @@ fn resolution(settings: HttpSettings) -> Resolution {
 fn resolved(py: Python<'_>, settings: HttpSettings) -> HttpClientConfig {
     let resolution = resolution(settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
-        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
+        crate::logger::capture(py).scope(|| tracing::warn!("{unsupported}"));
     }
     resolution.config
 }

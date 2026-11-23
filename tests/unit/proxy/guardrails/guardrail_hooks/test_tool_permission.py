@@ -3996,7 +3996,7 @@ class TestToolPermissionGuardrailAnthropicMessages:
         assert self._events(out)[-1] == self.UPSTREAM_ERROR
 
     @pytest.mark.asyncio
-    async def test_client_gets_the_input_the_check_read_when_deltas_interleave_before_an_upstream_error(self):
+    async def test_denied_tool_input_whose_deltas_interleave_before_an_upstream_error_is_blocked(self):
         guardrail: Final = ToolPermissionGuardrail(
             guardrail_name="anthropic-param-block",
             rules=[
@@ -4364,6 +4364,22 @@ def _call_as_data_lines_of_one_frame(name_line: bytes) -> tuple[bytes, ...]:
     return _stream(name_line + b"".join(b"data: " + json.dumps(event).encode() + b"\n" for event in events) + b"\n")
 
 
+def _overlapped_calls(first_command: dict[str, str], second_command: dict[str, str]) -> tuple[bytes, ...]:
+    return _stream(
+        *(
+            _sse_frame(event)
+            for event in (
+                _tool_start(1, "Bash"),
+                _tool_start(2, "Bash"),
+                _input_delta(1, json.dumps(first_command)),
+                _block_stop(1),
+                _input_delta(2, json.dumps(second_command)),
+                _block_stop(2),
+            )
+        )
+    )
+
+
 _DENIED_CALLS_ONLY_A_LINE_SPLITTING_CLIENT_READS: Final = {
     "form-feed": _call_in_a_comment_broken_by(b"\x0c"),
     "line-separator": _call_in_a_comment_broken_by("\u2028".encode()),
@@ -4677,6 +4693,22 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
 
         tool_inputs: Final = [block.input for block in _sdk_message(out).content if block.type == "tool_use"]
         assert _RM_RF not in tool_inputs
+
+    @pytest.mark.asyncio
+    async def test_allowed_calls_that_overlap_are_forwarded_as_the_upstream_sent_them(self):
+        chunks: Final = _overlapped_calls(_LS, _LS)
+
+        assert await self._drain(self._bash_ls_only("block"), chunks) == list(chunks)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("first", "second", "kept_id"), [(_LS, _RM_RF, "tu_1"), (_RM_RF, _LS, "tu_2")])
+    async def test_of_two_calls_that_overlap_only_the_allowed_one_reaches_the_client_with_its_own_input(
+        self, first: dict[str, str], second: dict[str, str], kept_id: str
+    ):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), _overlapped_calls(first, second))
+
+        calls: Final = [block for block in _sdk_message(out).content if block.type == "tool_use"]
+        assert [(call.id, call.input) for call in calls] == [(kept_id, _LS)]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("chunks", _ALLOWED_CALL_SHAPES.values(), ids=_ALLOWED_CALL_SHAPES)

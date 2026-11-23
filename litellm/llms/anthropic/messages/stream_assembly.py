@@ -2,8 +2,7 @@ import codecs
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from functools import reduce
-from itertools import chain
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
@@ -545,9 +544,16 @@ def _client_events(named_data: Sequence[_NamedData]) -> tuple[Mapping[str, objec
     return tuple(event for name, data in named_data if (event := _client_event(name, data)) is not None)
 
 
+def _stream_client_frames(sse_stream: str) -> tuple[tuple[str, str], ...]:
+    return _client_frames(_sse_frames(sse_stream.removeprefix(_BYTE_ORDER_MARK)))
+
+
 def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
-    """Every Anthropic event a client reads in the stream, an event with no data ``type`` taking its ``event:`` name."""
-    return _client_events(_named_data(_client_frames(_sse_frames(sse_stream.removeprefix(_BYTE_ORDER_MARK)))))
+    """Every Anthropic event a client reads in the stream, whatever line breaks, comments or data lines it uses.
+
+    An event without a data ``type`` takes its SSE ``event:`` name, as the Anthropic SDK reads it.
+    """
+    return _client_events(_named_data(_stream_client_frames(sse_stream)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -573,8 +579,9 @@ def _stream_item(name: str, data: str) -> _StreamItem | None:
 
 
 def _stream_items(sse_stream: str) -> tuple[_StreamItem, ...]:
-    frames: Final = _client_frames(_sse_frames(sse_stream.removeprefix(_BYTE_ORDER_MARK)))
-    return tuple(item for name, data in frames if (item := _stream_item(name, data)) is not None)
+    return tuple(
+        item for name, data in _stream_client_frames(sse_stream) if (item := _stream_item(name, data)) is not None
+    )
 
 
 def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[str, object] | None:
@@ -590,7 +597,7 @@ def _anthropic_message_start(events: Sequence[Mapping[str, object]]) -> Mapping[
 
 
 def anthropic_message_delta_fields(all_chunks: Sequence[object]) -> Mapping[str, object]:
-    """The ``stop_details`` and ``safeguard_results`` of the stream's ``message_delta``.
+    """The ``stop_details``, ``safeguard_results`` and ``container`` of the stream's ``message_delta``.
 
     The assembled OpenAI shape has no slot for them, and a client that asked to stream reads them
     from that event and nowhere else (a Claude Code auto-mode session takes its classifier verdict
@@ -645,8 +652,8 @@ def has_unreadable_json_event(all_chunks: Sequence[object]) -> bool:
     return any(_is_json_no_reader_can_take(_sse_data_payload(event) or "") for event in _sse_frames(sse_stream))
 
 
-def _has_undecodable_object_event(sse_stream: str) -> bool:
-    return any(is_undecodable_json_object(_sse_data_payload(frame) or "") for frame in _sse_frames(sse_stream))
+def _has_undecodable_object(client_frames: Sequence[tuple[str, str]]) -> bool:
+    return any(is_undecodable_json_object(data) for _, data in client_frames)
 
 
 def anthropic_sse_event_type(event: str) -> object:
@@ -699,6 +706,38 @@ def anthropic_sse_error_events(all_chunks: Sequence[object]) -> tuple[str, ...]:
     return tuple(_plain_error_event(event) for event in _error_events(_joined_sse_stream(all_chunks) or ""))
 
 
+@dataclass(frozen=True, slots=True)
+class AnthropicSseFrame:
+    """A frame of the stream, with the Anthropic event a client reads in it and the data of an error one raises on."""
+
+    raw: str
+    event: Mapping[str, object]
+    error_data: str | None
+
+
+def _sse_frame(raw: str) -> AnthropicSseFrame:
+    name, data = _client_frame(raw) or ("", "")
+    return AnthropicSseFrame(
+        raw=raw,
+        event=_client_event(name, loads_json_object(data)) or MappingProxyType({}),
+        error_data=data if _is_error_event(raw) or _is_named_error_event(raw) else None,
+    )
+
+
+def anthropic_sse_frames(all_chunks: Sequence[object]) -> tuple[AnthropicSseFrame, ...]:
+    return tuple(map(_sse_frame, _frames_a_client_dispatches(_joined_sse_stream(all_chunks) or "")))
+
+
+def _error_data_lines(data: str) -> tuple[str, ...]:
+    if loads_json_object(data) is not None:
+        return (data.replace("\n", " ").translate(_JSON_ESCAPED_LINE_BREAKS),)
+    return tuple(data.split("\n")) if data else ()
+
+
+def anthropic_sse_error_event_of(data: str) -> str:
+    return "\n".join(("event: error", *(f"data: {line}" for line in _error_data_lines(data))))
+
+
 def anthropic_sse_stopped_block_index(event: str) -> object:
     return next(
         (
@@ -738,7 +777,7 @@ def _unfinished_blocks(events: Sequence[Mapping[str, object]]) -> Mapping[int, M
 
 
 def anthropic_sse_unfinished_blocks(all_chunks: Sequence[object]) -> Mapping[int, Mapping[str, object]]:
-    """The blocks the stream opened and never stopped, which only a failed upstream leaves."""
+    """The blocks the stream opened and never stopped."""
     return _unfinished_blocks(_parsed_sse_events(_joined_sse_stream(all_chunks) or ""))
 
 
@@ -766,6 +805,11 @@ def _streamed_input_index(event: Mapping[str, object]) -> int | None:
     return _block_index(event)
 
 
+def _started_tool_use(event: Mapping[str, object]) -> Mapping[str, object] | None:
+    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
+    return block if block is not None and block.get("type") == "tool_use" else None
+
+
 def _with_tool_input_as_delta(
     event: Mapping[str, object], streamed_input_indexes: frozenset[int]
 ) -> tuple[Mapping[str, object], ...]:
@@ -773,10 +817,8 @@ def _with_tool_input_as_delta(
 
     A client takes a ``tool_use`` start's ``input`` as the call's input unless input deltas replace it.
     """
-    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
-    tool_input: Final = (
-        as_str_mapping(block.get("input")) if block is not None and block.get("type") == "tool_use" else None
-    )
+    block: Final = _started_tool_use(event)
+    tool_input: Final = as_str_mapping(block.get("input")) if block is not None else None
     if block is None or not tool_input:
         return (event,)
     start: Final = {**event, "content_block": {**block, "input": dict[str, object]()}}
@@ -784,6 +826,27 @@ def _with_tool_input_as_delta(
         return (start,)
     input_delta: Final = {"type": "input_json_delta", "partial_json": json.dumps(tool_input)}
     return start, {"type": "content_block_delta", "index": event.get("index"), "delta": input_delta}
+
+
+def _streamed_input_indexes(events: Sequence[Mapping[str, object]]) -> frozenset[int]:
+    return frozenset(index for event in events if (index := _streamed_input_index(event)) is not None)
+
+
+_BLOCK_EVENT_TYPES: Final = frozenset({"content_block_start", "content_block_delta", "content_block_stop"})
+
+
+def _positions_by_block(events: Sequence[Mapping[str, object]], event_type: str) -> Mapping[int, tuple[int, ...]]:
+    indexed: Final = sorted(
+        (index, position)
+        for position, event in enumerate(events)
+        if event.get("type") == event_type and (index := _block_index(event)) is not None
+    )
+    return MappingProxyType(
+        {
+            index: tuple(position for _, position in positions)
+            for index, positions in groupby(indexed, key=lambda indexed_position: indexed_position[0])
+        }
+    )
 
 
 _DELTA_FIELD_BY_TYPE: Final = MappingProxyType(
@@ -876,8 +939,8 @@ def _sse_frame_text(item: _StreamItem) -> str:
 
 def _canonical_sse_frames(items: Sequence[_StreamItem]) -> tuple[str, ...]:
     sdk_items: Final = tuple(_as_the_sdks_apply(item) for item in _in_block_order(items))
-    streamed_input_indexes: Final = frozenset(
-        index for item in sdk_items if isinstance(item, Mapping) and (index := _streamed_input_index(item)) is not None
+    streamed_input_indexes: Final = _streamed_input_indexes(
+        tuple(item for item in sdk_items if isinstance(item, Mapping))
     )
     canonical_items: Final = chain.from_iterable(
         _with_its_input_as_delta(item, streamed_input_indexes) for item in sdk_items
@@ -913,9 +976,12 @@ def assemble_anthropic_sse_stream(
     passes the upstream error on; a caller recording what was served keeps None.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None or _has_undecodable_object_event(sse_stream):
+    if sse_stream is None:
         return None
-    events: Final = _parsed_sse_events(sse_stream)
+    client_frames: Final = _stream_client_frames(sse_stream)
+    if _has_undecodable_object(client_frames):
+        return None
+    events: Final = _client_events(_named_data(client_frames))
     message_start: Final = _anthropic_message_start(events)
     if message_start is None:
         return None
@@ -943,59 +1009,64 @@ def assemble_anthropic_sse_stream(
     return assembled
 
 
+def _input_delta_index(event: Mapping[str, object]) -> int | None:
+    delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "content_block_delta" else None
+    return _block_index(event) if delta is not None and delta.get("type") == "input_json_delta" else None
+
+
+def _replaces_its_start_input(event: Mapping[str, object], input_delta_indexes: frozenset[int]) -> bool:
+    block: Final = as_str_mapping(event.get("content_block")) if event.get("type") == "content_block_start" else None
+    tool_input: Final = as_str_mapping(block.get("input")) if block is not None else None
+    return bool(tool_input) and _block_index(event) in input_delta_indexes
+
+
+def anthropic_sse_assembles_every_tool_input(all_chunks: Sequence[object]) -> bool:
+    """Whether assembly reads the input of every client and server tool call, as it does in a stream that ends well.
+
+    It leaves out a start's input that deltas replace, and reads a server tool call only once it stops.
+    """
+    events: Final = _parsed_sse_events(_joined_sse_stream(all_chunks) or "")
+    input_delta_indexes: Final = frozenset(
+        index for event in events if (index := _input_delta_index(event)) is not None
+    )
+    return not any(_replaces_its_start_input(event, input_delta_indexes) for event in events) and not any(
+        block.get("type") == "server_tool_use" for block in _unfinished_blocks(events).values()
+    )
+
+
 def _names_its_own_type(name: str, data: Mapping[str, object] | None) -> bool:
     data_type: Final = data.get("type") if data is not None else None
     return name in (data_type, "error") or not (_is_applied_by_name(name) or _is_applied_by_name(data_type))
 
 
-def _is_block_index(value: object, expected: int) -> bool:
-    return type(value) is int and value == expected
+def _carries_text(event: Mapping[str, object]) -> bool:
+    content: Final = as_str_mapping(event.get("content_block") or event.get("delta"))
+    return content is not None and bool(content.get("text"))
 
 
-def _carries_only_its_own_field(event: Mapping[str, object]) -> bool:
-    delta: Final = as_str_mapping(event.get("delta"))
-    delta_type: Final = delta.get("type") if delta is not None else None
-    if delta is None or not isinstance(delta_type, str):
+def _is_read_by_block(events: Sequence[Mapping[str, object]]) -> bool:
+    """Whether the blocks start at 0, 1, 2 and so on, take their deltas while open, and send their text in that order.
+
+    Blocks may overlap, as when an upstream streams several tool calls at once.
+    """
+    block_events: Final = tuple(event for event in events if event.get("type") in _BLOCK_EVENT_TYPES)
+    indexes: Final = tuple(index for event in block_events if type(index := event.get("index")) is int)
+    if len(indexes) != len(block_events):
         return False
-    own_field: Final = _DELTA_FIELD_BY_TYPE.get(delta_type)
-    return _DELTA_FIELDS.intersection(delta) == (frozenset((own_field,)) if own_field else frozenset())
-
-
-def _starts_with_input(event: Mapping[str, object]) -> bool:
-    block: Final = as_str_mapping(event.get("content_block"))
-    return block is not None and bool(block.get("input"))
-
-
-def _is_input_delta(event: Mapping[str, object]) -> bool:
-    delta: Final = as_str_mapping(event.get("delta"))
-    return delta is not None and delta.get("type") == "input_json_delta"
-
-
-_BlockOrder: TypeAlias = tuple[int, bool, bool]
-
-
-def _after_block_event(blocks: _BlockOrder | None, event: Mapping[str, object]) -> _BlockOrder | None:
-    """The blocks started so far, whether the last one is open, and whether it started with its input."""
-    if blocks is None:
-        return None
-    started, is_open, started_with_input = blocks
-    index: Final = event.get("index")
-    match event.get("type"):
-        case "content_block_start":
-            opens_next: Final = _is_block_index(index, started) and not _carries_the_typescript_sdk_input_buffer(event)
-            return (started + 1, True, _starts_with_input(event)) if opens_next else None
-        case "content_block_delta":
-            reads_alike: Final = (
-                is_open
-                and _is_block_index(index, started - 1)
-                and _carries_only_its_own_field(event)
-                and not (started_with_input and _is_input_delta(event))
-            )
-            return blocks if reads_alike else None
-        case "content_block_stop":
-            return (started, False, False) if is_open and _is_block_index(index, started - 1) else None
-        case _:
-            return blocks
+    started: Final = tuple(event.get("index") for event in block_events if event.get("type") == "content_block_start")
+    if started != tuple(range(len(started))):
+        return False
+    starts: Final = _positions_by_block(block_events, "content_block_start")
+    stops: Final = _positions_by_block(block_events, "content_block_stop")
+    never: Final = (len(block_events),)
+    text_indexes: Final = tuple(
+        index for index, event in zip(indexes, block_events, strict=True) if _carries_text(event)
+    )
+    return text_indexes == tuple(sorted(text_indexes)) and all(
+        starts.get(index, never)[0] < position <= stops.get(index, never)[0]
+        for position, (index, event) in enumerate(zip(indexes, block_events, strict=True))
+        if event.get("type") != "content_block_start"
+    )
 
 
 def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool:
@@ -1004,6 +1075,25 @@ def _opens_with_an_empty_message(events: Sequence[Mapping[str, object]]) -> bool
     )
     message: Final = as_str_mapping(events[0].get("message")) if message_starts == (0,) else None
     return message is not None and not message.get("content")
+
+
+_DELTA_FIELDS_ASSEMBLY_READS_FIRST: Final = MappingProxyType(
+    {
+        "input_json_delta": frozenset({"text"}),
+        "citations_delta": frozenset({"text", "partial_json"}),
+        "thinking_delta": frozenset({"text", "partial_json", "citation"}),
+        "signature_delta": frozenset({"text", "partial_json", "citation"}),
+        "compaction_delta": frozenset({"text", "partial_json", "citation", "thinking", "signature"}),
+    }
+)
+
+
+def _assembly_reads_the_field_the_delta_type_names(event: Mapping[str, object]) -> bool:
+    delta: Final = as_str_mapping(event.get("delta"))
+    delta_type: Final = delta.get("type") if delta is not None else None
+    if delta is None or not isinstance(delta_type, str):
+        return True
+    return delta.keys().isdisjoint(_DELTA_FIELDS_ASSEMBLY_READS_FIRST.get(delta_type, frozenset()))
 
 
 def _is_plain(line: str) -> bool:
@@ -1020,24 +1110,68 @@ def _ends_at_its_first_message_stop(events: Sequence[Mapping[str, object]]) -> b
     return stops[:1] in ((), (len(events) - 1,))
 
 
+def _block_events_read_alike(event: Mapping[str, object]) -> bool:
+    match event.get("type"):
+        case "content_block_start":
+            return not _carries_the_typescript_sdk_input_buffer(event)
+        case "content_block_delta":
+            return _assembly_reads_the_field_the_delta_type_names(event)
+        case _:
+            return True
+
+
+def _is_json_object(data: str) -> bool:
+    return loads_json_object(data) is not None or is_undecodable_json_object(data)
+
+
+def _carries_json(client_frame: tuple[str, str]) -> bool:
+    _, data = client_frame
+    return _is_json_object(data)
+
+
+def _no_data_line_of_a_frame_is_json_alone(client_frames: tuple[tuple[str, str], ...]) -> bool:
+    multi_line_data: Final = (data for _, data in client_frames if "\n" in data)
+    return not any(map(_is_json_object, chain.from_iterable(map(str.splitlines, multi_line_data))))
+
+
+def _the_widest_reader_dispatches_no_other_json(sse_stream: str, client_frames: tuple[tuple[str, str], ...]) -> bool:
+    dispatched_in_order: Final = iter(client_frames)
+    json_frames: Final = (
+        frame for frame in _client_frames(_frames_of_the_widest_reader(sse_stream)) if _carries_json(frame)
+    )
+    return all(frame in dispatched_in_order for frame in json_frames)
+
+
 def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     """Whether every client reads the stream's content as assembly does, so the stream can be forwarded as sent.
 
-    That holds only for plain lines and single-line data that a spec reader, ``str.splitlines`` and an LF-only
-    reader split alike, ``event:`` names that agree with data types, an empty ``message_start`` first and nothing
-    after ``message_stop``, and blocks that start at the next index and take only their own deltas, each carrying
-    only its type's field, an input delta never following a start with input or ``__json_buf``.
+    The Anthropic SDKs apply a frame by its SSE ``event:`` name, other clients by its data ``type``, and a
+    client puts a block delta on the block at that list position or index. Assembly reads every one of
+    these the same way only when the names and types agree, ``message_start`` comes first with no content and
+    nothing follows ``message_stop``, each block starts at the next index and takes its deltas before it stops,
+    and the text of the blocks comes in their order. A frame named ``error`` may carry any data, since the SDKs
+    raise on it and other clients read its type. A leading byte order mark stays part of the first field name, as
+    the Python SDK reads it, so these rules refuse it wherever it changes what that SDK reads. No client dispatches
+    a frame the stream never ended, so a stream with one reads differently too. Only plain lines read alike, since
+    an LF-only reader keeps a bare CR inside a line and a lenient reader takes data from a line that starts with a
+    space or a comment. A reader taking each data line on its own, or reading lines with httpx, which also breaks
+    them at a form feed or U+2028, reads differently when that reveals a JSON object the others skip. The SDKs read
+    a block delta's field by its delta type and the TypeScript SDK puts a start's ``__json_buf`` in front of its
+    input deltas, so a delta also carrying a field assembly reads first, as text on an ``input_json_delta``, or a
+    start with that buffer reads differently.
+    So does an object Python cannot decode, nested too deep or holding too long a number, which a JavaScript client
+    reads.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     if not _has_only_plain_lines(sse_stream):
         return False
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
-    sse_frames: Final = _sse_frames(sse_stream)
-    widest_frames: Final = _frames_of_the_widest_reader(sse_stream)
-    other_readings: Final = (sse_frames,) if widest_frames == sse_frames else (sse_frames, widest_frames)
-    if any(_client_frames(frames) != client_frames for frames in other_readings):
+    if client_frames != _client_frames(_sse_frames(sse_stream)) or _has_undecodable_object(client_frames):
         return False
-    if any("\n" in data for _, data in client_frames):
+    if not (
+        _the_widest_reader_dispatches_no_other_json(sse_stream, client_frames)
+        and _no_data_line_of_a_frame_is_json_alone(client_frames)
+    ):
         return False
     named_data: Final = _named_data(client_frames)
     if not all(_names_its_own_type(name, data) for name, data in named_data):
@@ -1046,7 +1180,8 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     return (
         _opens_with_an_empty_message(events)
         and _ends_at_its_first_message_stop(events)
-        and reduce(_after_block_event, events, (0, False, False)) is not None
+        and _is_read_by_block(events)
+        and all(map(_block_events_read_alike, events))
     )
 
 

@@ -207,13 +207,13 @@ class DataDogLogger(
             verbose_logger.exception("Datadog: Got exception on init Datadog client %s", e)
             raise e
 
-    def _get_datadog_params(self) -> dict:
+    def _get_datadog_params(self) -> dict[str, object]:
         """
         Get the datadog_params from litellm.datadog_params
 
         These are params specific to initializing the DataDogLogger e.g. turn_off_message_logging
         """
-        dict_datadog_params: dict = {}
+        dict_datadog_params: dict[str, object] = {}
         if litellm.datadog_params is not None:
             if isinstance(litellm.datadog_params, DatadogInitParams):
                 dict_datadog_params = litellm.datadog_params.model_dump()
@@ -273,7 +273,13 @@ class DataDogLogger(
         self.DD_API_KEY = resolved_api_key
         self.intake_url = f"https://http-intake.logs.{resolved_site}/api/v2/logs"
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         """
         Async Log success events to Datadog
 
@@ -292,7 +298,13 @@ class DataDogLogger(
         except Exception as e:
             verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         try:
             verbose_logger.debug("Datadog: Logging - Enters logging function for model %s", kwargs)
             await self._log_async_event(kwargs, response_obj, start_time, end_time)
@@ -418,7 +430,7 @@ class DataDogLogger(
             self.log_queue = batch_to_send + self.log_queue
             verbose_logger.exception("Datadog Error sending batch API - %s\n%s", e, traceback.format_exc())
 
-    async def _send_with_413_split(self, batch: list) -> list:
+    async def _send_with_413_split(self, batch: list[DatadogPayload]) -> list[DatadogPayload]:
         """
         Send a batch, halving any sub-batch that exceeds Datadog's intake limits before
         sending, and halving again on a 413 (payload too large) response, since Datadog
@@ -516,7 +528,13 @@ class DataDogLogger(
         except Exception as e:
             verbose_logger.exception("Datadog Layer Error - %s\n%s", e, traceback.format_exc())
 
-    async def _log_async_event(self, kwargs, response_obj, start_time, end_time):
+    async def _log_async_event(
+        self,
+        kwargs: _DatadogLoggingKwargs,
+        response_obj: object,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
         dd_payload: Final = self.create_datadog_logging_payload(
             kwargs=kwargs,
             response_obj=response_obj,
@@ -626,7 +644,7 @@ class DataDogLogger(
         parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """
         Logs failures from Redis, Postgres (Adjacent systems), as 'WARNING' on DataDog
@@ -660,7 +678,7 @@ class DataDogLogger(
         parent_otel_span: object = None,
         start_time: datetimeObj | float | None = None,
         end_time: float | datetimeObj | None = None,
-        event_metadata: dict | None = None,
+        event_metadata: Mapping[str, object] | None = None,
     ):
         """
         Logs success from Redis, Postgres (Adjacent systems), as 'INFO' on DataDog
