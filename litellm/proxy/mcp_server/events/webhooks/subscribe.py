@@ -424,7 +424,10 @@ async def unsubscribe(
     if row.status != "pending" and not await events_store.hold_for_unsubscribe(
         sid, row.upstream_subscription_id, row.generation
     ):
-        return Error(subscription_not_found())
+        held: Final = await events_store.get(sid)
+        expected: Final = ("pending", row.generation, row.upstream_subscription_id)
+        if held is None or (held.status, held.generation, held.upstream_subscription_id) != expected:
+            return Error(subscription_not_found())
     with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS) as deadline:
         if not await end_upstream(row, settings, runtime, prepared=prepared):
             return Error(internal_error("Upstream unsubscribe was not confirmed; retry"))
