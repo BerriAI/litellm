@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
-from collections.abc import Awaitable, Mapping, Sequence
+import subprocess
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from functools import reduce
 from itertools import accumulate, chain, groupby, pairwise, takewhile
@@ -885,3 +887,299 @@ async def pr_receipts(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)
         spend_with_pr=sum(receipt.spend for receipt in receipts),
         spend_without_pr=sum(run.spend for run in runs if not run.pr_urls),
     )
+
+
+class RecallRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team: str
+    model: str
+    first_day: str
+    last_day: str
+    days: int
+    requests: int
+    prompt_tokens: int
+    completion_tokens: int
+    logged: float
+    corrected: float
+    delta: float
+
+
+class BillRecall(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    window_days: int
+    rows: tuple[RecallRow, ...]
+    logged: float
+    corrected: float
+    delta: float
+    days_checked: int
+
+
+def _int(value: object) -> int:
+    return int(_number(value) or 0)
+
+
+def _at_todays_price(model: str, prompt_tokens: int, completion_tokens: int) -> float:
+    prices: Final = _prices(model)
+    return prompt_tokens * (_number(prices.get("input_cost_per_token")) or 0.0) + completion_tokens * (
+        _number(prices.get("output_cost_per_token")) or 0.0
+    )
+
+
+_DAILY_TEAM_SQL: Final = (
+    "SELECT COALESCE(t.team_alias, d.team_id, 'no team') AS team, d.model AS model, d.date AS day, "
+    "SUM(d.prompt_tokens) AS prompt_tokens, SUM(d.completion_tokens) AS completion_tokens, "
+    "SUM(d.api_requests) AS requests, SUM(d.spend) AS spend, MAX(t.max_budget) AS max_budget "
+    'FROM "LiteLLM_DailyTeamSpend" d LEFT JOIN "LiteLLM_TeamTable" t ON t.team_id = d.team_id '
+    "WHERE d.model IS NOT NULL AND d.date >= $1 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"
+)
+
+
+async def _daily_team_rows(window_days: int) -> Sequence[Mapping[str, object]]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    since: Final = (datetime.now(timezone.utc) - timedelta(days=window_days)).strftime("%Y-%m-%d")
+    return await query_raw_within_statement_timeout(prisma_client, _DAILY_TEAM_SQL, since)
+
+
+def _recall_row(team: str, model: str, days: Sequence[Mapping[str, object]]) -> RecallRow | None:
+    priced: Final = tuple(
+        (day, _at_todays_price(model, _int(day.get("prompt_tokens")), _int(day.get("completion_tokens"))))
+        for day in days
+    )
+    wrong: Final = tuple(
+        (day, corrected)
+        for day, corrected in priced
+        if abs(corrected - (_number(day.get("spend")) or 0.0)) > max(0.01 * corrected, 1e-6)
+    )
+    if not wrong:
+        return None
+    logged: Final = sum(_number(day.get("spend")) or 0.0 for day, _ in wrong)
+    corrected_total: Final = sum(corrected for _, corrected in wrong)
+    return RecallRow(
+        team=team,
+        model=model,
+        first_day=str(wrong[0][0].get("day")),
+        last_day=str(wrong[-1][0].get("day")),
+        days=len(wrong),
+        requests=sum(_int(day.get("requests")) for day, _ in wrong),
+        prompt_tokens=sum(_int(day.get("prompt_tokens")) for day, _ in wrong),
+        completion_tokens=sum(_int(day.get("completion_tokens")) for day, _ in wrong),
+        logged=logged,
+        corrected=corrected_total,
+        delta=corrected_total - logged,
+    )
+
+
+@router.get("/bill_recall")
+async def bill_recall(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], window_days: int = 30) -> BillRecall:
+    """Re-prices every stored team, model and day at today's cost map and returns the days whose logged spend
+    is off by more than one percent, with what they were logged at and what they cost at the corrected price."""
+    _require_admin(user)
+    daily: Final = await _daily_team_rows(window_days)
+    rows: Final = tuple(
+        row
+        for (team, model), days in groupby(daily, key=lambda day: (str(day.get("team")), str(day.get("model"))))
+        if (row := _recall_row(team, model, tuple(days))) is not None
+    )
+    return BillRecall(
+        window_days=window_days,
+        rows=tuple(sorted(rows, key=lambda row: -abs(row.delta))),
+        logged=sum(row.logged for row in rows),
+        corrected=sum(row.corrected for row in rows),
+        delta=sum(row.delta for row in rows),
+        days_checked=len(daily),
+    )
+
+
+class SwapRow(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team: str
+    model: str
+    successor: str
+    retires: str | None
+    prompt_tokens: int
+    completion_tokens: int
+    now: float
+    after: float
+    delta: float
+
+
+class SwapTeam(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    team: str
+    budget: float | None
+    now: float
+    after: float
+    budget_lasts_days_now: float | None
+    budget_lasts_days_after: float | None
+
+
+class SwapBill(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    window_days: int
+    rows: tuple[SwapRow, ...]
+    teams: tuple[SwapTeam, ...]
+    now: float
+    after: float
+
+
+def _swap_row(team: str, model: str, days: Sequence[Mapping[str, object]]) -> SwapRow | None:
+    catalog: Final = _as_dict(litellm.model_cost.get(model, {}))
+    successor: Final = catalog.get("successor_model")
+    if not isinstance(successor, str) or not _prices(successor):
+        return None
+    prompt_tokens: Final = sum(_int(day.get("prompt_tokens")) for day in days)
+    completion_tokens: Final = sum(_int(day.get("completion_tokens")) for day in days)
+    now: Final = _at_todays_price(model, prompt_tokens, completion_tokens)
+    after: Final = _at_todays_price(successor, prompt_tokens, completion_tokens)
+    retires: Final = catalog.get("deprecation_date")
+    return SwapRow(
+        team=team,
+        model=model,
+        successor=successor,
+        retires=str(retires) if retires else None,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        now=now,
+        after=after,
+        delta=after - now,
+    )
+
+
+def _swap_team(team: str, days: Sequence[Mapping[str, object]], rows: Sequence[SwapRow], window_days: int) -> SwapTeam:
+    now: Final = sum(_number(day.get("spend")) or 0.0 for day in days)
+    after: Final = now + sum(row.delta for row in rows if row.team == team)
+    budget: Final = next((found for day in days if (found := _number(day.get("max_budget"))) is not None), None)
+    return SwapTeam(
+        team=team,
+        budget=budget,
+        now=now,
+        after=after,
+        budget_lasts_days_now=budget / (now / window_days) if budget is not None and now > 0 else None,
+        budget_lasts_days_after=budget / (after / window_days) if budget is not None and after > 0 else None,
+    )
+
+
+@router.get("/swap_bill")
+async def swap_bill(user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)], window_days: int = 30) -> SwapBill:
+    """Prices the stored traffic of every model the cost map marks with a successor at that successor's price,
+    per team, and says how many days each team's budget lasts before and after the swap."""
+    _require_admin(user)
+    daily: Final = await _daily_team_rows(window_days)
+    rows: Final = tuple(
+        row
+        for (team, model), days in groupby(daily, key=lambda day: (str(day.get("team")), str(day.get("model"))))
+        if (row := _swap_row(team, model, tuple(days))) is not None
+    )
+    teams: Final = tuple(
+        _swap_team(team, tuple(days), rows, window_days)
+        for team, days in groupby(daily, key=lambda day: str(day.get("team")))
+    )
+    return SwapBill(
+        window_days=window_days,
+        rows=tuple(sorted(rows, key=lambda row: -row.delta)),
+        teams=tuple(team for team in teams if any(row.team == team.team for row in rows)),
+        now=sum(row.now for row in rows),
+        after=sum(row.after for row in rows),
+    )
+
+
+class LocalPatch(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    added: int
+    removed: int
+    first_change: str
+    found_in: str | None
+    verdict: str
+
+
+class PatchDrop(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    tree: str
+    installed: str
+    checked_against: tuple[str, ...]
+    patches: tuple[LocalPatch, ...]
+    droppable: int
+
+
+def _git(tree: str, *args: str) -> str | None:
+    done: Final = subprocess.run(  # arguments are fixed git subcommands plus refs read from the tree itself
+        ("git", "-C", tree, *args), capture_output=True, text=True, timeout=60, check=False
+    )
+    return done.stdout if done.returncode == 0 else None
+
+
+Git = Callable[..., str | None]
+
+
+def _already_in(git: Git, tree: str, ref: str, path: str, patch: str) -> bool:
+    upstream: Final = git(tree, "show", f"{ref}:{path}")
+    if upstream is None:
+        return False
+    upstream_lines: Final = frozenset(line.strip() for line in upstream.splitlines())
+    added: Final = tuple(
+        line[1:].strip() for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++")
+    )
+    return all(line in upstream_lines for line in added if line)
+
+
+def _local_patch(git: Git, tree: str, path: str, base: str, refs: Sequence[tuple[str, str]]) -> LocalPatch:
+    patch: Final = git(tree, "diff", base, "--", path) or ""
+    changed: Final = tuple(
+        line for line in patch.splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))
+    )
+    found: Final = next(((ref, verdict) for ref, verdict in refs if _already_in(git, tree, ref, path, patch)), None)
+    return LocalPatch(
+        path=path,
+        added=sum(line.startswith("+") for line in changed),
+        removed=sum(line.startswith("-") for line in changed),
+        first_change=next((line[1:].strip() for line in changed if line.startswith("+") and line[1:].strip()), ""),
+        found_in=found[0] if found else None,
+        verdict=found[1] if found else "Only in your tree. No upstream release or branch has it.",
+    )
+
+
+def _patch_drop(tree: str, lts_branch: str, main_branch: str, git: Git = _git) -> PatchDrop:
+    base: Final = (git(tree, "describe", "--tags", "--abbrev=0") or "").strip()
+    if not base:
+        raise HTTPException(status_code=404, detail=f"No release tag found for the tree at {tree}")
+    newest_tag: Final = (git(tree, "tag", "--merged", lts_branch, "--sort=-v:refname") or "").split("\n")[0]
+    refs: Final = (
+        (newest_tag, f"Drop it when you upgrade to {newest_tag}."),
+        (lts_branch, f"Merged on {lts_branch.removeprefix('origin/')}. Drop it at the next patch release."),
+        (main_branch, "Fixed on main only. It will not reach your LTS line, keep carrying it."),
+    )
+    paths: Final = tuple(path for path in (git(tree, "diff", "--name-only", base) or "").splitlines() if path)
+    patches: Final = tuple(_local_patch(git, tree, path, base, refs) for path in paths)
+    return PatchDrop(
+        tree=tree,
+        installed=base,
+        checked_against=tuple(ref for ref, _ in refs),
+        patches=patches,
+        droppable=sum(patch.found_in in (newest_tag, lts_branch) for patch in patches),
+    )
+
+
+@router.get("/patch_drop")
+async def patch_drop(
+    user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    lts_branch: str = "origin/lts/1.108.x",
+    main_branch: str = "origin/main",
+) -> PatchDrop:
+    """Lists every file the tree at PATCH_DROP_TREE changed since its release tag and checks each local patch
+    against the newest LTS tag, the LTS branch and main, by looking for its added lines in the upstream file."""
+    _require_admin(user)
+    tree: Final = os.environ.get("PATCH_DROP_TREE", "")
+    if not tree:
+        raise HTTPException(status_code=404, detail="Set PATCH_DROP_TREE to the checkout that carries local patches")
+    return await asyncio.to_thread(_patch_drop, tree, lts_branch, main_branch)

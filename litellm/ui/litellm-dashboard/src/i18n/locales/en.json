@@ -8597,7 +8597,10 @@
         "planLab": "Plan Lab",
         "limitXray": "Limit X-ray",
         "ghostTrace": "Ghost Trace",
-        "prReceipts": "PR Receipts"
+        "prReceipts": "PR Receipts",
+        "billRecall": "Bill Recall",
+        "swapBill": "Swap Bill",
+        "patchDrop": "Patch Drop"
       },
       "homeLink": "LiteLLM home"
     },
@@ -8645,7 +8648,10 @@
       "planLab": "Replay spend logs against a draft subscription plan",
       "limitXray": "Every budget and rate limit that applies to one key, across key, team, team member, user and organization, ordered by which one blocks the next request first.",
       "ghostTrace": "Agent runs rebuilt from requests that carry no session id: a request joins a run when its messages start with an earlier request's full message list.",
-      "prReceipts": "What each pull request cost to produce, attributed from the GitHub URLs in the agent's own tool calls."
+      "prReceipts": "What each pull request cost to produce, attributed from the GitHub URLs in the agent's own tool calls.",
+      "billRecall": "Every stored team, model and day re-priced at today's cost map. Days whose logged spend is off by more than 1% are listed with what they were logged at and what they cost.",
+      "swapBill": "Last month's real traffic on every retiring model, priced on the successor the cost map names, and how long each team's budget lasts after the swap.",
+      "patchDrop": "Every file your deployment changed since its release tag, checked against the newest LTS release, the LTS branch and main, so you know which local patches to drop at the next upgrade."
     },
     "sidebarAccountMenu": {
       "toggles": {
@@ -21663,6 +21669,52 @@
       "toolCalls": "Tool calls",
       "tokens": "Tokens",
       "cost": "Cost"
+    },
+    "billRecall": {
+      "title": "Bill Recall",
+      "description": "Every stored team, model and day re-priced at today's cost map. Days whose logged spend is off by more than 1% are listed with what they were logged at and what they cost.",
+      "logged": "Logged on those days",
+      "corrected": "At the corrected price",
+      "delta": "Missing from the books",
+      "team": "Team",
+      "model": "Model",
+      "days": "Days affected",
+      "tokens": "Tokens",
+      "loggedAt": "Logged",
+      "correctedTo": "Corrected",
+      "owed": "Difference"
+    },
+    "swapBill": {
+      "title": "Swap Bill",
+      "description": "Last month's real traffic on every retiring model, priced on the successor the cost map names, and how long each team's budget lasts after the swap.",
+      "now": "Paid on retiring models",
+      "after": "Same traffic on successors",
+      "delta": "Monthly change",
+      "team": "Team",
+      "retiring": "Retiring model",
+      "successor": "Successor",
+      "retires": "Retires",
+      "paidNow": "Paid now",
+      "onSuccessor": "On successor",
+      "change": "Change",
+      "budgets": "Team budgets after the swap",
+      "budget": "Monthly budget",
+      "spendNow": "Spend now",
+      "spendAfter": "Spend after",
+      "lastsNow": "Budget lasts (days)",
+      "lastsAfter": "After swap (days)"
+    },
+    "patchDrop": {
+      "title": "Patch Drop",
+      "description": "Every file your deployment changed since its release tag, checked against the newest LTS release, the LTS branch and main, so you know which local patches to drop at the next upgrade.",
+      "installed": "Installed release",
+      "carried": "Local patches carried",
+      "droppable": "Drop at next LTS patch",
+      "file": "Patched file",
+      "lines": "Lines",
+      "foundIn": "Found upstream in",
+      "verdict": "What to do",
+      "nowhere": "nowhere"
     }
   }
 }

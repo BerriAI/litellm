@@ -1,4 +1,14 @@
-import { FlaskConical, Ghost, ReceiptText, ScanLine, SearchX, ShieldCheck } from "lucide-react";
+import {
+  ArrowLeftRight,
+  FlaskConical,
+  Ghost,
+  History,
+  PackageMinus,
+  ReceiptText,
+  ScanLine,
+  SearchX,
+  ShieldCheck,
+} from "lucide-react";
 import { all_admin_roles } from "../utils/roles";
 import type { MenuItem } from "./LeftNav";
 
@@ -46,5 +56,26 @@ export const whatIfNavItems: MenuItem[] = [
     icon: <ReceiptText {...ICON} />,
     roles: all_admin_roles,
     label: "shell.nav.items.prReceipts",
+  },
+  {
+    key: "bill-recall",
+    page: "bill-recall",
+    icon: <History {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.billRecall",
+  },
+  {
+    key: "swap-bill",
+    page: "swap-bill",
+    icon: <ArrowLeftRight {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.swapBill",
+  },
+  {
+    key: "patch-drop",
+    page: "patch-drop",
+    icon: <PackageMinus {...ICON} />,
+    roles: all_admin_roles,
+    label: "shell.nav.items.patchDrop",
   },
 ];

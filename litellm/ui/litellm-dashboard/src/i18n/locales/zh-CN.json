@@ -8528,7 +8528,10 @@
         "planLab": "Plan Lab",
         "limitXray": "限额透视",
         "ghostTrace": "幽灵追踪",
-        "prReceipts": "PR 账单"
+        "prReceipts": "PR 账单",
+        "billRecall": "账单重算",
+        "swapBill": "换代账单",
+        "patchDrop": "补丁清理"
       },
       "homeLink": "LiteLLM 首页"
     },
@@ -8576,7 +8579,10 @@
       "planLab": "用草稿订阅方案回放支出日志",
       "limitXray": "作用于单个密钥的全部预算与速率限制，涵盖密钥、团队、团队成员、用户和组织，按最先拦截下一次请求的顺序排列。",
       "ghostTrace": "从未携带会话 ID 的请求中重建智能体运行：当请求的消息以更早请求的完整消息列表开头时，即归入同一次运行。",
-      "prReceipts": "每个拉取请求的产出成本，依据智能体工具调用中的 GitHub URL 归因。"
+      "prReceipts": "每个拉取请求的产出成本，依据智能体工具调用中的 GitHub URL 归因。",
+      "billRecall": "按当前价格表重新计价每个团队、模型和日期的已存用量，列出记录支出偏差超过 1% 的日期及其应有成本。",
+      "swapBill": "将上月每个即将下线模型的真实流量按价格表指定的后继模型计价，并显示切换后各团队预算可用天数。",
+      "patchDrop": "列出部署自发布标签以来修改的每个文件，并与最新 LTS 版本、LTS 分支和 main 比对，告诉你下次升级时可以删除哪些本地补丁。"
     },
     "sidebarAccountMenu": {
       "toggles": {
@@ -21545,6 +21551,52 @@
       "toolCalls": "工具调用",
       "tokens": "Token",
       "cost": "成本"
+    },
+    "billRecall": {
+      "title": "账单重算",
+      "description": "按当前价格表重新计价每个团队、模型和日期的已存用量，列出记录支出偏差超过 1% 的日期及其应有成本。",
+      "logged": "当日记录支出",
+      "corrected": "按修正价格",
+      "delta": "账面缺失",
+      "team": "团队",
+      "model": "模型",
+      "days": "受影响日期",
+      "tokens": "Token",
+      "loggedAt": "已记录",
+      "correctedTo": "修正后",
+      "owed": "差额"
+    },
+    "swapBill": {
+      "title": "换代账单",
+      "description": "将上月每个即将下线模型的真实流量按价格表指定的后继模型计价，并显示切换后各团队预算可用天数。",
+      "now": "下线模型的支出",
+      "after": "相同流量用后继模型",
+      "delta": "月度变化",
+      "team": "团队",
+      "retiring": "下线模型",
+      "successor": "后继模型",
+      "retires": "下线日期",
+      "paidNow": "当前支出",
+      "onSuccessor": "后继模型支出",
+      "change": "变化",
+      "budgets": "切换后的团队预算",
+      "budget": "月度预算",
+      "spendNow": "当前支出",
+      "spendAfter": "切换后支出",
+      "lastsNow": "预算可用（天）",
+      "lastsAfter": "切换后（天）"
+    },
+    "patchDrop": {
+      "title": "补丁清理",
+      "description": "列出部署自发布标签以来修改的每个文件，并与最新 LTS 版本、LTS 分支和 main 比对，告诉你下次升级时可以删除哪些本地补丁。",
+      "installed": "已安装版本",
+      "carried": "本地补丁数",
+      "droppable": "下个 LTS 补丁可删除",
+      "file": "已修改文件",
+      "lines": "行数",
+      "foundIn": "上游位置",
+      "verdict": "处理方式",
+      "nowhere": "无"
     }
   }
 }

@@ -51,6 +51,9 @@ export const pageDescriptions: Record<string, ParseKeys> = {
   "limit-xray": "shell.pageDescriptions.limitXray",
   "ghost-trace": "shell.pageDescriptions.ghostTrace",
   "pr-receipts": "shell.pageDescriptions.prReceipts",
+  "bill-recall": "shell.pageDescriptions.billRecall",
+  "swap-bill": "shell.pageDescriptions.swapBill",
+  "patch-drop": "shell.pageDescriptions.patchDrop",
 };
 
 export interface PageMetadata {

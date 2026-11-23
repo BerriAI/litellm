@@ -26908,6 +26908,27 @@ export interface paths {
         patch: operations["watsonx_proxy_route_watsonx__endpoint__patch"];
         trace?: never;
     };
+    "/what_if/bill_recall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bill Recall
+         * @description Re-prices every stored team, model and day at today's cost map and returns the days whose logged spend
+         *     is off by more than one percent, with what they were logged at and what they cost at the corrected price.
+         */
+        get: operations["bill_recall_what_if_bill_recall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/what_if/cache_miss": {
         parameters: {
             query?: never;
@@ -26992,6 +27013,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/what_if/patch_drop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Patch Drop
+         * @description Lists every file the tree at PATCH_DROP_TREE changed since its release tag and checks each local patch
+         *     against the newest LTS tag, the LTS branch and main, by looking for its added lines in the upstream file.
+         */
+        get: operations["patch_drop_what_if_patch_drop_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/what_if/plan_lab/replay": {
         parameters: {
             query?: never;
@@ -27025,6 +27067,27 @@ export interface paths {
          *     and total the spend per pull request.
          */
         get: operations["pr_receipts_what_if_pr_receipts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/what_if/swap_bill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Swap Bill
+         * @description Prices the stored traffic of every model the cost map marks with a successor at that successor's price,
+         *     per team, and says how many days each team's budget lasts before and after the swap.
+         */
+        get: operations["swap_bill_what_if_swap_bill_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -30323,6 +30386,21 @@ export interface components {
          * @enum {string}
          */
         BedrockGuardrailOutputScope: "INTERVENTIONS" | "FULL";
+        /** BillRecall */
+        BillRecall: {
+            /** Corrected */
+            corrected: number;
+            /** Days Checked */
+            days_checked: number;
+            /** Delta */
+            delta: number;
+            /** Logged */
+            logged: number;
+            /** Rows */
+            rows: components["schemas"]["RecallRow"][];
+            /** Window Days */
+            window_days: number;
+        };
         /** BillingPeriod */
         BillingPeriod: {
             /**
@@ -41426,6 +41504,21 @@ export interface components {
              */
             type: "local";
         };
+        /** LocalPatch */
+        LocalPatch: {
+            /** Added */
+            added: number;
+            /** First Change */
+            first_change: string;
+            /** Found In */
+            found_in: string | null;
+            /** Path */
+            path: string;
+            /** Removed */
+            removed: number;
+            /** Verdict */
+            verdict: string;
+        };
         /**
          * LocalShell
          * @description A tool that allows the model to execute shell commands in a local environment.
@@ -45075,6 +45168,19 @@ export interface components {
             /** Tpm Limit */
             tpm_limit?: number | null;
         };
+        /** PatchDrop */
+        PatchDrop: {
+            /** Checked Against */
+            checked_against: string[];
+            /** Droppable */
+            droppable: number;
+            /** Installed */
+            installed: string;
+            /** Patches */
+            patches: components["schemas"]["LocalPatch"][];
+            /** Tree */
+            tree: string;
+        };
         /** PatchGuardrailRequest */
         PatchGuardrailRequest: {
             /** Guardrail Info */
@@ -46854,6 +46960,31 @@ export interface components {
             generate_summary?: ("auto" | "concise" | "detailed") | null;
             /** Summary */
             summary?: ("auto" | "concise" | "detailed") | null;
+        };
+        /** RecallRow */
+        RecallRow: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Corrected */
+            corrected: number;
+            /** Days */
+            days: number;
+            /** Delta */
+            delta: number;
+            /** First Day */
+            first_day: string;
+            /** Last Day */
+            last_day: string;
+            /** Logged */
+            logged: number;
+            /** Model */
+            model: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Requests */
+            requests: number;
+            /** Team */
+            team: string;
         };
         /** ReferenceExchangeRates */
         ReferenceExchangeRates: {
@@ -51849,6 +51980,55 @@ export interface components {
         SupportedEndpointsResponse: {
             /** Endpoints */
             endpoints: components["schemas"]["SupportedEndpoint"][];
+        };
+        /** SwapBill */
+        SwapBill: {
+            /** After */
+            after: number;
+            /** Now */
+            now: number;
+            /** Rows */
+            rows: components["schemas"]["SwapRow"][];
+            /** Teams */
+            teams: components["schemas"]["SwapTeam"][];
+            /** Window Days */
+            window_days: number;
+        };
+        /** SwapRow */
+        SwapRow: {
+            /** After */
+            after: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Delta */
+            delta: number;
+            /** Model */
+            model: string;
+            /** Now */
+            now: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Retires */
+            retires: string | null;
+            /** Successor */
+            successor: string;
+            /** Team */
+            team: string;
+        };
+        /** SwapTeam */
+        SwapTeam: {
+            /** After */
+            after: number;
+            /** Budget */
+            budget: number | null;
+            /** Budget Lasts Days After */
+            budget_lasts_days_after: number | null;
+            /** Budget Lasts Days Now */
+            budget_lasts_days_now: number | null;
+            /** Now */
+            now: number;
+            /** Team */
+            team: string;
         };
         /**
          * TagActiveUsersResponse
@@ -96779,6 +96959,37 @@ export interface operations {
             };
         };
     };
+    bill_recall_what_if_bill_recall_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillRecall"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     explain_cache_misses_what_if_cache_miss_get: {
         parameters: {
             query?: {
@@ -96905,6 +97116,38 @@ export interface operations {
             };
         };
     };
+    patch_drop_what_if_patch_drop_get: {
+        parameters: {
+            query?: {
+                lts_branch?: string;
+                main_branch?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PatchDrop"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     replay_draft_plan_what_if_plan_lab_replay_post: {
         parameters: {
             query?: never;
@@ -96956,6 +97199,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PrReceipts"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    swap_bill_what_if_swap_bill_get: {
+        parameters: {
+            query?: {
+                window_days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SwapBill"];
                 };
             };
             /** @description Validation Error */
