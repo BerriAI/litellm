@@ -41,7 +41,7 @@ from litellm.utils import supports_thinking_cache_preservation
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
 _MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
-_SYSTEM: Final = TypeAdapter(str | list[dict[str, JsonValue]] | None)
+_SYSTEM: Final = TypeAdapter[str | list[dict[str, JsonValue]] | None](str | list[dict[str, JsonValue]] | None)
 _counter: Final = AnthropicCountTokensHandler()
 
 
