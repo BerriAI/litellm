@@ -50,6 +50,7 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamKeys: { all: ["teams"] },
   fetchTeamMembersByUserId: vi.fn(),
+  useTeam: vi.fn(() => ({ data: undefined, isPending: false, isError: false })),
   useAllTeams: vi.fn(() => ({
     data: [{ team_id: "team-1", team_alias: "Test Team" }],
     isLoading: false,

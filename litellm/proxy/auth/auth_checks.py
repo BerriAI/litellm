@@ -332,7 +332,7 @@ def _raw_cache(cache: _RawCacheRead) -> _RawCacheRead:
     return cache
 
 
-def _typed_request_body(request_body: dict) -> Mapping[str, object]:
+def _typed_request_body(request_body: Mapping[str, object]) -> Mapping[str, object]:
     return request_body
 
 
@@ -875,7 +875,9 @@ async def _run_project_checks(
         )
 
 
-def _enforce_user_param_check(general_settings: dict, request: Request, request_body: dict, route: str) -> None:
+def _enforce_user_param_check(
+    general_settings: Mapping[str, object], request: Request, request_body: Mapping[str, object], route: str
+) -> None:
     if not general_settings.get("enforce_user_param", False):
         return
 
@@ -891,7 +893,10 @@ def _enforce_user_param_check(general_settings: dict, request: Request, request_
 
 
 def _reject_clientside_metadata_tags_check(
-    general_settings: dict, request_body: dict, route: str, request: Request | None = None
+    general_settings: Mapping[str, object],
+    request_body: Mapping[str, object],
+    route: str,
+    request: Request | None = None,
 ) -> None:
     if not general_settings.get("reject_clientside_metadata_tags", False):
         return
@@ -932,7 +937,7 @@ def _global_proxy_budget_check(global_proxy_spend: float | None, skip_budget_che
             raise native.error()
 
 
-_GUARDRAIL_MODIFICATION_KEYS: Final[tuple] = (
+_GUARDRAIL_MODIFICATION_KEYS: Final[tuple[str, ...]] = (
     "guardrails",
     "disable_global_guardrails",
     "disable_global_guardrail",
@@ -1311,7 +1316,7 @@ async def common_checks(
     user_object: LiteLLM_UserTable | None,
     end_user_object: LiteLLM_EndUserTable | None,
     global_proxy_spend: float | None,
-    general_settings: dict,
+    general_settings: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     proxy_logging_obj: ProxyLogging,
@@ -3835,7 +3840,12 @@ async def get_team_object_from_cache(
     key: AuthObject,
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | None:
+    if for_auth:
+        return await user_api_key_cache.get_auth_team(key, auth_user_id)
     decoded: Final = await user_api_key_cache.async_get_cache(
         key=key,
         model_type=LiteLLM_TeamTableCachedObj,
@@ -3860,6 +3870,9 @@ async def read_team(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj | TeamReadFailed:
     if prisma_client is None:
         raise Exception("No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys")
@@ -3872,6 +3885,8 @@ async def read_team(
             key=key,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
+            for_auth=for_auth,
+            auth_user_id=auth_user_id,
         )
 
         if cached_team_obj is not None:
@@ -3885,7 +3900,7 @@ async def read_team(
 
     # else, check db
     try:
-        return await _get_team_object_from_user_api_key_cache(
+        team: Final = await _get_team_object_from_user_api_key_cache(
             team_id=team_id,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
@@ -3896,6 +3911,16 @@ async def read_team(
             team_id_upsert=team_id_upsert,
             use_writer=bool(check_db_only),
         )
+        if not for_auth:
+            return team
+        member: Final = (
+            next((member for member in team.members_with_roles if member.user_id == auth_user_id), None)
+            if auth_user_id is not None
+            else None
+        )
+        return team.model_copy(
+            update={"members_with_roles": [] if member is None else [member], "members": [], "admins": []}
+        ).model_copy(deep=True)
     except TeamNotFoundError:
         raise
     except Exception as error:
@@ -3911,6 +3936,9 @@ async def get_team_object(
     check_cache_only: bool | None = None,
     check_db_only: bool | None = None,
     team_id_upsert: bool | None = None,
+    *,
+    for_auth: bool = False,
+    auth_user_id: str | None = None,
 ) -> LiteLLM_TeamTableCachedObj:
     """
     - Check if team id in proxy Team Table
@@ -3929,6 +3957,8 @@ async def get_team_object(
         check_cache_only=check_cache_only,
         check_db_only=check_db_only,
         team_id_upsert=team_id_upsert,
+        for_auth=for_auth,
+        auth_user_id=auth_user_id,
     )
     if isinstance(read, TeamReadFailed):
         raise HTTPException(
@@ -8100,7 +8130,7 @@ _organization_max_budget_check: Final = organization_max_budget_check
 
 
 async def _tag_max_budget_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -8647,7 +8677,7 @@ async def _cached_object_permission(
 
 
 async def vector_store_access_check(
-    request_body: dict,
+    request_body: Mapping[str, object],
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,
     *,

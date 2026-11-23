@@ -713,7 +713,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         # Per-instance queue for buffering multiple chunks. Must be initialized
         # here (not at class level) so concurrent streams don't share the same
         # deque and corrupt each other's SSE event order.
-        self.chunk_queue: deque = deque()
+        self.chunk_queue: deque[_AnthropicStreamEvent] = deque()
         # Per-instance default content block. Must be initialized here (not at
         # class level) so concurrent streams don't share the same mutable dict
         # — `_should_start_new_content_block` mutates `tool_block["name"]` in

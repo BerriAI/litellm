@@ -64,9 +64,9 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
-_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
-_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+_MESSAGE_FIELDS: Final[frozenset[str]] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset[str]] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset[str]] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])

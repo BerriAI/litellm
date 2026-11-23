@@ -102,13 +102,50 @@ def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
     return vars(embedding_response)
 
 
+def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    return mapping if isinstance(raw_extra_body, dict) else None
+
+
+def _concrete_sequence(value: object) -> Sequence[object] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: isinstance leaves the item type unknown
+
+
+def _extra_body_pair(item: object) -> tuple[str, object] | None:
+    pair: Final = item if isinstance(item, str) else _concrete_sequence(item)
+    if pair is None or len(pair) != 2:
+        return None
+    key: Final = pair[0]
+    return (key, pair[1]) if isinstance(key, str) else None
+
+
+def _extra_body_from_pairs(raw_extra_body: object) -> Mapping[str, object] | None:
+    items: Final = _concrete_sequence(raw_extra_body)
+    if items is None:
+        return None
+    pairs: Final = tuple(pair for pair in map(_extra_body_pair, items) if pair is not None)
+    return dict(pairs) if len(pairs) == len(items) else None
+
+
+def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    extra_body: Final = mapping if mapping is not None else _extra_body_from_pairs(raw_extra_body)
+    if extra_body is None:
+        return {}
+    token_ids_keyed_separately: Final = isinstance(raw_extra_body, dict)
+    return {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _ALWAYS_KEYED_PROVIDER_PARAMS or (not token_ids_keyed_separately and value)
+    }
+
+
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
-    raw_extra_body: Final = kwargs.get("extra_body")
-    if not isinstance(raw_extra_body, dict):
+    extra_body: Final = _extra_body_mapping(kwargs.get("extra_body"))
+    if extra_body is None:
         return ""
-    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
-        Mapping[str, object], raw_extra_body
-    )
     return "".join(
         f"extra_body.{param}: {extra_body[param]}"
         for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
@@ -257,7 +294,7 @@ def response_cache_phase(operation: Literal["get", "set"]) -> Generator[None]:
         yield
 
 
-def print_verbose(print_statement):
+def print_verbose(print_statement: object):
     try:
         verbose_logger.debug(print_statement)
         if litellm.set_verbose:
@@ -544,7 +581,7 @@ class Cache:
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
-    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset[str] = frozenset({"messages", "prompt", "input"})
 
     # Server-set identity (from proxy auth) used to isolate semantic-cache
     # buckets per tenant. Required once the prompt is out of the scope key, so a
@@ -625,6 +662,8 @@ class Cache:
                 and kwargs[param] is not None
             ):
                 yield param, kwargs[param]
+            elif param == "extra_body" and (forwarded := _extra_body_beyond_always_keyed_params(kwargs[param])):
+                yield param, forwarded
 
     def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
         is_semantic_cache: Final = self._is_semantic_cache()
@@ -927,7 +966,7 @@ class Cache:
             print_verbose(f"An exception occurred: {traceback.format_exc()}")
             return None
 
-    def _add_cache_logic(self, result, **kwargs):
+    def _add_cache_logic(self, result: object, **kwargs):
         """
         Common implementation across sync + async add_cache functions
         """
@@ -957,7 +996,7 @@ class Cache:
         except Exception as e:
             raise e
 
-    def add_cache(self, result, **kwargs):
+    def add_cache(self, result: object, **kwargs: object):
         """
         Adds a result to the cache.
 
@@ -984,7 +1023,7 @@ class Cache:
             return
         verbose_logger.error("%s: %s", message, exc)
 
-    async def async_add_cache(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache(self, result: object, dynamic_cache_object: BaseCache | None = None, **kwargs: object):
         """
         Async implementation of add_cache
         """
@@ -1009,7 +1048,7 @@ class Cache:
         embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
-        prompt_tokens_details: dict | None = None,
+        prompt_tokens_details: Mapping[str, object] | None = None,
     ) -> _UnvalidatedCachedEmbedding:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
@@ -1038,7 +1077,7 @@ class Cache:
         self,
         result: EmbeddingResponse,
         idx_in_result_data: int,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Extract per-item prompt_tokens_details from a response for caching.
 
@@ -1070,7 +1109,7 @@ class Cache:
             return details_dict
 
         # Distribute integer/float fields evenly across items
-        per_item: Final[dict] = {}
+        per_item: Final[dict[str, object]] = {}
         for key, value in details_dict.items():
             if isinstance(value, int):
                 quotient, remainder = divmod(value, num_items)
@@ -1114,7 +1153,7 @@ class Cache:
         input: str,
         kwargs: dict,
         idx_in_result_data: int = 0,
-    ) -> tuple[str, dict, dict]:
+    ) -> tuple[str, dict[str, object], dict[str, object]]:
         preset_cache_key: Final = self.get_cache_key(**{**kwargs, "input": input})
         kwargs["cache_key"] = preset_cache_key
         embedding_response: Final = _embedding_item(result, idx_in_result_data)
@@ -1190,7 +1229,7 @@ class Cache:
         except Exception as e:
             self._log_add_cache_failure(e)
 
-    def should_use_cache(self, **kwargs):
+    def should_use_cache(self, **kwargs: object) -> bool:
         """
         Returns true if we should use the cache for LLM API calls
 
@@ -1211,7 +1250,7 @@ class Cache:
                 return True
         return False
 
-    async def batch_cache_write(self, result, **kwargs):
+    async def batch_cache_write(self, result: object, **kwargs: object):
         cache_key, cached_data, kwargs = self._add_cache_logic(result=result, **kwargs)
         await self.cache.batch_cache_write(cache_key, cached_data, **kwargs)
 

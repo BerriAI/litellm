@@ -152,7 +152,7 @@ class RerankResponse(LiteLLMBaseModel):
     provider_usage: Mapping[str, object] | None = Field(default=None, alias="usage")
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, object] = PrivateAttr(default_factory=dict)
 
     @field_validator("provider_usage", mode="before")
     @classmethod
