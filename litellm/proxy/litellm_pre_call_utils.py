@@ -3805,6 +3805,7 @@ async def _team_router_settings(user_api_key_dict_team_id: str | None) -> Mappin
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
+            for_auth=True,
         )
         settings: Final = getattr(team_obj, "router_settings", None)
         return (

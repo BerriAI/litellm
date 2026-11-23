@@ -4007,7 +4007,11 @@ async def _accounting_scope_windows(
 ) -> tuple[Mapping[str, object], ...]:
     from litellm.proxy.spend_tracking.budget_reservation import fixed_budget_window
 
-    cached: Final[object] = _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    cached: Final[object] = (
+        await user_api_key_cache.get_team_fields(cache_key, ("budget_limits",))
+        if entity_type == Litellm_EntityType.TEAM
+        else _UNTYPED_VALUE.validate_python(await user_api_key_cache.async_get_cache(key=cache_key))
+    )
     limits: Final = (
         await _stored_budget_limits(entity_type, entity_id) if cached is None else _cached_budget_limits(cached)
     )
@@ -4288,6 +4292,9 @@ _CachedSpendObjectT = TypeVar(
 def _add_spend_to_locally_cached_object(
     cache: UserApiKeyCache, key: AuthObject, model_type: type[_CachedSpendObjectT], response_cost: float
 ) -> None:
+    if model_type is LiteLLM_TeamTableCachedObj:
+        cache.add_local_team_spend(key, response_cost)
+        return
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
         return
@@ -8199,6 +8206,7 @@ class ProxyConfig:
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 team_settings: Final = self._parse_router_settings_value(getattr(team_obj, "router_settings", None))
                 if team_settings is not None:
