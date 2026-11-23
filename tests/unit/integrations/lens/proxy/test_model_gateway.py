@@ -11,6 +11,7 @@ from litellm.integrations.lens.proxy.model_gateway import (
     GatewayStatus,
     SetupFailure,
     connect_models,
+    ensure_model_key,
     key_request,
     model_key,
     setup,
@@ -172,3 +173,32 @@ def test_separate_lens_services_do_not_share_model_keys() -> None:
 async def test_a_lens_only_admin_key_cannot_provision_model_access() -> None:
     auth: Final = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, allowed_routes=["/lens/*"])
     assert await setup(CONNECTION, ADMIN, "https://gateway.test", auth) is SetupFailure.KEY_POLICY
+
+
+@pytest.mark.asyncio
+async def test_a_retired_model_key_is_never_reissued_on_reconnection() -> None:
+    active: Final = AsyncMock(return_value=False)
+    retired: Final = AsyncMock(return_value=True)
+    generate: Final = AsyncMock()
+    key: Final = model_key(CONNECTION)
+    assert not await ensure_model_key(key, ("analysis",), active, retired, generate)
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retries_reuse_an_active_key_without_creating_another() -> None:
+    active: Final = AsyncMock(return_value=True)
+    retired: Final = AsyncMock(return_value=False)
+    generate: Final = AsyncMock()
+    assert await ensure_model_key(model_key(CONNECTION), ("analysis",), active, retired, generate)
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_first_provisioning_creates_the_restricted_key() -> None:
+    active: Final = AsyncMock(return_value=False)
+    retired: Final = AsyncMock(return_value=False)
+    generate: Final = AsyncMock()
+    key: Final = model_key(CONNECTION)
+    assert await ensure_model_key(key, ("analysis",), active, retired, generate)
+    generate.assert_awaited_once_with(key_request(key, ("analysis",)))

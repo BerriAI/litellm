@@ -7,10 +7,11 @@ from typing import Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
+from starlette.exceptions import HTTPException
 
 from litellm.integrations.lens.proxy.adapter import Connection, Identity
 from litellm.integrations.lens.remote import bounded_response
-from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.route_checks import RouteChecks
 
 MODEL_ROUTES: Final = (
@@ -46,7 +47,10 @@ class SetupFailure(Enum):
     UNAVAILABLE = "Lens could not be reached. Check the connection and try again"
     UNSUPPORTED = "Update Lens to connect this gateway automatically"
     NO_MODELS = "Add a model to this LiteLLM gateway before connecting Lens"
-    KEY_POLICY = "The gateway could not create the Lens key. Check key-generation permissions and policy"
+    KEY_POLICY = (
+        "The gateway could not create the Lens key. "
+        "Check key-generation permissions, policy, and whether the Lens key was revoked"
+    )
     DATABASE = "Connect a database to LiteLLM before creating a Lens model key"
 
 
@@ -120,10 +124,7 @@ async def connect_models(
 async def setup(
     connection: Connection, identity: Identity, gateway_url: str, auth: UserAPIKeyAuth
 ) -> GatewayStatus | SetupFailure:
-    from starlette.exceptions import HTTPException
-
     from litellm.proxy import proxy_server
-    from litellm.proxy._types import ProxyException
     from litellm.proxy.management_endpoints.key_management_endpoints import generate_key_fn
     from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
@@ -140,17 +141,40 @@ async def setup(
     models: Final = tuple(router.registry().names()) if router else ()
     repository: Final = VerificationTokenRepository(database)
 
+    async def active(hashed: str) -> bool:
+        return await repository.find_for_auth(hashed, use_writer=True) is not None
+
+    async def retired(hashed: str, alias: str) -> bool:
+        deleted: Final = await repository.deleted_table.find_many(where={"token": hashed}, take=1)
+        return bool(deleted) or await repository.find_by_alias(alias) is not None
+
+    async def generate(request: GenerateKeyRequest) -> None:
+        await generate_key_fn(data=request, user_api_key_dict=auth, litellm_changed_by=None)
+
     async def ensure_key(key: str, models: Sequence[str]) -> bool:
-        hashed: Final = hashlib.sha256(key.encode()).hexdigest()
-        if await repository.find_for_auth(hashed, use_writer=True) is not None:
-            return True
-        try:
-            await generate_key_fn(data=key_request(key, models), user_api_key_dict=auth, litellm_changed_by=None)
-        except (HTTPException, ProxyException, ValidationError):
-            return await repository.find_for_auth(hashed, use_writer=True) is not None
-        else:
-            return True
+        return await ensure_model_key(key, models, active, retired, generate)
 
     return await connect_models(
         connection, identity, gateway_url, models, connection.remote.control_client(), ensure_key, int(time.time())
     )
+
+
+async def ensure_model_key(
+    key: str,
+    models: Sequence[str],
+    active: Callable[[str], Awaitable[bool]],
+    retired: Callable[[str, str], Awaitable[bool]],
+    generate: Callable[[GenerateKeyRequest], Awaitable[None]],
+) -> bool:
+    hashed: Final = hashlib.sha256(key.encode()).hexdigest()
+    if await active(hashed):
+        return True
+    request: Final = key_request(key, models)
+    if await retired(hashed, request.key_alias or ""):
+        return False
+    try:
+        await generate(request)
+    except (HTTPException, ProxyException, ValidationError):
+        return await active(hashed)
+    else:
+        return True
