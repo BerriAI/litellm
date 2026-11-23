@@ -104,7 +104,7 @@ async def test_a_new_subscription_verifies_the_client_then_subscribes_upstream_w
     method, params, _headers = upstream.calls[0]
     delivery: Final = params["delivery"]
     assert method == "events/subscribe" and isinstance(delivery, Mapping)
-    assert delivery["url"] == f"https://gateway.example/mcp/events/webhooks/{SID}"
+    assert str(delivery["url"]).startswith(f"https://gateway.example/mcp/events/webhooks/{SID}?instance=")
     assert delivery["secret"] != SECRET
     row: Final = store.rows[SID]
     assert (row.status, row.upstream_subscription_id, row.client_secret) == ("active", "up_1", SECRET)
@@ -224,7 +224,7 @@ async def test_unsubscribe_deletes_the_row_and_ends_the_upstream_subscription() 
     assert result == Ok(None) and store.rows == {}
     method, sent, _ = upstream.calls[-1]
     assert method == "events/unsubscribe"
-    assert sent["delivery"] == {"url": f"https://gateway.example/mcp/events/webhooks/{SID}"}
+    assert sent["delivery"] == {"url": upstream.calls[0][1]["delivery"]["url"]}
     again: Final = await unsubscribe(context(), params, None, SETTINGS, runtime((server(),), upstream=upstream), store)
     assert isinstance(again, Error) and (again.error.code, again.error.data) == (
         EventsErrorCode.NOT_FOUND,
