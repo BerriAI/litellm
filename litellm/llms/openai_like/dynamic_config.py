@@ -2,6 +2,7 @@
 Dynamic configuration class generator for JSON-based providers.
 """
 
+import json
 from collections.abc import Coroutine, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, overload
@@ -27,6 +28,7 @@ from .json_loader import SimpleProviderConfig
 
 if TYPE_CHECKING:
     from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+    from litellm.types.llms.openai import ChatCompletionToolParam
 
 _PAID_SEARCH_TOOLS: Final = frozenset({"web_search", "web_search_image", "image_search"})
 _PAYLOAD_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
@@ -78,6 +80,27 @@ def _with_declared_reasoning_effort(
     return MappingProxyType({**params, "reasoning_effort": accepted})
 
 
+def _values_outside_fixed(
+    params: Mapping[str, object], fixed_values: Mapping[str, bool | int | float]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {param: value for param, value in params.items() if param in fixed_values and value != fixed_values[param]}
+    )
+
+
+def _describe(params: Mapping[str, object]) -> str:
+    return ", ".join(f"{param}={json.dumps(value)}" for param, value in params.items())
+
+
+def _model_info_reading_prompt_cache_breakpoints(model_info: object, provider_slug: str) -> Mapping[str, object]:
+    from litellm.integrations.anthropic_cache_control_hook import declared_prompt_cache_breakpoint, routed_model_info
+
+    declared: Final = routed_model_info(model_info) or MappingProxyType({})
+    if declared_prompt_cache_breakpoint(declared) is not None:
+        return declared
+    return MappingProxyType({"litellm_provider": provider_slug, **declared, "supports_prompt_cache_breakpoint": True})
+
+
 def create_config_class(provider: SimpleProviderConfig):
     """Generate config class dynamically from JSON configuration"""
 
@@ -123,6 +146,33 @@ def create_config_class(provider: SimpleProviderConfig):
                 "preserve_cache_control", False
             ) or super()._should_preserve_cache_control_for_endpoint(custom_llm_provider, api_base)
 
+        def _messages_and_tools_in_cache_mark_dialect(
+            self,
+            model: str,
+            messages: Sequence[AllMessageValues],
+            tools: Sequence["ChatCompletionToolParam"] | None,
+            prompt_cache_options: object,
+            litellm_params: Mapping[str, object],
+            request_params: Mapping[str, object],
+        ) -> tuple[Sequence[AllMessageValues], Sequence["ChatCompletionToolParam"] | None]:
+            return super()._messages_and_tools_in_cache_mark_dialect(
+                model,
+                messages,
+                tools,
+                prompt_cache_options,
+                MappingProxyType(
+                    {
+                        **litellm_params,
+                        "model_info": _model_info_reading_prompt_cache_breakpoints(
+                            litellm_params.get("model_info"), provider.slug
+                        ),
+                    }
+                )
+                if provider.special_handling_for(model).get("reads_prompt_cache_breakpoint")
+                else litellm_params,
+                request_params,
+            )
+
         def _get_openai_compatible_provider_info(
             self, api_base: str | None, api_key: str | None
         ) -> tuple[str | None, str | None]:
@@ -166,7 +216,10 @@ def create_config_class(provider: SimpleProviderConfig):
             inherited_params: Final = _PARAM_NAMES_ADAPTER.validate_python(
                 super().get_supported_openai_params(model=model)
             )
-            supported_params: Final = [param for param in inherited_params if param not in provider.unsupported_params]
+            supported_params: Final = [
+                *(param for param in inherited_params if param not in provider.unsupported_params),
+                *(param for param in provider.extra_supported_params if param not in inherited_params),
+            ]
 
             _supports_fc: Final = supports_function_calling(model=model, custom_llm_provider=provider.slug)
 
@@ -214,9 +267,20 @@ def create_config_class(provider: SimpleProviderConfig):
                 if provider.special_handling_for(model).get("round_reasoning_effort_to_declared_levels")
                 else caller_params
             )
+            rejected_values: Final = _values_outside_fixed(requested_params, provider.fixed_value_params)
+            if rejected_values and not (drop_params or litellm.drop_params is True):
+                raise litellm.UnsupportedParamsError(
+                    message=f"{provider.slug} does not support {_describe(rejected_values)}. It only accepts "
+                    f"{_describe({param: provider.fixed_value_params[param] for param in rejected_values})}. "
+                    "To drop unsupported openai params from the call, set `litellm.drop_params = True`",
+                    llm_provider=provider.slug,
+                    model=model,
+                )
 
             # Apply supported params
             for param, value in requested_params.items():
+                if param in rejected_values:
+                    continue
                 # Check parameter mappings first
                 if param in provider.param_mappings:
                     optional_params[provider.param_mappings[param]] = value
@@ -284,6 +348,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
     if provider.slug in _responses_config_cache:
         return _responses_config_cache[provider.slug]
 
+    from litellm.integrations.anthropic_cache_control_hook import deployment_model_info
     from litellm.llms.openai_like.responses.transformation import (
         OpenAILikeResponsesConfig,
     )
@@ -318,6 +383,25 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
                 or provider.base_url
             )
             return join_api_base(resolved_base, "responses")
+
+        def _reads_prompt_cache_breakpoints(
+            self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
+        ) -> bool:
+            return super()._reads_prompt_cache_breakpoints(
+                model,
+                litellm_params.model_copy(
+                    update={
+                        "model_info": dict(
+                            _model_info_reading_prompt_cache_breakpoints(
+                                deployment_model_info(litellm_params), provider.slug
+                            )
+                        )
+                    }
+                )
+                if provider.special_handling_for(model).get("reads_prompt_cache_breakpoint")
+                else litellm_params,
+                prompt_cache_options,
+            )
 
         def transform_responses_api_request(
             self,

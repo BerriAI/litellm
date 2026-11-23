@@ -26,6 +26,7 @@ _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
 _STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
+_FIXED_VALUE_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, bool | int | float])
 _API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
     str | Annotated[tuple[str, ...], Field(min_length=1)]
 )
@@ -57,6 +58,16 @@ class SimpleProviderConfig:
         )
         self.unsupported_params: Final[frozenset[str]] = frozenset(
             _STR_TUPLE_ADAPTER.validate_python(data["unsupported_params"]) if "unsupported_params" in data else ()
+        )
+        self.extra_supported_params: Final[tuple[str, ...]] = (
+            _STR_TUPLE_ADAPTER.validate_python(data["extra_supported_params"])
+            if "extra_supported_params" in data
+            else ()
+        )
+        self.fixed_value_params: Final[Mapping[str, bool | int | float]] = (
+            _FIXED_VALUE_PARAMS_ADAPTER.validate_python(data["fixed_value_params"])
+            if "fixed_value_params" in data
+            else MappingProxyType({})
         )
         self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
         self.model_supported_endpoints: Mapping[str, tuple[str, ...]] = _MODEL_ENDPOINTS_ADAPTER.validate_python(
