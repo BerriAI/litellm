@@ -13,17 +13,23 @@ A write is only reported as stored once it has been read back, because keyring's
 null backend, which `keyring --disable` and headless CI images both select,
 accepts every write and keeps nothing. Writes are also pre-flighted with a
 throwaway value, because a keychain can answer neither way and block forever.
-The new secret is parked in a staging slot and read back before the live slot is
-touched, so a write that fails or is killed halfway cannot take the previous
-credential down with it; a staging copy outliving its write is promoted by the
-next read.
+
+A write parks the new secret in a staging entry before it replaces the live one,
+because keyring replaces an entry on macOS by deleting it and then adding the new
+one. A process stopped between the two would otherwise leave no credential at all,
+after a renewal already spent the refresh token that could have minted another.
 """
 
+import hashlib
 import os
 import threading
 from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Final, Protocol, TypeAlias
+
+from pydantic import ConfigDict, ValidationError
+
+from litellm.types.llms.base_model import LiteLLMBaseModel
 
 KEYRING_SERVICE: Final = "litellm-cli"
 KEYRING_ACCOUNT: Final = "credential"
@@ -145,14 +151,64 @@ def _answers_a_write(api: KeyringApi, timeout_seconds: float) -> bool:
     return answered.wait(timeout_seconds)
 
 
-def _forget_the_preflight(api: KeyringApi) -> None:
-    """Take the throwaway probe back out.
-
-    A backend that kept nothing has nothing to remove, and the probe is worth nothing either way,
-    so a keychain that refuses to give it up costs the caller nothing.
-    """
+def _forget(api: KeyringApi, account: str) -> None:
+    """Take an entry that is worth nothing any more back out: the pre-flight probe, or a staged
+    write whose live write has settled. One that is already gone or that the keychain refuses to
+    give up costs the caller nothing."""
     with suppress(Exception):
-        api.delete_password(KEYRING_SERVICE, KEYRING_PREFLIGHT_ACCOUNT)
+        api.delete_password(KEYRING_SERVICE, account)
+
+
+class _StagedWrite(LiteLLMBaseModel):
+    """A secret parked before the live entry is replaced, with a fingerprint of the entry it replaces.
+
+    The fingerprint is what tells an unfinished write apart from a later one that went to the live
+    entry alone, such as a login by a litellm version that predates staging.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    replaces: str | None
+    secret: str
+
+
+def _fingerprint(blob: str | None) -> str | None:
+    return None if blob is None else hashlib.sha256(blob.encode()).hexdigest()
+
+
+def _parse_staged_write(raw: str | None) -> _StagedWrite | None:
+    if raw is None:
+        return None
+    try:
+        return _StagedWrite.model_validate_json(raw)
+    except ValidationError:
+        return None
+
+
+def _newest(live: str | None, staged: _StagedWrite | None) -> SecretFound | SecretMissing:
+    """The live entry, unless a staged write never got to replace it.
+
+    That is the case while the live entry is gone or still holds what the staged write replaces,
+    and then the staged secret is the newest one this machine saved, possibly the only one left
+    after a renewal spent the refresh token behind the live entry.
+    """
+    if staged is not None and (live is None or _fingerprint(live) == staged.replaces):
+        return SecretFound(staged.secret)
+    return SecretMissing() if live is None else SecretFound(live)
+
+
+def _store(api: KeyringApi, account: str, value: str) -> SecretWrite:
+    try:
+        api.set_password(KEYRING_SERVICE, account, value)
+        kept: Final = api.get_password(KEYRING_SERVICE, account)
+    except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
+        return KeyringUnreachable()
+    return SecretStored() if kept == value else KeyringDiscardsWrites()
+
+
+def _delete_if_present(api: KeyringApi, account: str) -> None:
+    if api.get_password(KEYRING_SERVICE, account) is not None:
+        api.delete_password(KEYRING_SERVICE, account)
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,34 +225,17 @@ class KeyringVault:
     stopped_answering: threading.Event = field(default_factory=threading.Event, compare=False, repr=False)
 
     def read(self) -> SecretRead:
-        """The stored secret, promoting a write that died after staging but before replacing.
-
-        A write parks the new secret in the staging slot before it touches the live one, so a
-        kill between the two leaves the staging copy as the newest credential this machine saved.
-        Finding the live slot empty with a staging copy present means exactly that happened, and
-        handing the staged secret back (with a best-effort copy into the live slot) recovers it
-        instead of reporting the login gone.
-        """
         if self.stopped_answering.is_set():
             return KeyringUnreachable()
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
         try:
-            blob: Final = api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
-            return KeyringUnreachable()
-        if blob is not None:
-            return SecretFound(blob)
-        try:
+            live: Final = api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
             staged: Final = api.get_password(KEYRING_SERVICE, KEYRING_STAGING_ACCOUNT)
         except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
             return KeyringUnreachable()
-        if staged is None:
-            return SecretMissing()
-        with suppress(Exception):
-            api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, staged)
-        return SecretFound(staged)
+        return _newest(live, _parse_staged_write(staged))
 
     def write(self, blob: str) -> SecretWrite:
         """Store the secret, reporting stored only once the keychain hands the same bytes back.
@@ -206,11 +245,10 @@ class KeyringVault:
         distinguish itself. Reading the value back is the only way to tell it apart from a keychain
         that really stored the credential, and the caller is about to drop its own copy on our word.
 
-        The new secret is parked in the staging slot and read back before the live slot is touched.
-        Replacing the live entry is not one keychain operation, so a write that fails or is killed
-        halfway can no longer take the previous credential down with it: the old secret is still in
-        the live slot when staging fails, and the staged copy is what the next read promotes when
-        the live slot did not survive. The staging copy is removed once the live slot reads back.
+        The secret is staged and read back before the live entry is touched, so a process stopped
+        anywhere after that leaves it for the next read. A live write that fails while the process
+        is still running takes the staged copy back out, because the caller then keeps the secret
+        in the token file instead.
 
         The keychain is pre-flighted first, because one that blocks rather than answering would
         otherwise hang `lite login` outright.
@@ -223,45 +261,28 @@ class KeyringVault:
         if not _answers_a_write(api, self.preflight_timeout_seconds):
             self.stopped_answering.set()
             return KeyringUnreachable()
-        _forget_the_preflight(api)
-        staged: Final = self._stage(api, blob)
-        if staged is not None:
+        _forget(api, KEYRING_PREFLIGHT_ACCOUNT)
+        try:
+            replaced: Final = api.get_password(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
+            return KeyringUnreachable()
+        staging: Final = _StagedWrite(replaces=_fingerprint(replaced), secret=blob).model_dump_json()
+        staged: Final = _store(api, KEYRING_STAGING_ACCOUNT, staging)
+        if not isinstance(staged, SecretStored):
             return staged
-        try:
-            api.set_password(KEYRING_SERVICE, KEYRING_ACCOUNT, blob)
-        except Exception:  # noqa: BLE001  # a keychain that refuses the write falls back to the token file
-            return KeyringUnreachable()
-        stored: Final = self.read() == SecretFound(blob)
-        self._clear_staging(api)
-        return SecretStored() if stored else KeyringDiscardsWrites()
-
-    def _stage(self, api: KeyringApi, blob: str) -> SecretWrite | None:
-        """Park the new secret where a failed live write cannot strand it. None means parked."""
-        try:
-            api.set_password(KEYRING_SERVICE, KEYRING_STAGING_ACCOUNT, blob)
-        except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
-            return KeyringUnreachable()
-        try:
-            parked: Final = api.get_password(KEYRING_SERVICE, KEYRING_STAGING_ACCOUNT)
-        except Exception:  # noqa: BLE001  # backends raise outside keyring.errors; never break the SDK
-            return KeyringUnreachable()
-        return None if parked == blob else KeyringDiscardsWrites()
-
-    def _clear_staging(self, api: KeyringApi) -> None:
-        with suppress(Exception):
-            api.delete_password(KEYRING_SERVICE, KEYRING_STAGING_ACCOUNT)
+        stored: Final = _store(api, KEYRING_ACCOUNT, blob)
+        _forget(api, KEYRING_STAGING_ACCOUNT)
+        return stored
 
     def erase(self) -> SecretErase:
-        """Remove our entries, live and staging, reporting whether the keychain is guaranteed
-        to be free of them.
-
-        The staging slot has to go too: a copy a killed write left behind would otherwise be
-        promoted by the next read and resurrect the login that was just ended.
+        """Remove our entries, reporting whether the keychain is guaranteed to be free of them.
 
         A keychain out of reach is never an erasure: the entry belongs to the OS, not to this
         install, so it outlives an uninstalled `keyring` package and a kill switch set after login.
         Those cases are reported apart from a confirmed entry that would not delete, because only
         the caller knows whether this machine ever put a secret in a keychain.
+
+        A staged write goes too, since the next read would otherwise hand back the login this ended.
         """
         match self.read():
             case KeyringNotInstalled() | KeyringDisabled() | KeyringUnreachable() as unusable:
@@ -269,23 +290,15 @@ class KeyringVault:
             case SecretMissing():
                 return SecretErased()
             case SecretFound():
-                return self._delete_all()
+                return self._delete()
 
-    def _delete_all(self) -> SecretErase:
+    def _delete(self) -> SecretErase:
         api: Final = _keyring_api()
         if isinstance(api, (KeyringNotInstalled, KeyringDisabled)):
             return api
-        live: Final = self._delete_account(api, KEYRING_ACCOUNT)
-        staged: Final = self._delete_account(api, KEYRING_STAGING_ACCOUNT)
-        return (
-            SecretErased() if isinstance(live, SecretErased) and isinstance(staged, SecretErased) else SecretStranded()
-        )
-
-    def _delete_account(self, api: KeyringApi, account: str) -> SecretErase:
         try:
-            if api.get_password(KEYRING_SERVICE, account) is None:
-                return SecretErased()
-            api.delete_password(KEYRING_SERVICE, account)
+            _delete_if_present(api, KEYRING_ACCOUNT)
+            _delete_if_present(api, KEYRING_STAGING_ACCOUNT)
         except Exception:  # noqa: BLE001  # report the failure as a value so `lite logout` can warn
             return SecretStranded()
         return SecretErased()
