@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
-from litellm.types.llms.openai import FileTypes
+from litellm.types.llms.openai import AllMessageValues, FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -163,7 +163,7 @@ class BaseLLMAIOHTTPHandler:
         async_client_session: ClientSession | None,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, str],
         data: dict | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
@@ -266,7 +266,7 @@ class BaseLLMAIOHTTPHandler:
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        messages: list,
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         encoding: "Tokenizer | None",
@@ -300,7 +300,7 @@ class BaseLLMAIOHTTPHandler:
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
         model_response: ModelResponse,
@@ -436,13 +436,13 @@ class BaseLLMAIOHTTPHandler:
         headers: dict,
         data: dict,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, str]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:
