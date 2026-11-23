@@ -11655,3 +11655,84 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "toolConfig" not in request
     assert "toolChoice" not in json.dumps(request)
     assert "tool_choice" not in json.dumps(request)
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)
+
+
+_MISTRAL_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
+_REPLAYED_TOOL_CALL_IDS: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
+
+
+def _replayed_tool_history() -> list[AllMessageValues]:
+    return [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": tool_call_id, "type": "function", "function": {"name": f"tool_{n}", "arguments": "{}"}}
+                for n, tool_call_id in enumerate(_REPLAYED_TOOL_CALL_IDS)
+            ],
+        },
+        *(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": "ok"}
+            for tool_call_id in _REPLAYED_TOOL_CALL_IDS
+        ),
+        {"role": "user", "content": "Sum it up."},
+    ]
+
+
+async def _sent_tool_use_ids(model: str, use_async: bool) -> tuple[list[str], list[str]]:
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=_replayed_tool_history(),
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": f"tool_{n}", "parameters": {"type": "object"}}}
+                for n in range(len(_REPLAYED_TOOL_CALL_IDS))
+            ]
+        },
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    return (
+        [block["toolUse"]["toolUseId"] for block in blocks if "toolUse" in block],
+        [block["toolResult"]["toolUseId"] for block in blocks if "toolResult" in block],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral.mistral-large-3-675b-instruct", "us.mistral.pixtral-large-2502-v1:0"])
+async def test_converse_sends_mistral_tool_use_ids_as_nine_alphanumeric_characters(model: str, use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids(model, use_async)
+
+    assert tool_result_ids == tool_use_ids
+    assert all(_MISTRAL_TOOL_USE_ID.fullmatch(tool_use_id) for tool_use_id in tool_use_ids)
+    assert len(set(tool_use_ids)) == len(_REPLAYED_TOOL_CALL_IDS)
+    assert tool_use_ids[3] == "D681PevKs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_converse_keeps_tool_use_ids_for_a_model_that_is_not_mistral(use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids("us.anthropic.claude-haiku-5-5", use_async)
+
+    assert tool_use_ids == tool_result_ids == list(_REPLAYED_TOOL_CALL_IDS)

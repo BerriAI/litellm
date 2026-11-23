@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from pydantic import BaseModel, TypeAdapter
 from pydantic_core import PydanticSerializationError
 
 import litellm
@@ -21,6 +22,7 @@ from litellm.exceptions import MidStreamFallbackError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.streaming_iterator import(
     CachedResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
@@ -37,6 +39,7 @@ from litellm.types.llms.openai import (
 )
 from contextlib import suppress
 from litellm.responses import streaming_iterator as streaming_module
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.utils import CallTypes
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from types import SimpleNamespace
@@ -2245,6 +2248,127 @@ def test_mock_responses_streaming_iterator_sync_iteration_logs_completion(monkey
     assert logging_obj.async_success_calls == 1
     assert hook_calls["post_call"] == 1
     assert hook_calls["metadata"] == 1
+
+_REASONING_ITEM_ID: Final = "rs_affinity"
+_STREAMED_REASONING_ITEM: Final = {
+    "id": _REASONING_ITEM_ID,
+    "type": "reasoning",
+    "summary": [{"type": "summary_text", "text": "thinking"}],
+    "encrypted_content": "ciphertext",
+}
+_STREAMED_MESSAGE_ITEM: Final = {
+    "id": "msg_affinity",
+    "type": "message",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+}
+
+
+def _reasoning_response_body(status: str, output: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "id": "resp_affinity",
+        "object": "response",
+        "created_at": 1,
+        "status": status,
+        "model": "gpt-5-mini",
+        "output": output,
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+
+
+_ITEM_RECORD: Final = TypeAdapter(dict[str, object])
+
+
+def _item_record(item: object) -> dict[str, object]:
+    return _ITEM_RECORD.validate_python(item.model_dump(exclude_none=True) if isinstance(item, BaseModel) else item)
+
+
+def _faked_reasoning_stream(
+    response: Mapping[str, object], litellm_metadata: dict[str, object]
+) -> MockResponsesAPIStreamingIterator:
+    return MockResponsesAPIStreamingIterator(
+        response=httpx.Response(200, json=response),
+        model="gpt-5-mini",
+        responses_api_provider_config=OpenAIResponsesAPIConfig(),
+        logging_obj=_logging_obj_stub(),
+        litellm_metadata=litellm_metadata,
+        custom_llm_provider="openai",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "affinity, origin",
+    [(True, "dep-1"), (False, None)],
+    ids=["affinity-on", "affinity-off"],
+)
+async def test_faked_stream_carries_the_reasoning_and_response_ids_a_real_stream_carries(
+    affinity: bool, origin: str | None
+):
+    iterator: Final = _faked_reasoning_stream(
+        _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM]),
+        {"encrypted_content_affinity_enabled": affinity, "model_info": {"id": "dep-1"}},
+    )
+
+    events: Final = [event async for event in iterator]
+
+    item_records: Final = [
+        _item_record(event.item)
+        for event in events
+        if event.type in (ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED, ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE)
+    ]
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    output_records: Final = [_item_record(item) for item in completed.output]
+    summary_item_ids: Final = {
+        event.item_id for event in events if event.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+    }
+    expected_reasoning_id: Final = (
+        _REASONING_ITEM_ID
+        if origin is None
+        else ResponsesAPIRequestUtils._build_encrypted_item_id(origin, _REASONING_ITEM_ID)
+    )
+    assert {
+        record["id"] for record in [*item_records, *output_records] if record["type"] == "reasoning"
+    } | summary_item_ids == {expected_reasoning_id}
+
+    done_reasoning: Final = next(record for record in reversed(item_records) if record["type"] == "reasoning")
+    completed_reasoning: Final = next(record for record in output_records if record["type"] == "reasoning")
+    assert [
+        ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(str(record["encrypted_content"]))
+        for record in (done_reasoning, completed_reasoning)
+    ] == [(origin, "ciphertext"), (origin, "ciphertext")]
+
+    response_ids: Final = {event.response.id for event in events if getattr(event, "response", None) is not None}
+    assert [ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id) for response_id in response_ids] == [
+        {"custom_llm_provider": "openai", "model_id": "dep-1", "response_id": "resp_affinity"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_faked_stream_of_an_already_encoded_response_keeps_its_ids():
+    litellm_metadata: Final[dict[str, object]] = {
+        "encrypted_content_affinity_enabled": True,
+        "model_info": {"id": "dep-1"},
+    }
+    encoded: Final = ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+        responses_api_response=ResponsesAPIResponse.model_validate(
+            _reasoning_response_body("completed", [_STREAMED_REASONING_ITEM, _STREAMED_MESSAGE_ITEM])
+        ),
+        custom_llm_provider="openai",
+        litellm_metadata=litellm_metadata,
+    )
+
+    events: Final = [event async for event in _faked_reasoning_stream(encoded.model_dump(), litellm_metadata)]
+
+    completed: Final = next(
+        event.response for event in events if event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    assert completed.id == encoded.id
+    assert [_item_record(item) for item in completed.output] == [_item_record(item) for item in encoded.output]
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 @pytest.mark.asyncio

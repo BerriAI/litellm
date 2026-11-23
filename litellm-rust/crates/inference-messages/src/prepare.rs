@@ -107,10 +107,8 @@ fn prepare_provider_request(
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let forwarded = config.request_headers(
-        with_default_headers(forwarded, config.default_headers()),
-        &transformed,
-    );
+    let requested = with_default_headers(forwarded, config.default_headers());
+    let forwarded = config.request_headers(requested.clone(), &transformed);
     let environment = config.validate_environment(
         forwarded,
         api_key.as_deref(),
@@ -127,10 +125,12 @@ fn prepare_provider_request(
         &env_lookup,
     )?;
 
+    let body = config.request_body(transformed, &url, &requested, shaping.settings.drop_params)?;
+
     Ok(ProviderMessagesRequest {
         provider,
         url,
-        body: transformed,
+        body,
         environment,
         timeout: timeout.or_else(|| shaping.settings.request_timeout()),
         api_key: api_key.map(SecretValue::new),
@@ -558,5 +558,256 @@ mod tests {
         assert!(
             matches!(prepared.environment.auth, litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, service: actual, .. } if region == "us-west-2" && actual == service)
         );
+    }
+
+    type Upstream<'a> = (Option<&'a str>, &'a [(&'a str, &'a str)]);
+
+    const ANTHROPIC_BY_DEFAULT: Upstream<'static> = (None, &[]);
+    const ANTHROPIC_API_BASE: Upstream<'static> = (Some("https://api.anthropic.com"), &[]);
+    const ANTHROPIC_BASE_URL_ENV: Upstream<'static> = (
+        None,
+        &[("ANTHROPIC_BASE_URL", "https://api.anthropic.com/")],
+    );
+
+    fn versioned_body(
+        version: Option<&str>,
+        (api_base, env): Upstream<'_>,
+        drop_params: bool,
+        shaping: MessagesShaping,
+    ) -> Result<Value, Error> {
+        let lookup = |name: &str| {
+            env.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.to_string())
+        };
+        prepare_with_secrets(
+            MessagesCall {
+                body: body(json!({
+                    "model": "claude-test",
+                    "max_tokens": 16,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                api_key: Some("sk-test".into()),
+                api_base: api_base.map(Into::into),
+                custom_llm_provider: Some("anthropic".into()),
+                litellm_params: Default::default(),
+                extra_headers: version
+                    .map(|version| Map::from_iter([("anthropic-version".into(), json!(version))])),
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping {
+                    settings: MessagesSettings {
+                        drop_params,
+                        ..shaping.settings
+                    },
+                    ..shaping
+                },
+            },
+            &lookup,
+        )
+        .map(|prepared| serde_json::to_value(prepared.body).unwrap())
+    }
+
+    #[rstest]
+    #[case::caller_on_2023_06_01(Some("2023-06-01"), false, Some(json!(0.2)))]
+    #[case::default_version(None, false, Some(json!(0.2)))]
+    #[case::caller_on_2026_10_21_under_drop_params(Some("2026-10-21"), true, None)]
+    fn temperature_reaches_anthropic_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] version: Option<&str>,
+        #[case] drop_params: bool,
+        #[case] expected: Option<Value>,
+        #[values(ANTHROPIC_BY_DEFAULT, ANTHROPIC_API_BASE, ANTHROPIC_BASE_URL_ENV)]
+        upstream: Upstream<'_>,
+    ) {
+        let prepared = versioned_body(version, upstream, drop_params, shaping).unwrap();
+        assert_eq!(prepared.get("temperature").cloned(), expected);
+    }
+
+    #[rstest]
+    fn an_api_version_without_sampling_params_refuses_them_before_the_anthropic_call(
+        shaping: MessagesShaping,
+        #[values(ANTHROPIC_BY_DEFAULT, ANTHROPIC_API_BASE, ANTHROPIC_BASE_URL_ENV)]
+        upstream: Upstream<'_>,
+    ) {
+        let Err(Error::InvalidRequest(detail)) =
+            versioned_body(Some("2026-10-21"), upstream, false, shaping)
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        );
+    }
+
+    #[rstest]
+    #[case::deepseek_api_base(Some("https://api.deepseek.com/anthropic"), &[])]
+    #[case::minimax_api_base(Some("https://api.minimax.io/anthropic"), &[])]
+    #[case::api_base_env(None, &[("ANTHROPIC_API_BASE", "https://api.deepseek.com/anthropic")])]
+    #[case::sdk_base_url_env(None, &[("ANTHROPIC_BASE_URL", "https://api.minimax.io/anthropic")])]
+    fn a_third_party_messages_api_gets_sampling_params_under_anthropic_version_2026_10_21(
+        shaping: MessagesShaping,
+        #[case] api_base: Option<&str>,
+        #[case] env: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let prepared =
+            versioned_body(Some("2026-10-21"), (api_base, env), drop_params, shaping).unwrap();
+        assert_eq!(prepared.get("temperature"), Some(&json!(0.2)));
+    }
+
+    fn aws_route_body(
+        (model, base): (&str, &str),
+        version: &str,
+        drop_params: bool,
+        shaping: MessagesShaping,
+    ) -> Result<Value, Error> {
+        prepare_with_secrets(
+            MessagesCall {
+                body: body(json!({
+                    "model": model,
+                    "max_tokens": 16,
+                    "temperature": 0.2,
+                    "messages": [{"role": "user", "content": "hi"}]
+                })),
+                api_key: None,
+                api_base: Some(base.into()),
+                custom_llm_provider: None,
+                litellm_params: Default::default(),
+                extra_headers: Some(Map::from_iter([(
+                    "anthropic-version".into(),
+                    json!(version),
+                )])),
+                provider_specific_header: None,
+                timeout: None,
+                shaping: MessagesShaping {
+                    settings: MessagesSettings {
+                        drop_params,
+                        ..shaping.settings
+                    },
+                    ..shaping
+                },
+            },
+            &|name: &str| match name {
+                "AWS_REGION_NAME" => Some("us-west-2".into()),
+                "ANTHROPIC_AWS_WORKSPACE_ID" => Some("workspace".into()),
+                _ => None,
+            },
+        )
+        .map(|prepared| serde_json::to_value(prepared.body).unwrap())
+    }
+
+    const MANTLE: (&str, &str) = (
+        "bedrock_mantle/claude-test",
+        "https://bedrock-mantle.us-west-2.api.aws",
+    );
+    const CLAUDE_PLATFORM: (&str, &str) = (
+        "bedrock/claude_platform/claude-test",
+        "https://aws-external-anthropic.us-west-2.api.aws",
+    );
+
+    #[rstest]
+    #[case::caller_on_2023_06_01("2023-06-01", false, Some(json!(0.2)))]
+    #[case::caller_on_2026_10_21_under_drop_params("2026-10-21", true, None)]
+    fn temperature_reaches_anthropic_on_aws_only_under_an_api_version_that_has_it(
+        shaping: MessagesShaping,
+        #[case] version: &str,
+        #[case] drop_params: bool,
+        #[case] expected: Option<Value>,
+        #[values(MANTLE, CLAUDE_PLATFORM)] route: (&str, &str),
+    ) {
+        let prepared = aws_route_body(route, version, drop_params, shaping).unwrap();
+        assert_eq!(prepared.get("temperature").cloned(), expected);
+    }
+
+    #[rstest]
+    fn anthropic_on_aws_refuses_sampling_params_under_anthropic_version_2026_10_21(
+        shaping: MessagesShaping,
+        #[values(MANTLE, CLAUDE_PLATFORM)] route: (&str, &str),
+    ) {
+        let Err(Error::InvalidRequest(detail)) =
+            aws_route_body(route, "2026-10-21", false, shaping)
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+        );
+    }
+
+    fn vertex_call_requesting(
+        shaping: MessagesShaping,
+        requested: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: None,
+            api_base: Some("https://vertex.test".into()),
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([
+                ("authorization".to_string(), json!("Bearer vertex-token")),
+                ("anthropic-version".to_string(), json!(requested)),
+            ])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    fn vertex_project(name: &str) -> Option<String> {
+        (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string())
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", false, "2026-10-21")]
+    #[case::sdk_1("2023-06-01", false, "vertex-2023-10-16")]
+    #[case::unknown_under_drop_params("latest", true, "vertex-2023-10-16")]
+    fn vertex_gets_the_requested_version_in_the_body_alone(
+        shaping: MessagesShaping,
+        #[case] requested: &str,
+        #[case] drop_params: bool,
+        #[case] body_version: &str,
+    ) {
+        let prepared = prepare_with_secrets(
+            vertex_call_requesting(shaping, requested, drop_params),
+            &vertex_project,
+        )
+        .unwrap();
+        let version_headers: Vec<String> = wire_headers(&prepared)
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
+            .map(|(_, value)| value)
+            .collect();
+        let body = serde_json::to_value(prepared.body).unwrap();
+        assert_eq!(
+            (version_headers, &body["anthropic_version"]),
+            (Vec::<String>::new(), &json!(body_version))
+        );
+    }
+
+    #[rstest]
+    fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
+        assert!(matches!(
+            prepare_with_secrets(
+                vertex_call_requesting(shaping, "latest", false),
+                &vertex_project
+            ),
+            Err(Error::InvalidRequest(
+                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+            ))
+        ));
     }
 }

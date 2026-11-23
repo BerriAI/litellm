@@ -2,6 +2,8 @@ import base64
 import json
 import uuid
 from types import SimpleNamespace
+from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -243,3 +245,59 @@ async def test_mantle_claude_async_completion_streams_a_wrapped_json_schema_answ
     chunks = tuple([chunk async for chunk in stream])
 
     assert _streamed_answer(chunks) == BARE_STREAMED_ANSWER
+
+
+def _text_message(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "anthropic.claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    )
+
+
+def _mantle_extra_body_kwargs(model: str, extra_body: dict[str, object], respond: MagicMock) -> dict[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 2048,
+        "extra_body": extra_body,
+        "aws_access_key_id": "AKIAEXAMPLE",
+        "aws_secret_access_key": "fake-secret",
+        "aws_region_name": "us-east-1",
+        "client": HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+    }
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+def test_mantle_claude_answers_400_for_extra_body_messages_without_calling_mantle(model: str) -> None:
+    respond: Final = MagicMock(wraps=_text_message)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages"):
+        litellm.completion(**_mantle_extra_body_kwargs(model, {"messages": [{"role": "user", "content": "x"}]}, respond))
+
+    assert respond.call_count == 0
+
+
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+def test_mantle_claude_drop_params_drops_extra_body_messages_and_keeps_its_thinking_display(model: str) -> None:
+    respond: Final = MagicMock(wraps=_text_message)
+    thinking: Final = {"type": "enabled", "budget_tokens": 1024, "display": "updates"}
+
+    litellm.completion(
+        **_mantle_extra_body_kwargs(
+            model, {"thinking": thinking, "messages": [{"role": "user", "content": "from extra_body"}]}, respond
+        ),
+        drop_params=True,
+    )
+
+    sent: Final = json.loads(respond.call_args.args[0].content)
+    assert sent["thinking"] == thinking
+    assert "from extra_body" not in json.dumps(sent["messages"])

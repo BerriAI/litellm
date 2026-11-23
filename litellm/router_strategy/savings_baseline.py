@@ -18,6 +18,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 from litellm._logging import verbose_router_logger
+from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 if TYPE_CHECKING:
@@ -90,8 +91,7 @@ def _models_in(router: "Router", group_name: str) -> tuple[Baseline, ...]:
         if not isinstance(params, dict):
             return None
         info: Final = deployment.get("model_info")
-        base: Final = info.get("base_model") if isinstance(info, dict) else None
-        model: Final = base or params.get("base_model") or params.get("model")
+        model: Final = next(iter(deployment_pricing_models(deployment)), None)
         qualified: Final = canonical_model(model, params.get("custom_llm_provider")) if model else None
         if qualified is None:
             return None
