@@ -470,7 +470,7 @@ fn requested_optional_params(
         return Ok(request);
     }
     if request.params.service_tier.is_some() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `service_tier` for model={} on provider={}. Only the Anthropic API routes accept it.",
             request.model,
             provider.as_str()

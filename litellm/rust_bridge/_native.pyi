@@ -1924,7 +1924,12 @@ class NativeAuthCache:
     ) -> None: ...
     def lease(self, key: AuthObject) -> Future[str | None]: ...
     def set_leased(
-        self, key: AuthObject, lease: str | None, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
+        self,
+        key: AuthObject,
+        lease: str | None,
+        value: object,
+        ttl_seconds: float | None,
+        request: NativeRequestRedis | None,
     ) -> Future[bool]: ...
     def declare_set(
         self, key: AuthObject, value: object, ttl_seconds: float | None, send: NativeSend
@@ -3097,6 +3102,7 @@ class RouterCoreHandle:
         counts_request: bool = False,
         usage_model: str | None = None,
         callbacks: Mapping[str, bool] | None = None,
+        batch_api: bool = False,
     ) -> RouterCall[_FailureReportSteps]: ...
     # A success a logging callback saw, driven like `report_failure`; `done` carries `key`.
     def report_success(

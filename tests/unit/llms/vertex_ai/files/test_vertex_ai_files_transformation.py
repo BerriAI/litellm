@@ -2218,6 +2218,23 @@ class TestVertexClaudeBatch:
             _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
         assert exc_info.value.status_code == 400
 
+    def test_claude_responses_row_drops_service_tier_under_its_own_drop_params(self, config):
+        entry: Final = _responses_entry(
+            {
+                "model": "claude-sonnet-4-6",
+                "input": "Hello!",
+                "max_output_tokens": 50,
+                "service_tier": "priority",
+                "drop_params": True,
+            },
+            custom_id="r1",
+        )
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert row["request"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+        assert "service_tier" not in row["request"]
+
     def test_claude_deployment_wins_over_a_gemini_body_model(self, config):
         entry: Final = _claude_chat_entry("r1", "hi", max_tokens=10, model="gemini-2.5-flash")
 
@@ -2492,6 +2509,77 @@ class TestVertexClaudeBatch:
         assert row["response"]["body"]["choices"][0]["message"]["content"] == "first"
 
 
+def _image_edit_entry(**body: object) -> Mapping[str, object]:
+    assistant_turn: Final = {
+        "role": "assistant",
+        "content": "Here is your cat.",
+        "images": [
+            {
+                "image_url": {"url": "data:image/png;base64,Y2F0"},
+                "index": 0,
+                "type": "image_url",
+                "provider_specific_fields": {"thought_signature": "sig-cat"},
+            }
+        ],
+        "provider_specific_fields": {"thought_signatures": ["sig-text", {"bad": 1}, "sig-cat"]},
+    }
+    return {
+        "custom_id": "request-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-3.1-flash-image",
+            "messages": [
+                {"role": "user", "content": "Draw a cat"},
+                assistant_turn,
+                {"role": "user", "content": "Make the chair blue"},
+            ],
+            **body,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry_body", "deployment_params"),
+    [
+        pytest.param({"drop_params": True}, {}, id="line-drop-params"),
+        pytest.param({}, {"drop_params": True}, id="deployment-drop-params"),
+    ],
+)
+def test_batch_line_drops_a_malformed_history_signature_under_drop_params(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_body: Mapping[str, object],
+    deployment_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    (row,) = _uploaded_rows(
+        config,
+        {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.1-flash-image", **deployment_params},
+        [_image_edit_entry(**entry_body)],
+    )
+
+    model_turn: Final = row["request"]["contents"][1]
+    assert [part.get("thoughtSignature") for part in model_turn["parts"]] == ["sig-text", "sig-cat"]
+
+
+def test_batch_line_with_a_malformed_history_signature_is_refused_without_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match="thought_signatures") as exc_info:
+        _uploaded_rows(
+            config,
+            {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.1-flash-image"},
+            [_image_edit_entry()],
+        )
+    assert exc_info.value.status_code == 400
+
+
 _SAMPLING_KNOBS: Final = MappingProxyType({"temperature": 0, "top_p": 0.5, "top_k": 3})
 
 
@@ -2561,6 +2649,155 @@ def test_batch_row_for_an_unflagged_gemini_model_keeps_the_knobs(monkeypatch: py
     monkeypatch.setattr(litellm, "drop_params", False)
     (row,) = _wrap_entries([_chat_entry("gemini-2.5-flash", _SAMPLING_KNOBS)])
     assert _generation_config(row) == {"max_output_tokens": 5, **_SAMPLING_KNOBS}
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_row_with_a_hosted_mcp_tool_is_refused_with_advice_a_batch_row_can_follow(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _claude_chat_entry(
+        "r1",
+        "hi",
+        model=model,
+        max_tokens=10,
+        tools=[{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}],
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}"}, [entry])
+
+    assert exc_info.value.status_code == 400
+    assert "`deepwiki`" in exc_info.value.message
+    assert "A batch row cannot reach the LiteLLM MCP gateway" in exc_info.value.message
+    assert "litellm_proxy/mcp" not in exc_info.value.message
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_responses_row_drops_a_hosted_mcp_tool_under_its_own_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {
+        "custom_id": "r1",
+        "method": "POST",
+        "url": "/v1/responses",
+        "body": {
+            "model": model,
+            "input": "hi",
+            "max_output_tokens": 10,
+            "drop_params": True,
+            "tools": [
+                {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+                {"type": "function", "name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            ],
+        },
+    }
+
+    (row,) = _uploaded_rows(config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}"}, [entry])
+
+    assert "get_weather" in json.dumps(row)
+    assert "deepwiki" not in json.dumps(row)
+    assert "drop_params" not in json.dumps(row)
+
+
+_DEEPWIKI_SERVER: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
+_RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-sonnet-4-6"])
+@pytest.mark.parametrize(
+    ("url", "body", "unsent_server"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            "deepwiki",
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            "deepwiki",
+            id="responses-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_DEEPWIKI_SERVER, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "docs"},
+            },
+            "docs",
+            id="responses-another-server",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    url: str,
+    body: Mapping[str, object],
+    unsent_server: str,
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {"custom_id": "r1", "method": "POST", "url": url, "body": {"model": model, **body}}
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(
+            config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}", "drop_params": True}, [entry]
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+        in exc_info.value.message
+    )
+    assert exc_info.value.message.endswith(
+        f"This request sends no hosted MCP tool with server_label `{unsent_server}`. "
+        "Send that tool or remove the tool_choice."
+    )
+
+
+@pytest.mark.parametrize("model", ["gemini-2.5-flash", "claude-sonnet-4-6"])
+def test_batch_row_with_a_null_drop_params_takes_its_deployments_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = _claude_chat_entry(
+        "r1",
+        "hi",
+        model=model,
+        max_tokens=10,
+        drop_params=None,
+        tools=[
+            {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"},
+            {"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}}},
+        ],
+    )
+
+    (row,) = _uploaded_rows(
+        config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}", "drop_params": True}, [entry]
+    )
+
+    assert "get_weather" in json.dumps(row)
+    assert "deepwiki" not in json.dumps(row)
 
 
 _ANSWER_SCHEMA: Final = MappingProxyType(
@@ -2727,8 +2964,12 @@ def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_para
 
 @pytest.mark.parametrize(
     ("deployment", "body"),
-    [({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}), (_GEMINI_DEPLOYMENT, {"drop_params": True})],
-    ids=["deployment", "request"],
+    [
+        ({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}),
+        (_GEMINI_DEPLOYMENT, {"drop_params": True}),
+        ({**_GEMINI_DEPLOYMENT, "drop_params": True}, {"drop_params": None}),
+    ],
+    ids=["deployment", "request", "null_request"],
 )
 def test_drop_params_drops_json_schema_annotations_bigquery_refuses(
     config: VertexAIFilesConfig,
@@ -2929,6 +3170,47 @@ def test_batch_row_keeps_flagged_logprobs_only_when_the_row_allows_them(
 
     assert _generation_config(allowed_row) == {"max_output_tokens": 5, "responseLogprobs": True, "logprobs": 3}
     assert _generation_config(dropped_row) == {"max_output_tokens": 5}
+
+
+def _generation_config_of(row: Mapping[str, object]) -> dict[str, object]:
+    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generationConfig"])
+
+
+def test_batch_row_asking_for_n_image_candidates_uploads_with_n_beside_a_plain_row(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    (image_row, plain_row) = _uploaded_rows(
+        config,
+        _GEMINI_DEPLOYMENT,
+        [
+            dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2})),
+            dict(_chat_entry("gemini-2.5-flash", {})),
+        ],
+    )
+
+    assert _generation_config_of(image_row)["candidate_count"] == 2
+    assert _generation_config_of(plain_row) == {"max_output_tokens": 5}
+
+
+@pytest.mark.parametrize(
+    ("globally", "deployment_params", "row_params"),
+    [(True, {}, {}), (False, {"drop_params": True}, {}), (False, {}, {"drop_params": True})],
+    ids=["global", "deployment", "row"],
+)
+def test_drop_params_drops_n_from_a_batch_row_asking_for_image_candidates(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    globally: bool,
+    deployment_params: Mapping[str, object],
+    row_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", globally)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"modalities": ["image", "text"], "n": 2, **row_params}))
+
+    (row,) = _uploaded_rows(config, {**_GEMINI_DEPLOYMENT, **deployment_params}, [entry])
+
+    assert "candidate_count" not in _generation_config_of(row)
 
 
 _SYSTEM_VIDEO_MESSAGES: Final = (

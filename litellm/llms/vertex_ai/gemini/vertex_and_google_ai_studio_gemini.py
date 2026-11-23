@@ -6,7 +6,7 @@ import re
 import threading
 import time
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from copy import deepcopy
 from functools import lru_cache, partial
 from itertools import chain, repeat
@@ -14,6 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, Union, cast, get_args
 
 import httpx
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -32,7 +33,9 @@ from litellm.constants import (
     PROVIDER_FINISH_REASONS_HIDDEN_PARAM,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     drops_unsupported_params,
     map_finish_reason,
@@ -45,6 +48,7 @@ from litellm.litellm_core_utils.model_param_helper import embeds_thought_signatu
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning
+from litellm.litellm_core_utils.service_tier_utils import GEMINI_TRAFFIC_TYPE_SERVICE_TIERS
 from litellm.litellm_core_utils.tool_fields import (
     declared_function_name,
     qualified_member_name,
@@ -83,6 +87,8 @@ from litellm.types.llms.vertex_ai import (
     FunctionCallingConfig,
     FunctionDeclaration,
     GeminiFinishReason,
+    GeminiImageProviderSpecificFields,
+    GeminiImageURLListItem,
     GeminiThinkingConfig,
     GenerateContentResponseBody,
     HttpxPartType,
@@ -133,7 +139,7 @@ from ..context_caching.rejected_cache_retry import (
 )
 from ..request_labels import vertex_request_label_fields, without_caller_labels_header
 from ..vertex_llm_base import VertexBase
-from .grounding_requests import calculate_grounding_requests
+from .grounding_requests import calculate_grounding_requests, search_tool_call_queries, web_search_queries
 from .long_decode import (
     HOP_FAILURES,
     AsyncStreamResume,
@@ -171,6 +177,7 @@ from .transformation import (
     gemini_convert_messages_with_history,
     sync_transform_request_body,
 )
+from .web_search_calls import gemini_web_search_calls
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -220,6 +227,37 @@ OPENAI_TO_GEMINI_TTS_VOICES: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
+SENT_SERVICE_TIERS: Final = frozenset({"priority", "flex", "standard"})
+PROVIDER_DEFAULT_SERVICE_TIERS: Final = frozenset({"auto", "default", "unspecified"})
+VERTEX_SHARED_REQUEST_TIERS: Final = frozenset({"priority", "flex"})
+SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType({"standard_only": "standard"})
+GEMINI_SERVICE_TIER_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
+    {**SERVICE_TIER_ALIASES, "auto": "priority", "default": "standard"}
+)
+
+
+def _response_service_tier(header_tier: str | None, traffic_type: object) -> str | None:
+    if header_tier:
+        lowered: Final = header_tier.lower()
+        return "default" if lowered == "standard" else lowered
+    if isinstance(traffic_type, str) and traffic_type:
+        return GEMINI_TRAFFIC_TYPE_SERVICE_TIERS.get(traffic_type.upper(), "default")
+    return None
+
+
+def _unsupported_service_tier(service_tier: str) -> UnsupportedParamsError:
+    known_tiers: Final = sorted(SENT_SERVICE_TIERS | PROVIDER_DEFAULT_SERVICE_TIERS | frozenset(SERVICE_TIER_ALIASES))
+    return UnsupportedParamsError(
+        message=(
+            f"Invalid `service_tier`: {service_tier!r}. "
+            f"Must be one of: {', '.join(repr(tier) for tier in known_tiers)}. "
+            "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+            "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+        ),
+        status_code=400,
+    )
+
+
 def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsError:
     return UnsupportedParamsError(
         message=(
@@ -229,6 +267,34 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
             "in the request - https://docs.litellm.ai/docs/completion/drop_params"
         ),
         status_code=400,
+    )
+
+
+_SERVER_SIDE_TOOL_INVOCATIONS_KEYS: Final = ("include_server_side_tool_invocations", "includeServerSideToolInvocations")
+
+
+def _turns_server_side_tools_off(params: Mapping[str, object]) -> bool:
+    return any(params.get(key) is False for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS)
+
+
+def _pins_function_calling_mode(params: Mapping[str, object]) -> bool:
+    match params.get("tool_choice"):
+        case "required" | "none" | {"function": {"name": str()}}:
+            return True
+        case _:
+            return False
+
+
+_PINNED_FUNCTION_CALLING_MODES: Final = frozenset({"ANY", "NONE"})
+
+
+def _tool_config_keeps_the_old_search_drop(tool_config: Mapping[str, object]) -> bool:
+    calling: Final = as_str_mapping(
+        tool_config.get("functionCallingConfig", tool_config.get("function_calling_config"))
+    )
+    mode: Final = calling.get("mode") if calling is not None else None
+    return _turns_server_side_tools_off(tool_config) or (
+        isinstance(mode, str) and mode in _PINNED_FUNCTION_CALLING_MODES
     )
 
 
@@ -280,16 +346,24 @@ def _content_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def _generated_image_item(data_uri: str, thought_signature: str | None) -> ImageURLListItem:
+    image_url: Final = ImageURLObject(url=data_uri, detail="auto")
+    if thought_signature is None:
+        return ImageURLListItem(image_url=image_url, index=0, type="image_url")
+    return GeminiImageURLListItem(
+        image_url=image_url,
+        index=0,
+        type="image_url",
+        provider_specific_fields=GeminiImageProviderSpecificFields(thought_signature=thought_signature),
+    )
+
+
 def _inline_image(part: HttpxPartType) -> ImageURLListItem | None:
     inline_data: Final = part.get("inlineData", {})
     mime_type: Final = inline_data.get("mimeType", "")
     if not mime_type.startswith("image/"):
         return None
-    return ImageURLListItem(
-        image_url=ImageURLObject(url=f"data:{mime_type};base64,{inline_data.get('data', '')}", detail="auto"),
-        index=0,
-        type="image_url",
-    )
+    return _generated_image_item(f"data:{mime_type};base64,{inline_data.get('data', '')}", part.get("thoughtSignature"))
 
 
 def _images_in(parts: Sequence[HttpxPartType]) -> tuple[ImageURLListItem, ...]:
@@ -320,6 +394,24 @@ def _with_delta_images(choice: "StreamingChoices", images: tuple[ImageURLListIte
 def _candidate_finish_fields(candidate: Candidates) -> Mapping[str, str] | None:
     reason: Final = candidate.get("finishReason")
     return MappingProxyType({"native_finish_reason": reason}) if reason is not None else None
+
+
+def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
+    content: Final = candidate.get("content")
+    return (content.get("parts") or ()) if content else ()
+
+
+def _parts_of_candidates(candidates: Sequence[Candidates]) -> Iterator[HttpxPartType]:
+    for candidate in candidates:
+        yield from _candidate_parts(candidate)
+
+
+def _candidate_web_search_queries(candidate: Candidates) -> tuple[str, ...]:
+    grounding: Final = candidate.get("groundingMetadata")
+    grounding_items: Final = as_object_list(grounding) or (() if grounding is None else per_hop(grounding))
+    return web_search_queries(
+        tuple(filter(None, map(as_str_mapping, grounding_items))), search_tool_call_queries(_candidate_parts(candidate))
+    )
 
 
 _MALFORMED_FINISH_REASONS: Final[frozenset[GeminiFinishReason]] = frozenset(
@@ -621,6 +713,34 @@ def unsupported_gemini_tts_audio_format(
     )
 
 
+def gemini_image_candidate_count(
+    model: str,
+    request_params: Mapping[str, object],
+    drop_params: bool,
+    allowed_openai_params: Sequence[str],
+    llm_provider: str,
+) -> Literal["forward", "drop"] | UnsupportedParamsError:
+    n: Final = request_params.get("n")
+    modalities: Final = request_params.get("modalities")
+    asks_for_several_candidates: Final = isinstance(n, int) and n > 1
+    asks_for_image_output: Final = isinstance(modalities, list) and "image" in modalities
+    if not (asks_for_several_candidates and asks_for_image_output):
+        return "forward"
+    if "n" in allowed_openai_params:
+        return "forward"
+    if drops_unsupported_params(drop_params):
+        return "drop"
+    return UnsupportedParamsError(
+        message=(
+            f"n={n} with image output in modalities is not supported for {model}. Gemini returns one candidate "
+            "per request when modalities asks for image output, so send n=1 or separate requests, or set "
+            "drop_params to drop n."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
 def normalize_gemini_speech_config(
     value: Mapping[str, object], drop_unknown_fields: bool = False
 ) -> dict[str, object]:  # mutable-ok: provider request serialization requires a concrete dict
@@ -669,9 +789,15 @@ class _ToolChoiceParam(TypedDict, total=False):
     tool_choice: ReadOnly[object]
 
 
+class _CandidateCountParams(TypedDict, total=False):
+    n: ReadOnly[object]
+    modalities: ReadOnly[object]
+
+
 _CALLER_TOOL: Final = TypeAdapter(_CallerTool)
 _CALLER_TOOLS: Final = TypeAdapter(tuple[object, ...])
 _TOOL_CHOICE_PARAM: Final = TypeAdapter(_ToolChoiceParam)
+_CANDIDATE_COUNT_PARAMS: Final = TypeAdapter(_CandidateCountParams)
 
 
 def _caller_parameters(tool: object) -> Mapping[str, object] | None:
@@ -926,6 +1052,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
     _route: ClassVar[str] = "vertex_ai"
     _removes_undeclared_thinking_levels: ClassVar[bool] = False
+    _service_tier_aliases: ClassVar[Mapping[str, str]] = SERVICE_TIER_ALIASES
 
     temperature: float | None = None
     max_output_tokens: int | None = None
@@ -1068,6 +1195,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return flag
         return True
 
+    def _supports_search_tools_with_functions(self, model: str) -> bool:
+        rows: Final = cast(Mapping[str, Mapping[str, object]], litellm.model_cost)  # cast-ok: JSON rows by model id
+        bare: Final = model.split("/")[-1]
+        flags: Final = (
+            rows.get(candidate, {}).get("supports_search_tools_with_functions")
+            for candidate in (f"{self._route}/{bare}", bare)
+        )
+        return next((flag for flag in flags if isinstance(flag, bool)), False)
+
+    @staticmethod
+    def caller_tool_config_keeps_the_old_search_drop(tool_config: JsonValue | None) -> bool:
+        fields: Final = as_str_mapping(tool_config)
+        return fields is not None and _tool_config_keeps_the_old_search_drop(fields)
+
+    def _keeps_search_tools_with_functions(self, model: str, *param_sources: Mapping[str, object]) -> bool:
+        keeps_the_old_drop: Final = any(
+            _turns_server_side_tools_off(params) or _pins_function_calling_mode(params) for params in param_sources
+        )
+        return not keeps_the_old_drop and self._supports_search_tools_with_functions(model)
+
     @staticmethod
     def reject_unsupported_sampling_param(model: str, param: str, drop_params: bool) -> None:
         """Return under ``drop_params`` so the caller drops ``param``, else raise the client-side 400
@@ -1181,33 +1328,55 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._search_tool_keys()
 
     @classmethod
-    def _drop_search_tools_mixed_with_functions(cls, optional_params: dict) -> None:
+    def _is_search_tool(cls, tool: object) -> bool:
+        return not cls.search_tool_keys().isdisjoint(as_str_mapping(tool) or ())
+
+    @classmethod
+    def _mixes_search_tools_with_functions(cls, tools: Sequence[object]) -> bool:
+        return any((as_str_mapping(tool) or {}).get("function_declarations") for tool in tools) and any(
+            map(cls._is_search_tool, tools)
+        )
+
+    @staticmethod
+    def _is_search_retrieval_tool(tool: object) -> bool:
+        return VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value in (as_str_mapping(tool) or ())
+
+    @classmethod
+    def _drop_search_tools_mixed_with_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        keeps_search_tools: bool = False,
+        drops_search_retrieval: bool = False,
+    ) -> None:
         """
         Drop search tools from optional_params when mixed with function declarations
-        and include_server_side_tool_invocations is not enabled.
+        and include_server_side_tool_invocations is not enabled. A model that keeps
+        search tools next to function declarations (Gemini 3+) keeps both and gets
+        include_server_side_tool_invocations set instead, minus googleSearchRetrieval,
+        which Gemini 3+ rejects. A caller who set include_server_side_tool_invocations
+        keeps googleSearchRetrieval unless drop_params is set, as before.
 
         Runs after map_openai_params merges tools and web_search_options so both
         code paths (single _map_function call vs split tools + web_search_options)
         get the same conflict resolution.
         """
+        tools: Final = as_object_list(optional_params.get("tools")) or ()
+        if not cls._mixes_search_tools_with_functions(tools):
+            return
+        if keeps_search_tools:
+            caller_flag_on: Final = optional_params.get("include_server_side_tool_invocations") is True
+            cls._keep_search_tools_next_to_functions(
+                optional_params, tools, drops_search_retrieval or not caller_flag_on
+            )
+            return
         if optional_params.get("include_server_side_tool_invocations"):
             return
+        optional_params["tools"] = list(cls.without_search_tools_next_to_functions(tools))
 
-        tools: Final = optional_params.get("tools")
-        if not isinstance(tools, list) or not tools:
-            return
-
-        search_tool_keys: Final = cls._search_tool_keys()
-        has_function_declarations = any(isinstance(tool, dict) and tool.get("function_declarations") for tool in tools)
-        if not has_function_declarations:
-            return
-
-        has_search_tools: Final = any(
-            isinstance(tool, dict) and any(key in tool for key in search_tool_keys) for tool in tools
-        )
-        if not has_search_tools:
-            return
-
+    @classmethod
+    def without_search_tools_next_to_functions(cls, tools: Sequence[object]) -> tuple[object, ...]:
+        if not cls._mixes_search_tools_with_functions(tools):
+            return tuple(tools)
         verbose_logger.warning(
             "Vertex AI does not support mixing function declarations with "
             "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -1215,9 +1384,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "tools and keeping function declarations. To use search tools, "
             "send a request without function calling tools."
         )
-        optional_params["tools"] = [
-            tool for tool in tools if not (isinstance(tool, dict) and any(key in tool for key in search_tool_keys))
-        ]
+        return tuple(tool for tool in tools if not cls._is_search_tool(tool))
+
+    @classmethod
+    def _keep_search_tools_next_to_functions(
+        cls,
+        optional_params: dict[str, object],  # mutable-ok: map_openai_params builds the request params in place
+        tools: Sequence[object],
+        drops_search_retrieval: bool,
+    ) -> None:
+        kept: Final = (
+            [tool for tool in tools if not cls._is_search_retrieval_tool(tool)] if drops_search_retrieval else tools
+        )
+        if len(kept) < len(tools):
+            verbose_logger.warning(
+                "Gemini 3+ does not support googleSearchRetrieval next to function declarations. Dropping it, "
+                "use googleSearch instead."
+            )
+            optional_params["tools"] = kept  # rebind-ok: map_openai_params builds the request params in place
+        if cls._mixes_search_tools_with_functions(kept):
+            optional_params["include_server_side_tool_invocations"] = True  # rebind-ok: built in place as above
 
     @classmethod
     def drop_search_tools_mixed_with_functions(
@@ -1226,16 +1412,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     ) -> None:
         return cls._drop_search_tools_mixed_with_functions(optional_params)
 
-    def _map_service_tier_param(self, value: str, optional_params: dict) -> None:
-        """
-        Map OpenAI service_tier (string) to Gemini serviceTier.
-        'auto' maps to 'priority'.
-        Other values are passed lowercased.
-        """
-        if value.lower() == "auto":
-            optional_params["service_tier"] = "priority"
-        else:
-            optional_params["service_tier"] = value.lower()
+    def _map_service_tier_param(self, value: str, optional_params: dict, drop_params: bool) -> None:
+        unprefixed: Final = value.lower().removeprefix("service_tier_")
+        normalized: Final = self._service_tier_aliases.get(unprefixed, unprefixed)
+        if normalized in SENT_SERVICE_TIERS:
+            optional_params["service_tier"] = normalized
+            return
+        if normalized in PROVIDER_DEFAULT_SERVICE_TIERS or drops_unsupported_params(drop_params):
+            return
+        raise _unsupported_service_tier(value)
 
     def _transform_computer_use_config(self, computer_use_config: dict) -> dict:
         """
@@ -1341,14 +1526,15 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         enterpriseWebSearch: dict | None,
         urlContext: dict | None,
         optional_params: dict,
+        keep_search_tools_with_functions: bool = False,
     ) -> tuple:
         """
-        Resolve Vertex AI constraint: multiple Tool objects in a request must
+        Resolve the Gemini 2.x constraint: multiple Tool objects in a request must
         ALL be search tools. When function declarations are mixed with search
         tools, drop search tools to avoid 400 error.
 
-        Skip when include_server_side_tool_invocations is enabled (Gemini 3+
-        supports tool combination natively).
+        Skip when include_server_side_tool_invocations is enabled or the model
+        keeps search tools next to function declarations (Gemini 3+).
 
         Note: code_execution, computerUse, and googleMaps are NOT search tools
         and CAN coexist with function declarations, so they are preserved.
@@ -1367,8 +1553,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 urlContext,
             ]
         )
-        server_side_tool_invocations: Final = optional_params.get("include_server_side_tool_invocations", False)
-        if gtool_func_declarations and has_search_tools and not server_side_tool_invocations:
+        keeps_search_tools: Final = keep_search_tools_with_functions or optional_params.get(
+            "include_server_side_tool_invocations", False
+        )
+        if gtool_func_declarations and has_search_tools and not keeps_search_tools:
             verbose_logger.warning(
                 "Vertex AI does not support mixing function declarations with "
                 "search tools (googleSearch, enterpriseWebSearch, urlContext, "
@@ -1376,10 +1564,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 "tools and keeping function declarations. To use search tools, "
                 "send a request without function calling tools."
             )
-            googleSearch = None
-            googleSearchRetrieval = None
-            enterpriseWebSearch = None
-            urlContext = None
+            return None, None, None, None
 
         return googleSearch, googleSearchRetrieval, enterpriseWebSearch, urlContext
 
@@ -1414,6 +1599,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool = True,
         outside_declarations: JsonValue = None,
         tool_choice: object = None,
+        keep_search_tools_with_functions: bool = False,
     ) -> list[Tools]:
         """
         Map OpenAI-style tools/functions to Vertex AI format.
@@ -1568,6 +1754,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             enterpriseWebSearch=enterpriseWebSearch,
             urlContext=urlContext,
             optional_params=optional_params,
+            keep_search_tools_with_functions=keep_search_tools_with_functions,
         )
 
         # Function declarations can be grouped together in one Tool
@@ -2060,10 +2247,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         appear before this flag, _resolve_search_tool_conflict would drop search
         tools before the flag is applied.
         """
-        for key in (
-            "include_server_side_tool_invocations",
-            "includeServerSideToolInvocations",
-        ):
+        for key in _SERVER_SIDE_TOOL_INVOCATIONS_KEYS:
             if non_default_params.get(key) is True or optional_params.get(key) is True:
                 optional_params["include_server_side_tool_invocations"] = True
                 return
@@ -2099,12 +2283,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         )
         return {"includeThoughts": VertexGeminiConfig._include_thoughts(thinking_config.get("includeThoughts"))}
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def _tools_builder(
         self,
         param: str,
         request_params: Mapping[str, object],
         optional_params: dict[str, object],  # mutable-ok: _map_function adds toolConfig to the request's params
         allow_parameters_json_schema: bool,
+        *,
+        keep_search_tools_with_functions: bool,
     ) -> Callable[[bool, bool], Sequence[Tools]]:
         return partial(
             self._build_function_tools,
@@ -2115,6 +2304,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 JsonValue, request_params.get("functions" if param == "tools" else "tools")
             ),
             tool_choice=_TOOL_CHOICE_PARAM.validate_python(request_params).get("tool_choice"),
+            keep_search_tools_with_functions=keep_search_tools_with_functions,
         )
 
     def _schema_pins_fit(
@@ -2123,6 +2313,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         allow_integer_enums: bool,
         allow_parameters_json_schema: bool,
+        keep_search_tools_with_functions: bool,
     ) -> bool:
         tool_params: Final = tuple(
             param
@@ -2139,7 +2330,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         self.apply_response_schema_transformation(response_format, response_params, model, allow_integer_enums)
         tools: Final = [
             with_enums_that_fit(
-                self._tools_builder(param, request_params, {}, allow_parameters_json_schema),
+                self._tools_builder(
+                    param,
+                    request_params,
+                    {},
+                    allow_parameters_json_schema,
+                    keep_search_tools_with_functions=keep_search_tools_with_functions,
+                ),
                 allow_integer_enums and self._is_gemini_3_or_newer(model),
                 has_const(cast(JsonValue, request_params[param])),  # cast-ok: tools are JSON request data
             )
@@ -2157,16 +2354,36 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool = True,
         *,
         allowed_openai_params: Sequence[str] = (),
+        allow_unsupported_n: bool = False,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route=self._route, drop_params=drop_params
+            non_default_params,
+            model=model,
+            route=self._route,
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         self._apply_include_server_side_tool_invocations(request_params, optional_params)
+        keeps_search_tools_with_functions: Final = self._keeps_search_tools_with_functions(
+            model,
+            cast(Mapping[str, object], request_params),  # cast-ok: map_openai_params keys request params by name
+            cast(Mapping[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+        )
         supports_sampling_params: Final = self.supports_sampling_params(model)
         drops_logprobs: Final = self._drops_logprobs(model, drop_params, allowed_openai_params)
         typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
+        candidate_params: Final = _CANDIDATE_COUNT_PARAMS.validate_python(typed_request_params)
+        candidate_count: Final = gemini_image_candidate_count(
+            model, candidate_params, drop_params, allowed_openai_params, self._route
+        )
+        if isinstance(candidate_count, UnsupportedParamsError) and not allow_unsupported_n:
+            raise candidate_count
         pins_fit: Final = self._schema_pins_fit(
-            typed_request_params, model, allow_integer_enums, allow_parameters_json_schema
+            typed_request_params,
+            model,
+            allow_integer_enums,
+            allow_parameters_json_schema,
+            keeps_search_tools_with_functions,
         )
         for param, value in request_params.items():
             if param in ("temperature", "top_p", "top_k") and not supports_sampling_params:
@@ -2194,6 +2411,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
+            elif param == "n" and candidate_count == "drop":
+                verbose_logger.warning(
+                    "Dropping n=%s for %s because Gemini returns one candidate per request when modalities asks "
+                    "for image output",
+                    candidate_params.get("n"),
+                    model,
+                )
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
@@ -2226,7 +2450,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif (param == "tools" or param == "functions") and isinstance(value, list) and value:
                 # Pass optional_params so _map_function can add toolConfig if needed
                 mapped_tools = with_enums_that_fit(
-                    self._tools_builder(param, typed_request_params, optional_params, allow_parameters_json_schema),
+                    self._tools_builder(
+                        param,
+                        typed_request_params,
+                        optional_params,
+                        allow_parameters_json_schema,
+                        keep_search_tools_with_functions=keeps_search_tools_with_functions,
+                    ),
                     allow_integer_enums and self._is_gemini_3_or_newer(model),
                     pins_fit and has_const(cast(JsonValue, value)),  # cast-ok: tools are JSON request data
                 )
@@ -2292,7 +2522,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tools = self._map_web_search_options(value)
                 optional_params = self._add_tools_to_optional_params(optional_params, [_tools])
             elif param == "service_tier" and isinstance(value, str):
-                self._map_service_tier_param(value, optional_params)
+                self._map_service_tier_param(value, optional_params, drop_params)
             elif param == "include_server_side_tool_invocations" and value is True:
                 optional_params["include_server_side_tool_invocations"] = True
         if litellm.vertex_ai_safety_settings is not None:
@@ -2306,7 +2536,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        self._drop_search_tools_mixed_with_functions(optional_params)
+        self._drop_search_tools_mixed_with_functions(
+            cast(dict[str, object], optional_params),  # cast-ok: map_openai_params keys request params by name
+            keeps_search_tools_with_functions,
+            drops_search_retrieval=drops_unsupported_params(drop_params),
+        )
 
         return optional_params
 
@@ -3054,8 +3288,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return cls._calculate_web_search_requests(grounding_metadata)
 
     @staticmethod
-    def _set_grounding_usage_counters(usage: Usage, grounding_metadata: Sequence[Mapping[str, object]]) -> None:
-        grounding_requests: Final = calculate_grounding_requests(grounding_metadata)
+    def _set_grounding_usage_counters(
+        usage: Usage,
+        grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
+    ) -> None:
+        grounding_requests: Final = calculate_grounding_requests(grounding_metadata, tool_call_queries)
         details: Final = cast(PromptTokensDetailsWrapper, usage.prompt_tokens_details)
         if grounding_requests.web_search_requests is not None:
             details.web_search_requests = grounding_requests.web_search_requests
@@ -3067,8 +3305,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         cls,
         usage: Usage,
         grounding_metadata: Sequence[Mapping[str, object]],
+        tool_call_queries: Sequence[str] = (),
     ) -> None:
-        return cls._set_grounding_usage_counters(usage, grounding_metadata)
+        return cls._set_grounding_usage_counters(usage, grounding_metadata, tool_call_queries)
 
     @staticmethod
     def _create_streaming_choice(
@@ -3423,6 +3662,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 for key, value in (
                     ("thought_signatures", thought_signatures),
                     ("server_side_tool_invocations", server_side_tool_invocations),
+                    (
+                        "web_search_calls",
+                        list(gemini_web_search_calls(model_response.id, _candidate_web_search_queries(candidate)))
+                        or None,
+                    ),
                     ("continuation_token", client_continuation_token(candidate)),
                 )
                 if value is not None
@@ -3587,7 +3831,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 cache_creation_tokens=_cache_creation_tokens(logging_obj),
             )
 
-            VertexGeminiConfig._set_grounding_usage_counters(usage, grounding_metadata)
+            VertexGeminiConfig._set_grounding_usage_counters(
+                usage, grounding_metadata, search_tool_call_queries(_parts_of_candidates(_candidates or ()))
+            )
 
             setattr(model_response, "usage", usage)
 
@@ -3617,13 +3863,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
             ## ADD SERVICE TIER ##
-            if getattr(raw_response, "headers", None):
-                service_tier: Final = _response_header(raw_response.headers, "x-gemini-service-tier")
-                if service_tier:
-                    if service_tier.lower() == "standard":
-                        setattr(model_response, "service_tier", "default")
-                    else:
-                        setattr(model_response, "service_tier", service_tier.lower())
+            response_headers: Final = getattr(raw_response, "headers", None)
+            service_tier: Final = _response_service_tier(
+                _response_header(response_headers, "x-gemini-service-tier") if response_headers else None,
+                traffic_type,
+            )
+            if service_tier:
+                setattr(model_response, "service_tier", service_tier)
 
         except Exception as e:
             raise VertexAIError(
@@ -3697,9 +3943,18 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers.update(api_key)
         elif api_key is not None:
             default_headers["Authorization"] = f"Bearer {api_key}"
-        if headers is not None:
-            default_headers.update(headers)
 
+        optional_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict
+        litellm_fields: Final[Mapping[str, object]] = cast(Mapping[str, object], litellm_params)  # cast-ok: bare dict
+        caller_headers: Final[Mapping[str, str]] = cast(Mapping[str, str], headers or {})  # cast-ok: bare dict
+        service_tier: Final = optional_fields.get("service_tier")
+        is_vertex: Final = litellm_fields.get("custom_llm_provider") != litellm.LlmProviders.GEMINI
+        if is_vertex and isinstance(service_tier, str) and service_tier in VERTEX_SHARED_REQUEST_TIERS:
+            caller_header_names: Final = frozenset(name.lower() for name in caller_headers)
+            if "x-vertex-ai-llm-shared-request-type" not in caller_header_names:
+                default_headers["X-Vertex-AI-LLM-Shared-Request-Type"] = service_tier
+
+        default_headers.update(caller_headers)
         return default_headers
 
 
@@ -4474,6 +4729,8 @@ class ModelResponseIterator:
         self._initial_prompt_tokens: int | None = None
         self._grounding_offset: tuple[Mapping[str, object], ...] = ()
         self._hop_grounding: tuple[Mapping[str, object], ...] = ()
+        self._search_tool_call_queries: tuple[str, ...] = ()
+        self._web_search_calls_by_choice: Mapping[int, Mapping[str, ResponseFunctionWebSearch]] = MappingProxyType({})
         self._answer_offset: int = 0
         self._hop_answer_bytes: int = 0
         self._held_thought_images: Mapping[int, tuple[ImageURLListItem, ...]] = MappingProxyType({})
@@ -4618,18 +4875,17 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
+        VertexGeminiConfig.set_grounding_usage_counters(
+            usage, self._grounding_through_this_hop(grounding_metadata), self._search_tool_call_queries
+        )
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
             model_response.hidden_params.setdefault("provider_specific_fields", {})["traffic_type"] = traffic_type
 
-        service_tier: Final = self.response_headers.get("x-gemini-service-tier")
+        service_tier: Final = _response_service_tier(self.response_headers.get("x-gemini-service-tier"), traffic_type)
         if service_tier:
-            if service_tier.lower() == "standard":
-                setattr(model_response, "service_tier", "default")
-            else:
-                setattr(model_response, "service_tier", service_tier.lower())
+            setattr(model_response, "service_tier", service_tier)
 
         return usage
 
@@ -4678,6 +4934,11 @@ class ModelResponseIterator:
                     safety_ratings,
                     citation_metadata,
                 ) = self._apply_stream_candidates(_candidates, model_response)
+                self._search_tool_call_queries = (
+                    *self._search_tool_call_queries,
+                    *search_tool_call_queries(_parts_of_candidates(_candidates)),
+                )
+                self._report_web_search_calls_so_far(model_response)
 
             usage: Final = self._marked_stream_usage(
                 self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
@@ -4702,6 +4963,36 @@ class ModelResponseIterator:
 
         except json.JSONDecodeError:
             raise ValueError(f"Failed to decode JSON from chunk: {chunk}")
+
+    def _report_web_search_calls_so_far(self, model_response: "ModelResponseStream") -> None:
+        searched: Final = frozenset(
+            call.id for call in gemini_web_search_calls(model_response.id, self._search_tool_call_queries)
+        )
+        for choice in model_response.choices:
+            if (fields := self._fields_with_web_search_calls_so_far(choice, searched)) is not None:
+                choice.delta.provider_specific_fields = fields
+
+    def _fields_with_web_search_calls_so_far(
+        self, choice: "StreamingChoices", searched: frozenset[str]
+    ) -> dict[str, object] | None:
+        fields: Final[Mapping[str, object]] = choice.delta.provider_specific_fields or {}
+        arrived: Final = as_object_list(fields.get("web_search_calls"))
+        if not arrived:
+            return None
+        reported: Final = MappingProxyType(
+            {
+                **self._web_search_calls_by_choice.get(choice.index, {}),
+                **{
+                    call.id: call
+                    for call in arrived
+                    if isinstance(call, ResponseFunctionWebSearch) and (not searched or call.id in searched)
+                },
+            }
+        )
+        self._web_search_calls_by_choice = MappingProxyType(
+            {**self._web_search_calls_by_choice, choice.index: reported}
+        )
+        return {**fields, "web_search_calls": list(reported.values())}
 
     def _with_usage_offset(self, chunk: GenerateContentResponseBody) -> GenerateContentResponseBody:
         if "usageMetadata" not in chunk:

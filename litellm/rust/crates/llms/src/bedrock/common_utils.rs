@@ -146,7 +146,7 @@ pub(crate) fn strip_unsupported_bedrock_invoke_output_config_keys(
     if output_config.keys().all(|key| key == "format") || accepts_output_config {
         return;
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Bedrock Invoke: stripping unsupported `output_config` keys for model={model}: neither `supports_output_config` nor any `supports_*_reasoning_effort` flag is set in model_prices_and_context_window.json. Add the capability flag to the model JSON entry if this model accepts `output_config`."
     );
     match output_config

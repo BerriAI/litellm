@@ -89,7 +89,7 @@ def missing_json_provider_key_error(
     if api_key or litellm.api_key or _sets_authorization(forwarded_headers):
         return None
     return AuthenticationError(
-        message=f"Set {json_provider.api_key_env} or pass api_key",
+        message=f"Set {' or '.join(json_provider.api_key_envs)} or pass api_key",
         llm_provider=json_provider.slug,
         model=model,
     )

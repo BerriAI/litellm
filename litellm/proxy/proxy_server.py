@@ -971,7 +971,7 @@ from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
-from litellm.integrations.lens.config import is_lens_tracing_enabled
+from litellm.integrations.lens.config import LensController
 from litellm.integrations.lens.proxy import tracing_endpoints
 from litellm.integrations.lens.proxy.tracing_runtime import manage_tracing
 from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream
@@ -1231,6 +1231,7 @@ from fastapi.responses import (
     HTMLResponse,
     JSONResponse,
     ORJSONResponse,
+    PlainTextResponse,
     RedirectResponse,
     StreamingResponse,
 )
@@ -2124,7 +2125,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         dict[str, object] | None,
         TypeAdapter(dict[str, object] | None).validate_python(general_settings.get("tracing")),
     )
-    tracing_enabled: Final = is_lens_tracing_enabled(tracing_settings)
+    tracing_enabled: Final = LensController.is_lens_setup(tracing_settings)
     async with manage_tracing(
         enabled=tracing_enabled,
         settings=tracing_settings,
@@ -13985,6 +13986,9 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     return {key: value for key, value in form_data.items() if key != "file"}
 
 
+PLAIN_TEXT_TRANSCRIPTION_FORMATS: Final = frozenset({"text", "srt", "vtt"})
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -13992,7 +13996,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -14003,7 +14010,10 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
     responses={
         200: {
             "model": TranscriptionResponse,
-            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+            "content": {
+                "text/event-stream": {"schema": {"type": "string"}},
+                "text/plain": {"schema": {"type": "string"}},
+            },
         }
     },
 )
@@ -14024,6 +14034,7 @@ async def audio_transcriptions(
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         form_data: Final = await get_form_data(request)
+        requested_response_format: Final = form_data.get("response_format")
         data = {**_form_fields_without_file(form_data), **data}
 
         # Include original request and headers in the data
@@ -14157,6 +14168,11 @@ async def audio_transcriptions(
                 media_type="text/event-stream",
                 headers=response_headers,
             )
+
+        if requested_response_format in PLAIN_TEXT_TRANSCRIPTION_FORMATS and isinstance(
+            response, TranscriptionResponse
+        ):
+            return PlainTextResponse(content=response.text or "", headers=response_headers)
 
         fastapi_response.headers.update(response_headers)
 
