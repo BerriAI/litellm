@@ -713,3 +713,45 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert len(drop_warnings) == 1
     assert len(drop_warnings[0]) < 300
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+_MIXED_422_DETAIL: Final = {
+    "error": {
+        "message": json.dumps(
+            {
+                "detail": [
+                    {"loc": ["body", "temperature"], "msg": "Extra inputs are not permitted"},
+                    "unexpected plain string entry",
+                    42,
+                    None,
+                    {"loc": ["body", "top_p"], "msg": "Extra inputs are not permitted"},
+                ]
+            }
+        )
+    }
+}
+
+
+def test_mixed_dict_and_non_dict_422_detail_list_skips_non_dict_entries() -> None:
+    """Non-dict entries in a 422 detail list must not crash the drop-params recovery path (issue #52669)."""
+    error: Final = httpx.HTTPStatusError(
+        message="422",
+        request=httpx.Request("POST", "https://example.invalid/v1/chat/completions"),
+        response=httpx.Response(422, json=_MIXED_422_DETAIL),
+    )
+    data: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "messages": [],
+        "temperature": 2.0,
+        "top_p": 0.9,
+        "max_tokens": 5,
+    }
+
+    retried: Final = drop_params_from_unprocessable_entity_error(
+        error, data, model="gpt-4o", drop_params_gated=True
+    )
+
+    assert "temperature" not in retried
+    assert "top_p" not in retried
+    assert retried["max_tokens"] == 5
+    assert retried["model"] == "gpt-4o"

@@ -239,6 +239,11 @@ def drop_params_from_unprocessable_entity_error(
 
         if isinstance(detail, list) and len(detail) > 0 and isinstance(detail[0], dict):
             for error_dict in detail:
+                if not isinstance(error_dict, dict):
+                    # Self-hosted OpenAI-compatible backends may return 422
+                    # detail lists mixing dict and non-dict entries; skip the
+                    # non-dict ones instead of crashing the error-recovery path.
+                    continue
                 if (
                     error_dict.get("loc")
                     and isinstance(error_dict.get("loc"), list)
