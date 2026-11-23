@@ -714,7 +714,7 @@ async def get_available_search_providers():
     try:
         from litellm.utils import ProviderConfigManager
 
-        available_providers: Final[list[Mapping[str, str]]] = []
+        available_providers: Final = []
 
         # Auto-discover providers from SearchProviders enum
         for provider in SearchProviders:

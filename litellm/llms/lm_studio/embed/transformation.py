@@ -46,7 +46,5 @@ class LmStudioEmbeddingConfig:
     def get_supported_openai_params(self) -> list[str]:
         return []
 
-    def map_openai_params(
-        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
-    ) -> dict[str, object]:
+    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
         return optional_params

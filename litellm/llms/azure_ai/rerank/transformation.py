@@ -25,7 +25,7 @@ class AzureAIRerankConfig(CohereRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict[str, object] | None = None,
+        optional_params: dict | None = None,
     ) -> str:
         if api_base is None:
             raise ValueError(
@@ -62,12 +62,12 @@ class AzureAIRerankConfig(CohereRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict[str, object] | None = None,
+        optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         if api_key is None:
             api_key = get_secret_str("AZURE_AI_API_KEY") or litellm.azure_key
 
@@ -91,9 +91,9 @@ class AzureAIRerankConfig(CohereRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict[str, object] = {},
-        optional_params: dict[str, object] = {},
-        litellm_params: dict[str, object] = {},
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> RerankResponse:
         rerank_response: Final = super().transform_rerank_response(
             model=model,
