@@ -7,7 +7,7 @@ use litellm_llms_types::{
             MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig, ThinkingDisplay,
         },
     },
-    recognized::Recognized,
+    recognized::{Recognized, is_one, python_str},
 };
 use litellm_python_compat::{
     BigInt, Value as PythonValue,
@@ -15,11 +15,11 @@ use litellm_python_compat::{
     number,
     repr::repr,
     reprlib::reprlib,
+    scalar::{python_number, python_value},
     truthy::truthy,
 };
 use serde_json::Value;
 
-use super::scalar::{is_one, python_number, python_str, python_value};
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };

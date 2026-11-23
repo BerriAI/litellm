@@ -8,9 +8,10 @@ from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.prompt_templates.common_utils import message_with_file_parts_as_image_urls
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -27,7 +28,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from ..credentials import AICoreConfiguration, AICoreDeploymentList, get_token_creator
+from ..credentials import AICoreDeploymentList, get_token_creator
 from .handler import (
     AsyncSAPStreamIterator,
     GenAIHubOrchestrationError,
@@ -45,6 +46,8 @@ from .models import (
     SAPUserMessage,
 )
 from .reasoning import normalize_reasoning_blocks
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # Keys routed outside SAP orchestration `model.params` (prompt, stream, fallbacks, etc.)
 _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
@@ -196,10 +199,10 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         return response
 
     def _is_orchestration_configuration(self, configuration_id: str) -> bool:
-        configuration: Final[AICoreConfiguration] = self._get_from_ai_core(
-            f"lm/configurations/{configuration_id}"
-        ).json()
-        return configuration.get("executableId") == "orchestration"
+        configuration: Final = _DECODED_JSON.validate_python(
+            self._get_from_ai_core(f"lm/configurations/{configuration_id}").json()
+        )
+        return require_get(configuration).get("executableId") == "orchestration"
 
     @cached_property
     def deployment_url(self) -> str:

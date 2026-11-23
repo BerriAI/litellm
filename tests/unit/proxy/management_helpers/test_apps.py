@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from pydantic import TypeAdapter
 
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_helpers.apps import AppStore, app_scope_id, app_scope_identity
 from litellm.proxy.management_helpers.customer_hierarchy import BudgetGroupScope, CustomerHierarchy, ErrorCode, Failure
@@ -28,6 +27,8 @@ from litellm.types.proxy.management_endpoints.apps import (
 )
 from litellm.types.proxy.management_endpoints.customer_hierarchy import (
     Budget,
+    BudgetGroupChange,
+    BudgetGroups,
     BudgetGroupsUpdate,
     BudgetTemplate,
     MemberPatch,
@@ -59,7 +60,7 @@ class AppTable(Table):
         self.pause_read: tuple[asyncio.Event, asyncio.Event] | None = None
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
-        return await super().create({"app_id": str(uuid4()), **data}, include)
+        return await super().create({self.id_field: str(uuid4()), **data}, include)
 
     async def find_unique(
         self,
@@ -116,12 +117,13 @@ class CompositeTable(AppTable):
         )
 
     async def create(self, data: Mapping[str, object], include: Mapping[str, object] | None = None) -> Record:
-        customer_column: Final = self.id_field.removeprefix("app_id_")
+        parent_column, suffix = self.id_field.split("_customer_", 1)
+        customer_column: Final = "customer_" + suffix
         return await super().create(
             {
                 **data,
                 self.id_field: {
-                    "app_id": data["app_id"],
+                    parent_column: data[parent_column],
                     customer_column: data[customer_column],
                 },
             },
@@ -166,6 +168,8 @@ class AppDatabase(Database):
         self.litellm_customerorganizationtable = AppCustomerTable("customer_org_id", self)
         self.litellm_customermembertable = AppCustomerTable("customer_member_id", self)
         self.litellm_apptable: Final = AppTable("app_id", self)
+        self.litellm_appgrouptable: Final = AppTable("app_group_id", self)
+        self.litellm_appgroupcustomerorgtable: Final = CompositeTable("app_group_id_customer_org_id", self)
         self.litellm_appcustomerorgtable: Final = CompositeTable("app_id_customer_org_id", self)
         self.litellm_appcustomermembertable: Final = CompositeTable("app_id_customer_member_id", self)
         self.litellm_teamtable: Final = AppTable("team_id", self)
@@ -185,6 +189,8 @@ class AppDatabase(Database):
     def has_budget_reference(self, budget_id: str, relation: str) -> bool:
         references: Final = {
             "apps": (self.litellm_apptable, "budget_id"),
+            "app_groups": (self.litellm_appgrouptable, "budget_id"),
+            "app_group_org_budgets": (self.litellm_appgroupcustomerorgtable, "budget_id"),
             "app_default_tiers": (self.litellm_apptable, "default_tier_budget_id"),
             "app_default_members": (
                 self.litellm_apptable,
@@ -259,6 +265,79 @@ async def profile(
         },
     )
     return budget_id
+
+
+async def configure_default_profile(store: AppStore, scope: BudgetGroupScope) -> BudgetGroups:
+    current: Final = await store.customers.get_budget_groups(None, scope=scope)
+    assert isinstance(current, BudgetGroups)
+    saved: Final = await store.customers.configure_templates(
+        None,
+        BudgetGroupsUpdate(
+            expected_revision=current.budget_groups_revision,
+            default_budgets=(BudgetGroupChange(name="Default", max_budget=100),),
+            default_budget_template="Default",
+        ),
+        "admin",
+        scope=scope,
+    )
+    assert isinstance(saved, BudgetGroups)
+    assert saved.default_budget_template_id == saved.default_budgets[0].budget_id
+    assert await store.customers.get_budget_groups(None, scope=scope) == saved
+    return saved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", (BudgetGroupScope.ORGANIZATION, BudgetGroupScope.APP, BudgetGroupScope.APP_GROUP))
+async def test_default_catalog_selection_can_be_cleared_and_rejects_stale_updates(scope: BudgetGroupScope) -> None:
+    store: Final = AppStore(AppDatabase(), NOW)
+    selected: Final = await configure_default_profile(store, scope)
+    patch: Final = BudgetGroupsUpdate(
+        expected_revision=selected.budget_groups_revision,
+        default_budgets=tuple(
+            BudgetGroupChange.model_validate(group.model_dump()) for group in selected.default_budgets
+        ),
+        default_budget_template=None,
+    )
+    cleared: Final = await store.customers.configure_templates(None, patch, "admin", scope=scope)
+    assert isinstance(cleared, BudgetGroups) and cleared.default_budget_template_id is None
+    assert cleared.default_budgets == selected.default_budgets
+    assert await store.customers.get_budget_groups(None, scope=scope) == cleared
+    assert await store.customers.configure_templates(None, patch, "admin", scope=scope) == Failure(
+        ErrorCode.CONFIGURATION_CONFLICT
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ("default", "none", "custom", "preset"))
+async def test_new_apps_use_their_catalog_default_unless_a_budget_is_explicit(choice: str) -> None:
+    database: Final = AppDatabase()
+    store: Final = AppStore(database, NOW)
+    await seed_resources(database)
+    await store.put_definition(AppDefinition(resource_type=AppResourceType.TEAM))
+    existing: Final = await store.create(AppCreate(resource_id="chat"), "admin")
+    assert isinstance(existing, App) and existing.budget_id is None
+    catalog: Final = await configure_default_profile(store, BudgetGroupScope.APP)
+    await configure_default_profile(store, BudgetGroupScope.ORGANIZATION)
+    other: Final = await profile(store, "Other", 200, BudgetGroupScope.APP)
+    selection: Final = {
+        "default": AppCreate(resource_id="search"),
+        "none": AppCreate(resource_id="search", budget_id=None),
+        "custom": AppCreate(resource_id="search", budget=Budget(max_budget=300)),
+        "preset": AppCreate(resource_id="search", budget_id=other),
+    }[choice]
+    created: Final = await store.create(selection, "admin")
+    assert isinstance(created, App)
+    assert (created.budget.max_budget if created.budget else None) == {
+        "default": 100,
+        "none": None,
+        "custom": 300,
+        "preset": 200,
+    }[choice]
+    if choice == "default":
+        assert created.budget_id == catalog.default_budget_template_id
+    assert await store.create(AppCreate(resource_id="chat"), "admin") == existing
+    unchanged: Final = await store.patch(existing.app_id, AppPatch(auto_create_customers=False), "admin")
+    assert isinstance(unchanged, App) and unchanged.budget_id is None
 
 
 @pytest.fixture
@@ -541,25 +620,17 @@ async def test_customer_deletion_evicts_cached_app_associations(
             await offline.organization(app, "org")
 
 
-class AppCacheClock:
-    seconds: float = 0
-
-    def __call__(self) -> float:
-        return self.seconds
-
-
 @pytest.mark.asyncio
 async def test_app_cache_hits_do_not_extend_configured_ttl(
     app_store: tuple[AppDatabase, AppStore, App],
 ) -> None:
     database, _, app = app_store
-    clock: Final = AppCacheClock()
-    cache: Final = UserApiKeyCache(in_memory_cache=InMemoryCache(clock=clock), default_in_memory_ttl=10)
+    cache: Final = UserApiKeyCache(default_in_memory_ttl=0.3)
     assert await AppStore(database, NOW, cache).by_resource(AppResourceType.TEAM, "chat") == app
     offline: Final = AppStore(UnavailableAppDatabase(), NOW, cache)
-    clock.seconds = 9
+    await asyncio.sleep(0.2)
     assert await offline.by_resource(AppResourceType.TEAM, "chat") == app
-    clock.seconds = 11
+    await asyncio.sleep(0.15)
     with pytest.raises(ConnectionError, match="database unavailable"):
         await offline.by_resource(AppResourceType.TEAM, "chat")
 

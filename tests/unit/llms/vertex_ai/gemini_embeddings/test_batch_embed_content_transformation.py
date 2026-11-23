@@ -682,9 +682,22 @@ class TestFileContentBlocks:
         )
         assert result.usage.prompt_tokens == 0
 
-    def test_image_block_counts_as_image_only_input(self) -> None:
+    @pytest.mark.parametrize(
+        "embedding_input, image_tokens",
+        [
+            ([_file_block(file_data=IMAGE_DATA_URI)], 258),
+            ([IMAGE_DATA_URI], 258),
+            ([GCS_URL], 258),
+            ([IMAGE_DATA_URI, VIDEO_DATA_URI], 0),
+            (["a red shoe"], 0),
+        ],
+        ids=["image-block", "bare-image-data-uri", "bare-image-gcs-url", "image-and-video", "plain-text"],
+    )
+    def test_only_image_only_input_bills_undetailed_usage_as_image_tokens(
+        self, embedding_input: list[object], image_tokens: int
+    ) -> None:
         result: Final = process_embed_content_response(
-            input=[_file_block(file_data=IMAGE_DATA_URI)],
+            input=embedding_input,
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json={
@@ -692,7 +705,8 @@ class TestFileContentBlocks:
                 "usageMetadata": {"promptTokenCount": 258, "totalTokenCount": 258},
             },
         )
-        assert result.usage.prompt_tokens_details.image_tokens == 258
+        assert result.usage.prompt_tokens == 258
+        assert result.usage.prompt_tokens_details.image_tokens == image_tokens
 
 
 @pytest.mark.respx(assert_all_called=True)
@@ -792,3 +806,145 @@ def test_gemini_embedding_sends_extra_body_fields_on_each_request(respx_mock: re
             "documentOcr": True,
         }
     ]
+
+
+def _text_block(text: object) -> dict[str, object]:
+    return {"type": "text", "text": text}
+
+
+LITERAL_TEXTS: Final = (
+    "data:application/octet-stream;base64,AACAvw==",
+    'data:image/png;base64,iVBORw0KGgo="}',
+    "gs://bucket/build/output.txt",
+    "gs://bucket/assets/logo.png",
+    "files/README.md is the entry point",
+    FILES_URI,
+)
+
+
+class TestTextContentBlocks:
+    MODEL: Final = "gemini-embedding-2"
+
+    @pytest.mark.parametrize("text", LITERAL_TEXTS)
+    def test_batch_path_sends_a_text_block_as_text_whatever_it_starts_with(self, text: str) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[_text_block(text)], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [{"text": text}]
+
+    @pytest.mark.parametrize("text", LITERAL_TEXTS)
+    def test_embed_content_path_sends_a_text_block_as_text_whatever_it_starts_with(self, text: str) -> None:
+        body: Final = transform_openai_input_gemini_embed_content(
+            input=[_text_block(text)], model=self.MODEL, optional_params={}
+        )
+        assert body["content"]["parts"] == [{"text": text}]
+
+    def test_text_block_and_bare_media_string_share_one_grouped_request(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[[_text_block(GCS_URL), GCS_URL]], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [
+            {"text": GCS_URL},
+            {"file_data": {"mime_type": "image/png", "file_uri": GCS_URL}},
+        ]
+
+    @pytest.mark.parametrize(
+        "block, named_in_error",
+        [
+            ({"type": "text"}, "text: Field required"),
+            (_text_block(5), "text: Input should be a valid string"),
+            ({"type": "text", "text": "hello", "cache_control": {"type": "ephemeral"}}, "cache_control"),
+        ],
+    )
+    def test_malformed_text_block_answers_400_naming_the_field(
+        self, block: dict[str, object], named_in_error: str
+    ) -> None:
+        with pytest.raises(BadRequestError, match=named_in_error):
+            _build_part_for_input(block)
+
+    def test_drop_params_drops_the_text_block_keys_embeddings_do_not_take(self) -> None:
+        block: Final = {"type": "text", "text": IMAGE_DATA_URI, "cache_control": {"type": "ephemeral"}}
+        assert _build_part_for_input(block, drop_params=True) == {"text": IMAGE_DATA_URI}
+
+    def test_drop_params_still_answers_400_for_a_non_string_text(self) -> None:
+        block: Final = {"type": "text", "text": 5, "cache_control": {"type": "ephemeral"}}
+        with pytest.raises(BadRequestError, match="text: Input should be a valid string"):
+            _build_part_for_input(block, drop_params=True)
+
+    def test_batch_path_sends_an_empty_text_block_as_an_empty_text_part(self) -> None:
+        body: Final = transform_openai_input_gemini_content(
+            input=[_text_block("")], model=self.MODEL, optional_params={}
+        )
+        assert body["requests"][0]["content"]["parts"] == [{"text": ""}]
+
+    def test_embed_content_path_sends_an_empty_text_block_as_an_empty_text_part(self) -> None:
+        body: Final = transform_openai_input_gemini_embed_content(
+            input=[_text_block("")], model=self.MODEL, optional_params={}
+        )
+        assert body["content"]["parts"] == [{"text": ""}]
+
+    @pytest.mark.parametrize(
+        "embedding_input, texts",
+        [
+            (["alpha beta", "gamma delta"], ("alpha beta", "gamma delta")),
+            ([["alpha beta", "gamma delta"], "epsilon"], ("alpha beta", "gamma delta", "epsilon")),
+            (["alpha beta", IMAGE_DATA_URI, "gamma delta"], ("alpha beta", "gamma delta")),
+        ],
+        ids=["flat-strings", "grouped-strings", "strings-around-media"],
+    )
+    def test_process_response_counts_the_concatenated_plain_text(
+        self, embedding_input: list[object], texts: tuple[str, ...]
+    ) -> None:
+        result: Final = process_response(
+            input=embedding_input,
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={"embeddings": [{"values": [0.1]}]},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text="".join(texts)) > 0
+
+    def test_embed_content_usage_fallback_counts_the_concatenated_flat_strings(self) -> None:
+        result: Final = process_embed_content_response(
+            input=["alpha beta", "gamma delta"],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text="alpha betagamma delta") > 0
+
+    def test_text_block_is_not_multimodal(self) -> None:
+        assert _is_multimodal_input([_text_block(IMAGE_DATA_URI)]) is False
+        assert _is_multimodal_input([_text_block("hello"), IMAGE_DATA_URI]) is True
+
+    def test_process_response_counts_a_text_block_like_plain_text(self) -> None:
+        text: Final = 'data:image/png;base64,iVBORw0KGgo="}'
+        result: Final = process_response(
+            input=[_text_block(text), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            _predictions={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text=text) > 0
+
+    def test_embed_content_usage_fallback_counts_a_text_block(self) -> None:
+        text: Final = "gs://bucket/assets/logo.png"
+        result: Final = process_embed_content_response(
+            input=[_text_block(text)],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={"embedding": {"values": [0.1, 0.2]}},
+        )
+        assert result.usage.prompt_tokens == litellm.token_counter(model=self.MODEL, text=text) > 0
+
+    def test_text_block_next_to_an_image_is_not_image_only_input(self) -> None:
+        result: Final = process_embed_content_response(
+            input=[_text_block(IMAGE_DATA_URI), IMAGE_DATA_URI],
+            model_response=EmbeddingResponse(),
+            model=self.MODEL,
+            response_json={
+                "embedding": {"values": [0.1, 0.2]},
+                "usageMetadata": {"promptTokenCount": 270, "totalTokenCount": 270},
+            },
+        )
+        assert result.usage.prompt_tokens == 270
+        assert result.usage.prompt_tokens_details.image_tokens == 0

@@ -10,7 +10,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({ useOr
 vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({ useUISettings: settings }));
 vi.mock("./_components/components/UsagePageView", () => ({
   default: ({ defaultTimeRange }: { defaultTimeRange?: string }) => (
-    <div>Usage range: {defaultTimeRange ?? "last_7_days"}</div>
+    <div>Usage range: {defaultTimeRange ?? "not configured"}</div>
   ),
 }));
 
@@ -21,9 +21,9 @@ describe("Usage settings readiness", () => {
     const { rerender } = renderWithProviders(<UsagePage />);
     expect(screen.getByRole("status", { name: "Loading usage settings" })).toBeInTheDocument();
     expect(screen.queryByText(/Usage range/)).not.toBeInTheDocument();
-    settings.mockReturnValue({ isLoading: false, data: { values: { usage_default_time_range: "month_to_date" } } });
+    settings.mockReturnValue({ isLoading: false, data: { values: { usage_default_time_range: "last_7_days" } } });
     rerender(<UsagePage />);
-    expect(screen.getByText("Usage range: month_to_date")).toBeInTheDocument();
+    expect(screen.getByText("Usage range: last_7_days")).toBeInTheDocument();
   });
 
   it.each(["?range=MTD", "?from=2026-01-01&to=2026-01-15"])(
@@ -43,9 +43,9 @@ describe("Usage settings readiness", () => {
     },
   );
 
-  it("uses the existing fallback if settings cannot be fetched", () => {
+  it("lets the view choose the fallback if settings cannot be fetched", () => {
     settings.mockReturnValue({ isLoading: false, isError: true });
     renderWithProviders(<UsagePage />);
-    expect(screen.getByText("Usage range: last_7_days")).toBeInTheDocument();
+    expect(screen.getByText("Usage range: not configured")).toBeInTheDocument();
   });
 });
