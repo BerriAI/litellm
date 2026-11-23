@@ -22,7 +22,7 @@ use litellm_repositories::{
 use tokio::runtime::Handle;
 
 use crate::{
-    Error, Gateway, Inference, KeyLimiter, RedisClients, Resources, db,
+    Error, Gateway, Inference, KeyLimiter, Metrics, RedisClients, Resources, db,
     gateway_requests::GatewayRequests,
     host::{
         self, NativeRows,
@@ -44,6 +44,8 @@ pub struct AppState {
     /// The proxy's `parallel_request_limiter_v3`, which the inference routes' callback stage runs
     /// and the limit check before the body asks.
     pub key_limiter: Arc<KeyLimiter>,
+    /// The Prometheus logger's metrics, when the config lists it.
+    pub metrics: Option<Arc<Metrics>>,
     /// The config's `environment_variables` in front of the process environment.
     pub environment: Arc<dyn Lookup + Send + Sync>,
     /// The gateway request counts the request volume middleware records. `None` without a
@@ -69,6 +71,7 @@ impl AppState {
         let Inference {
             gateway: inference,
             key_limiter,
+            metrics,
         } = crate::build_inference(config, environment, resources, routing, &redis).await?;
         let (database, connected) = db::connect(config, &resources.secrets)
             .await?
@@ -93,6 +96,7 @@ impl AppState {
             keys,
             entitlements,
             key_limiter,
+            metrics,
             environment: resources.environment.clone(),
             gateway_requests,
             gateway_requests_flush,

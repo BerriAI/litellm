@@ -20,4 +20,6 @@ pub enum Error {
     Router(#[from] litellm_router_core::Error),
     #[error(transparent)]
     Callback(#[from] crate::callbacks::Unregistrable),
+    #[error(transparent)]
+    Metrics(#[from] litellm_callbacks_prometheus::families::FamiliesError),
 }

@@ -22,6 +22,11 @@ impl Settings {
 
     /// `PerRequestRootPathMiddleware`: the longest `SERVER_ROOT_PATHS` entry the path sits under
     /// replaces `SERVER_ROOT_PATH` for that request.
+    /// The path the routes match for `path`, with its root path taken off.
+    pub fn route<'a>(&self, path: &'a str) -> &'a str {
+        route_path(path, self.root_path(path))
+    }
+
     fn root_path(&self, path: &str) -> &str {
         self.root_paths
             .iter()
@@ -49,7 +54,7 @@ pub fn layer(settings: Settings) -> MapRequestLayer<impl Fn(Request) -> Request 
 
 fn without_root_path(settings: &Settings, mut request: Request) -> Request {
     let path = request.uri().path();
-    let route = route_path(path, settings.root_path(path));
+    let route = settings.route(path);
     if route == path {
         return request;
     }

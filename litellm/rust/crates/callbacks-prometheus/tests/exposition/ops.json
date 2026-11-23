@@ -1,0 +1,123 @@
+[
+ {
+  "family": "litellm_requests_metric",
+  "values": [
+   "eu",
+   "hash",
+   "alias",
+   "gpt",
+   "team",
+   "team alias \"q\"",
+   "user",
+   "u@x",
+   "",
+   "",
+   "id",
+   "id2",
+   "x",
+   "y",
+   "z"
+  ],
+  "op": "inc",
+  "amount": 1
+ },
+ {
+  "family": "litellm_requests_metric",
+  "values": [
+   "eu",
+   "hash",
+   "alias",
+   "gpt",
+   "team",
+   "team alias \"q\"",
+   "user",
+   "u@x",
+   "",
+   "",
+   "id",
+   "id2",
+   "x",
+   "y",
+   "z"
+  ],
+  "op": "inc",
+  "amount": 2.5
+ },
+ {
+  "family": "litellm_spend_metric",
+  "values": [
+   "eu",
+   "hash",
+   "alias",
+   "gpt",
+   "team",
+   "ta",
+   "user",
+   "None",
+   "None",
+   "None",
+   "None",
+   "None",
+   "line\nbreak",
+   "a",
+   "b",
+   "c"
+  ],
+  "op": "inc",
+  "amount": 0.000123
+ },
+ {
+  "family": "litellm_total_users",
+  "values": [],
+  "op": "set",
+  "amount": 12345678.0
+ },
+ {
+  "family": "litellm_check_batch_cost_last_run_timestamp",
+  "values": [],
+  "op": "set",
+  "amount": 1795409129.5
+ },
+ {
+  "family": "litellm_request_total_latency_metric",
+  "values": [
+   "g",
+   "None",
+   "h",
+   "a",
+   "m",
+   "t",
+   "ta",
+   "u",
+   "m2",
+   "id",
+   "openai",
+   "None",
+   "o",
+   "oa"
+  ],
+  "op": "observe",
+  "amount": 0.3
+ },
+ {
+  "family": "litellm_request_total_latency_metric",
+  "values": [
+   "g",
+   "None",
+   "h",
+   "a",
+   "m",
+   "t",
+   "ta",
+   "u",
+   "m2",
+   "id",
+   "openai",
+   "None",
+   "o",
+   "oa"
+  ],
+  "op": "observe",
+  "amount": 1000
+ }
+]

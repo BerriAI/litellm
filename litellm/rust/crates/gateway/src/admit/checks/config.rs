@@ -9,6 +9,8 @@ use litellm_config::{
     RouterSettings, Value,
 };
 
+use crate::callbacks::prometheus::NAME as PROMETHEUS;
+
 use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
@@ -35,7 +37,11 @@ pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
         .stored_models
         .iter()
         .cloned()
-        .chain(unhonored(&admit.config, &admit.environment))
+        .chain(unhonored(
+            &admit.config,
+            &admit.environment,
+            admit.standalone,
+        ))
         .next()
         .map(|over| Reason::new(Refused::Settings, over))
 }
@@ -57,12 +63,13 @@ pub(super) fn messages_only(config: &Config) -> Option<Box<str>> {
 fn unhonored<'a>(
     config: &'a Config,
     environment: &Environment,
+    standalone: bool,
 ) -> impl Iterator<Item = Box<str>> + 'a {
     unread(config)
         .chain(variables(environment))
         .chain(general(config))
         .chain(router(&config.router_settings))
-        .chain(litellm(config))
+        .chain(litellm(config, standalone))
         .chain(sections(config))
 }
 
@@ -288,12 +295,18 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
 
-/// A callback other than `dynamic_rate_limiter_v3`, the one the native app runs.
-fn other_callbacks(callbacks: &Option<Vec<Value>>) -> bool {
+/// A callback the native app does not run: it runs `dynamic_rate_limiter_v3`, and standalone
+/// also `prometheus`. In front of Python the Prometheus logger stays Python's, since one `/metrics`
+/// has to hold every call's metrics and Python's counts the calls it answers.
+fn other_callbacks(callbacks: &Option<Vec<Value>>, standalone: bool) -> bool {
     callbacks
         .iter()
         .flatten()
-        .any(|callback| callback.as_str() != Some(MODEL_CAPACITY))
+        .any(|callback| match callback.as_str() {
+            Some(MODEL_CAPACITY) => false,
+            Some(PROMETHEUS) => !standalone,
+            _ => true,
+        })
 }
 
 /// A per-model limit that borrows a model's idle capacity, which the dynamic rate limiter holds
@@ -311,7 +324,7 @@ fn borrows(settings: &Option<PriorityReservationSettings>) -> bool {
 /// `use_chat_completions_url_for_anthropic_messages` is [`messages_only`]. `callbacks` is honored
 /// when it names only the dynamic rate limiter, which reads `priority_reservation` and its
 /// settings. The others the native app does not read only shape another route or the UI.
-fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
+fn litellm(config: &Config, standalone: bool) -> impl Iterator<Item = Box<str>> + '_ {
     let LiteLlmSettings {
         ssl_verify: _,
         ssl_certificate: _,
@@ -366,7 +379,10 @@ fn litellm(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             enable_anthropic_prompt_caching,
             reasoning_auto_summary,
         ],
-        by: [callbacks => other_callbacks, priority_reservation_settings => borrows]
+        by: [
+            callbacks => |callbacks| other_callbacks(callbacks, standalone),
+            priority_reservation_settings => borrows
+        ]
     )
     .chain(unknown("litellm_settings.", additional_fields))
     .map(|key| spelled(config, key))
@@ -434,7 +450,7 @@ mod tests {
     use super::*;
 
     fn found(config: &Config) -> Vec<String> {
-        unhonored(config, &Environment::default())
+        unhonored(config, &Environment::default(), false)
             .map(String::from)
             .collect()
     }
@@ -475,6 +491,35 @@ mod tests {
     )]
     fn a_setting_the_native_app_does_not_honor_is_named(#[case] yaml: &str, #[case] setting: &str) {
         assert_eq!(written(yaml), [setting]);
+    }
+
+    #[rstest]
+    #[case::in_front_of_python(false, vec!["litellm_settings.callbacks".to_owned()])]
+    #[case::standalone(true, vec![])]
+    fn the_prometheus_logger_is_run_natively_only_standalone(
+        #[case] standalone: bool,
+        #[case] named: Vec<String>,
+    ) {
+        let config = Config::from_yaml(
+            "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
+        )
+        .unwrap();
+        let found: Vec<String> = unhonored(&config, &Environment::default(), standalone)
+            .map(String::from)
+            .collect();
+        assert_eq!(found, named);
+    }
+
+    #[rstest]
+    fn a_setting_of_the_prometheus_logger_stays_python_s_standalone() {
+        let config = Config::from_yaml(
+            "litellm_settings:\n  callbacks: [prometheus]\n  prometheus_emit_stream_label: true\n",
+        )
+        .unwrap();
+        let found: Vec<String> = unhonored(&config, &Environment::default(), true)
+            .map(String::from)
+            .collect();
+        assert_eq!(found, ["litellm_settings.prometheus_emit_stream_label"]);
     }
 
     #[rstest]
