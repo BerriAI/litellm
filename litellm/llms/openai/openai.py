@@ -32,6 +32,7 @@ from litellm._logging import WarningLogger, verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
+from litellm.images.streaming import ImageStreamingResponse, image_stream_requested
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     run_chat_completion_agentic_hooks,
@@ -451,6 +452,23 @@ def _request_without_sdk_transform(
         **_CLIENT_API_KEY_ONLY_AUTH,  # pyright: ignore[reportArgumentType]  # openai<3 make_request_options has no security kwarg
     )
     return body, options
+
+
+def _image_generation_stream_split(request_data: dict) -> tuple[dict, bool]:
+    extra_body: Final = request_data.get("extra_body")
+    requested: Final = image_stream_requested(request_data.get("stream")) or (
+        isinstance(extra_body, Mapping) and image_stream_requested(extra_body.get("stream"))
+    )
+    if not requested:
+        return request_data, False
+    cleaned: dict = {k: v for k, v in request_data.items() if k != "stream"}
+    if isinstance(extra_body, Mapping):
+        cleaned_extra: Final = {k: v for k, v in extra_body.items() if k != "stream"}
+        if cleaned_extra:
+            cleaned["extra_body"] = cleaned_extra
+        else:
+            cleaned.pop("extra_body", None)
+    return cleaned, True
 
 
 class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
@@ -1567,6 +1585,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
 
             request_data: Final = {**data, "extra_headers": headers} if headers else data
+            stream_data, stream_requested = _image_generation_stream_split(request_data)
+            if stream_requested:
+                sdk_stream: Final = await openai_aclient.images.generate(**stream_data, stream=True, timeout=timeout)
+                return ImageStreamingResponse(stream_iterator=sdk_stream, logging_obj=logging_obj)
             raw_response: Final = await openai_aclient.images.with_raw_response.generate(
                 **request_data, timeout=timeout
             )
@@ -1609,7 +1631,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         organization: str | None = None,
         headers: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> ImageResponse:
+    ) -> ImageResponse | ImageStreamingResponse:
         data = {}
         try:
             data = {"model": model, "prompt": prompt, **optional_params}
@@ -1658,6 +1680,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             ## COMPLETION CALL
             request_data: Final = {**data, "extra_headers": headers} if headers else data
+            stream_data, stream_requested = _image_generation_stream_split(request_data)
+            if stream_requested:
+                sdk_stream: Final = openai_client.images.generate(**stream_data, stream=True, timeout=timeout)
+                return ImageStreamingResponse(stream_iterator=sdk_stream, logging_obj=logging_obj)
             raw_response: Final = openai_client.images.with_raw_response.generate(**request_data, timeout=timeout)
 
             response: Final = raw_response.parse().model_dump()
