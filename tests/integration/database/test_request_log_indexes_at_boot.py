@@ -189,7 +189,7 @@ def fail_the_call_id_index_migration_like_the_shipped_release(database_url: str,
 
 def partition_spend_logs(database_url: str) -> None:
     with psycopg.connect(database_url, autocommit=True) as connection:
-        script = PARTITION_SCRIPT.read_text()
+        script: Final = PARTITION_SCRIPT.read_text()
         assert RUNBOOK_TODAY in script, "the runbook no longer sets today"
         connection.execute(script.replace(RUNBOOK_TODAY, f"today CONSTANT date := '{RUNBOOK_DAY}';").encode())
         for partition, (start, stop) in POPULATED_PARTITIONS.items():
