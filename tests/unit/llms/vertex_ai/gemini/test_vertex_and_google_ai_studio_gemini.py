@@ -3421,6 +3421,27 @@ def test_gemini_reports_and_bills_each_distinct_search_query_once(
 
 
 @pytest.mark.usefixtures("_gemini_httpx_transport")
+def test_gemini_search_call_ids_differ_for_the_same_query_in_another_response(respx_mock: respx.MockRouter) -> None:
+    turn: Final = _SEARCHED_TURNS["tool_calls_only"]
+    respx_mock.post(f"{_GEMINI_3_STUDIO_URL}:generateContent").mock(
+        side_effect=[
+            httpx.Response(200, json={**turn.response(), "responseId": response_id})
+            for response_id in ("resp_first", "resp_second")
+        ]
+    )
+
+    first, second = (
+        _SEARCH_WEB_ITEMS.validate_python(
+            litellm.completion(**_SEARCHED_REQUEST).choices[0].message.provider_specific_fields["web_search_calls"]
+        )
+        for _ in range(2)
+    )
+
+    assert [call.action.query for call in first] == [call.action.query for call in second]
+    assert not {call.id.rsplit("_", 1)[1] for call in first} & {call.id.rsplit("_", 1)[1] for call in second}
+
+
+@pytest.mark.usefixtures("_gemini_httpx_transport")
 def test_gemini_bills_server_side_search_tool_calls_like_grounded_searches(respx_mock: respx.MockRouter) -> None:
     searched_queries: Final = _SEARCHED_TURNS["tool_calls_only"].searched_queries
     turns: Final = (
