@@ -124,6 +124,29 @@ async def test_events_list_returns_the_gateway_catalog() -> None:
 
 
 @pytest.mark.asyncio
+async def test_the_poll_handler_returns_the_upstream_backlog() -> None:
+    upstream: Final = FakeUpstream(
+        responses={
+            "events/poll": {
+                "events": [],
+                "hasMore": True,
+                "truncated": False,
+                "nextPollMs": 0,
+                "cursor": None,
+            }
+        }
+    )
+    status, frames = await _call(
+        _server(SETTINGS, runtime((server(),), upstream=upstream)),
+        "events/poll",
+        {"name": "ci-build.failed", "arguments": {"repo": "acme/web"}},
+        {"Mcp-Name": "ci-build.failed", "Mcp-Param-Repo": "acme/web"},
+    )
+    result: Final = frames[0].get("result")
+    assert status == 200 and isinstance(result, dict) and result["hasMore"] is True
+
+
+@pytest.mark.asyncio
 async def test_a_routing_header_mismatch_is_http_400() -> None:
     status, frames = await _call(
         _server(SETTINGS, runtime((server(),))),
