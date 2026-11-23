@@ -24,10 +24,11 @@ async def settle_delivery(
         return False
     async with client.tx() as tx:
         locked: Final = await tx.query_raw(
-            """SELECT id FROM "LiteLLM_MCPEventSubscription"
+            """SELECT cursor FROM "LiteLLM_MCPEventSubscription"
             WHERE id = $1 AND generation = $2 AND status IN ('active', 'suspended') FOR UPDATE""",
             delivery.subscription_id,
             generation,
+            model=GapEnvelope,
         )
         if not locked:
             return False
@@ -43,12 +44,12 @@ async def settle_delivery(
         if not finished:
             return False
         if outcome == "delivered":
-            await tx.litellm_mcpeventsubscription.update(
+            await tx.litellm_mcpeventsubscription.update_many(
                 where={"id": delivery.subscription_id},
                 data={"last_delivery_at": at, "consecutive_failures": 0, "last_error": None, "failed_since": None},
             )
         elif outcome == "terminated":
-            await tx.litellm_mcpeventsubscription.update(
+            await tx.litellm_mcpeventsubscription.update_many(
                 where={"id": delivery.subscription_id}, data={"status": "terminated"}
             )
             await tx.litellm_mcpeventdelivery.delete_many(
@@ -66,14 +67,13 @@ async def settle_delivery(
             )
             if gap:
                 gap_id: Final = f"msg_gap_{delivery.delivery_id}"
-                await tx.litellm_mcpeventdelivery.create(
-                    data={
-                        "delivery_id": gap_id,
-                        "subscription_id": delivery.subscription_id,
-                        "webhook_id": gap_id,
-                        "body": GapEnvelope(cursor=None).model_dump_json(),
-                        "next_attempt_at": at,
-                        "prepared": True,
-                    }
+                await tx.execute_raw(
+                    """INSERT INTO "LiteLLM_MCPEventDelivery"
+                    (delivery_id, subscription_id, webhook_id, body, next_attempt_at, prepared)
+                    VALUES ($1, $2, $1, $3, $4::timestamp, true)""",
+                    gap_id,
+                    delivery.subscription_id,
+                    locked[0].model_dump_json(),
+                    at.isoformat(),
                 )
     return True
