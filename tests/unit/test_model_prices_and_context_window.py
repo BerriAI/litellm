@@ -1344,3 +1344,40 @@ def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
     assert litellm.supports_video_input(model=model) is supports_video_input
     assert litellm.supports_audio_input(model=model) is supports_audio_input
     assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)
+
+
+def test_qwen3_asr_models_mapped_for_audio_transcription(prices: dict) -> None:
+    for model_id in ("qwen3-asr", "qwen3-asr-1.7b"):
+        entry: Final = prices[model_id]
+        assert isinstance(entry, dict)
+        assert entry["mode"] == "audio_transcription"
+        assert entry["litellm_provider"] == "openai"
+        assert "/v1/audio/transcriptions" in entry["supported_endpoints"]
+
+    assert prices["Qwen/Qwen3-ASR-1.7B"]["alias_of"] == "qwen3-asr-1.7b"
+    assert prices["openai/qwen3-asr"]["alias_of"] == "qwen3-asr"
+    assert prices["openai/qwen3-asr-1.7b"]["alias_of"] == "qwen3-asr-1.7b"
+    assert prices["openai/Qwen/Qwen3-ASR-1.7B"]["alias_of"] == "qwen3-asr-1.7b"
+
+
+def test_fireworks_kimi_k3p1_aliases_resolve(prices: dict) -> None:
+    model_target: Final = "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro"
+    router_target: Final = "fireworks_ai/accounts/fireworks/routers/kimi-k3p1-pro-us"
+
+    assert prices["fireworks_ai/kimi-k3p1-pro"]["alias_of"] == model_target
+    assert prices["kimi-k3p1-pro"]["alias_of"] == model_target
+    assert prices["fireworks_ai/kimi-k3p1-pro-us"]["alias_of"] == router_target
+    assert prices["kimi-k3p1-pro-us"]["alias_of"] == router_target
+
+
+def test_gemini_robotics_er_1_6_preview_metadata(prices: dict) -> None:
+    entry: Final = prices["gemini-robotics-er-1.6-preview"]
+    assert isinstance(entry, dict)
+    assert entry["mode"] == "chat"
+    assert entry["litellm_provider"] == "vertex_ai-language-models"
+    assert entry["max_input_tokens"] == 1048576
+    assert entry["supports_audio_input"] is True
+    assert entry["supports_video_input"] is True
+    assert entry["supports_vision"] is True
+    assert prices["gemini/gemini-robotics-er-1.6-preview"]["alias_of"] == "gemini-robotics-er-1.6-preview"
+    assert prices["vertex_ai/gemini-robotics-er-1.6-preview"]["alias_of"] == "gemini-robotics-er-1.6-preview"
