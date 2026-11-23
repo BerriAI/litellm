@@ -1,7 +1,9 @@
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager
 from datetime import timedelta
+from itertools import count
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
@@ -266,31 +268,36 @@ async def test_an_unreachable_database_reported_as_a_data_error_never_parks_a_de
     ]
 
 
-class _ShortTransactions:
-    def __init__(self, client: Prisma, timeout: timedelta) -> None:
+class _RetriedElsewhereBeforeFailureIsRecorded:
+    def __init__(self, client: Prisma, database: psycopg.Connection[tuple[object, ...]], timeout: timedelta) -> None:
         self._client: Final = client
+        self._database: Final = database
         self._timeout: Final = timeout
+        self._transactions: Final = count(1)
 
-    def tx(self, *, timeout: timedelta):
+    def tx(self, *, timeout: timedelta) -> AbstractAsyncContextManager[Prisma]:
+        if next(self._transactions) == 2:
+            self._database.execute(
+                """UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 7 WHERE delivery_id = 'request-1'"""
+            )
         return self._client.tx(timeout=min(timeout, self._timeout))
 
 
 @pytest.mark.asyncio
 async def test_a_failed_full_batch_is_scheduled_for_retry_within_one_short_transaction(
-    delivery_database, delivery_client
-):
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
     batch: Final = 5000
     _insert(delivery_database, tuple(_row(f"request-{index}") for index in range(batch)))
     delivery_database.execute("""UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 3 WHERE delivery_id = 'request-0'""")
 
-    async def apply(transaction, deliveries):
-        delivery_database.execute(
-            """UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 7 WHERE delivery_id = 'request-1'"""
-        )
+    async def apply(transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]) -> None:
         raise ConnectionError("database went away")
 
-    repository = AccountingDeliveryRepository(_ShortTransactions(delivery_client, timedelta(seconds=2)))
-    result = await repository.apply_pending(apply, batch_size=batch, retry_only=False)
+    repository: Final = AccountingDeliveryRepository(
+        _RetriedElsewhereBeforeFailureIsRecorded(delivery_client, delivery_database, timedelta(seconds=2))
+    )
+    result: Final = await repository.apply_pending(apply, batch_size=batch, retry_only=False)
 
     assert (result.failed, result.parked, result.error) == (batch - 1, (), "ConnectionError")
     assert delivery_database.execute(

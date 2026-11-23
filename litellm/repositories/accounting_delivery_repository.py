@@ -109,8 +109,8 @@ _FAILED: Final = """WITH failed AS (
     FOR UPDATE OF delivery
 )
 UPDATE "LiteLLM_SpendLogDelivery" AS delivery
-SET attempts = delivery.attempts + 1, last_error = $2,
-    next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(delivery.attempts, 8)) * (0.5 + random()))),
+SET attempts = attempts + 1, last_error = $2,
+    next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
     state = $3::"AccountingDeliveryState"
 FROM failed
 WHERE delivery.delivery_id = failed.delivery_id
