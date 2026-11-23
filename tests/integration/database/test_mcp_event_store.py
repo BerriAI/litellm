@@ -377,3 +377,58 @@ async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_sub
             assert not await receiver.enqueue_current(active, _delivery(row.id))
         finally:
             await admin.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_delayed_teardown_preserves_reused_upstream_id_and_replacement_delivery() -> None:
+    async with _connected() as old, _connected() as new:
+        row: Final = await _active(old)
+        current: Final = await old.get(row.id)
+        assert current is not None
+        try:
+            assert await old.hold_for_unsubscribe(row.id, "up_1", current.generation)
+            assert await new.end_if_expired(row.id, datetime.now(timezone.utc) + timedelta(days=1))
+            replacement: Final = _row().model_copy(update={"id": row.id})
+            assert await new.reserve(replacement)
+            activation: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor=None,
+            )
+            assert await new.activate(row.id, activation)
+            active: Final = await new.get(row.id)
+            assert active is not None and active.generation != current.generation
+            assert await new.enqueue_current(active, _delivery(row.id))
+            assert not await old.end_if_current(row.id, "up_1", current.generation)
+            assert not await old.hold_for_unsubscribe(row.id, "up_1", current.generation)
+            await old.delete_held(row.id, "up_1", current.generation)
+            assert await new.has_pending(row.id) and await new.get(row.id) == active
+        finally:
+            await new.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_expiry_rechecks_a_renewed_deadline_before_removing_its_deliveries() -> None:
+    async with _connected() as sweeper, _connected() as subscriber:
+        row: Final = await _active(sweeper)
+        after_old_deadline: Final = NOW + timedelta(hours=2)
+        try:
+            assert row.id in {item.id for item in await sweeper.expired(after_old_deadline)}
+            renewal: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=NOW + timedelta(hours=3),
+                cursor=None,
+            )
+            assert await subscriber.activate(row.id, renewal)
+            renewed: Final = await subscriber.get(row.id)
+            assert renewed is not None and await subscriber.enqueue_current(renewed, _delivery(row.id))
+            assert not await sweeper.end_if_expired(row.id, after_old_deadline)
+            assert await subscriber.has_pending(row.id)
+            assert await sweeper.end_if_expired(row.id, NOW + timedelta(hours=4))
+            assert not await subscriber.has_pending(row.id)
+        finally:
+            await subscriber.delete(row.id)
