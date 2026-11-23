@@ -1769,6 +1769,17 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
             ),
             id="choice_with_empty_answer",
         ),
+        pytest.param(
+            (
+                ({"index": None, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="first_choice_opened_without_index",
+        ),
     ],
 )
 async def test_streamed_n_choices_each_open_with_one_assistant_role(
@@ -1828,10 +1839,13 @@ async def test_streamed_n_choices_each_open_with_one_assistant_role(
         else:
             client.close()
 
-    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in received))
-    role_indexes: Final = sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant")
+    emitted_choices: Final = tuple(
+        (0 if choice.index is None else choice.index, choice.delta.role)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+    )
+    role_indexes: Final = sorted(index for index, role in emitted_choices if role == "assistant")
     opening_roles: Final = {
-        index: next(choice for choice in emitted_choices if choice.index == index).delta.role for index in (0, 1)
+        index: next(role for choice_index, role in emitted_choices if choice_index == index) for index in (0, 1)
     }
     assert role_indexes == [0, 1]
     assert opening_roles == {0: "assistant", 1: "assistant"}
@@ -10494,6 +10508,34 @@ def _completion_chunk(
         object="text_completion",
         choices=[{"index": 0, "text": text, "finish_reason": finish_reason, "logprobs": None, **choice_extras}],
     )
+
+
+def test_text_completion_n_choices_each_open_with_one_assistant_role(logging_obj: Logging) -> None:
+    emitted: Final = tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(
+                tuple(
+                    Completion.construct(
+                        id="cmpl-n2",
+                        created=1,
+                        model="m",
+                        object="text_completion",
+                        choices=[{"index": index, "text": text, "finish_reason": None, "logprobs": None}],
+                    )
+                    for index, text in ((1, "Hi"), (0, "Hello"), (1, " there"), (0, " there"))
+                )
+            ),
+            model="m",
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+    )
+
+    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in emitted))
+    assert sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant") == [0, 1]
+    assert {
+        index: next(choice.delta.role for choice in emitted_choices if choice.index == index) for index in (0, 1)
+    } == {0: "assistant", 1: "assistant"}
 
 
 @pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])

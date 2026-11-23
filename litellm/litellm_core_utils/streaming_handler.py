@@ -1289,10 +1289,11 @@ class CustomStreamWrapper:
             return None
         return _delta_from_upstream(upstream_delta)
 
-    def _claim_role_for_choice(self, choice_index: int) -> bool:
-        if choice_index in self._choice_indexes_given_role:
+    def _claim_role_for_choice(self, choice_index: int | None) -> bool:
+        index: Final = 0 if choice_index is None else choice_index
+        if index in self._choice_indexes_given_role:
             return False
-        self._choice_indexes_given_role = self._choice_indexes_given_role | {choice_index}
+        self._choice_indexes_given_role = self._choice_indexes_given_role | {index}
         self.sent_first_chunk = True
         return True
 
