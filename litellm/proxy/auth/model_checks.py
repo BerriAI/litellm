@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.litellm_core_utils.pattern_match_deployments import PatternMatchRouter, PatternUtils
+from litellm.llms.azure.model_listing import discover_azure_openai_deployments
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
 from litellm.llms.fireworks_ai.common_utils import FIREROUTER
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
@@ -805,6 +806,17 @@ def _known_models_from_wildcard(
         return _ids_routing_through_catch_all(
             wildcard_model, _catch_all_catalog(litellm_params), routes_through_catch_all
         )
+
+    if (
+        litellm.check_provider_endpoint
+        and wildcard_model == "azure/*"
+        and litellm_params is not None
+        and litellm_params.model == "azure/*"
+    ):
+        deployment_names: Final = discover_azure_openai_deployments(litellm_params.api_base)
+        if deployment_names is not None:
+            listed_deployments: Final = (f"azure/{name}" for name in deployment_names)
+            return tuple(model for model in listed_deployments if routes_to_model(model, model))
 
     wildcard_models = get_provider_models(provider=provider, litellm_params=litellm_params)
 

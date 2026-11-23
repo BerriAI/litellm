@@ -519,6 +519,20 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
+### Discover Azure OpenAI deployments in the model list
+
+For an Azure deployment with both the model group and provider model set to `azure/*`, set
+`litellm_settings.check_provider_endpoint: true` in the proxy configuration. Set
+`AZURE_OPENAI_DEPLOYMENT_DISCOVERY_RESOURCE_ID` in the proxy environment to the full Azure
+Resource Manager ID of the public Azure OpenAI account. The route's API base must match that account's
+`https://<account>.openai.azure.com` endpoint.
+
+The proxy uses its configured Azure identity with `Microsoft.CognitiveServices/accounts/deployments/read`
+permission on that account. `GET /v1/models` lists the actual deployment names under `azure/`.
+The discovery cache defaults to 300 seconds. Set `AZURE_OPENAI_DEPLOYMENT_DISCOVERY_TTL_SECONDS`
+to a positive integer to change it. If refresh fails, the proxy uses the last successful list. If the
+first lookup fails or discovery is disabled, the existing model listing behavior applies.
+
 ### Deploy on AWS or GCP with Terraform
 
 Run the LiteLLM proxy as a production-ready componentized stack (gateway, backend, UI on separate services; managed Postgres + Redis + object store) using the published Terraform modules. Both modules are on the [public Terraform Registry](https://registry.terraform.io/namespaces/BerriAI) — no auth needed.
