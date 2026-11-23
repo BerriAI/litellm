@@ -130,7 +130,9 @@ class EventStore(Protocol):
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
         ...
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
         ...
 
@@ -151,6 +153,8 @@ class EventStore(Protocol):
     async def end_if_expired(self, subscription_id: str, now: datetime) -> bool:
         """Terminate the row only while it is still past its deadline, so a renewal that just landed survives."""
         ...
+
+    async def has_pending(self, subscription_id: str) -> bool: ...
 
     async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool: ...
 
@@ -259,9 +263,7 @@ class PrismaEventStore:
         return True
 
     async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
-        await self._subscriptions.delete_many(
-            where={"id": subscription_id, "status": "pending", **({"generation": generation} if generation else {})}
-        )
+        await self.delete_held(subscription_id, None, generation)
 
     async def activate(
         self,
@@ -382,9 +384,16 @@ class PrismaEventStore:
         )
         return held > 0
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         await self._subscriptions.delete_many(
-            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
+            where={
+                "id": subscription_id,
+                "upstream_subscription_id": upstream_subscription_id,
+                "status": "pending",
+                **({"generation": generation} if generation else {}),
+            }
         )
 
     async def delete(self, subscription_id: str) -> None:
@@ -438,6 +447,12 @@ class PrismaEventStore:
             data={"status": "terminated"},
         )
         return ended > 0
+
+    async def has_pending(self, subscription_id: str) -> bool:
+        return (
+            await self._deliveries.find_first(where={"subscription_id": subscription_id, "delivered_at": None})
+            is not None
+        )
 
     async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
         """Acknowledge duplicates, but retry if the subscription changed after signature verification."""

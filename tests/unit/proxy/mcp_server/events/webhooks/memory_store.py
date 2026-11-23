@@ -40,9 +40,7 @@ class MemoryStore:
         return True
 
     async def discard_pending(self, subscription_id: str, generation: str | None = None) -> None:
-        current: Final = self.rows.get(subscription_id)
-        if current is not None and current.status == "pending" and generation in (None, current.generation):
-            self.rows.pop(subscription_id)
+        await self.delete_held(subscription_id, None, generation)
 
     def _update_live(self, subscription_id: str, **fields: object) -> bool:  # noqa: ANN003  # test double mirrors a guarded UPDATE
         current: Final = self.rows.get(subscription_id)
@@ -77,7 +75,6 @@ class MemoryStore:
         self._update_live(
             subscription_id,
             status="active",
-            generation=uuid.uuid4().hex,
             consecutive_failures=0,
             cursor=watermark.cursor,
             **activation.model_dump(exclude={"expected_generation", "reactivation_gap_id", "cursor"}),
@@ -141,11 +138,14 @@ class MemoryStore:
         )
         return True
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         current: Final = self.rows.get(subscription_id)
         if (
             current is not None
             and current.status == "pending"
+            and generation in (None, current.generation)
             and current.upstream_subscription_id == upstream_subscription_id
         ):
             self.rows.pop(subscription_id)
@@ -201,6 +201,9 @@ class MemoryStore:
             return False
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
         return True
+
+    async def has_pending(self, subscription_id: str) -> bool:
+        return any(delivery.subscription_id == subscription_id for delivery in self.queue.values())
 
     async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
         raise NotImplementedError("Inbound callbacks use the PostgreSQL receiver fixture")

@@ -375,6 +375,31 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
 
 
 @pytest.mark.asyncio
+async def test_late_activation_and_cleanup_leave_the_new_reservation_intact() -> None:
+    async with _connected() as first, _connected() as second:
+        old: Final = _row()
+        replacement: Final = _row().model_copy(update={"id": old.id})
+        assert await first.reserve(old)
+        try:
+            await second.terminate(old.id)
+            assert await second.reserve(replacement)
+            activation: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="old",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor="old",
+                expected_generation=old.generation,
+            )
+            assert not await first.activate(old.id, activation, ("pending",))
+            await first.discard_pending(old.id, old.generation)
+            current: Final = await second.get(old.id)
+            assert current is not None and (current.status, current.generation) == ("pending", replacement.generation)
+        finally:
+            await second.delete(old.id)
+
+
+@pytest.mark.asyncio
 async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_subscription() -> None:
     async with _connected() as receiver, _connected() as admin:
         row: Final = await _active(receiver)
@@ -389,6 +414,32 @@ async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_sub
             assert not await receiver.enqueue_current(active, _delivery(row.id))
         finally:
             await admin.delete(row.id)
+
+
+@pytest.mark.asyncio
+async def test_refresh_retains_the_cursor_when_a_receiver_enqueues_before_activation() -> None:
+    async with _connected() as subscriber, _connected() as receiver:
+        row: Final = await _active(subscriber)
+        try:
+            active: Final = await subscriber.get(row.id)
+            assert active is not None and active.cursor == "c1"
+            assert not await subscriber.has_pending(row.id)
+            assert await receiver.enqueue_current(active, _delivery(row.id))
+            assert await subscriber.activate(
+                row.id,
+                Activation(
+                    expected_generation=active.generation,
+                    client_secret=SECRET,
+                    upstream_subscription_id="up_1",
+                    upstream_refresh_before=None,
+                    refresh_before=None,
+                    cursor="c2",
+                ),
+            )
+            refreshed: Final = await subscriber.get(row.id)
+            assert refreshed is not None and refreshed.cursor == "c1"
+        finally:
+            await subscriber.delete(row.id)
 
 
 @pytest.mark.asyncio

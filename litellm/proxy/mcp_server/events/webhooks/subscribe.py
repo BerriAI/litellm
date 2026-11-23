@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 import anyio
+from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of, stored_key_hash
@@ -16,6 +17,7 @@ from litellm.proxy.mcp_server.events.cursors import (
     OpenedCursor,
     ensure_sealable,
     open_cursor,
+    seal_cursor,
 )
 from litellm.proxy.mcp_server.events.errors import (
     EventsFailure,
@@ -24,26 +26,38 @@ from litellm.proxy.mcp_server.events.errors import (
     forbidden,
     internal_error,
     invalid_params,
+    subscription_not_found,
     unsupported,
 )
+from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
 from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, is_https_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import (
+    client_grant,
+    granted_ttl_ms,
+    iso,
+    parse_time,
     subscription_id,
 )
-from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, parse_secret
+from litellm.proxy.mcp_server.events.webhooks.signing import new_secret, new_webhook_id, parse_secret
 from litellm.proxy.mcp_server.events.webhooks.store import (
+    Activation,
     EventStore,
     SubscriptionRow,
+    SubscriptionStatus,
     default_store,
 )
 from litellm.proxy.mcp_server.events.webhooks.termination import end_upstream
 from litellm.proxy.mcp_server.events.webhooks.verification import Poster, verify_callback
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.types.mcp_server.events import (
+    DeliveryStatus,
+    EventsErrorCode,
     SubscribeEventsParams,
+    SubscribeEventsResult,
 )
 
+_KNOWN_CODES: Final = frozenset(member.value for member in EventsErrorCode)
 _BEING_CREATED: Final = internal_error("Another request is creating this subscription; retry")
 
 
@@ -88,6 +102,24 @@ def validate_subscription(
     return Ok(_Request(principal=principal, secret=secret, store=resolved_store))
 
 
+def delivery_status(row: SubscriptionRow) -> DeliveryStatus:
+    return DeliveryStatus(
+        active=row.status == "active",
+        last_delivery_at=iso(row.last_delivery_at),
+        last_error=row.last_error,
+        failed_since=iso(row.failed_since),
+    )
+
+
+def upstream_failure(error: MCPError) -> EventsFailure:
+    if error.error.code == EventsErrorCode.CALLBACK_ENDPOINT_ERROR:
+        return internal_error("The upstream server could not verify the gateway webhook endpoint")
+    known: Final = error.error.code in _KNOWN_CODES
+    return EventsFailure(
+        EventsErrorCode(error.error.code) if known else EventsErrorCode.INTERNAL_ERROR, error.error.message
+    )
+
+
 def _new_row(
     sid: str, request: _Request, context: OperationContext, prepared: PreparedEvent, params: SubscribeEventsParams
 ) -> SubscriptionRow:
@@ -117,6 +149,88 @@ async def _admit_new(
         return None
     failure: Final = await verify_callback(params.delivery.url, request.secret, sid, now, post)
     return callback_error(failure) if failure is not None else None
+
+
+async def _discard_pending(subscription: _Subscription) -> None:
+    if subscription.reserved:
+        await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
+
+
+async def _roll_back(
+    subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
+) -> None:
+    """Undo an upstream subscription this request created but could not record."""
+    # The conditional delete serializes with a possibly committed activation before the ownership read.
+    await _discard_pending(subscription)
+    current: Final = await subscription.request.store.get(subscription.base.id)
+    if current is not None and current.upstream_secret == subscription.base.upstream_secret:
+        if current.status in ("active", "suspended"):
+            return
+        if current.status == "pending" and current.generation != subscription.base.generation:
+            return
+    orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
+    await end_upstream(orphan, settings, runtime, prepared=subscription.prepared)
+
+
+async def activate_subscription(
+    subscription: _Subscription,
+    upstream: SubscribeEventsResult,
+    context: OperationContext,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+) -> Result[SubscribeEventsResult, EventsFailure]:
+    base: Final = subscription.base
+    existing: Final = subscription.existing
+    upstream_refresh: Final = parse_time(upstream.refresh_before)
+    refresh_before: Final = client_grant(
+        datetime.now(timezone.utc),
+        granted_ttl_ms(subscription.params, subscription.prepared.resolved.target.server),
+        upstream_refresh,
+    )
+    sealed: Final = seal_cursor(subscription.binding, upstream.cursor, runtime.now())
+    if isinstance(sealed, Error):
+        await _roll_back(subscription, upstream, settings, runtime)
+        return Error(sealed.error)
+    activation: Final = Activation(
+        reactivation_gap_id=new_webhook_id("gap") if existing is not None and existing.status == "suspended" else None,
+        expected_generation=base.generation,
+        client_secret=base.client_secret,
+        upstream_subscription_id=upstream.id,
+        upstream_refresh_before=upstream_refresh,
+        refresh_before=refresh_before,
+        cursor=sealed.ok,
+    )
+    expected: Final[tuple[SubscriptionStatus, ...]] = (
+        ("pending",) if subscription.reserved else (existing.status,) if existing is not None else ("pending",)
+    )
+    try:
+        activated: Final = await subscription.request.store.activate(base.id, activation, expected)
+    except Exception:
+        await _roll_back(subscription, upstream, settings, runtime)
+        raise
+    if activated is None:
+        await _roll_back(subscription, upstream, settings, runtime)
+        return Error(subscription_not_found())
+    refreshed: Final = existing if existing is not None and existing.status != "terminated" else None
+    await runtime.record(
+        EventActivity(
+            call_type="mcp_event_subscribe",
+            mode="webhook",
+            server_id=base.server_id,
+            event_name=subscription.prepared.resolved.gateway_name,
+            outcome="subscribed",
+            caller=context.user_api_key_auth,
+            subscription_id=base.id,
+        )
+    )
+    result: Final = SubscribeEventsResult(
+        id=base.id,
+        refresh_before=iso(refresh_before),
+        cursor=activated.cursor,
+        truncated=upstream.truncated or subscription.opened.expired,
+        delivery_status=delivery_status(refreshed) if refreshed is not None else None,
+    )
+    return Ok(result)
 
 
 async def _retire_if_moved(
