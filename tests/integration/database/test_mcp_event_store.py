@@ -128,6 +128,31 @@ async def test_no_writer_revives_a_terminated_subscription() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
+    from prisma.errors import RawQueryError
+
+    async with _connected() as store:
+        row = await _active(store)
+        try:
+            gap = _delivery(row.id)
+            activation = Activation(
+                client_secret=ROTATED,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor="advanced",
+                reactivation_gap=gap,
+            )
+            assert await store.enqueue(gap)
+            with pytest.raises(RawQueryError):
+                await store.activate(row.id, activation)
+            unchanged = await store.get(row.id)
+            assert unchanged is not None and (unchanged.cursor, unchanged.client_secret) == ("c1", SECRET)
+        finally:
+            await store.delete(row.id)
+
+
+@pytest.mark.asyncio
 async def test_a_refresh_rotates_the_secret_encrypted_at_rest() -> None:
     async with _connected() as store:
         row: Final = await _active(store)
@@ -330,6 +355,8 @@ async def test_losing_the_claim_or_subscription_generation_blocks_all_settlement
                 for d in await first_worker.claim(later, later + timedelta(minutes=1), 100)
                 if d.subscription_id == row.id
             ]
-            assert [d.body for d in due] == (['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else [])
+            assert [d.body for d in due] == (
+                ['{"type":"gap","cursor":"previous-safe"}'] if outcome == "timeout" else []
+            )
         finally:
             await first_worker.delete(row.id)
