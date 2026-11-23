@@ -694,6 +694,16 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         return True
 
     @staticmethod
+    def _drops_client_effort(
+        completion_kwargs: _CompletionKwargs, target_provider: str | None, *, drop_params: bool
+    ) -> bool:
+        if not drop_params or target_provider not in RESPONSES_API_PROVIDERS:
+            return False
+        return LiteLLMMessagesToCompletionTransformationHandler._drops_unknown_client_effort(
+            completion_kwargs
+        ) or LiteLLMMessagesToCompletionTransformationHandler._drops_unconfirmed_client_none(completion_kwargs)
+
+    @staticmethod
     def _client_effort(completion_kwargs: _CompletionKwargs) -> object:
         reasoning_effort: Final = completion_kwargs.get("reasoning_effort")
         effort_options: Final = as_str_mapping(reasoning_effort)
@@ -924,12 +934,9 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 completion_kwargs[key] = value
 
         if (
-            drop_params
-            and target_provider in RESPONSES_API_PROVIDERS
-            and "reasoning_effort" in openai_request
-            and (
-                LiteLLMMessagesToCompletionTransformationHandler._drops_unknown_client_effort(completion_kwargs)
-                or LiteLLMMessagesToCompletionTransformationHandler._drops_unconfirmed_client_none(completion_kwargs)
+            "reasoning_effort" in openai_request
+            and LiteLLMMessagesToCompletionTransformationHandler._drops_client_effort(
+                completion_kwargs, target_provider, drop_params=drop_params
             )
         ):
             del completion_kwargs["reasoning_effort"]
