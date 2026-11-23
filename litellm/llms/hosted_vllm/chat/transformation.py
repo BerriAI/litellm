@@ -186,7 +186,7 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                     message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
-                    text_parts = []
+                    text_parts: list[str] = []
                     tool_calls: list[ChatCompletionAssistantToolCall] = []
                     content_blocks: list[object] = []
                     has_structured_content = False
