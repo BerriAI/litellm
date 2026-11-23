@@ -60,7 +60,7 @@ _MAX_COUNTS: Final = 4096
 async def _baseline_target(params: LiteLLM_Params) -> NativePredictionTarget | UnsupportedPredictionTarget:
     try:
         return await asyncio.wait_for(aresolve_baseline_prediction_target(params), _TARGET_TIMEOUT)
-    except TimeoutError:
+    except asyncio.TimeoutError:
         return UnsupportedPredictionTarget("provider_credentials_timeout")
 
 
@@ -271,7 +271,7 @@ class AutoRouterBaselineCache(CustomLogger):
                 timeout=max(0.0, deadline - asyncio.get_running_loop().time()),
             )
             return (None, counted.reason) if isinstance(counted, UnsupportedCachePlan) else (counted, None)
-        except TimeoutError:
+        except asyncio.TimeoutError:
             return None, "token_count_timeout"
         except Exception:  # noqa: BLE001  # token counting cannot fail a completed request
             return None, "token_count_unavailable"
