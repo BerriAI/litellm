@@ -1,6 +1,6 @@
 import asyncio
 import io
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
@@ -38,7 +38,6 @@ from litellm.proxy.common_utils.openai_error_payload import (
 from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.images.main import ImageEditRequestParams
-from litellm.types.llms.openai import ChatCompletionUserMessage
 from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
@@ -119,7 +118,9 @@ async def image_generation(
     )
 
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
-    data = {"litellm_call_id": litellm_call_id}
+    data: dict[str, object] = {  # mutable-ok: the pre-call steps update this request body in place
+        "litellm_call_id": litellm_call_id
+    }
     try:
         # Use orjson to parse JSON data, orjson speeds up requests significantly
         body: Final = await request.body()
@@ -145,8 +146,9 @@ async def image_generation(
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
         # get the actual model name
-        if data["model"] in litellm.model_alias_map:
-            data["model"] = litellm.model_alias_map[data["model"]]
+        aliased_image_model: Final = data["model"]
+        if isinstance(aliased_image_model, str) and aliased_image_model in litellm.model_alias_map:
+            data["model"] = litellm.model_alias_map[aliased_image_model]
 
         if llm_router is not None:
             requested_model: Final = _IMAGE_GENERATION_MODEL_ADAPTER.validate_python(data.get("model"))
@@ -174,7 +176,7 @@ async def image_generation(
         prompt_value: Final = data.get("prompt")
         if prompt_value is not None:
             # Reformat the image prompt as a chat message so guardrails can process it.
-            user_message: Final[ChatCompletionUserMessage] = {
+            user_message: Final[Mapping[str, object]] = {
                 "role": "user",
                 "content": prompt_value,
             }
