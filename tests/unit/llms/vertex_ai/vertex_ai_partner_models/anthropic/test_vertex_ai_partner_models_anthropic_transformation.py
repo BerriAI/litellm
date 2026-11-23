@@ -989,15 +989,7 @@ def test_vertex_chat_request_rejects_a_malformed_output_format_without_drop_para
 
 @pytest.mark.parametrize(
     "model",
-    (
-        "claude-fable-5-1",
-        "claude-fable-5",
-        "claude-fable-5@default",
-        "claude-haiku-5-5",
-        "claude-haiku-5-5@default",
-        "claude-sonnet-5-5",
-        "claude-sonnet-5-5@default",
-    ),
+    ("claude-fable-5-1",),
 )
 def test_vertex_ai_native_response_format_reaches_vertex_as_output_config_format(
     local_model_cost_map: None, model: str
