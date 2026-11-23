@@ -20,6 +20,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, MutableMapping
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
+from itertools import chain
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -31,7 +32,7 @@ from litellm import token_counter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm._uuid import uuid
-from litellm.constants import NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
+from litellm.constants import DEFAULT_IMAGE_TOKEN_COUNT, NO_MAX_TOKENS_TPM_RESERVATION_FRACTION
 from litellm.litellm_core_utils.attempt_settlement import current_attempt_id, release_in_background, released
 from litellm.litellm_core_utils.core_helpers import coerce_token_limit
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -218,6 +219,35 @@ def _responses_items_as_messages(items: object) -> tuple[object, ...]:
     )
 
 
+def _item_list_tokens(model: str, messages: tuple[object, ...]) -> int:
+    return max(0, int(token_counter(model=model, messages=messages, use_default_image_token_count=True)))
+
+
+_MESSAGE_CONTENT_BLOCKS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _one_block_messages(message: object) -> tuple[object, ...]:
+    if not is_str_keyed_mapping(message):
+        return (message,)
+    with contextlib.suppress(ValidationError):
+        blocks: Final = _MESSAGE_CONTENT_BLOCKS.validate_python(message.get("content"))
+        return tuple({**message, "content": [block]} for block in blocks)
+    return (message,)
+
+
+def _one_block_tokens(model: str, message: object) -> int:
+    with contextlib.suppress(Exception):
+        return _item_list_tokens(model, (message,))
+    return DEFAULT_IMAGE_TOKEN_COUNT
+
+
+def _responses_input_tokens(model: str, messages: tuple[object, ...]) -> int:
+    with contextlib.suppress(Exception):
+        return _item_list_tokens(model, messages)
+    one_block_messages: Final = chain.from_iterable(_one_block_messages(message) for message in messages)
+    return sum(_one_block_tokens(model, message) for message in one_block_messages)
+
+
 def _estimate_input_tokens(request_kwargs: Mapping[str, Any] | None, model: str = "") -> int:
     if not request_kwargs:
         return 0
@@ -232,7 +262,7 @@ def _estimate_input_tokens(request_kwargs: Mapping[str, Any] | None, model: str 
     with contextlib.suppress(Exception):
         input_messages: Final = _responses_input_messages(input_text)
         if input_messages:
-            return max(0, int(token_counter(model=model, messages=input_messages, use_default_image_token_count=True)))
+            return _responses_input_tokens(model, input_messages)
         return max(0, int(token_counter(model=model, messages=messages, text=prompt or input_text)))
     return 0
 

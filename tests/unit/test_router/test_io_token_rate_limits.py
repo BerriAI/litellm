@@ -2043,6 +2043,42 @@ async def test_an_item_list_image_url_counts_on_http_and_a_socket_turn_without_b
     assert not download.called
 
 
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("settled_on_the_turn_s_minute")
+@pytest.mark.parametrize(
+    "media_block",
+    [
+        pytest.param({"type": "input_image", "file_id": "file-abc"}, id="image-file-id"),
+        pytest.param({"type": "input_audio", "input_audio": {"data": "AAAA", "format": "wav"}}, id="audio"),
+    ],
+)
+async def test_a_media_block_the_counter_cannot_read_keeps_the_item_list_text_counted(
+    media_block: Mapping[str, object],
+) -> None:
+    usage: Final = _memory_usage()
+    usage.increment_local(CounterIncrement(_ITPM_350_KEY, 310, 60))
+    request: Final = {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": _INPUT_PAST_40_TOKENS}, media_block],
+            }
+        ]
+    }
+    text_tokens: Final = litellm.token_counter(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": [{"type": "text", "text": _INPUT_PAST_40_TOKENS}]}],
+    )
+
+    http_refusal: Final = await _itpm_350_refusal(usage, request, opens_responses_socket=False)
+    with pytest.raises(litellm.RateLimitError) as turn_refusal:
+        await async_admit_io_token_turn(usage, _ITPM_350_DEPLOYMENT, _TURN_AT, request)
+
+    assert str(turn_refusal.value) == http_refusal
+    assert f"current usage={310 + text_tokens + litellm.constants.DEFAULT_IMAGE_TOKEN_COUNT}" in http_refusal
+
+
 _TURN_WITH_A_LARGE_INPUT_AND_OUTPUT_CAP: Final[Mapping[str, object]] = MappingProxyType(
     {"input": _INPUT_PAST_40_TOKENS * 10, "max_output_tokens": 1000}
 )
