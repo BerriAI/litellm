@@ -10,7 +10,7 @@ use litellm_http::Client;
 use url::Url;
 
 use crate::attempt::{self, Cause, Fetched, Rejected};
-use crate::{RetryPolicy, Source};
+use crate::{Location, RetryPolicy};
 
 /// How an `s3://` fetch reaches S3
 #[derive(Clone, Debug)]
@@ -31,6 +31,13 @@ pub enum GcsAccess {
     },
 }
 
+/// How each scheme reaches its store
+#[derive(Clone)]
+pub struct Access {
+    pub s3: S3Access,
+    pub gcs: GcsAccess,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failed {
     pub reason: String,
@@ -39,61 +46,100 @@ pub struct Failed {
     pub retry_after: Option<Duration>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Start {
-    Fresh,
-    /// Continues a fetch whose first attempt failed retryably elsewhere, waiting before its next attempt
-    After(Failed),
+/// Where a cost map document comes from
+pub trait Source {
+    fn fetch(&self) -> impl Future<Output = Result<Fetched, Failed>> + Send;
 }
 
-pub async fn fetch(
-    client: &Client,
-    s3: &S3Access,
-    gcs: &GcsAccess,
-    url: &str,
+/// A document behind an http(s), `s3://` or `gs://` URL, fetched with retries
+#[derive(Clone)]
+pub struct RemoteSource {
+    url: String,
+    client: Client,
+    access: Access,
     policy: RetryPolicy,
-    start: Start,
-) -> Result<Fetched, Failed> {
-    let shown = redacted(url);
-    let source =
-        Source::parse(url).map_err(|error| Failed::of(&shown, &Rejected::fatal(error), 1))?;
-    let mut backoff = policy.backoff();
-    let made = AtomicU32::new(0);
-    if let Start::After(failed) = start {
-        let Some(wait) = backoff.next() else {
-            return Err(failed);
-        };
-        tokio::time::sleep(policy.delay(wait, failed.retry_after)).await;
-        made.store(1, Ordering::Relaxed);
-    }
-    let attempt = || {
-        made.fetch_add(1, Ordering::Relaxed);
-        async {
-            match &source {
-                Source::Http(http) => {
-                    attempt::http(client, http.clone(), None, policy.timeout).await
-                }
-                Source::S3(object) => attempt::s3(client, s3, object, policy.timeout).await,
-                Source::Gcs(object) => attempt::gcs(client, gcs, object, policy.timeout).await,
-            }
+    resumed: Option<Failed>,
+}
+
+impl RemoteSource {
+    pub fn new(
+        url: impl Into<String>,
+        client: Client,
+        access: Access,
+        policy: RetryPolicy,
+    ) -> Self {
+        Self {
+            url: url.into(),
+            client,
+            access,
+            policy,
+            resumed: None,
         }
-    };
-    attempt
-        .retry(backoff)
-        .sleep(tokio::time::sleep)
-        .when(|rejected| rejected.retryable)
-        .adjust(|rejected, wait| wait.map(|wait| policy.delay(wait, rejected.retry_after)))
-        .notify(|rejected, wait| {
-            tracing::warn!(
-                "LiteLLM: model cost map fetch attempt {}/{} failed ({}); retrying in {:.1}s",
-                made.load(Ordering::Relaxed),
-                policy.max_attempts,
-                reason(&shown, &rejected.cause),
-                wait.as_secs_f64(),
-            );
-        })
-        .await
-        .map_err(|rejected| Failed::of(&shown, &rejected, made.load(Ordering::Relaxed)))
+    }
+
+    /// Continues a fetch whose first attempt failed retryably elsewhere, waiting before its next attempt
+    pub fn resuming(self, failed: Failed) -> Self {
+        Self {
+            resumed: Some(failed),
+            ..self
+        }
+    }
+}
+
+impl Source for RemoteSource {
+    async fn fetch(&self) -> Result<Fetched, Failed> {
+        let Self {
+            url,
+            client,
+            access,
+            policy,
+            resumed,
+        } = self;
+        let shown = redacted(url);
+        let location =
+            Location::parse(url).map_err(|error| Failed::of(&shown, &Rejected::fatal(error), 1))?;
+        let mut backoff = policy.backoff();
+        let made = AtomicU32::new(0);
+        if let Some(failed) = resumed {
+            let Some(wait) = backoff.next() else {
+                return Err(failed.clone());
+            };
+            tokio::time::sleep(policy.delay(wait, failed.retry_after)).await;
+            made.store(1, Ordering::Relaxed);
+        }
+        let attempt = || {
+            made.fetch_add(1, Ordering::Relaxed);
+            async {
+                match &location {
+                    Location::Http(http) => {
+                        attempt::http(client, http.clone(), None, policy.timeout).await
+                    }
+                    Location::S3(object) => {
+                        attempt::s3(client, &access.s3, object, policy.timeout).await
+                    }
+                    Location::Gcs(object) => {
+                        attempt::gcs(client, &access.gcs, object, policy.timeout).await
+                    }
+                }
+            }
+        };
+        attempt
+            .retry(backoff)
+            .sleep(tokio::time::sleep)
+            .when(|rejected| rejected.retryable)
+            .adjust(|rejected, wait| wait.map(|wait| policy.delay(wait, rejected.retry_after)))
+            .notify(|rejected, wait| {
+                tracing::warn!(
+                    "LiteLLM: model cost map fetch attempt {}/{} failed ({}); retrying in {:.1}s",
+                    made.load(Ordering::Relaxed),
+                    policy.max_attempts,
+                    reason(&shown, &rejected.cause),
+                    wait.as_secs_f64(),
+                );
+            })
+            .await
+            .map_err(|rejected| Failed::of(&shown, &rejected, made.load(Ordering::Relaxed)))
+    }
 }
 
 impl Failed {
