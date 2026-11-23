@@ -170,10 +170,14 @@ def test_mistake_in_included_file_is_reported_at_the_include_line(tmp_path: Path
     ]
 
 
-def test_duplicate_key_in_included_file_is_an_error(tmp_path: Path) -> None:
+def test_duplicate_key_in_included_file_is_reported_beside_its_other_mistakes(tmp_path: Path) -> None:
     included: Final = tmp_path / "settings.yaml"
-    included.write_text("litellm_settings:\n  set_verbose: true\n  set_verbose: false\n", encoding="utf-8")
+    included.write_text(
+        "litellm_settings:\n  set_verbose: true\n  set_verbose: false\n  drop_parms: true\n", encoding="utf-8"
+    )
     assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
-        f"config.yaml:17: error: include: cannot load included config: {included}:3: "
-        "duplicate key litellm_settings.set_verbose"
+        f"config.yaml:17: error: include: {included}:3: duplicate key litellm_settings.set_verbose, "
+        "only the last value is used",
+        'config.yaml:17: warning: litellm_settings.drop_parms: unknown key, did you mean "drop_params"? '
+        "(in an included file)",
     ]

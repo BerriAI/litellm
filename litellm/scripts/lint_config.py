@@ -338,15 +338,35 @@ def _with_includes(config: Mapping[str, object], config_path: Path) -> Mapping[s
         return resolve_include_file_path(include_file, declared_in, root)
 
     async def read(file_path: str) -> Mapping[str, object]:
-        text: Final = Path(file_path).read_text(encoding="utf-8")
-        node: Final = yaml.compose(text, Loader=yaml.SafeLoader)
-        events: Final = _node_events(node, ()) if node is not None else ()
-        duplicate: Final = next((event for event in events if isinstance(event, Finding)), None)
-        if duplicate is not None:
-            raise ValueError(f"{file_path}:{duplicate.line}: duplicate key {_dotted(duplicate.path)}")
-        return _MAPPING.validate_python(yaml.safe_load(text))
+        return _MAPPING.validate_python(yaml.safe_load(Path(file_path).read_text(encoding="utf-8")))
 
     return asyncio.run(resolve_includes(config=config, location=root, resolve=resolve, read=read))
+
+
+def _included_files(pending: tuple[tuple[str, str], ...], seen: frozenset[str], root: str) -> tuple[str, ...]:
+    from litellm.proxy.common_utils.config_includes import include_entries, resolve_include_file_path
+
+    if not pending:
+        return ()
+    entry, declared_in = pending[0]
+    location: Final = resolve_include_file_path(entry, declared_in, root)
+    if location in seen:
+        return _included_files(pending[1:], seen, root)
+    included: Final = _mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or {}
+    nested: Final = tuple((nested_entry, location) for nested_entry in include_entries(included))
+    return (location, *_included_files((*pending[1:], *nested), seen | {location}, root))
+
+
+def _included_duplicates(location: str, line: int | None) -> Iterator[Finding]:
+    node: Final = yaml.compose(Path(location).read_text(encoding="utf-8"), Loader=yaml.SafeLoader)
+    for event in _node_events(node, ()) if node is not None else ():
+        if isinstance(event, Finding):
+            yield Finding(
+                "error",
+                ("include",),
+                f"{location}:{event.line}: duplicate key {_dotted(event.path)}, only the last value is used",
+                line,
+            )
 
 
 def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, ...]:
@@ -375,7 +395,15 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
     located: Final = (
         _located(found, lines, has_includes="include" in config) for found in lint_config(merged, environ)
     )
-    return tuple(sorted((*duplicates, *located), key=lambda found: (found.line or 0, found.severity)))
+    root: Final = str(config_path.resolve())
+    entries: Final = tuple((entry, root) for entry in _sequence(config.get("include")) or () if isinstance(entry, str))
+    included_duplicates: Final = itertools.chain.from_iterable(
+        _included_duplicates(location, lines.get(("include",)))
+        for location in _included_files(entries, frozenset(), root)
+    )
+    return tuple(
+        sorted((*duplicates, *included_duplicates, *located), key=lambda found: (found.line or 0, found.severity))
+    )
 
 
 def _located(found: Finding, lines: Mapping[PathKey, int], *, has_includes: bool) -> Finding:
