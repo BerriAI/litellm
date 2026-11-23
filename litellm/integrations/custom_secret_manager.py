@@ -87,7 +87,7 @@ class CustomSecretManager(BaseSecretManager):
     def __init__(
         self,
         secret_manager_name: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ):
         """
         Initialize the CustomSecretManager.
