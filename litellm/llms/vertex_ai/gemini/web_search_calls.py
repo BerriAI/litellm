@@ -12,7 +12,8 @@ _SEARCH_CALL_ID_KEY: Final = secrets.token_bytes(32)
 
 
 def _search_call_id(response_id: str, query: str) -> str:
-    return f"{response_id}_{hmac.new(_SEARCH_CALL_ID_KEY, query.encode(), hashlib.sha256).hexdigest()[:16]}"
+    digest: Final = hmac.new(_SEARCH_CALL_ID_KEY, f"{response_id}\0{query}".encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{response_id}_{digest}"
 
 
 def gemini_web_search_calls(response_id: str, queries: Sequence[str]) -> tuple[ResponseFunctionWebSearch, ...]:
