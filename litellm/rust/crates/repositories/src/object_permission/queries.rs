@@ -11,7 +11,7 @@ use crate::RawJson;
 #[derive(serde::Serialize)]
 pub struct ObjectPermission {
     pub object_permission_id: String,
-    pub mcp_servers: Vec<String>,
+    pub mcp_servers: Option<Vec<String>>,
     pub mcp_access_groups: Vec<String>,
     pub mcp_tool_permissions: Option<RawJson>,
     pub mcp_event_permissions: Option<RawJson>,
@@ -127,8 +127,36 @@ mod tests {
 
         assert_eq!(
             (found.mcp_servers, found.models, found.skills),
-            (vec![], vec![], vec![])
+            (Some(vec![]), vec![], vec![])
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::inherited(true, None)]
+    #[case::explicit(false, Some(vec![]))]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn event_only_server_scope(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+        #[case] inherited: bool,
+        #[case] expected: Option<Vec<String>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(clippy::disallowed_methods, reason = "Fixture insert")]
+        sqlx::query(
+            r#"INSERT INTO "LiteLLM_ObjectPermissionTable"
+            (object_permission_id, mcp_event_permissions, mcp_event_scope_inherited)
+            VALUES ('event-scope', '{}', $1)"#,
+        )
+        .bind(inherited)
+        .execute(&mut *tx)
+        .await?;
+        let found = find_object_permission(&mut *tx, "event-scope")
+            .await?
+            .ok_or("row missing")?;
+        assert_eq!(found.mcp_servers, expected);
         Ok(())
     }
 
