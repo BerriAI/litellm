@@ -1,78 +1,15 @@
 from collections.abc import Mapping
-from itertools import product
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
 from pydantic import Field, TypeAdapter, ValidationError
 
-from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.rust_bridge._native import auth_managed_agent_route_allowed, auth_managed_route
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
-
-_MANAGED_REALTIME_ROUTES: Final = frozenset(
-    (
-        "/realtime",
-        "/v1/realtime",
-        "/openai/v1/realtime",
-        "/realtime/translations",
-        "/v1/realtime/translations",
-    )
-)
-_MANAGED_LIVE_ROUTES: Final = frozenset(("/live/sessions", "/v1/live/sessions", "/openai/v1/live/sessions"))
-_MANAGED_MODEL_ROUTES: Final = frozenset(
-    f"{prefix}/{operation}"
-    for prefix, operation in product(
-        ("", "/v1"),
-        (
-            "chat/completions",
-            "completions",
-            "embeddings",
-            "responses",
-            "messages",
-            "messages/count_tokens",
-            "images/generations",
-            "images/edits",
-            "audio/transcriptions",
-            "audio/speech",
-            "moderations",
-            "rerank",
-            "decisions",
-            "systemone",
-            "extraction",
-            "ocr",
-        ),
-    )
-) | frozenset(
-    (
-        "/openai/v1/responses",
-        "/v2/rerank",
-        "/claude_code_gateway/v1/messages",
-        "/claude_code_gateway/v1/messages/count_tokens",
-        "/cursor/chat/completions",
-    )
-)
-_MANAGED_MODEL_PATHS: Final = (
-    "/engines/{model:path}/chat/completions",
-    "/engines/{model:path}/completions",
-    "/engines/{model:path}/embeddings",
-    "/openai/deployments/{model:path}/chat/completions",
-    "/openai/deployments/{model:path}/completions",
-    "/openai/deployments/{model:path}/embeddings",
-    "/openai/deployments/{model:path}/images/generations",
-    "/openai/deployments/{model:path}/images/edits",
-    "/v1beta/models/{model_name:path}:countTokens",
-    "/v1beta/models/{model_name:path}:generateContent",
-    "/v1beta/models/{model_name:path}:streamGenerateContent",
-    "/models/{model_name:path}:countTokens",
-    "/models/{model_name:path}:generateContent",
-    "/models/{model_name:path}:streamGenerateContent",
-)
-_MANAGED_MCP_ROUTES: Final = tuple(
-    route for route in LiteLLMRoutes.mcp_inference_routes.value if route not in ("/token", "/introspect")
-)
-
 
 _MODEL_ROUTE_KINDS: Final[
     Mapping[str, Literal["image_generation", "image_edit", "moderation", "speech", "body", "path"]]
@@ -94,17 +31,7 @@ _MODEL_ROUTE_KINDS: Final[
 
 
 def managed_agent_route_allowed(route: str, method: str | None) -> bool:
-    from litellm.proxy.auth.route_checks import RouteChecks
-
-    if route in ("/agents", "/v1/agents"):
-        return method in (None, "GET", "HEAD")
-    if route in _MANAGED_REALTIME_ROUTES or route in _MANAGED_LIVE_ROUTES:
-        return method in (None, "GET")
-    if route in _MANAGED_MODEL_ROUTES or RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
-        return method in (None, "POST")
-    return RouteChecks.check_route_access(route, _MANAGED_MCP_ROUTES) or RouteChecks.check_route_access(
-        route, LiteLLMRoutes.agent_inference_routes.value
-    )
+    return auth_managed_agent_route_allowed(route, method)
 
 
 def managed_inference_request(
@@ -115,11 +42,8 @@ def managed_inference_request(
     path_model: object = None,
     query_model: object = None,
 ) -> dict[str, object]:
-    from litellm.proxy.auth.route_checks import RouteChecks
-
-    if route in _MANAGED_LIVE_ROUTES:
-        return dict(body)
-    if route in _MANAGED_REALTIME_ROUTES:
+    managed_route: Final = auth_managed_route(route)
+    if managed_route == "realtime":
         from litellm.proxy.common_utils.http_parsing_utils import resolve_realtime_route_model
 
         model: Final = resolve_realtime_route_model(
@@ -130,7 +54,7 @@ def managed_inference_request(
                 AgentIdentityFailure(message="Managed inference requires an explicit or configured model")
             )
         return {**body, "model": model}
-    if route not in _MANAGED_MODEL_ROUTES and not RouteChecks.check_route_access(route, _MANAGED_MODEL_PATHS):
+    if managed_route != "model":
         return dict(body)
     from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
 

@@ -1,4 +1,3 @@
-import { Page } from "@/components/shared/Page";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { parseAsString, useQueryState } from "nuqs";
 import React, { useCallback, useMemo, useState } from "react";
@@ -48,28 +47,28 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
     <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
   );
 
+  if (!selectedGuardrailId) {
+    return (
+      <GuardrailsOverview
+        accessToken={accessToken}
+        startDate={startDate}
+        endDate={endDate}
+        onSelectGuardrail={handleSelectGuardrail}
+        dateRangeControl={dateRangeControl}
+      />
+    );
+  }
+
   return (
-    <Page>
-      {!selectedGuardrailId ? (
-        <GuardrailsOverview
-          accessToken={accessToken}
-          startDate={startDate}
-          endDate={endDate}
-          onSelectGuardrail={handleSelectGuardrail}
-          dateRangeControl={dateRangeControl}
-        />
-      ) : (
-        <>
-          <div className="mb-4 flex items-center justify-end">{dateRangeControl}</div>
-          <GuardrailDetail
-            guardrailId={selectedGuardrailId}
-            onBack={handleBack}
-            accessToken={accessToken}
-            startDate={startDate}
-            endDate={endDate}
-          />
-        </>
-      )}
-    </Page>
+    <>
+      <div className="mb-4 flex items-center justify-end">{dateRangeControl}</div>
+      <GuardrailDetail
+        guardrailId={selectedGuardrailId}
+        onBack={handleBack}
+        accessToken={accessToken}
+        startDate={startDate}
+        endDate={endDate}
+      />
+    </>
   );
 }

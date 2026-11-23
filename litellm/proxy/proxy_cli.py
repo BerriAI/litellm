@@ -10,9 +10,10 @@ import subprocess
 import sys
 import urllib.parse as urlparse
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, Protocol
 
 import click
 import httpx
@@ -37,6 +38,7 @@ from litellm.types.llms.base import LiteLLMBaseModel
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from litellm.proxy.control_plane.main import Tls
     from litellm.proxy.rust_forward.peer import ASGIApp
     from litellm.proxy.rust_forward.server import PythonServer
 else:
@@ -79,7 +81,7 @@ def _build_db_connection_url_params(
     socket_timeout: float | None = None,
     disable_prepared_statements: bool = False,
     extra_params: dict | None = None,
-) -> dict:
+) -> dict[str, str | int | float]:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
@@ -91,7 +93,7 @@ def _build_db_connection_url_params(
     `extra_params` is an untyped passthrough — keys it provides win over the
     named arguments above, so it can be used to override any default we set here.
     """
-    params: Final[dict] = {
+    params: Final[dict[str, str | int | float]] = {
         "connection_limit": connection_limit,
     }
     if pool_timeout is not None:
@@ -268,7 +270,18 @@ WORKER_APP: Final = "litellm_cli.main:proxy_worker_app"
 WORKER_LOG_CONFIG_ENV: Final = "LITELLM_WORKER_LOG_CONFIG"
 _LOG_CONFIG: Final = TypeAdapter[str | Mapping[str, object]](str | Mapping[str, object])
 _LOG_CONFIG_FILE: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
+_GENERAL_SETTINGS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter[object](object)
+
+
+class _GunicornSettings(Protocol):
+    def __getattr__(self, name: str, /) -> object: ...
+
+
+def _gunicorn_settings() -> _GunicornSettings:
+    from gunicorn.config import Config as GunicornConfig
+
+    return GunicornConfig()
 
 
 class ProxyInitializationHelpers:
@@ -280,7 +293,7 @@ class ProxyInitializationHelpers:
     _echo_litellm_version = echo_litellm_version
 
     @staticmethod
-    def run_health_check(host, port):
+    def run_health_check(host: str, port: int):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
@@ -330,7 +343,7 @@ class ProxyInitializationHelpers:
     def run_test_chat_completion(
         host: str,
         port: int,
-        model: str,
+        model: str | None,
         test: bool | str,
     ):
         request_model: Final = model or "gpt-3.5-turbo"
@@ -597,8 +610,8 @@ class ProxyInitializationHelpers:
         app: FastAPI,
         host: str,
         port: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         ciphers: str | None = None,
     ):
         """
@@ -685,8 +698,8 @@ class ProxyInitializationHelpers:
         port: int,
         app: "ASGIApp",
         num_workers: int,
-        ssl_certfile_path: str,
-        ssl_keyfile_path: str,
+        ssl_certfile_path: str | None,
+        ssl_keyfile_path: str | None,
         max_requests_before_restart: int | None = None,
         max_requests_before_restart_jitter: int | None = None,
         max_request_header_size: int | None = None,
@@ -848,12 +861,19 @@ class ProxyInitializationHelpers:
         run_hypercorn: bool,
         run_granian: bool,
         tls: bool,
+        config: str | None,
     ) -> "PythonServer":
         """``run_gunicorn_server`` never hands ``--keepalive_timeout`` or forwarded IPs to gunicorn, so its workers keep
         gunicorn's keep-alive and gunicorn's trusted proxies, which include ``::1`` where uvicorn's do not."""
         import uvicorn
 
-        from litellm.proxy.rust_forward.server import Listener, PythonServer, Server, uvicorn_trusted_proxies
+        from litellm.proxy.rust_forward.server import (
+            Listener,
+            PythonServer,
+            Server,
+            local_config_path,
+            uvicorn_trusted_proxies,
+        )
         from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         server: Final = (
@@ -883,19 +903,16 @@ class ProxyInitializationHelpers:
             keepalive_seconds=keepalive,
             graceful_timeout_seconds=GracefulShutdownManager.get_timeout(),
             trusted_proxies=trusted_proxies,
+            config_path=local_config_path(config, os.environ),
         )
 
     @staticmethod
     def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
         """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
-        from gunicorn.config import Config as GunicornConfig
-
-        config: Final = GunicornConfig()
-        keepalive: Final[object] = config.keepalive
-        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
+        config: Final = _gunicorn_settings()
         return (
-            TypeAdapter(int).validate_python(keepalive),
-            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+            TypeAdapter(int).validate_python(config.keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),
         )
 
     @staticmethod
@@ -926,7 +943,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: dict | None,
+        litellm_settings: Mapping[str, object] | None,
         prometheus_metrics_port: int | None = None,
     ) -> str | None:
         """
@@ -956,6 +973,57 @@ class ProxyInitializationHelpers:
         return multiproc_dir
 
     _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
+
+
+def control_plane_requested(control_plane: bool, skip_server_startup: bool, utility_command: bool = False) -> bool:
+    return control_plane and not utility_command
+
+
+class _ControlPlaneLicense(Protocol):
+    def is_premium(self) -> bool: ...
+
+
+def _decrypt_env_var() -> Mapping[str, str | bool]:
+    from litellm.secret_managers.aws_secret_manager import decrypt_env_var
+
+    return decrypt_env_var()
+
+
+def _control_plane_license_check() -> _ControlPlaneLicense:
+    from litellm.proxy.auth.litellm_license import LicenseCheck
+
+    return LicenseCheck()
+
+
+def _migrate_control_plane() -> None:
+    from litellm.proxy.control_plane.store.migrate import migrate_from_environment
+
+    migrate_from_environment()
+
+
+@dataclass(frozen=True, slots=True)
+class CliDependencies:
+    decrypt_env: Callable[[], Mapping[str, str | bool]] = _decrypt_env_var
+    license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
+    migrate_control_plane: Callable[[], None] = _migrate_control_plane
+
+
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str | bool]]) -> None:
+    if os.getenv("USE_AWS_KMS") != "True":
+        return
+
+    for key, value in decrypt_env().items():
+        os.environ[key] = value  # pyright: ignore[reportArgumentType]  # environ raises its own TypeError for a bool
+
+
+def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":
+    from litellm.proxy.control_plane.main import Tls
+
+    if ssl_keyfile_path is None and ssl_certfile_path is None:
+        return None
+    if ssl_keyfile_path is None or ssl_certfile_path is None:
+        raise click.UsageError("--control-plane needs both --ssl_keyfile_path and --ssl_certfile_path for TLS")
+    return Tls(keyfile=ssl_keyfile_path, certfile=ssl_certfile_path)
 
 
 @click.command()
@@ -1266,6 +1334,17 @@ class ProxyInitializationHelpers:
     envvar="USE_V2_MIGRATION_RESOLVER",
 )
 @click.option(
+    "--control-plane",
+    "control_plane",
+    is_flag=True,
+    default=False,
+    envvar="LITELLM_CONTROL_PLANE",
+    help=(
+        "Serve the global control plane API instead of the proxy, on the same image. Enterprise only, "
+        "refuses to start without LITELLM_LICENSE. Configure with CONTROL_PLANE_* env vars."
+    ),
+)
+@click.option(
     "--use_legacy_migration_resolver",
     is_flag=True,
     default=False,
@@ -1295,51 +1374,53 @@ class ProxyInitializationHelpers:
     ),
     envvar="PROMETHEUS_METRICS_PORT",
 )
+@click.pass_context
 def run_server(
-    cli_args,
+    ctx: click.Context,
+    cli_args: tuple[str, ...],
     host: str,
     port: int,
-    api_base,
-    api_version,
-    model,
-    alias,
-    add_key,
-    headers,
-    save,
-    debug,
-    detailed_debug,
-    temperature,
-    max_tokens,
-    request_timeout,
-    drop_params,
-    add_function_to_prompt,
-    config,
-    max_budget,
-    test,
-    local,
+    api_base: str | None,
+    api_version: str,
+    model: str | None,
+    alias: str | None,
+    add_key: str | None,
+    headers: str | None,
+    save: bool,
+    debug: bool,
+    detailed_debug: bool,
+    temperature: float | None,
+    max_tokens: int | None,
+    request_timeout: int | None,
+    drop_params: bool,
+    add_function_to_prompt: bool,
+    config: str | None,
+    max_budget: float | None,
+    test: str | bool | None,
+    local: bool,
     num_workers: int,
-    granian_threads,
-    test_async,
-    iam_token_db_auth,
+    granian_threads: int | None,
+    test_async: bool,
+    iam_token_db_auth: bool,
     azure_postgresql_auth: bool,
-    num_requests,
-    use_queue,
-    health,
-    setup,
-    version,
-    run_gunicorn,
-    run_hypercorn,
-    run_granian,
-    ssl_keyfile_path,
-    ssl_certfile_path,
-    ciphers,
-    log_config,
+    num_requests: int,
+    use_queue: bool,
+    health: bool,
+    setup: bool,
+    version: bool,
+    run_gunicorn: bool,
+    run_hypercorn: bool,
+    run_granian: bool,
+    ssl_keyfile_path: str | None,
+    ssl_certfile_path: str | None,
+    ciphers: str | None,
+    log_config: str | None,
     use_prisma_db_push: bool,
-    skip_server_startup,
+    skip_server_startup: bool,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
     keepalive_timeout: int | None,
-    timeout_worker_healthcheck,
+    timeout_worker_healthcheck: int | None,
     max_request_header_size: int | None,
     max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
@@ -1349,7 +1430,9 @@ def run_server(
     use_legacy_migration_resolver: bool,
     reload: bool,
     prometheus_metrics_port: int | None,
+    control_plane: bool,
 ):
+    dependencies: Final = ctx.find_object(CliDependencies) or CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator
@@ -1366,6 +1449,34 @@ def run_server(
         from litellm.setup_wizard import run_setup_wizard
 
         run_setup_wizard()
+        return
+    utility_command: Final = bool(
+        version or validate_config or health or test or check_migrations_against_existing_data
+    )
+    if control_plane_requested(control_plane, skip_server_startup, utility_command):
+        if skip_server_startup:
+            _decrypt_kms_env_vars(dependencies.decrypt_env)
+            dependencies.migrate_control_plane()
+            return
+        if num_workers > 1:
+            raise click.UsageError("scale the control plane with replicas.")
+        from litellm.proxy.control_plane.main import serve
+
+        if any((run_gunicorn, run_hypercorn, run_granian, reload)):
+            raise click.UsageError(
+                "--control-plane serves with plain uvicorn, drop --run_gunicorn, --run_hypercorn, --run_granian and --reload"
+            )
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
+        serve(
+            host=host,
+            port=port,
+            tls=control_plane_tls(ssl_keyfile_path, ssl_certfile_path),
+            license_check=dependencies.license_check,
+            limit_concurrency=limit_concurrency,
+            log_config=log_config,
+            keepalive_timeout=keepalive_timeout,
+            max_request_header_size=max_request_header_size,
+        )
         return
 
     from pydantic import ValidationError
@@ -1404,6 +1515,7 @@ def run_server(
             run_hypercorn=run_hypercorn is True,
             run_granian=run_granian is True,
             tls=None not in (ssl_keyfile_path, ssl_certfile_path),
+            config=config,
         )
         if prometheus_metrics_port == server.port:
             raise click.UsageError("--prometheus_metrics_port must differ from --port")
@@ -1513,17 +1625,7 @@ def run_server(
         if wants_rds_iam or wants_azure_entra:
             DatabaseURLSettings.from_env().apply_writer_url_to_env()
 
-        ### DECRYPT ENV VAR ###
-
-        from litellm.secret_managers.aws_secret_manager import decrypt_env_var
-
-        if os.getenv("USE_AWS_KMS", None) is not None and os.getenv("USE_AWS_KMS") == "True":
-            ## V2 IMPLEMENTATION OF AWS KMS - USER WANTS TO DECRYPT MULTIPLE KEYS IN THEIR ENV
-            new_env_var: Final = decrypt_env_var()
-
-            for k, v in new_env_var.items():
-                os.environ[k] = v
-
+        _decrypt_kms_env_vars(dependencies.decrypt_env)
         litellm_settings = None
         env_config_file: Final = os.environ.get("CONFIG_FILE_PATH")
         if (
@@ -1637,16 +1739,25 @@ def run_server(
             db_connection_timeout = LiteLLMDatabaseConnectionPool.database_connection_pool_timeout.value
 
         if os.getenv("DATABASE_URL", None) is not None or os.getenv("DIRECT_URL", None) is not None:
+            from litellm.proxy.db.connection_budget import (
+                RUST_READER_CONNECTIONS_ENV_VAR,
+                RUST_WRITER_CONNECTIONS_ENV_VAR,
+                ConnectionBudget,
+                UnsplittableConnectionLimit,
+                rust_writer_reserve,
+            )
             from litellm.proxy.db.db_url_settings import (
                 DISABLE_PREPARED_STATEMENTS_ENV_VAR,
                 add_missing_query_params,
                 idle_lifetime_params,
                 postgres_connection_budget_message,
+                prisma_default_params,
                 reader_shareable_params,
                 translate_libpq_ssl_params,
                 unsupported_db_scheme,
                 unsupported_db_scheme_message,
             )
+            from litellm.proxy.db.rust_spend_log_writer import spend_log_writer_runs_in_rust
 
             for _db_env in ("DATABASE_URL", "DIRECT_URL"):
                 _candidate_url = os.getenv(_db_env)
@@ -1676,7 +1787,44 @@ def run_server(
                 disable_prepared_statements=disable_prepared_statements,
                 extra_params=db_extra_connection_params,
             )
+            # The reader pool is a real pool against the same configured cap, so it
+            # gets the allowlisted pool params. Schema-affecting ones, including any
+            # the operator smuggled in through database_extra_connection_params, stay
+            # on the writer. Anything pinned on the replica URL wins, unlike the
+            # writer where the config is applied on top.
+            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
+            try:
+                writer_budget: Final = ConnectionBudget.of(
+                    "DATABASE_URL",
+                    connection_url_params["connection_limit"],
+                    rust_writer_reserve(
+                        spend_log_writer_runs_in_rust(_GENERAL_SETTINGS.validate_python(general_settings))
+                    ),
+                )
+                reader_budget: Final = (
+                    ConnectionBudget.of(
+                        "DATABASE_URL_READ_REPLICA",
+                        _url_query_value(read_replica_url, "connection_limit")
+                        or connection_url_params["connection_limit"],
+                    )
+                    if read_replica_url
+                    else None
+                )
+            except UnsplittableConnectionLimit as unsplittable:
+                print(
+                    terminal_text(f"\033[1;31mLiteLLM Proxy: {unsplittable}\033[0m"),
+                    file=sys.stderr,
+                    flush=True,
+                )
+                sys.exit(1)
+            os.environ[RUST_WRITER_CONNECTIONS_ENV_VAR] = str(writer_budget.rust)
+            if reader_budget is None:
+                os.environ.pop(RUST_READER_CONNECTIONS_ENV_VAR, None)
+            else:
+                os.environ[RUST_READER_CONNECTIONS_ENV_VAR] = str(reader_budget.rust)
+            prisma_url_params: Final = writer_budget.prisma_params(connection_url_params)
             lifetime_params: Final = idle_lifetime_params(general_settings.get("database_max_idle_connection_lifetime"))
+            prisma_defaults: Final = prisma_default_params(lifetime_params, writer_budget.rust)
             if os.getenv("DATABASE_URL", None) is not None:
                 database_url = get_secret("DATABASE_URL", default_value=None)
                 resolved_url: Final[str | None] = str(database_url) if database_url else None
@@ -1693,10 +1841,10 @@ def run_server(
                 )
                 modified_url = append_query_params(
                     writer_url,
-                    connection_url_params,
+                    dict(prisma_url_params),
                 )
                 os.environ["DATABASE_URL"] = translate_libpq_ssl_params(
-                    add_missing_query_params(modified_url, lifetime_params)
+                    add_missing_query_params(modified_url, prisma_defaults)
                 )
             if os.getenv("DIRECT_URL", None) is not None:
                 database_url = os.getenv("DIRECT_URL")
@@ -1704,40 +1852,39 @@ def run_server(
                 os.environ["DIRECT_URL"] = translate_libpq_ssl_params(
                     add_missing_query_params(modified_url, lifetime_params)
                 )
-            # The reader pool is a real pool against the same configured cap, so it
-            # gets the allowlisted pool params. Schema-affecting ones, including any
-            # the operator smuggled in through database_extra_connection_params, stay
-            # on the writer. Anything pinned on the replica URL wins, unlike the
-            # writer where the config is applied on top.
-            read_replica_url: Final[str | None] = os.getenv("DATABASE_URL_READ_REPLICA")
-            if read_replica_url:
+            if read_replica_url and reader_budget is not None:
                 reader_options: Final[str] = _pg_options_with_timeouts(
                     _url_query_value(read_replica_url, "options"),
                     db_statement_timeout,
                     db_lock_timeout,
                     db_idle_in_transaction_timeout,
                 )
+                reader_url: Final = (
+                    _with_query_value(read_replica_url, "options", reader_options)
+                    if reader_options
+                    else read_replica_url
+                )
                 os.environ["DATABASE_URL_READ_REPLICA"] = translate_libpq_ssl_params(
                     add_missing_query_params(
                         add_missing_query_params(
-                            _with_query_value(read_replica_url, "options", reader_options)
-                            if reader_options
-                            else read_replica_url,
-                            reader_shareable_params(connection_url_params),
+                            _with_query_value(reader_url, "connection_limit", str(reader_budget.python)),
+                            reader_shareable_params(prisma_url_params),
                         ),
-                        lifetime_params,
+                        prisma_defaults,
                     )
                 )
             print_startup_message(
                 postgres_connection_budget_message(
                     writer_limit=_url_query_value(os.getenv("DATABASE_URL"), "connection_limit")
                     or f"{db_connection_pool_limit}",
+                    rust_writer_limit=writer_budget.rust,
                     reader_limit=(
                         _url_query_value(os.getenv("DATABASE_URL_READ_REPLICA"), "connection_limit")
                         or f"{db_connection_pool_limit}"
                     )
                     if read_replica_url
                     else None,
+                    rust_reader_limit=0 if reader_budget is None else reader_budget.rust,
                     num_workers=f"{1 if run_hypercorn else num_workers}",
                 )
             )

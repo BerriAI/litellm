@@ -1,5 +1,6 @@
 import { ChevronDown } from "lucide-react";
 import React, { useState } from "react";
+import { v4 as uuidv4 } from "uuid";
 import type { ParseKeys, TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useComplexityScorerDefaults } from "@/app/(dashboard)/hooks/autoRouter/useComplexityScorerDefaults";
@@ -281,7 +282,7 @@ const HeuristicScoringConfig: React.FC<HeuristicScoringConfigProps> = ({ value, 
                         onAdd={() =>
                           changeWeights({
                             type: "add",
-                            row: { id: crypto.randomUUID(), name: "", weight: 0.1, scoring_mode: "match_count" },
+                            row: { id: uuidv4(), name: "", weight: 0.1, scoring_mode: "match_count" },
                           })
                         }
                         onRemove={(id) => changeWeights({ type: "remove", id })}

@@ -7,12 +7,16 @@ repository.workspace = true
 description = "Python data formats (repr, literal_eval, json.dumps, pickle) reproduced for interop with persisted LiteLLM state"
 
 [dependencies]
+base64.workspace = true
+litellm-host.workspace = true
 num-bigint = "0.4"
 num-traits = "0.2"
 serde.workspace = true
 serde-pickle = "1.2"
 serde_json = { workspace = true, features = ["preserve_order"] }
+serde_with.workspace = true
 thiserror.workspace = true
+unicode-general-category = "1.1"
 
 [dev-dependencies]
 criterion.workspace = true

@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  type QueryClient,
   useInfiniteQuery,
   useQuery,
   UseQueryResult,
@@ -39,6 +40,7 @@ export interface KeyListCallOptions {
   agentID?: string | null;
   selectedKeyAlias?: string | null;
   userID?: string | null;
+  ownerUserID?: string;
   keyHash?: string | null;
   search?: string | null;
   sortBy?: string | null;
@@ -63,7 +65,7 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         key_alias: options.selectedKeyAlias,
         key_hash: options.keyHash,
         search: options.search,
-        user_id: options.userID,
+        user_id: options.ownerUserID ?? options.userID,
         page,
         size: pageSize,
         sort_by: options.sortBy,
@@ -71,11 +73,11 @@ const keyListCall = async (accessToken: string, page: number, pageSize: number, 
         expand: options.expand,
         status: options.status,
         return_full_object: "true",
-        include_team_keys: "true",
-        include_created_by_keys: "true",
+        include_team_keys: String(!options.ownerUserID),
+        include_created_by_keys: String(!options.ownerUserID),
         // Opt into substring matching so the admin key-list search box keeps
         // matching partial user_id/key_alias. /key/list is exact by default.
-        substring_matching: "true",
+        substring_matching: String(!options.ownerUserID),
       })
         .filter(([, value]) => value !== undefined && value !== null)
         .map(([key, value]) => [key, String(value)]),
@@ -145,6 +147,12 @@ export const useInfiniteKeys = (pageSize: number, options: KeyListCallOptions = 
 };
 
 export const deletedKeyKeys = createQueryKeys("deletedKeys");
+
+export const invalidateKeyQueries = (queryClient: QueryClient) =>
+  Promise.allSettled(
+    [keyKeys, deletedKeyKeys, infiniteKeyKeys].map((keys) => queryClient.invalidateQueries({ queryKey: keys.all })),
+  );
+
 export const useDeletedKeys = (
   page: number,
   pageSize: number,

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Final, TypeAlias
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.model_cost_table import AliasedCostEntry
 from litellm.types.proxy.model_deprecation import (
@@ -61,9 +62,9 @@ def _cost_map_lookup(model_key: str | None, catalog: Mapping[str, object]) -> _R
     if model_key is None:
         return None
     entry: Final = litellm.model_cost.get(model_key)
-    if not isinstance(entry, Mapping):
+    fields: Final = as_str_mapping(entry)
+    if fields is None:
         return None
-    fields: Final[Mapping[str, object]] = entry
     parsed: Final = _parse_deprecation_date(fields.get("deprecation_date"))
     if parsed is None:
         return None
@@ -123,8 +124,8 @@ def _schedule_keys(provider: str | None, model_name: str | None) -> tuple[str | 
 
 
 def _mapping_field(deployment: Mapping[str, object], key: str) -> Mapping[str, object]:
-    value: Final = deployment.get(key)
-    return value if isinstance(value, Mapping) else _NO_MODEL_METADATA
+    value: Final = as_str_mapping(deployment.get(key))
+    return value if value is not None else _NO_MODEL_METADATA
 
 
 def _resolve_deployment_deprecation(

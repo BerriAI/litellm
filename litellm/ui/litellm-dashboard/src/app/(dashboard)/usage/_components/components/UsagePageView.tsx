@@ -6,7 +6,7 @@
  * Works at 1m+ spend logs, by querying an aggregate table instead.
  */
 
-import { Download, Link2, Search, X } from "lucide-react";
+import { BarChart3, Download, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -15,6 +15,8 @@ import { Trans, useTranslation } from "react-i18next";
 import { StackedUsageChart } from "@/components/shared/charts";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -457,16 +459,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   );
 
   return (
-    <div ref={pageRef} className="relative w-full px-4 pt-3 pb-8 sm:px-6">
-      <header className="mb-3 flex w-full flex-wrap items-center justify-between gap-3 border-b pb-3">
-        <UsageViewSelect
-          value={usageView}
-          onChange={(value) => void setUrlParams(usageViewPatch(value))}
-          userRole={userRole}
-          canViewTagUsage={canViewTagUsage}
-          isOrgAdmin={isOrgAdmin}
-        />
-        <div className="flex flex-wrap items-center gap-2">
+    <Page ref={pageRef} className="relative">
+      <PageHeader>
+        <PageHeaderTitle>
+          <BarChart3 />
+          {t("usage.viewSelect.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("usage.viewSelect.description")}</PageHeaderDescription>
+        <PageHeaderControls>
+          <UsageViewSelect
+            title={null}
+            value={usageView}
+            onChange={(value) => void setUrlParams(usageViewPatch(value))}
+            userRole={userRole}
+            canViewTagUsage={canViewTagUsage}
+            isOrgAdmin={isOrgAdmin}
+          />
           {isAdmin && usageView === "global" && (
             <div className="flex items-center gap-2">
               <div className="w-64">
@@ -480,393 +488,401 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
               <ClientUsageSelect value={selectedClient} onChange={openClientPanel} />
             </div>
           )}
-          <div className="flex items-center gap-2">
-            <AdvancedDatePicker
-              value={dateValue}
-              onValueChange={handleDateChange}
-              presetShortLabel={presetShortLabel}
-            />
-            <Button
-              variant="outline"
-              onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
-            >
-              <Link2 />
-              {t("usage.pageView.copyShareLink")}
-            </Button>
-          </div>
-        </div>
-      </header>
-      {aggregatedFailed && (
-        <ErrorState title={t("usage.pageView.spendLoadFailed")} message={aggregatedError} onRetry={reloadAggregated} />
-      )}
-      <div>
+          <AdvancedDatePicker
+            value={dateValue}
+            onValueChange={handleDateChange}
+            presetShortLabel={presetShortLabel}
+            className="max-w-full flex-wrap"
+          />
+          <Button
+            variant="outline"
+            onClick={() => void copyToClipboard(window.location.href, t("usage.pageView.linkCopied"))}
+          >
+            <Link2 />
+            {t("usage.pageView.copyShareLink")}
+          </Button>
+        </PageHeaderControls>
+      </PageHeader>
+      <PageContent>
+        {aggregatedFailed && (
+          <ErrorState
+            title={t("usage.pageView.spendLoadFailed")}
+            message={aggregatedError}
+            onRetry={reloadAggregated}
+          />
+        )}
         <div>
-          {/* Your Usage / Global Usage Panel */}
-          {(usageView === "global" || usageView === "my-usage") && (
-            <>
-              <Tabs
-                value={selectedTab}
-                onValueChange={(tab: string) => void setUrlParams(usageTabPatch(tab))}
-                className="gap-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <TabsList variant="line">
-                    <TabsTrigger value="cost" className="flex-none px-3">
-                      {t("usage.pageView.tabs.overview")}
-                    </TabsTrigger>
-                    <TabsTrigger value="models" className="flex-none px-3">
-                      {t("usage.pageView.tabs.modelActivity")}
-                    </TabsTrigger>
-                    <TabsTrigger value="keys" className="flex-none px-3">
-                      {t("usage.pageView.tabs.keyActivity")}
-                    </TabsTrigger>
-                    <TabsTrigger value="users" className="flex-none px-3">
-                      {t("usage.pageView.tabs.userActivity")}
-                    </TabsTrigger>
-                    <TabsTrigger value="mcp" className="flex-none px-3">
-                      {t("usage.pageView.tabs.mcpServerActivity")}
-                    </TabsTrigger>
-                    <TabsTrigger value="endpoints" className="flex-none px-3">
-                      {t("usage.pageView.tabs.endpointActivity")}
-                    </TabsTrigger>
-                    {isAdmin && (
-                      <TabsTrigger value="errors" className="flex-none px-3">
-                        {t("usage.pageView.tabs.errors")}
+          <div>
+            {/* Your Usage / Global Usage Panel */}
+            {(usageView === "global" || usageView === "my-usage") && (
+              <>
+                <Tabs
+                  value={selectedTab}
+                  onValueChange={(tab: string) => void setUrlParams(usageTabPatch(tab))}
+                  className="gap-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <TabsList variant="line">
+                      <TabsTrigger value="cost" className="flex-none px-3">
+                        {t("usage.pageView.tabs.overview")}
                       </TabsTrigger>
-                    )}
-                  </TabsList>
-                  <div className="flex items-center gap-2">
-                    <AriaUsageTrigger />
-                    <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
-                      <Download />
-                      {t("usage.pageView.exportData")}
-                    </Button>
-                  </div>
-                </div>
-                <TabsContent value="cost" keepMounted>
-                  <UsageOverview
-                    results={sortedDailyResults}
-                    totals={totals}
-                    loading={loading}
-                    requestCountsPending={requestCountsPending}
-                    budget={currentUser?.max_budget ?? null}
-                    subscriptionCosts={
-                      <SubscriptionCosts
-                        accessToken={accessToken}
-                        startTime={startTime}
-                        endTime={endTime}
-                        enabled={isAdmin && effectiveUserId === null}
-                        meteredSpend={totals.spend}
-                        canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
-                      />
-                    }
-                    topKeys={
-                      <TopKeyView
-                        topKeys={topKeys}
-                        teams={null}
-                        topKeysLimit={topKeysLimit}
-                        setTopKeysLimit={setTopKeysLimit}
-                      />
-                    }
-                    topUsers={<TopUsersView fetchUserPage={fetchUserPage} />}
-                    gatewayByEndpoint={
-                      gatewayActivity && gatewayActivity.by_route.length > 0 ? (
-                        <Panel
-                          testId="gateway-requests-by-endpoint"
-                          title={t("usage.pageView.gatewayByEndpoint.title")}
-                          subtitle={t("usage.pageView.gatewayByEndpoint.subtitle")}
-                          bodyClassName="px-2 pt-4"
-                        >
-                          <StackedUsageChart
-                            data={gatewayRequestsByRoute.map((row) => ({
-                              route: row.route,
-                              [t("usage.pageView.gatewayByEndpoint.successful")]: row.successful_requests,
-                              [t("usage.pageView.gatewayByEndpoint.failed")]: row.failed_requests,
-                            }))}
-                            series={[
-                              t("usage.pageView.gatewayByEndpoint.successful"),
-                              t("usage.pageView.gatewayByEndpoint.failed"),
-                            ]}
-                            colors={GATEWAY_ENDPOINT_COLORS}
-                            xKey="route"
-                            format={(value) => value.toLocaleString()}
-                            className="h-64"
-                          />
-                        </Panel>
-                      ) : null
-                    }
-                    topAgents={
-                      showTopAgents ? (
-                        <TopAgents
-                          rows={tagSummary}
-                          daily={tagDaily}
-                          loading={tagSummaryLoading || tagDailyLoading}
-                          totalTokens={totals.tokens}
-                          onOpenAgent={openAgentActivity}
-                        />
-                      ) : null
-                    }
-                    providerBreakdown={
-                      <SpendByProvider loading={loading} isDateChanging={false} providerSpend={providerSpend} />
-                    }
-                  />
-                </TabsContent>
-
-                {/* Activity Panel */}
-                <TabsContent value="models" keepMounted>
-                  <div className="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
-                    <InputGroup className="max-w-md">
-                      <InputGroupAddon>
-                        <Search className="size-4 text-muted-foreground" />
-                      </InputGroupAddon>
-                      <InputGroupInput
-                        aria-label={t("usage.pageView.modelSearch.label")}
-                        placeholder={t("usage.pageView.modelSearch.placeholder")}
-                        value={modelQuery}
-                        onChange={(event) => setModelQuery(event.target.value)}
-                      />
-                      {trimmedModelQuery !== "" && (
-                        <InputGroupAddon align="inline-end">
-                          <InputGroupButton
-                            size="icon-xs"
-                            aria-label={t("usage.pageView.modelSearch.clear")}
-                            onClick={() => setModelQuery("")}
-                          >
-                            <X />
-                          </InputGroupButton>
-                        </InputGroupAddon>
+                      <TabsTrigger value="models" className="flex-none px-3">
+                        {t("usage.pageView.tabs.modelActivity")}
+                      </TabsTrigger>
+                      <TabsTrigger value="keys" className="flex-none px-3">
+                        {t("usage.pageView.tabs.keyActivity")}
+                      </TabsTrigger>
+                      <TabsTrigger value="users" className="flex-none px-3">
+                        {t("usage.pageView.tabs.userActivity")}
+                      </TabsTrigger>
+                      <TabsTrigger value="mcp" className="flex-none px-3">
+                        {t("usage.pageView.tabs.mcpServerActivity")}
+                      </TabsTrigger>
+                      <TabsTrigger value="endpoints" className="flex-none px-3">
+                        {t("usage.pageView.tabs.endpointActivity")}
+                      </TabsTrigger>
+                      {isAdmin && (
+                        <TabsTrigger value="errors" className="flex-none px-3">
+                          {t("usage.pageView.tabs.errors")}
+                        </TabsTrigger>
                       )}
-                    </InputGroup>
-                    <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+                    </TabsList>
+                    <div className="flex items-center gap-2">
+                      <AriaUsageTrigger />
+                      <Button variant="outline" size="sm" onClick={() => setIsGlobalExportModalOpen(true)}>
+                        <Download />
+                        {t("usage.pageView.exportData")}
+                      </Button>
+                    </div>
                   </div>
-                  {trimmedModelQuery !== "" &&
-                  Object.keys(modelMetrics).length > 0 &&
-                  Object.keys(filteredModelMetrics).length === 0 ? (
-                    <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
-                      {t("usage.pageView.modelSearch.noMatch", { query: trimmedModelQuery })}
-                    </p>
-                  ) : (
-                    <ActivityMetrics
-                      modelMetrics={filteredModelMetrics}
-                      fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
-                    />
-                  )}
-                </TabsContent>
-                <TabsContent value="keys" keepMounted>
-                  <KeyActivityPanel
-                    summary={summaryMetrics}
-                    summaryLoading={loading}
-                    fetchKeyPage={fetchKeyPage}
-                    fetchKeyDetail={fetchKeyDetail}
-                    teams={teams}
-                    searchKeys={searchKeys}
-                  />
-                </TabsContent>
-                <TabsContent value="users" keepMounted>
-                  <UserActivityPanel fetchUserPage={fetchUserPage} />
-                </TabsContent>
-                <TabsContent value="mcp" keepMounted>
-                  <ActivityMetrics modelMetrics={mcpServerMetrics} />
-                </TabsContent>
-                <TabsContent value="endpoints" keepMounted>
-                  <EndpointUsage userSpendData={userSpendData} />
-                </TabsContent>
-                {isAdmin && (
-                  <TabsContent value="errors">
-                    <ErrorsTab
-                      activity={requestErrorActivity}
-                      loading={requestErrorActivity === null && !requestErrorsFailed}
-                      failed={requestErrorsFailed}
-                      userScoped={effectiveUserId !== null}
+                  <TabsContent value="cost" keepMounted>
+                    <UsageOverview
+                      results={sortedDailyResults}
+                      totals={totals}
+                      loading={loading}
+                      requestCountsPending={requestCountsPending}
+                      budget={currentUser?.max_budget ?? null}
+                      subscriptionCosts={
+                        <SubscriptionCosts
+                          accessToken={accessToken}
+                          startTime={startTime}
+                          endTime={endTime}
+                          enabled={isAdmin && effectiveUserId === null}
+                          meteredSpend={totals.spend}
+                          canEdit={!isViewOnly && isProxyAdminRole(userRole || "")}
+                        />
+                      }
+                      topKeys={
+                        <TopKeyView
+                          topKeys={topKeys}
+                          teams={null}
+                          topKeysLimit={topKeysLimit}
+                          setTopKeysLimit={setTopKeysLimit}
+                        />
+                      }
+                      topUsers={<TopUsersView fetchUserPage={fetchUserPage} />}
+                      gatewayByEndpoint={
+                        gatewayActivity && gatewayActivity.by_route.length > 0 ? (
+                          <Panel
+                            testId="gateway-requests-by-endpoint"
+                            title={t("usage.pageView.gatewayByEndpoint.title")}
+                            subtitle={t("usage.pageView.gatewayByEndpoint.subtitle")}
+                            bodyClassName="px-2 pt-4"
+                          >
+                            <StackedUsageChart
+                              data={gatewayRequestsByRoute.map((row) => ({
+                                route: row.route,
+                                [t("usage.pageView.gatewayByEndpoint.successful")]: row.successful_requests,
+                                [t("usage.pageView.gatewayByEndpoint.failed")]: row.failed_requests,
+                              }))}
+                              series={[
+                                t("usage.pageView.gatewayByEndpoint.successful"),
+                                t("usage.pageView.gatewayByEndpoint.failed"),
+                              ]}
+                              colors={GATEWAY_ENDPOINT_COLORS}
+                              xKey="route"
+                              format={(value) => value.toLocaleString()}
+                              className="h-64"
+                            />
+                          </Panel>
+                        ) : null
+                      }
+                      topAgents={
+                        showTopAgents ? (
+                          <TopAgents
+                            rows={tagSummary}
+                            daily={tagDaily}
+                            loading={tagSummaryLoading || tagDailyLoading}
+                            totalTokens={totals.tokens}
+                            onOpenAgent={openAgentActivity}
+                          />
+                        ) : null
+                      }
+                      providerBreakdown={
+                        <SpendByProvider loading={loading} isDateChanging={false} providerSpend={providerSpend} />
+                      }
                     />
                   </TabsContent>
-                )}
-              </Tabs>
-            </>
-          )}
-          {/* Organization Usage Panel */}
 
-          {usageView === "organization" && (
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="organization"
-              {...entitySelection("organization")}
-              userID={userID}
-              userRole={userRole}
-              isOrgAdmin={isOrgAdmin}
-              dateValue={dateValue}
-              entityList={
-                organizations?.map((organization) => ({
-                  label: organization.organization_alias,
-                  value: organization.organization_id,
-                })) || null
-              }
-              premiumUser={premiumUser}
-            />
-          )}
-
-          {/* Team Usage Panel */}
-          {usageView === "team" && (
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="team"
-              {...entitySelection("team")}
-              userID={userID}
-              userRole={userRole}
-              entityList={
-                teams?.map((team) => ({
-                  label: team.team_alias,
-                  value: team.team_id,
-                })) || null
-              }
-              premiumUser={premiumUser}
-              dateValue={dateValue}
-            />
-          )}
-
-          {/* Customer Usage Panel */}
-          {usageView === "customer" && (
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="customer"
-              {...entitySelection("customer")}
-              userID={userID}
-              userRole={userRole}
-              entityList={null}
-              premiumUser={premiumUser}
-              dateValue={dateValue}
-            />
-          )}
-          {/* Tag Usage Panel */}
-          {usageView === "tag" && (
-            <>
-              {showCredentialBanner && (
-                <Alert variant="info" className="mb-5">
-                  <AlertTitle>{t("usage.pageView.credentialBanner.title")}</AlertTitle>
-                  <AlertDescription className="text-inherit">
-                    <Trans
-                      i18nKey="usage.pageView.credentialBanner.description"
-                      components={{
-                        prefix: <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>,
-                      }}
+                  {/* Activity Panel */}
+                  <TabsContent value="models" keepMounted>
+                    <div className="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
+                      <InputGroup className="max-w-md">
+                        <InputGroupAddon>
+                          <Search className="size-4 text-muted-foreground" />
+                        </InputGroupAddon>
+                        <InputGroupInput
+                          aria-label={t("usage.pageView.modelSearch.label")}
+                          placeholder={t("usage.pageView.modelSearch.placeholder")}
+                          value={modelQuery}
+                          onChange={(event) => setModelQuery(event.target.value)}
+                        />
+                        {trimmedModelQuery !== "" && (
+                          <InputGroupAddon align="inline-end">
+                            <InputGroupButton
+                              size="icon-xs"
+                              aria-label={t("usage.pageView.modelSearch.clear")}
+                              onClick={() => setModelQuery("")}
+                            >
+                              <X />
+                            </InputGroupButton>
+                          </InputGroupAddon>
+                        )}
+                      </InputGroup>
+                      <ModelViewToggle value={modelViewType} onChange={setModelViewType} />
+                    </div>
+                    {trimmedModelQuery !== "" &&
+                    Object.keys(modelMetrics).length > 0 &&
+                    Object.keys(filteredModelMetrics).length === 0 ? (
+                      <p className="rounded-lg border p-6 text-center text-sm text-muted-foreground">
+                        {t("usage.pageView.modelSearch.noMatch", { query: trimmedModelQuery })}
+                      </p>
+                    ) : (
+                      <ActivityMetrics
+                        modelMetrics={filteredModelMetrics}
+                        fetchTopApiKeys={dailyActivityRequest ? fetchTopApiKeys : undefined}
+                      />
+                    )}
+                  </TabsContent>
+                  <TabsContent value="keys" keepMounted>
+                    <KeyActivityPanel
+                      summary={summaryMetrics}
+                      summaryLoading={loading}
+                      fetchKeyPage={fetchKeyPage}
+                      fetchKeyDetail={fetchKeyDetail}
+                      teams={teams}
+                      searchKeys={searchKeys}
                     />
-                  </AlertDescription>
-                  <AlertAction>
-                    <Button
-                      variant="ghost"
-                      size="icon-xs"
-                      aria-label={t("usage.pageView.credentialBanner.close")}
-                      onClick={() => setShowCredentialBanner(false)}
-                    >
-                      <X />
-                    </Button>
-                  </AlertAction>
-                </Alert>
-              )}
+                  </TabsContent>
+                  <TabsContent value="users" keepMounted>
+                    <UserActivityPanel fetchUserPage={fetchUserPage} />
+                  </TabsContent>
+                  <TabsContent value="mcp" keepMounted>
+                    <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                  </TabsContent>
+                  <TabsContent value="endpoints" keepMounted>
+                    <EndpointUsage userSpendData={userSpendData} />
+                  </TabsContent>
+                  {isAdmin && (
+                    <TabsContent value="errors">
+                      <ErrorsTab
+                        activity={requestErrorActivity}
+                        loading={requestErrorActivity === null && !requestErrorsFailed}
+                        failed={requestErrorsFailed}
+                        userScoped={effectiveUserId !== null}
+                      />
+                    </TabsContent>
+                  )}
+                </Tabs>
+              </>
+            )}
+            {/* Organization Usage Panel */}
+
+            {usageView === "organization" && (
               <EntityUsage
                 accessToken={accessToken}
-                entityType="tag"
-                {...entitySelection("tag")}
+                entityType="organization"
+                {...entitySelection("organization")}
                 userID={userID}
                 userRole={userRole}
-                entityList={allTags}
+                isOrgAdmin={isOrgAdmin}
+                dateValue={dateValue}
+                entityList={
+                  organizations?.map((organization) => ({
+                    label: organization.organization_alias,
+                    value: organization.organization_id,
+                  })) || null
+                }
+                premiumUser={premiumUser}
+              />
+            )}
+
+            {/* Team Usage Panel */}
+            {usageView === "team" && (
+              <EntityUsage
+                accessToken={accessToken}
+                entityType="team"
+                {...entitySelection("team")}
+                userID={userID}
+                userRole={userRole}
+                entityList={
+                  teams?.map((team) => ({
+                    label: team.team_alias,
+                    value: team.team_id,
+                  })) || null
+                }
                 premiumUser={premiumUser}
                 dateValue={dateValue}
               />
-            </>
-          )}
-          {usageView === "agent" && canViewAgentUsage && (
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="agent"
-              {...entitySelection("agent")}
-              userID={userID}
-              userRole={userRole}
-              entityList={
-                agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
-              }
-              premiumUser={premiumUser}
-              dateValue={dateValue}
-            />
-          )}
-          {/* User Usage Panel */}
-          {usageView === "user" && (
-            <EntityUsage
-              accessToken={accessToken}
-              entityType="user"
-              {...entitySelection("user")}
-              userID={userID}
-              userRole={userRole}
-              entityList={null}
-              premiumUser={premiumUser}
-              dateValue={dateValue}
-            />
-          )}
-          {/* User Agent Activity Panel */}
-          {usageView === "user-agent-activity" && (
-            <UserAgentActivity
-              accessToken={accessToken}
-              userRole={userRole}
-              dateValue={dateValue}
-              selectedTags={selectedEntitiesFromParams(urlParams, "tag")}
-              onSelectedTagsChange={(tags) => void setUrlParams(entitySelectionPatch("tag", tags))}
-            />
-          )}
+            )}
+
+            {/* Customer Usage Panel */}
+            {usageView === "customer" && (
+              <EntityUsage
+                accessToken={accessToken}
+                entityType="customer"
+                {...entitySelection("customer")}
+                userID={userID}
+                userRole={userRole}
+                entityList={null}
+                premiumUser={premiumUser}
+                dateValue={dateValue}
+              />
+            )}
+            {/* Tag Usage Panel */}
+            {usageView === "tag" && (
+              <>
+                {showCredentialBanner && (
+                  <Alert variant="info" className="mb-5">
+                    <AlertTitle>{t("usage.pageView.credentialBanner.title")}</AlertTitle>
+                    <AlertDescription className="text-inherit">
+                      <Trans
+                        i18nKey="usage.pageView.credentialBanner.description"
+                        components={{
+                          prefix: (
+                            <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-xs">Credential: </code>
+                          ),
+                        }}
+                      />
+                    </AlertDescription>
+                    <AlertAction>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        aria-label={t("usage.pageView.credentialBanner.close")}
+                        onClick={() => setShowCredentialBanner(false)}
+                      >
+                        <X />
+                      </Button>
+                    </AlertAction>
+                  </Alert>
+                )}
+                <EntityUsage
+                  accessToken={accessToken}
+                  entityType="tag"
+                  {...entitySelection("tag")}
+                  userID={userID}
+                  userRole={userRole}
+                  entityList={allTags}
+                  premiumUser={premiumUser}
+                  dateValue={dateValue}
+                />
+              </>
+            )}
+            {usageView === "agent" && canViewAgentUsage && (
+              <EntityUsage
+                accessToken={accessToken}
+                entityType="agent"
+                {...entitySelection("agent")}
+                userID={userID}
+                userRole={userRole}
+                entityList={
+                  agentsResponse?.agents?.map((agent) => ({ label: agent.agent_name, value: agent.agent_id })) || null
+                }
+                premiumUser={premiumUser}
+                dateValue={dateValue}
+              />
+            )}
+            {/* User Usage Panel */}
+            {usageView === "user" && (
+              <EntityUsage
+                accessToken={accessToken}
+                entityType="user"
+                {...entitySelection("user")}
+                userID={userID}
+                userRole={userRole}
+                entityList={null}
+                premiumUser={premiumUser}
+                dateValue={dateValue}
+              />
+            )}
+            {/* User Agent Activity Panel */}
+            {usageView === "user-agent-activity" && (
+              <UserAgentActivity
+                accessToken={accessToken}
+                userRole={userRole}
+                dateValue={dateValue}
+                selectedTags={selectedEntitiesFromParams(urlParams, "tag")}
+                onSelectedTagsChange={(tags) => void setUrlParams(entitySelectionPatch("tag", tags))}
+              />
+            )}
+          </div>
         </div>
-      </div>
 
-      {selectedClient && accessSettled && (
-        <ClientUsagePanel
-          client={selectedClient}
-          userId={clientUserId}
-          canChooseUser={clientScope.canChooseGlobalUser && clientTeamId === null}
-          teamId={clientTeamId}
-          scopeError={clientScope.error}
-          teams={usageView === "my-usage" ? [] : clientScope.administeredTeams}
-          members={clientScope.members}
-          defaultScopeLabel={
-            isAdmin ? t("usage.pageView.clientScope.allUsers") : t("usage.pageView.clientScope.myUsage")
-          }
-          onTeamChange={(teamId) => void setUrlParams({ client_team: teamId, client_user: "" }, { scroll: false })}
-          onUserChange={(userId) => void setUrlParams({ client_user: userId ?? "" }, { scroll: false })}
-          onClose={() => void setUrlParams(clientPanelPatch(null), { scroll: false })}
+        {selectedClient && accessSettled && (
+          <ClientUsagePanel
+            client={selectedClient}
+            userId={clientUserId}
+            canChooseUser={clientScope.canChooseGlobalUser && clientTeamId === null}
+            teamId={clientTeamId}
+            scopeError={clientScope.error}
+            teams={usageView === "my-usage" ? [] : clientScope.administeredTeams}
+            members={clientScope.members}
+            defaultScopeLabel={
+              isAdmin ? t("usage.pageView.clientScope.allUsers") : t("usage.pageView.clientScope.myUsage")
+            }
+            onTeamChange={(teamId) => void setUrlParams({ client_team: teamId, client_user: "" }, { scroll: false })}
+            onUserChange={(userId) => void setUrlParams({ client_user: userId ?? "" }, { scroll: false })}
+            onClose={() => void setUrlParams(clientPanelPatch(null), { scroll: false })}
+            accessToken={accessToken}
+            startTime={clientStartTime}
+            endTime={clientEndTime}
+            dateValue={clientDateValue}
+            presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
+            onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
+            agent={clientInheritsRange ? clientAgent : null}
+            daily={clientInheritsRange ? tagDaily : []}
+            colorSource={userSpendData.results}
+            loading={!accessSettled || tagSummaryLoading || tagDailyLoading}
+            summaryFailed={clientInheritsRange && tagSummaryFailed}
+            onRetry={() => void reloadTagSummary()}
+          />
+        )}
+
+        {/* CloudZero Export Modal */}
+        <CloudZeroExportModal
+          isOpen={isCloudZeroModalOpen}
+          onClose={() => setIsCloudZeroModalOpen(false)}
           accessToken={accessToken}
-          startTime={clientStartTime}
-          endTime={clientEndTime}
-          dateValue={clientDateValue}
-          presetShortLabel={client_range ?? (clientInheritsRange ? presetShortLabel : null)}
-          onDateChange={(value, preset) => void setUrlParams(clientDateRangePatch(value, preset), { scroll: false })}
-          agent={clientInheritsRange ? clientAgent : null}
-          daily={clientInheritsRange ? tagDaily : []}
-          colorSource={userSpendData.results}
-          loading={!accessSettled || tagSummaryLoading || tagDailyLoading}
-          summaryFailed={clientInheritsRange && tagSummaryFailed}
-          onRetry={() => void reloadTagSummary()}
         />
-      )}
 
-      {/* CloudZero Export Modal */}
-      <CloudZeroExportModal
-        isOpen={isCloudZeroModalOpen}
-        onClose={() => setIsCloudZeroModalOpen(false)}
-        accessToken={accessToken}
-      />
-
-      {/* Global Usage Export Modal */}
-      <EntityUsageExportModal
-        isOpen={isGlobalExportModalOpen}
-        onClose={() => setIsGlobalExportModalOpen(false)}
-        entityType="user"
-        onExport={(exportType, format) =>
-          dailyActivityRequest
-            ? ENTITY_API.user.exportRows(dailyActivityRequest, exportType, format)
-            : Promise.reject(new Error("Missing access token or date range"))
-        }
-        dateRange={dateValue}
-        selectedFilters={[]}
-        customTitle={t("usage.pageView.exportTitle")}
-      />
-    </div>
+        {/* Global Usage Export Modal */}
+        <EntityUsageExportModal
+          isOpen={isGlobalExportModalOpen}
+          onClose={() => setIsGlobalExportModalOpen(false)}
+          entityType="user"
+          onExport={(exportType, format, includeMetadata) =>
+            dailyActivityRequest
+              ? ENTITY_API.user.exportRows(dailyActivityRequest, exportType, format, includeMetadata)
+              : Promise.reject(new Error("Missing access token or date range"))
+          }
+          dateRange={dateValue}
+          selectedFilters={[]}
+          customTitle={t("usage.pageView.exportTitle")}
+          canIncludeMetadata={isAdmin}
+        />
+      </PageContent>
+    </Page>
   );
 };
 

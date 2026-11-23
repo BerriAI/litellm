@@ -1,0 +1,32 @@
+name: Keep Handwritten PR Description
+
+# Agents that rewrite a PR body from the template reset the author's handwritten description to the
+# placeholder. This puts the author's text back. Fork PRs are skipped because their token cannot edit
+# the PR, and the agents that do this push branches to this repo.
+
+on:
+  pull_request:
+    types: [edited]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+
+jobs:
+  restore:
+    name: Restore handwritten description
+    if: github.event.changes.body && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Restore the author's text if the edit replaced it with the placeholder
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/restore_handwritten_description.py

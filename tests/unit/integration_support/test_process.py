@@ -39,6 +39,7 @@ from tests.integration._support.process import (
     kill_stray_process,
     owned_environment,
     owned_proxy_process,
+    pool_limit_for_prisma,
     private_configuration,
     replacement_pid,
     stop_process_group,
@@ -119,9 +120,27 @@ def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserve
         "token_url": "http://127.0.0.1:8202/_oauth/token",
         "peer": "http://127.0.0.1:81910/v1",
         "custom": "http://127.0.0.1:9000/v1",
-        "general_settings": {"database_connection_pool_limit": 2},
+        "general_settings": {"database_connection_pool_limit": 6},
     }
     assert source.read_text() == original
+
+
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 6), (4, 8)))
+def test_pool_limit_for_prisma_leaves_prisma_its_connections_after_the_rust_share(prisma: int, limit: int) -> None:
+    assert pool_limit_for_prisma(prisma) == limit
+
+
+@pytest.mark.parametrize(("prisma", "limit"), ((1, 2), (2, 4), (4, 6)))
+def test_pool_limit_for_prisma_drops_the_spend_log_writer_reserve_when_the_ledger_is_off(
+    prisma: int, limit: int
+) -> None:
+    assert pool_limit_for_prisma(prisma, rust_spend_log_writer=False) == limit
+
+
+@pytest.mark.parametrize("prisma", (0, -1))
+def test_pool_limit_for_prisma_refuses_fewer_than_one_prisma_connection(prisma: int) -> None:
+    with pytest.raises(ValueError, match="at least one connection"):
+        pool_limit_for_prisma(prisma)
 
 
 @pytest.mark.parametrize("limit", (1, 5, 0, None, "", "bad"))
@@ -151,7 +170,7 @@ def test_worker_configuration_budgets_implicit_pools_without_changing_connection
     decoded: Final = TypeAdapter(dict[str, object]).validate_python(yaml.safe_load(configured.read_text()))
     assert decoded == {
         "general_settings": {
-            "database_connection_pool_limit": 2,
+            "database_connection_pool_limit": 6,
             "database_extra_connection_params": {"connection_limit": "1"},
         }
     }
@@ -394,6 +413,19 @@ def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
         )
     assert environment["DATABASE_URL"] == writer
     assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader
+
+
+@pytest.mark.parametrize("inherited", (None, "", "0"))
+@pytest.mark.parametrize("override", (None, ""))
+def test_owned_proxies_always_record_fatal_signal_stacks(inherited: str | None, override: str | None) -> None:
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = _proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"),
+            {} if override is None else {"PYTHONFAULTHANDLER": override},
+            (),
+            {} if inherited is None else {"PYTHONFAULTHANDLER": inherited},
+        )
+    assert environment["PYTHONFAULTHANDLER"] == "1"
 
 
 @pytest.mark.parametrize("explicit", (False, True))

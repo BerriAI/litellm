@@ -9,6 +9,7 @@ import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import { useKeyInfo } from "@/app/(dashboard)/hooks/keys/useKeyInfo";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import { fetchTeamMembersByUserId } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { regenerateKeyCall, teamInfoCall } from "../networking";
 
 // Resolve debounced values synchronously so an applied filter lands in the useKeys query within the test tick.
@@ -48,6 +49,8 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   teamKeys: { all: ["teams"] },
+  fetchTeamMembersByUserId: vi.fn(),
+  useTeam: vi.fn(() => ({ data: undefined, isPending: false, isError: false })),
   useAllTeams: vi.fn(() => ({
     data: [{ team_id: "team-1", team_alias: "Test Team" }],
     isLoading: false,
@@ -265,16 +268,23 @@ it("shows the team-member budget for a key without its own budget", async () => 
       team_alias: "Test Team",
       team_member_budget_table: { max_budget: 50, budget_duration: "30d" },
     },
-    team_memberships: [{ user_id: "user-1", litellm_budget_table: null }],
+    team_memberships: [],
   } as never);
+  vi.mocked(fetchTeamMembersByUserId).mockResolvedValue([
+    { user_id: "user-1", spend: 12, litellm_budget_table: null } as never,
+  ]);
   mockUseKeys.mockReturnValue(
     keysResult([{ ...mockKey, team_id: "member-budget-table-team", max_budget: null } as unknown as KeyResponse]),
   );
 
   renderWithProviders(<VirtualKeysTable />);
 
-  expect(await screen.findByText("· $0.00 of $50 (team member)")).toBeInTheDocument();
-  expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-table-team", { keyLimit: 1 });
+  expect(await screen.findByText("· $12.0000 of $50 (team member)")).toBeInTheDocument();
+  expect(teamInfoCall).toHaveBeenCalledWith("test-token", "member-budget-table-team", {
+    includeMembers: false,
+    keyLimit: 1,
+  });
+  expect(fetchTeamMembersByUserId).toHaveBeenCalledWith("test-token", "member-budget-table-team", ["user-1"]);
 
   await act(async () => {
     await testQueryClient.invalidateQueries({ queryKey: ["teams"] });
@@ -568,7 +578,8 @@ it("fetches the key by id when the URL has ?key= for a key not in the loaded pag
 it("shows a loading state while a deep-linked key is being fetched", () => {
   renderWithProviders(<VirtualKeysTable />, { searchParams: { key: "other-key-hash" } });
 
-  expect(screen.getByText("Loading key...")).toBeInTheDocument();
+  expect(screen.getByTestId("key-detail-skeleton")).toHaveAttribute("aria-busy", "true");
+  expect(screen.getByText("Back to Keys")).toBeInTheDocument();
   expect(screen.queryByTestId("pagination-range")).not.toBeInTheDocument();
 });
 

@@ -17,7 +17,6 @@ from litellm.constants import (
     MAX_S3_OBJECT_KEY_FILENAME_BYTES,
     S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
     S3_LOG_PROMPTS_ONLY_ENV_VAR,
-    S3_PARTITION_GRANULARITY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity
@@ -39,18 +38,6 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
         return True
 
 
-def resolve_s3_partition_granularity(
-    configured: object, environ: Mapping[str, str] | None = None
-) -> S3PartitionGranularity:
-    env: Final = os.environ if environ is None else environ
-    raw: Final = env.get(S3_PARTITION_GRANULARITY_ENV_VAR) if configured is None else configured
-    if raw == "hour":
-        return "hour"
-    if raw is not None and raw not in ("", "day"):
-        verbose_logger.warning("s3 logging: s3_partition_granularity=%r is not one of day, hour, using day", raw)
-    return "day"
-
-
 def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
     if configured is None or configured == "":
         return fallback
@@ -68,10 +55,6 @@ def _resolve_positive_int(setting: str, configured: object, fallback: int, *, re
         verbose_logger.warning("s3 logging: %s=%r must be at least 1, using %s", setting, configured, fallback)
         return fallback
     return bound
-
-
-def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback, reject_bool=False)
 
 
 def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
@@ -101,48 +84,6 @@ def resolve_s3_max_retry_age_seconds(configured: object, fallback: int | None) -
         )
         return fallback
     return bound or None
-
-
-def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback, reject_bool=True)
-
-
-def resolve_s3_drop_on_terminal_error(configured: object) -> bool:
-    if configured is None or configured == "":
-        return True
-    try:
-        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
-    except ValidationError:
-        verbose_logger.warning(
-            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, dropping terminal-failed uploads",
-            configured,
-        )
-        return True
-
-
-def resolve_s3_adaptive_concurrency(configured: object) -> bool:
-    if configured is None or configured == "":
-        return False
-    try:
-        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
-    except ValidationError:
-        verbose_logger.warning(
-            "s3 logging: s3_adaptive_concurrency=%r is not a boolean, keeping the fixed upload width",
-            configured,
-        )
-        return False
-
-
-def resolve_s3_batch_file_upload(configured: object) -> bool:
-    if configured is None or configured == "":
-        return False
-    try:
-        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
-    except ValidationError:
-        verbose_logger.warning(
-            "s3 logging: s3_batch_file_upload=%r is not a boolean, keeping per-request objects", configured
-        )
-        return False
 
 
 def prompts_only_payload(payload: StandardLoggingPayload) -> StandardLoggingPayload:

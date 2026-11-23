@@ -41,6 +41,7 @@ from litellm.proxy.proxy_server import (
     initialize,
 )
 from tests._master_key import MASTER_KEY
+from tests.integration._support.budget import readiness_seconds
 from tests.integration._support.ports import allocate_port
 from tests.integration._support.process import stop_child
 from tests.integration._support.timing import assert_enforced_within
@@ -362,7 +363,7 @@ def test_proxy_startup_failure_closes_acquired_resources(tmp_path: Path) -> None
         env={**os.environ, "LITELLM_MODE": "PRODUCTION", "PYTHON_DOTENV_DISABLED": "1"},
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=readiness_seconds(),
         check=False,
     )
     assert result.returncode == 0, result.stderr

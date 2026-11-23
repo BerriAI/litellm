@@ -4,14 +4,20 @@ use litellm_redis_types::{Auth, HealthCheck, ProviderHandle, Resolution, StaticA
 use serde_json::Value;
 
 mod auth;
+mod configured;
 mod endpoint;
 mod error;
 mod keys;
+mod layers;
 mod options;
+mod secrets;
+#[cfg(test)]
+mod surface_tests;
 mod tls;
 
+pub use configured::{Surface, resolve};
 pub use error::{Error, Expected, PythonException};
-pub use keys::{Asked, FromUrl, Handling, SETTINGS, Setting, setting};
+pub use keys::{Asked, Fallback, FromUrl, Handling, Kwarg, Read, Setting, When};
 pub use options::is_present;
 
 use options::Options;

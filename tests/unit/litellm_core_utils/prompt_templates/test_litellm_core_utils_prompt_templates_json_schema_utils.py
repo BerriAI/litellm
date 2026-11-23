@@ -1,8 +1,11 @@
 import functools
 import json
+import re
 import sys
 from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -557,17 +560,25 @@ class TestDropNonPythonRegexPatterns:
 
         assert drop_non_python_regex_patterns(schema) is schema
 
-    def test_regex_nested_past_what_python_re_can_parse_is_dropped_not_raised(self):
+    def test_regex_recursion_error_is_dropped_not_raised(self) -> None:
         from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
             drop_non_python_regex_patterns,
         )
 
-        schema = {
+        schema: Final = {
             "type": "object",
-            "properties": {"deep": {"type": "string", "pattern": "(" * 2000 + "a" + ")" * 2000}},
+            "properties": {"deep": {"type": "string", "pattern": "(a)"}},
         }
+        regex: Final = SimpleNamespace(
+            compile=Mock(side_effect=RecursionError("maximum recursion depth exceeded")),
+            error=re.error,
+        )
 
-        assert drop_non_python_regex_patterns(schema)["properties"]["deep"] == {"type": "string"}
+        with patch("litellm.litellm_core_utils.prompt_templates.json_schema_utils.re", regex):
+            result: Final = drop_non_python_regex_patterns(schema)
+
+        assert result == {"type": "object", "properties": {"deep": {"type": "string"}}}
+        assert schema == {"type": "object", "properties": {"deep": {"type": "string", "pattern": "(a)"}}}
 
     def test_walks_schemas_deeper_than_the_interpreter_recursion_limit(self):
         from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (

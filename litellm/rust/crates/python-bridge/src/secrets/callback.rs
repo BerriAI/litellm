@@ -1,6 +1,6 @@
 use std::{future::Future, pin::Pin, sync::Arc};
 
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_secret_value::SecretValue;
 use litellm_secrets::{

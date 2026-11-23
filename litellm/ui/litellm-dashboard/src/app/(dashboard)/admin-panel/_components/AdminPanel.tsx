@@ -1,3 +1,5 @@
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 /**
  * Allow proxy admin to add other people to view global spend
  * Use this to avoid sharing master key with others
@@ -8,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Info, TriangleAlert } from "lucide-react";
+import { Info, Settings, TriangleAlert } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useBaseUrl } from "@/components/constants";
@@ -430,11 +432,16 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
   ];
 
   return (
-    <div className="w-full m-2 mt-2 p-8">
-      <h2 className="mb-2 text-base font-semibold text-foreground">{t("adminPanel.page.title")}</h2>
-      <p className="mb-4 text-sm text-foreground">{t("adminPanel.page.subtitle")}</p>
-      <Tabs defaultValue={tabItems[0].key}>
-        <TabsList variant="line" className="mb-4 h-auto flex-wrap">
+    <PageContent>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Settings />
+          {t("shell.nav.items.adminSettings")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("adminPanel.page.subtitle")}</PageHeaderDescription>
+      </PageHeader>
+      <Tabs defaultValue={tabItems[0].key} className="gap-6">
+        <TabsList variant="line" className="h-auto max-w-full justify-start overflow-x-auto">
           {tabItems.map((item) => (
             <TabsTrigger key={item.key} value={item.key} className="flex-none">
               {item.label}
@@ -447,7 +454,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({ proxySettings }) => {
           </TabsContent>
         ))}
       </Tabs>
-    </div>
+    </PageContent>
   );
 };
 

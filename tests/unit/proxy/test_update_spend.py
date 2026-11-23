@@ -1,5 +1,6 @@
 import asyncio
 from unittest.mock import Mock
+from typing import Final
 from litellm.proxy.utils import get_redoc_url, get_docs_url
 
 import pytest
@@ -12,7 +13,10 @@ from unittest.mock import MagicMock, patch, AsyncMock
 import httpx
 import math
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_ROWS
-from litellm.proxy.utils import update_spend
+from litellm.proxy.db import baseline_accounting
+from litellm.proxy.spend_tracking.baseline_accounting import BaselineObservation
+from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot
+from litellm.proxy.utils import update_spend, update_spend_logs_job
 
 # The flush chunks the queue by BATCH_SIZE and then splits each chunk by the row
 # budget, so statement counts below are derived from both rather than hardcoded.
@@ -40,6 +44,7 @@ class MockPrismaClient:
         self.autorouter_turn_transactions = []
         self.baseline_accounting_transactions = []
         self.baseline_accounting_lock = asyncio.Lock()
+        self.baseline_accounting_recovery_due_at = 0.0
         self.spend_log_flush_requested = None
         self.db.tx = MagicMock()
         self.db.tx.return_value.__aenter__ = AsyncMock(return_value=self.db)
@@ -71,6 +76,95 @@ def create_mock_proxy_logging():
     )
     print("returning proxy logging obj")
     return proxy_logging_obj
+
+
+@pytest.mark.asyncio
+async def test_empty_flush_coalesces_baseline_recovery_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    times: Final = iter((10.0, 11.0, 16.0))
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
+    client: Final = MockPrismaClient()
+    logging: Final = create_mock_proxy_logging()
+
+    await update_spend_logs_job(client, None, logging)
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 1
+
+    await update_spend_logs_job(client, None, logging)
+    assert client.db.query_raw.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_queued_baseline_observation_is_persisted_during_recovery_cooldown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times: Final = iter((10.0, 11.0))
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: next(times))
+    client: Final = MockPrismaClient()
+    logging: Final = create_mock_proxy_logging()
+    record: Final = baseline_accounting.BaselineAccountingRecord(
+        scope="autorouter-baseline:v3:" + "a" * 64,
+        api_key="key",
+        session_id="session",
+        router_name="router",
+        baseline_model="baseline",
+        observation=BaselineObservation(
+            request_id="late-observation",
+            started_at=1.0,
+            available_at=2.0,
+            outcome="uncertain",
+            baseline_equivalent=False,
+        ),
+        pricing=BaselineCostSnapshot(model="routed", provider="anthropic", prices=None, actual_spend=0.0),
+        turn=None,
+        daily=None,
+    )
+
+    async def query(_statement: str, *args: object) -> list[dict[str, object]]:
+        if args == (record.scope,):
+            return [
+                {"revision": 0, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
+        return []
+
+    client.db.query_raw.side_effect = query
+    client.db.execute_raw.return_value = 1
+    await update_spend_logs_job(client, None, logging)
+    client.baseline_accounting_transactions = [record]
+    await update_spend_logs_job(client, None, logging)
+
+    writes: Final = [
+        (call.args[1], call.args[2])
+        for call in client.db.execute_raw.await_args_list
+        if 'INSERT INTO "LiteLLM_AutoRouterBaselineObservation"' in call.args[0]
+    ]
+    assert writes == [("late-observation", record.scope)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("claim_size", "expected_claims"), [(32, 2), (31, 1)])
+async def test_baseline_recovery_immediately_retries_a_full_claim(
+    monkeypatch: pytest.MonkeyPatch, claim_size: int, expected_claims: int
+) -> None:
+    monkeypatch.setattr(baseline_accounting, "monotonic", lambda: 10.0)
+    client: Final = MockPrismaClient()
+    client.spend_log_flush_requested = asyncio.Event()
+    claims: Final = iter(([{"scope": f"scope-{index}"} for index in range(claim_size)], [{"scope": "next"}]))
+
+    async def query(statement: str, *args: object) -> list[dict[str, object]]:
+        if not args:
+            return next(claims)
+        if "FOR UPDATE" in statement:
+            return [
+                {"revision": 1, "published_revision": 0, "initial_equivalent": True, "retired": False, "history": None}
+            ]
+        return []
+
+    client.db.query_raw.side_effect = query
+
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert client.spend_log_flush_requested.is_set() == (expected_claims == 2)
+    await baseline_accounting.flush_baseline_accounting(client)
+    assert sum(len(call.args) == 1 for call in client.db.query_raw.await_args_list) == expected_claims
 
 
 @pytest.mark.asyncio
