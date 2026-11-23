@@ -2435,6 +2435,41 @@ def _register_reranker(model: str, rates: dict[str, float]) -> None:
     litellm.register_model({model: {**rates, "litellm_provider": "cohere", "mode": "rerank"}})
 
 
+_SHARED_RERANKER: Final = "test-shared-reranker"
+
+
+@pytest.mark.parametrize("persist_across_reloads", [True, False])
+def test_rerank_cost_bills_the_reported_cost_when_a_bare_name_is_registered_for_another_provider(
+    persist_across_reloads: bool, _priced_test_reranker: None
+) -> None:
+    litellm.register_model(
+        {_SHARED_RERANKER: {"input_cost_per_query": 0.001, "litellm_provider": "jina_ai", "mode": "rerank"}},
+        persist_across_reloads=persist_across_reloads,
+    )
+
+    cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.004}), f"cohere/{_SHARED_RERANKER}")
+
+    assert cost == pytest.approx(0.004)
+
+
+@pytest.mark.parametrize("persist_across_reloads", [True, False])
+@pytest.mark.parametrize(
+    "provider_metadata",
+    [{"litellm_provider": "cohere"}, {}, {"litellm_provider": None}],
+)
+def test_rerank_cost_bills_a_bare_name_registration_that_matches_the_provider(
+    persist_across_reloads: bool, provider_metadata: Mapping[str, str | None], _priced_test_reranker: None
+) -> None:
+    litellm.register_model(
+        {_SHARED_RERANKER: {"input_cost_per_query": 0.001, "mode": "rerank", **provider_metadata}},
+        persist_across_reloads=persist_across_reloads,
+    )
+
+    cost: Final = _rerank_cost(_provider_usage_rerank({"cost": 0.5}), f"cohere/{_SHARED_RERANKER}")
+
+    assert cost == pytest.approx(_SEARCH_UNITS * 0.001)
+
+
 @pytest.mark.parametrize(
     ("rates", "expected"),
     [

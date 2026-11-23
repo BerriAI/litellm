@@ -181,6 +181,7 @@ from litellm.utils import (
     cached_get_model_info_helper,
     mapped_model_fill_missing,
     pricing_with_overrides,
+    provider_matched_runtime_model_cost_registrations,
     runtime_model_cost_registrations,
     token_counter,
     unmapped_model_generalization,
@@ -3166,7 +3167,7 @@ def _has_registered_rerank_price(call_type: str | None, model: str | None, custo
         return False
     return any(
         _cost_map_entry_prices_anything(entry)
-        for _, entry in runtime_model_cost_registrations(model, custom_llm_provider)
+        for _, entry in provider_matched_runtime_model_cost_registrations(model, custom_llm_provider)
     )
 
 

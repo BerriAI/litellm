@@ -294,3 +294,48 @@ async def test_scaleway_rerank_with_per_call_prices_keeps_the_zero_cost(
     response: Final = await _rerank_via_router(sync_mode, OPENROUTER_RERANK_BODY, respx_mock, pricing=pricing)
 
     assert response._hidden_params["response_cost"] == 0.0
+
+
+SHARED_RERANK_NAME: Final = "test-shared-reranker"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("persist", [True, False])
+@pytest.mark.parametrize("provider_from_catalog", [True, False])
+@pytest.mark.parametrize(
+    ("registered_provider", "expected"),
+    [("jina_ai", 4.8e-07), ("scaleway", 24 * 1e-06)],
+)
+async def test_scaleway_rerank_ignores_a_bare_name_registration_for_another_provider(
+    sync_mode: bool,
+    persist: bool,
+    provider_from_catalog: bool,
+    registered_provider: str,
+    expected: float,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if provider_from_catalog:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            SHARED_RERANK_NAME,
+            {"litellm_provider": registered_provider, "mode": "rerank", "input_cost_per_token": 2e-06},
+        )
+    provider_metadata: Final = {} if provider_from_catalog else {"litellm_provider": registered_provider}
+    litellm.register_model(
+        {
+            SHARED_RERANK_NAME: {
+                **provider_metadata,
+                "mode": "rerank",
+                "input_cost_per_token": 1e-06,
+            }
+        },
+        persist_across_reloads=persist,
+    )
+
+    response: Final = await _rerank_via_router(
+        sync_mode, TOKEN_REPORTED_BODY, respx_mock, model=f"scaleway/{SHARED_RERANK_NAME}"
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)

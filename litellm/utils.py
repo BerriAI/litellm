@@ -4624,6 +4624,19 @@ def runtime_model_cost_registrations(
     )
 
 
+def provider_matched_runtime_model_cost_registrations(
+    model: str, custom_llm_provider: str
+) -> tuple[tuple[str, Mapping[str, object]], ...]:
+    """``runtime_model_cost_registrations`` limited to rows whose effective provider, registered or inferred, passes
+    the same ``_check_provider_match`` a model info lookup applies."""
+    table: Final = _builtin_cost_map()
+    return tuple(
+        (key, fields)
+        for key, fields in runtime_model_cost_registrations(model, custom_llm_provider)
+        if _check_provider_match(dict(table.get(key) or {}), custom_llm_provider)
+    )
+
+
 class _LiveDeploymentReplay:
     """Single-slot holder for the callback that rebuilds live router deployments.
 
