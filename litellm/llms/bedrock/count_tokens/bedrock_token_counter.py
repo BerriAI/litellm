@@ -30,6 +30,7 @@ from litellm.llms.bedrock.common_utils import (
     strip_bedrock_routing_prefix,
 )
 from litellm.llms.bedrock.count_tokens.handler import (
+    BedrockCountTokensCredentialsError,
     BedrockCountTokensHandler,
     BedrockCountTokensRequestError,
     is_caller_refusal,
@@ -73,6 +74,7 @@ class CountTokensFailure:
     message: str
     tokenizer_type: str
     rejected_before_provider_call: bool = False
+    invalid_request: bool = False
 
 
 CountTokensOutcome = CountedTokens | CountTokensFailure
@@ -235,12 +237,13 @@ class BedrockTokenCounter(BaseTokenCounter):
                 client=self._client,
             )
             reply: Final = _CountTokensReply.model_validate(result)
-        except BedrockCountTokensRequestError as e:
+        except (BedrockCountTokensRequestError, BedrockCountTokensCredentialsError) as e:
             return CountTokensFailure(
                 status_code=e.status_code,
                 message=e.message,
                 tokenizer_type=tokenizer_type,
                 rejected_before_provider_call=True,
+                invalid_request=isinstance(e, BedrockCountTokensRequestError),
             )
         except BedrockError as e:
             verbose_logger.debug(
@@ -376,7 +379,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 )
             case CountTokensFailure():
                 refused_for_caller: Final = is_caller_refusal(
-                    outcome.status_code, outcome.message, outcome.rejected_before_provider_call
+                    outcome.status_code, outcome.message, outcome.invalid_request
                 )
                 verbose_logger.warning(
                     "%s CountTokens API error: status=%s, message=%s",
