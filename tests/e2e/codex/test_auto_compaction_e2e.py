@@ -26,6 +26,7 @@ class TestCodexAutoCompaction:
             cwd=workspace,
             compact_after_tokens=COMPACT_AFTER_TOKENS,
         )
+        assert first.exit_code == 0, first
         assert first.thread_id is not None, first
         (workspace / "secret.txt").unlink()
         second: Final = codex.resume(
@@ -35,5 +36,6 @@ class TestCodexAutoCompaction:
             cwd=workspace,
             compact_after_tokens=COMPACT_AFTER_TOKENS,
         )
+        assert second.exit_code == 0, second
         assert any(compaction.remote for compaction in codex.compactions(first.thread_id)), (first, second)
         assert marker in second.answer, second

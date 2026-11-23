@@ -221,9 +221,9 @@ from litellm.types.router_weights import RouterWeights, validate_router_weights
 
 _LateResponseT = TypeVar("_LateResponseT")
 _LlmCallT = TypeVar("_LlmCallT")
-_ResponseT: Final = TypeVar("_ResponseT")
-_ChunkT: Final = TypeVar("_ChunkT")
-_ProcessedT: Final = TypeVar("_ProcessedT")
+_ResponseT = TypeVar("_ResponseT")
+_ChunkT = TypeVar("_ChunkT")
+_ProcessedT = TypeVar("_ProcessedT")
 
 KNOWN_PROXY_ROUTES: Final = frozenset(
     route for member in LiteLLMRoutes for route in member.value if route.startswith("/")
@@ -1072,7 +1072,7 @@ async def _authorize_response_file_search_vector_stores(
         )
 
 
-async def _resolve_per_request_model_group_alias(
+async def resolve_per_request_model_group_alias(
     requested_model: object,
     router_settings: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
@@ -1105,6 +1105,14 @@ async def _resolve_per_request_model_group_alias(
     return target
 
 
+def saved_router_weights(router_settings: Mapping[str, object]) -> RouterWeights | None:
+    try:
+        return validate_router_weights(router_settings.get("weights"))
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
+        return None
+
+
 async def hierarchical_router_settings_updates(
     requested_model: object,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1134,16 +1142,9 @@ async def hierarchical_router_settings_updates(
     # If router_settings found (from key or team), apply them
     # Pass settings as per-request overrides instead of creating a new Router
     # This avoids expensive Router instantiation on each request
-    def validated_router_weights() -> RouterWeights | None:
-        try:
-            return validate_router_weights(router_settings.get("weights"))
-        except ValidationError:
-            verbose_proxy_logger.warning("Ignoring invalid saved router weights; update team/key router_settings")
-            return None
-
-    router_weights: Final = validated_router_weights()
+    router_weights: Final = saved_router_weights(router_settings)
     alias_target: Final = (
-        await _resolve_per_request_model_group_alias(
+        await resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings=router_settings,
             user_api_key_dict=user_api_key_dict,

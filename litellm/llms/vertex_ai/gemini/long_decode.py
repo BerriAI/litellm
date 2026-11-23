@@ -63,7 +63,7 @@ _CANDIDATE_COUNT_KEYS: Final = ("candidate_count", "candidateCount")
 LongDecodeHops: TypeAlias = tuple[GenerateContentResponseBody, ...]
 AsyncHopPost: TypeAlias = Callable[[RequestBody], Awaitable[httpx.Response]]
 SyncHopPost: TypeAlias = Callable[[RequestBody], httpx.Response]
-_Metadata: Final = TypeVar("_Metadata", bound=Mapping[str, object])
+_Metadata = TypeVar("_Metadata", bound=Mapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)

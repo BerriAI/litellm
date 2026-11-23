@@ -9,11 +9,6 @@ import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrgan
 import { useApplyUserBudgetToTeamKeys } from "@/app/(dashboard)/hooks/uiSettings/useApplyUserBudgetToTeamKeys";
 import type { Organization } from "../networking";
 
-// IMPORTANT: do not mock `@/utils/dataUtils` here. We want to exercise the
-// real `formatNumberWithCommas` so this test catches the LIT-2845 regression
-// where the overview "Spend" card formatted `max_budget` with the default 0
-// decimals, truncating sub-dollar budgets (e.g. $0.10) to "$0".
-
 vi.mock("next/navigation", () => ({
   usePathname: () => "/ui/",
   useRouter: () => ({ push: vi.fn() }),
@@ -183,6 +178,8 @@ const mockOrganizations = (organizations: Organization[]) =>
 
 const appliedBudgetRows = () => within(screen.getByTestId("applied-budgets")).queryAllByRole("listitem");
 
+const canStillSpend = () => screen.getByTestId("key-can-still-spend");
+
 describe("KeyInfoView overview budget display (LIT-2845)", () => {
   beforeEach(() => {
     vi.mocked(useTeams).mockReturnValue({ teams: [], setTeams: vi.fn() });
@@ -202,14 +199,10 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
       />,
     );
 
-    // Regression for LIT-2845: the overview card used to call
-    // `formatNumberWithCommas(max_budget)` with no second arg, which
-    // defaults to 0 decimals — so $0.10 rendered as "$0".
-    // After the fix it must render "$0.10".
-    await waitFor(() => {
-      expect(screen.getByText("of $0.10")).toBeInTheDocument();
-    });
-    expect(screen.queryByText(/of \$0$/)).not.toBeInTheDocument();
+    await screen.findByTestId("applied-budgets");
+    expect(appliedBudgetRows()[0]).toHaveTextContent("$0.0001 of $0.10");
+    expect(canStillSpend()).toHaveTextContent("$0.0999");
+    expect(canStillSpend()).toHaveTextContent("$0.0001 of $0.10 used");
   });
 
   it("still renders whole-dollar max_budget with 2-decimal precision", async () => {
@@ -222,13 +215,10 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      // 2-decimal formatting -> "$100.00"
-      expect(screen.getByText("of $100.00")).toBeInTheDocument();
-    });
+    expect(await screen.findByText("of $100.00")).toBeInTheDocument();
   });
 
-  it("renders 'Unlimited' when max_budget is null", async () => {
+  it("says nothing stops spend when max_budget is null and nothing else applies", async () => {
     renderWithProviders(
       <KeyInfoView
         keyData={{ ...MOCK_KEY_DATA, max_budget: null } as unknown as KeyResponse}
@@ -238,12 +228,13 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId("key-can-still-spend")).toHaveTextContent(
+      "No budget limits this key, so nothing stops its spend.",
+    );
+    expect(screen.getByTestId("key-period-spend")).toHaveTextContent("$0.0001");
   });
 
-  it("never pairs key spend with the team budget: shows Unlimited and lists the team budget under Budgets that apply", async () => {
+  it("never pairs key spend with the team budget: lists the team budget under Budgets that apply", async () => {
     vi.mocked(useTeams).mockReturnValue({
       teams: [makeTeam({ ...TEST_BUDGET_TEAM_FIELDS, spend: 300 })],
       setTeams: vi.fn(),
@@ -257,10 +248,9 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
-    expect(screen.queryByText("of $1,200.00")).not.toBeInTheDocument();
+    await screen.findByTestId("applied-budgets");
+    expect(screen.getByTestId("key-period-spend")).toHaveTextContent("$0.0001");
+    expect(canStillSpend()).toHaveTextContent("$900.00");
     const rows = appliedBudgetRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Test Budget");
@@ -286,9 +276,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
+    await screen.findByTestId("applied-budgets");
     const rows = appliedBudgetRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Acme Org");
@@ -319,9 +307,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
+    await screen.findByTestId("applied-budgets");
     const rows = appliedBudgetRows();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Budget Owner");
@@ -343,9 +329,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
+    await screen.findByTestId("applied-budgets");
     const card = screen.getByTestId("applied-budgets");
     expect(card).toHaveTextContent("Test Budget");
     expect(card).not.toHaveTextContent("Budget Owner");
@@ -366,9 +350,7 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
+    await screen.findByTestId("applied-budgets");
     const rows = appliedBudgetRows();
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Test Budget");
@@ -389,11 +371,11 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText(/of Unlimited/)).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("applied-budgets")).toHaveTextContent("No budget limits this key");
-    expect(appliedBudgetRows()).toHaveLength(0);
+    expect(await screen.findByTestId("key-spend-card")).toHaveTextContent(
+      "No budget limits this key. Spend is tracked but never blocked.",
+    );
+    expect(screen.queryByTestId("applied-budgets")).not.toBeInTheDocument();
+    expect(canStillSpend()).toHaveTextContent("nothing stops its spend");
   });
 
   it("keeps the team budget visible next to the key's own budget, since both are enforced", async () => {
@@ -408,16 +390,15 @@ describe("KeyInfoView overview budget display (LIT-2845)", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText("of $25.00")).toBeInTheDocument();
-    });
+    await screen.findByTestId("applied-budgets");
     const rows = appliedBudgetRows();
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("lit-2845-budget-display");
     expect(rows[0]).toHaveTextContent("$5.00 of $25.00");
-    expect(rows[0]).not.toHaveTextContent("Closest to limit");
     expect(rows[1]).toHaveTextContent("Test Budget");
-    expect(rows[1]).toHaveTextContent("Closest to limit");
+    expect(rows[1]).toHaveTextContent("$1,100.00 of $1,200.00");
+    expect(canStillSpend()).toHaveTextContent("$20.00");
+    expect(canStillSpend()).toHaveTextContent("before the key budget blocks this key");
   });
 });
 
@@ -445,9 +426,7 @@ describe("KeyInfoView budget reset visibility", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText("Resets Jul 22, 2026 at 12:00 PM UTC")).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId("key-spend-reset")).toHaveTextContent("Resets Jul 22, 2026 at 12:00 PM UTC");
   });
 
   it("omits the reset line from the overview Spend card when budget_reset_at is null", async () => {
@@ -460,9 +439,7 @@ describe("KeyInfoView budget reset visibility", () => {
         teams={[]}
       />,
     );
-    await waitFor(() => {
-      expect(screen.getByText("of $0.10")).toBeInTheDocument();
-    });
+    expect(await screen.findByTestId("key-spend-reset")).toHaveTextContent("Never resets.");
     expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
   });
 

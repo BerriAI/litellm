@@ -20,7 +20,10 @@ export function PageTabsList({ className, ...props }: ComponentProps<typeof Tabs
   return (
     <TabsList
       variant="line"
-      className={cn("h-9 w-full shrink-0 justify-start gap-6 overflow-x-auto border-b border-border p-0", className)}
+      className={cn(
+        "no-scrollbar scroll-fade-e h-9 w-full shrink-0 justify-start gap-6 overflow-x-auto border-b border-border p-0",
+        className,
+      )}
       {...props}
     />
   );
