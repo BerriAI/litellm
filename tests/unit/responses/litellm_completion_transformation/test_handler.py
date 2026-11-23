@@ -14,6 +14,7 @@ kwargs lack the flag and these tests fail.
 
 import inspect
 import json
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from itertools import chain
@@ -369,6 +370,23 @@ async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_b
         "previous_response_not_found",
     )
     assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_an_sdk_install_without_the_proxy_extras_gets_the_400_for_a_follow_up(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delitem(sys.modules, "litellm.proxy.proxy_server", raising=False)
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _bridged_follow_up(asynchronous, provider)
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
+    assert "LiteLLM proxy" in refused.value.message
 
 
 @pytest.mark.asyncio

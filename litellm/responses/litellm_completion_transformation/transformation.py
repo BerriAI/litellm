@@ -636,7 +636,8 @@ def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
 def _previous_response_not_found(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
     message: Final = (
         f"Previous response with id '{client_response_id}' not found. LiteLLM rebuilds this model's conversation "
-        "from its spend logs, which needs a database and `store_prompts_in_spend_logs: true`."
+        "from the LiteLLM proxy's spend logs, which needs a database, `disable_spend_logs` left off, "
+        "and `store_prompts_in_spend_logs: true`."
     )
     return BadRequestError(
         message=message,
