@@ -57,11 +57,11 @@ def _nova_canvas_task_body(
     image_b64: str,
     mask_b64: str | None,
     text: str,
-    negative_text: object,
-    similarity_strength: object,
-    task_type: object,
-    mask_prompt: object,
-    out_painting_mode: object,
+    negative_text: str | None,
+    similarity_strength: float | None,
+    task_type: str | None,
+    mask_prompt: str | None,
+    out_painting_mode: str | None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
@@ -143,7 +143,7 @@ def _nova_canvas_task_body(
     }
 
 
-def _file_types_to_b64(image: object) -> str:
+def _file_types_to_b64(image: FileTypes | Sequence[FileTypes | None] | None) -> str:
     """Encode OpenAI image input to base64 string for Nova Canvas."""
     if image is None:
         raise ValueError("Nova Canvas image edit requires an image input")
@@ -330,7 +330,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: Mapping[str, object],
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles]:
