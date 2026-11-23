@@ -84,15 +84,15 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         api_version: str = "",
         *,
         declared_reasoning_efforts: Collection[str] | None = None,
         reasoning_drop_logger: WarningLogger = verbose_logger,
-    ) -> dict:
+    ) -> dict[str, object]:
         return OpenAIGPT5Config.map_openai_params(
             self,
             non_default_params=non_default_params,
@@ -107,10 +107,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         model = model.replace(self.GPT5_SERIES_ROUTE, "")
         return super().transform_request(
             model=model,

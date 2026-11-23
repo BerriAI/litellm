@@ -11,6 +11,7 @@ import json
 import os
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from typing import Final, Literal
 
 from pydantic import TypeAdapter
@@ -34,7 +35,7 @@ class BudgetManager:
         project_name: str,
         client_type: str = "local",
         api_base: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, str] | None = None,
     ):
         self.client_type = client_type
         self.project_name = project_name
@@ -43,7 +44,7 @@ class BudgetManager:
         ## load the data or init the initial dictionaries
         self.load_data()
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             if litellm.set_verbose:
                 import logging
@@ -104,7 +105,7 @@ class BudgetManager:
         self._save_data_thread()  # [Non-Blocking] Update persistent storage without blocking execution
         return self.user_dict[user]
 
-    def projected_cost(self, model: str, messages: list, user: str):
+    def projected_cost(self, model: str, messages: Sequence[Mapping[str, str]], user: str):
         text: Final = "".join(message["content"] for message in messages)
         prompt_tokens: Final = litellm.token_counter(model=model, text=text)
         prompt_cost, _ = litellm.cost_per_token(model=model, prompt_tokens=prompt_tokens, completion_tokens=0)
@@ -166,10 +167,10 @@ class BudgetManager:
         self._save_data_thread()  # [Non-Blocking] Update persistent storage without blocking execution
         return {"user": self.user_dict[user]}
 
-    def get_current_cost(self, user):
+    def get_current_cost(self, user: str):
         return self.user_dict[user].get("current_cost", 0)
 
-    def get_model_cost(self, user):
+    def get_model_cost(self, user: str):
         return self.user_dict[user].get("model_cost", 0)
 
     def is_valid_user(self, user: str) -> bool:
@@ -178,7 +179,7 @@ class BudgetManager:
     def get_users(self):
         return list(self.user_dict.keys())
 
-    def reset_cost(self, user):
+    def reset_cost(self, user: str):
         """
         Reset the tracked spend for a user back to zero.
 
