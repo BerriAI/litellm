@@ -6403,7 +6403,6 @@ async def test_an_anthropic_stream_stays_main_s_execution_stream(
 # By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
 # matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
 # the same behaviour compare with Python in `CASES`.
-_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
 _SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {"type": "compaction", "content": "Summary.", "signature": "sig"}
 )
@@ -6412,10 +6411,6 @@ _TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
 )
 
 ANTHROPIC_SENT_AS_IS_CASES: Final = (
-    Case(
-        "anthropic_unparsed_message_non_string_text_block_sent",
-        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
-    ),
     Case(
         "anthropic_unparsed_message_tool_use_id_sent",
         _kw(

@@ -237,13 +237,9 @@ def test_native_request_rejections_map_to_the_public_400() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    ("custom_llm_provider", "llm_provider"),
-    ((None, ""), ("anthropic", "anthropic")),
-    ids=("provider-in-the-model", "provider-passed"),
-)
-def test_a_rejection_python_raises_before_resolving_the_provider_names_the_call_as_sent(
-    custom_llm_provider: str | None, llm_provider: str
+@pytest.mark.parametrize("custom_llm_provider", (None, "anthropic"), ids=("provider-in-the-model", "provider-passed"))
+def test_a_rejection_before_the_send_names_the_resolved_provider_and_is_raised_as_python_raises_it(
+    custom_llm_provider: str | None,
 ) -> None:
     rejected: Final = ValueError("messages: no message has content left after dropping empty or non-string text blocks")
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the native host sets
@@ -257,7 +253,8 @@ def test_a_rejection_python_raises_before_resolving_the_provider_names_the_call_
 
     assert isinstance(mapped, litellm.BadRequestError)
     assert mapped.status_code == 400
-    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", llm_provider)
+    assert (mapped.model, mapped.llm_provider) == ("anthropic/claude-sonnet-5", "anthropic")
+    assert mapped.__traceback__ is not None
 
 
 def test_stream_hidden_params_projects_upstream_headers_the_way_the_python_handler_does() -> None:

@@ -735,10 +735,8 @@ _MISSING_KEY: Final = (
 def _rejection(error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool) -> Exception:
     """The error Python's handler raises for a request it refuses before sending it."""
     if getattr(error, "messages_unresolved_rejection", False):
-        return litellm.BadRequestError(
-            message=str(error),
-            model=str(request["model"]),
-            llm_provider=optional_str(request.get("custom_llm_provider")) or "",
+        return _raised(
+            litellm.BadRequestError(message=str(error), model=str(request["model"]), llm_provider=request_provider)
         )
     metadata: Final = request.get("metadata")
     if isinstance(metadata, dict):
