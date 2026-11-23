@@ -375,7 +375,7 @@ class _StructuredMessagesReader(Protocol):
     def get_structured_messages(
         self,
         data: dict[str, object],  # mutable-ok: matches the request converters' existing dict parameter
-    ) -> list[AllMessageValues] | None: ...
+    ) -> Sequence[AllMessageValues] | None: ...
 
 
 def _structured_messages_reader(reader: Callable[[], _StructuredMessagesReader]) -> _StructuredMessagesReader:
@@ -665,7 +665,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         top-level ``system`` prompt and the ``tool_result`` blocks"""
         try:
             structured: Final = (
-                _structured_messages_reader(AnthropicMessagesHandler).get_structured_messages(dict(data)) or []
+                _structured_messages_reader(AnthropicMessagesHandler).get_structured_messages(dict(data)) or ()
             )
         except Exception as e:  # noqa: BLE001  # a request the translation cannot read is still scanned as before
             verbose_proxy_logger.warning(
