@@ -16,9 +16,15 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
     ToolCallAttributes,
 )
-from litellm.integrations.arize._utils import _coerce_response_obj_for_attrs, _parse_passthrough_response
+from litellm.integrations.arize._utils import (
+    ArizeOTELAttributes,
+    _coerce_response_obj_for_attrs,
+    _parse_passthrough_response,
+    set_attributes,
+)
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.utils import Choices, ModelResponse, StandardCallbackDynamicParams
 
 
@@ -1672,3 +1678,34 @@ def test_parse_passthrough_response_reads_only_json_objects_from_text(
     raw: object, coerced: object, kwargs: dict[str, object], expected: dict[str, object] | None
 ):
     assert _parse_passthrough_response(raw, coerced, kwargs) == expected
+
+
+@pytest.mark.parametrize(("input_tokens", "output_tokens"), [(12, 1), (12, 0), (0, 0)])
+def test_systemone_usage_emits_total_and_zero_token_counts(input_tokens: int, output_tokens: int) -> None:
+    response: Final = DecisionsResponse.model_validate(
+        {
+            "answers": {"is_allowed": {"type": "noul", "noul": 0.91}},
+            "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+        }
+    )
+    original: Final = response.model_dump()
+    provider: Final = TracerProvider()
+    span: Final = provider.get_tracer("systemone-usage-tests").start_span("litellm_request")
+    try:
+        set_attributes(
+            span,
+            {"call_type": "asystemone", "standard_logging_object": {"metadata": {}}, "litellm_params": {}},
+            response,
+            ArizeOTELAttributes,
+        )
+        attributes: Final = dict(getattr(span, "attributes", None) or {})
+
+        assert {key: value for key, value in attributes.items() if key.startswith("llm.token_count.")} == {
+            "llm.token_count.prompt": input_tokens,
+            "llm.token_count.completion": output_tokens,
+            "llm.token_count.total": input_tokens + output_tokens,
+        }
+        assert response.model_dump() == original
+    finally:
+        span.end()
+        provider.shutdown()
