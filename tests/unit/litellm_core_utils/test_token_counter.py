@@ -1105,6 +1105,7 @@ from litellm.utils import (
     _return_huggingface_tokenizer,
     _select_tokenizer_helper,
     encoding,
+    huggingface_tokenizer_may_download,
     without_huggingface_tokenizer_downloads,
 )
 
@@ -1408,6 +1409,18 @@ def _eventually(probe: Callable[[], bool]) -> bool:
             return True
         time.sleep(0.01)
     return False
+
+
+def test_a_hub_tokenizer_may_download_only_until_it_has_loaded_once():
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes()
+    before_loading: Final = huggingface_tokenizer_may_download(model, outcomes)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=sentinel.tokenizer):
+        _return_huggingface_tokenizer(model, outcomes)
+
+    assert before_loading
+    assert not huggingface_tokenizer_may_download(model, outcomes)
 
 
 def test_a_count_that_must_not_wait_on_a_download_uses_only_a_tokenizer_already_loaded():

@@ -1,5 +1,9 @@
 "use client";
 
+import { Page } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
+import { ShieldCheck } from "lucide-react";
+
 import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import useCan from "@/app/(dashboard)/hooks/useCan";
@@ -27,20 +31,25 @@ export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps)
 
   if (!canViewToolPolicies) {
     return (
-      <div className="p-6 w-full min-w-0 flex-1">
-        <h1 className="text-2xl font-semibold text-foreground mb-2">{t("toolPolicies.view.adminOnly.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("toolPolicies.view.adminOnly.message")}</p>
-      </div>
+      <Page>
+        <PageHeader>
+          <PageHeaderTitle>
+            <ShieldCheck />
+            {t("toolPolicies.view.adminOnly.title")}
+          </PageHeaderTitle>
+          <PageHeaderDescription>{t("toolPolicies.view.adminOnly.message")}</PageHeaderDescription>
+        </PageHeader>
+      </Page>
     );
   }
 
   return (
-    <div className="p-6 w-full min-w-0 flex-1">
+    <Page>
       {view.type === "detail" ? (
         <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
       ) : (
         <ToolPoliciesPanel accessToken={accessToken} onSelectTool={handleSelectTool} />
       )}
-    </div>
+    </Page>
   );
 }

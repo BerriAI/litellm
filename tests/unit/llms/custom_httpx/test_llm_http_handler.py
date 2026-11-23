@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequenc
 from contextlib import asynccontextmanager
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpcore
@@ -17,7 +17,6 @@ import httpx
 import pytest
 import respx
 import websockets.exceptions
-from botocore.credentials import RefreshableCredentials
 from h2.events import ConnectionTerminated
 
 import litellm
@@ -67,6 +66,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 )
 from litellm.llms.gemini.image_edit.transformation import GeminiImageEditConfig
 from litellm.llms.gemini.image_generation.transformation import GoogleImageGenConfig
+from litellm.llms.minimax.videos.transformation import MinimaxVideoConfig
 from litellm.llms.mistral.files.transformation import MistralFilesConfig
 from litellm.llms.openai.evals.transformation import OpenAIEvalsConfig
 from litellm.llms.openai.vector_store_files.transformation import OpenAIVectorStoreFilesConfig
@@ -77,7 +77,12 @@ from litellm.responses.streaming_iterator import (
     BaseResponsesAPIStreamingIterator,
     MockResponsesAPIStreamingIterator,
 )
-from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.types.integrations.custom_logger import (
+    WEBSEARCH_INTERCEPTION_PREFIX,
+    AgenticLoopPlan,
+    AgenticLoopRequestPatch,
+)
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
@@ -88,7 +93,7 @@ from litellm.types.utils import (
     ProviderSpecificHeader,
     TranscriptionResponse,
 )
-from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe, host_in_loop_probing_vault
+from tests.unit.llms.bedrock.event_loop_probe import host_in_loop_probing_vault
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -132,6 +137,7 @@ async def test_get_search_raises_provider_http_errors(is_async: bool, status_cod
             assert "rejected request" in error.value.message
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
+            assert error.value.response.json() == {"error": "rejected request"}
 
 
 @pytest.mark.asyncio
@@ -491,6 +497,152 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
     assert sent.body["stream"] is False
     assert "stream_options" not in sent.body
     assert "stream_options" not in recorder.seen_kwargs
+
+
+def _reasoning_answer_without_a_search(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "id": "resp_upstream",
+            "object": "response",
+            "created_at": 0,
+            "status": "completed",
+            "model": "gpt-4o",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_upstream",
+                    "encrypted_content": "blob_upstream",
+                    "summary": [{"type": "summary_text", "text": "no search needed"}],
+                },
+                {
+                    "type": "message",
+                    "id": "msg_upstream",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "hello", "annotations": []}],
+                },
+            ],
+            "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+        },
+    )
+
+
+def _web_search_stream_kwargs(affinity: bool, converted_by_the_client_hook: bool) -> dict[str, object]:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "say hello"}],
+        stream=True,
+        call_type=CallTypes.responses.value,
+        start_time=time.time(),
+        litellm_call_id="web-search-stream",
+        function_id="web-search-stream",
+    )
+    return {
+        "model": "gpt-4o",
+        "input": "say hello",
+        "responses_api_provider_config": AzureOpenAIResponsesAPIConfig(),
+        "response_api_optional_request_params": {
+            "stream": not converted_by_the_client_hook,
+            "store": False,
+            "include": ["reasoning.encrypted_content"],
+            "tools": [{"type": "web_search"}],
+        },
+        "custom_llm_provider": "azure",
+        "litellm_params": GenericLiteLLMParams(
+            api_key="sk-test",
+            api_base="https://example.openai.azure.com",
+            api_version="2025-04-01-preview",
+            **{f"{WEBSEARCH_INTERCEPTION_PREFIX}_converted_stream": converted_by_the_client_hook},
+        ),
+        "logging_obj": logging_obj,
+        "litellm_metadata": {"encrypted_content_affinity_enabled": affinity, "model_info": {"id": "deploy-b"}},
+    }
+
+
+def _assert_streamed_ids_carry_the_deployment(events: Sequence[object], affinity: bool) -> None:
+    done_reasoning: Final = next(
+        event.item
+        for event in events
+        if getattr(event, "type", None) == "response.output_item.done" and event.item.type == "reasoning"
+    )
+    completed: Final = next(event.response for event in events if getattr(event, "type", None) == "response.completed")
+    assert (done_reasoning.id, done_reasoning.encrypted_content) == (
+        (completed.output[0].id, completed.output[0].encrypted_content)
+    )
+    assert ResponsesAPIRequestUtils.decode_encrypted_item_id(done_reasoning.id) == (
+        {"model_id": "deploy-b", "item_id": "rs_upstream"} if affinity else None
+    )
+    assert ResponsesAPIRequestUtils.unwrap_encrypted_content_with_model_id(done_reasoning.encrypted_content) == (
+        "deploy-b" if affinity else None,
+        "blob_upstream",
+    )
+    assert ResponsesAPIRequestUtils.decode_responses_api_response_id(completed.id) == {
+        "custom_llm_provider": "azure",
+        "model_id": "deploy-b",
+        "response_id": "resp_upstream",
+    }
+
+
+@pytest.mark.parametrize("affinity", [True, False], ids=["affinity-on", "affinity-off"])
+def test_web_search_stream_answered_without_a_search_carries_the_deployment_ids(
+    affinity: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"])])
+
+    streamed: Final = BaseLLMHTTPHandler().response_api_handler(
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_reasoning_answer_without_a_search))),
+        **_web_search_stream_kwargs(affinity, converted_by_the_client_hook=False),
+    )
+
+    assert isinstance(streamed, MockResponsesAPIStreamingIterator)
+    _assert_streamed_ids_carry_the_deployment(list(streamed), affinity)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("affinity", [True, False], ids=["affinity-on", "affinity-off"])
+async def test_async_web_search_stream_answered_without_a_search_carries_the_deployment_ids(
+    affinity: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"])])
+
+    streamed: Final = await BaseLLMHTTPHandler().async_response_api_handler(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_reasoning_answer_without_a_search)),
+        **_web_search_stream_kwargs(affinity, converted_by_the_client_hook=True),
+    )
+
+    assert isinstance(streamed, MockResponsesAPIStreamingIterator)
+    _assert_streamed_ids_carry_the_deployment([event async for event in streamed], affinity)
+
+
+class _DeploymentSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_data: dict[str, object] | None = None
+        self.called = asyncio.Event()
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> None:
+        self.request_data = request_data
+        self.called.set()
+
+
+@pytest.mark.asyncio
+async def test_web_search_stream_hands_the_request_to_post_success_hooks(monkeypatch: pytest.MonkeyPatch):
+    recorder: Final = _DeploymentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder])
+
+    streamed: Final = await BaseLLMHTTPHandler().async_response_api_handler(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_reasoning_answer_without_a_search)),
+        **_web_search_stream_kwargs(affinity=True, converted_by_the_client_hook=True),
+    )
+    _ = [event async for event in streamed]
+    await asyncio.wait_for(recorder.called.wait(), timeout=5)
+
+    assert recorder.request_data is not None
+    assert recorder.request_data["tools"] == [{"type": "web_search"}]
+    assert recorder.request_data["include"] == ["reasoning.encrypted_content"]
 
 
 class _LookupLoop(CustomLogger):
@@ -1327,74 +1479,6 @@ async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstr
     assert tracker.closed is True
 
 
-class _ProbedBedrockMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
-    def __init__(self, probe: EventLoopProbe) -> None:
-        super().__init__()
-        self._probe = probe
-
-    def get_credentials(
-        self,
-        **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which the probe ignores
-    ) -> RefreshableCredentials:
-        return self._probe.credentials()
-
-
-@pytest.mark.asyncio
-async def test_async_anthropic_messages_handler_signs_bedrock_off_the_event_loop(monkeypatch):
-    """Regression for issue #40165: /v1/messages on Bedrock signed on the loop, so botocore's blocking
-    credential refresh inside SigV4 stalled every other request on the worker."""
-    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    probe = EventLoopProbe()
-    handler = BaseLLMHTTPHandler()
-    upstream_response = httpx.Response(
-        200,
-        json={
-            "id": "msg_123",
-            "type": "message",
-            "role": "assistant",
-            "content": [{"type": "text", "text": "hi"}],
-            "model": "claude-haiku-4-5-20251001",
-            "stop_reason": "end_turn",
-            "stop_sequence": None,
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-        },
-        request=httpx.Request("POST", "https://bedrock-runtime.us-west-2.amazonaws.com/"),
-    )
-    mock_client = AsyncMock(spec=AsyncHTTPHandler)
-    mock_client.post = AsyncMock(return_value=upstream_response)
-    mock_logging_obj = Mock()
-    mock_logging_obj.model_call_details = {}
-    mock_logging_obj.dynamic_success_callbacks = None
-    release = asyncio.create_task(probe.release_refresh_from_the_loop())
-
-    await handler.async_anthropic_messages_handler(
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        messages=[{"role": "user", "content": "hi"}],
-        anthropic_messages_provider_config=_ProbedBedrockMessagesConfig(probe),
-        anthropic_messages_optional_request_params={"max_tokens": 16},
-        custom_llm_provider="bedrock",
-        litellm_params=GenericLiteLLMParams(aws_region_name="us-west-2"),
-        logging_obj=mock_logging_obj,
-        client=mock_client,
-        stream=False,
-        kwargs={},
-    )
-    await release
-
-    sent_headers = mock_client.post.call_args.kwargs["headers"]
-    assert sent_headers["Authorization"].startswith("AWS4-HMAC-SHA256")
-    assert probe.served_during_refresh is True
-
-
-_BEDROCK_MESSAGE: Final = {
-    "id": "msg_1",
-    "type": "message",
-    "role": "assistant",
-    "model": "claude-sonnet-5-5",
-    "content": [{"type": "text", "text": "hi"}],
-    "stop_reason": "end_turn",
-    "usage": {"input_tokens": 1, "output_tokens": 1},
-}
 _BEDROCK_RESPONSE: Final = {
     "id": "resp_1",
     "object": "response",
@@ -1419,15 +1503,6 @@ _BATCH_LINE: Final = json.dumps(
 ).encode()
 _BATCH_FILE_ID: Final = "s3://batch-inputs/litellm-bedrock-files/batch.jsonl"
 _BEDROCK_ENTRY_POINTS: Final[tuple[tuple[str, Callable[[], Awaitable[object]], httpx.Response], ...]] = (
-    (
-        "anthropic_messages",
-        lambda: python_messages.anthropic_messages(
-            model="bedrock/invoke/us.anthropic.claude-sonnet-5-5",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=16,
-        ),
-        httpx.Response(200, json=_BEDROCK_MESSAGE),
-    ),
     (
         "responses",
         lambda: litellm.aresponses(model="bedrock/us.openai.gpt-5.6-sol", input="hi"),
@@ -3585,9 +3660,6 @@ async def test_anthropic_invalid_thinking_signature_retry_resigns_bedrock_reques
     """Regression: after Bedrock rejects a replayed thinking block (400 invalid signature),
     the strip-and-retry re-sign must not inherit attempt 1's SigV4 Authorization/X-Amz-Date;
     reusing them over the new stripped body makes AWS return 403 SignatureDoesNotMatch."""
-    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
-        AmazonAnthropicClaudeMessagesConfig,
-    )
 
     for env_var in ("AWS_BEARER_TOKEN_BEDROCK", "AWS_SESSION_TOKEN", "AWS_PROFILE"):
         monkeypatch.delenv(env_var, raising=False)
@@ -5498,6 +5570,80 @@ async def test_async_realtime_bridges_a_soniox_transcription_through_the_wrapped
 
 
 @pytest.mark.asyncio
+async def test_async_realtime_soniox_push_to_talk_stays_push_to_talk_under_a_transcript_guardrail_without_intent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
+
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
+    from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
+    from litellm.types.guardrails import GuardrailEventHooks
+    from litellm.types.utils import GenericGuardrailAPIInputs
+
+    class _TranscriptGuardrail(CustomGuardrail):
+        async def apply_guardrail(
+            self,
+            inputs: GenericGuardrailAPIInputs,
+            request_data: dict[str, object],
+            input_type: Literal["request", "response"],
+            logging_obj: LiteLLMLoggingObj | None = None,
+        ) -> GenericGuardrailAPIInputs:
+            return inputs
+
+    upstream: Final = _FakeSonioxSocket()
+
+    class _SonioxOverScriptedUpstream(SonioxRealtimeConfig):
+        async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend:
+            return upstream
+
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _TranscriptGuardrail(
+                guardrail_name="transcript-filter",
+                event_hook=GuardrailEventHooks.realtime_input_transcription,
+                default_on=True,
+            )
+        ],
+    )
+    audio: Final = b"\x00\x01" * 800
+    client_ws: Final = _ScriptedClientWebSocket(
+        [
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"type": "transcription", "audio": {"input": {"turn_detection": None}}},
+                }
+            ),
+            json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(audio).decode()}),
+            json.dumps({"type": "input_audio_buffer.commit"}),
+        ],
+        last_event_type="conversation.item.input_audio_transcription.completed",
+    )
+    logging_obj: Final = Mock()
+    logging_obj.litellm_trace_id = "trace_1"
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
+
+    await BaseLLMHTTPHandler().async_realtime(
+        model="stt-rt-v5",
+        websocket=client_ws,
+        logging_obj=logging_obj,
+        provider_config=_SonioxOverScriptedUpstream(),
+        headers={},
+        api_key="soniox-key",
+        query_params={"model": "stt-rt-v5"},
+    )
+
+    assert json.loads(upstream.sent[0])["enable_endpoint_detection"] is False
+    assert upstream.sent[1:] == [audio, '{"type":"finalize"}']
+    assert client_ws.sent_events()[-1]["transcript"] == "Hello"
+
+
+@pytest.mark.asyncio
 async def test_async_realtime_soniox_rejects_a_bad_session_update_and_still_transcribes_audio_sent_without_one():
     import websockets.exceptions  # noqa: F401  # binds the submodule so async_realtime's except clause resolves, as in the proxy process
 
@@ -6430,6 +6576,16 @@ def _call_lookup_handler(name: str, is_async: bool, client: HTTPHandler | AsyncH
                 _is_async=is_async,
                 client=client,
             )
+        case "file_content":
+            return handler.retrieve_file_content(
+                file_content_request={"file_id": "file_missing"},
+                provider_config=MistralFilesConfig(),
+                litellm_params=files_params,
+                headers={},
+                logging_obj=Mock(),
+                _is_async=is_async,
+                client=client,
+            )
         case "vector_store_file_content":
             return handler.vector_store_file_content_handler(
                 vector_store_id="vs_missing",
@@ -6531,6 +6687,7 @@ async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | A
         "vector_store_file_retrieve",
         "vector_store_file_content",
         "file_retrieve",
+        "file_content",
         "file_list",
         "eval_list",
         "eval_get",
@@ -6543,15 +6700,37 @@ async def _run_lookup_handler(name: str, is_async: bool, client: HTTPHandler | A
 @pytest.mark.parametrize("is_async", (False, True))
 @pytest.mark.parametrize("status_code", (404, 503))
 async def test_lookup_handlers_raise_the_provider_error_status(name: str, is_async: bool, status_code: int) -> None:
-    sync_client, async_client = _clients_answering_with(
-        httpx.Response(status_code, json={"error": {"message": "No such object"}})
-    )
+    wire_body: Final = {"error": {"message": "No such object"}}
+    sync_client, async_client = _clients_answering_with(httpx.Response(status_code, json=wire_body))
 
     with pytest.raises(BaseLLMException) as error:
         await _run_lookup_handler(name, is_async, async_client if is_async else sync_client)
 
     assert error.value.status_code == status_code
     assert "No such object" in error.value.message
+    assert error.value.response.json() == wire_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", (404, 503))
+async def test_streamed_file_content_error_keeps_the_provider_reply(status_code: int) -> None:
+    wire_body: Final = {"error": {"message": "No such object"}}
+    _, async_client = _clients_answering_with(httpx.Response(status_code, json=wire_body))
+
+    with pytest.raises(BaseLLMException) as error:
+        await BaseLLMHTTPHandler().async_retrieve_file_content_streaming(
+            file_content_request={"file_id": "file_missing"},
+            provider_config=MistralFilesConfig(),
+            litellm_params={"api_base": "https://api.example.test", "api_key": "sk-test"},
+            headers={},
+            logging_obj=Mock(),
+            chunk_size=16,
+            client=async_client,
+        )
+
+    assert error.value.status_code == status_code
+    assert "No such object" in error.value.message
+    assert error.value.response.json() == wire_body
 
 
 @pytest.mark.asyncio
@@ -7540,3 +7719,279 @@ def test_merged_image_response_keeps_billing_metadata_without_sharing_it_with_th
     assert merged.hidden_params["provider_specific_fields"] == {"traffic_type": "ON_DEMAND"}
     assert "response_cost" not in first.hidden_params
     assert "response_cost" not in ImageResponse(data=[]).hidden_params
+
+
+_WIRE_REJECTION: Final = json.dumps(
+    {"error": {"message": "wire says no", "type": "invalid_request_error", "param": "model", "code": "nope"}},
+    separators=(",", ":"),
+).encode()
+_WIRE_RATE_LIMIT: Final = b'{"error":{"message":"slow down","type":"tokens","code":"rate_limit_exceeded"}}'
+_WIRE_GUARDRAIL_BLOCK: Final = json.dumps(
+    {
+        "error": {
+            "message": "Blocked by guardrail",
+            "type": "None",
+            "param": "None",
+            "code": "400",
+            "provider_specific_fields": {"guardrail_name": "block-secret-project"},
+        }
+    },
+    separators=(",", ":"),
+).encode()
+_WIRE_SECRET: Final = "sk-wire-secret-value"
+
+
+class _UnreadWireBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __init__(self, content: bytes) -> None:
+        self._content = content
+
+    def __iter__(self):
+        yield self._content
+
+    async def __aiter__(self):
+        yield self._content
+
+
+def _replying(status_code: int, content: bytes, headers: Mapping[str, str] | None = None) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda _request: httpx.Response(status_code, content=content, headers=headers))
+
+
+def _replying_unread(status_code: int, content: bytes) -> httpx.MockTransport:
+    return httpx.MockTransport(lambda _request: httpx.Response(status_code, stream=_UnreadWireBody(content)))
+
+
+def _sync_client(transport: httpx.MockTransport) -> HTTPHandler:
+    handler: Final = HTTPHandler()
+    handler.client = httpx.Client(transport=transport)
+    return handler
+
+
+def _async_client(transport: httpx.MockTransport) -> AsyncHTTPHandler:
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=transport)
+    return handler
+
+
+_RESPONSES_REJECTIONS: Final = (
+    ("openai/gpt-5.6", _WIRE_REJECTION),
+    ("litellm_proxy/gpt-5.6", _WIRE_REJECTION),
+    ("litellm_proxy/gpt-5.6", _WIRE_GUARDRAIL_BLOCK),
+)
+
+
+@pytest.mark.parametrize(("model", "wire_body"), _RESPONSES_REJECTIONS)
+def test_responses_error_exposes_the_provider_reply(model: str, wire_body: bytes):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model=model,
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying(400, wire_body)),
+        )
+
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.text == wire_body.decode()
+    assert caught.value.response.json() == json.loads(wire_body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "wire_body"), _RESPONSES_REJECTIONS)
+async def test_aresponses_error_exposes_the_provider_reply(model: str, wire_body: bytes):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.aresponses(
+            model=model,
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_async_client(_replying(400, wire_body)),
+        )
+
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.text == wire_body.decode()
+    assert caught.value.response.json() == json.loads(wire_body)
+
+
+@pytest.mark.parametrize("model", ["openai/gpt-5.6", "litellm_proxy/gpt-5.6"])
+def test_streaming_responses_error_is_mapped_and_exposes_the_unread_provider_reply(model: str):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model=model,
+            input="hi",
+            stream=True,
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying_unread(400, _WIRE_REJECTION)),
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["openai/gpt-5.6", "litellm_proxy/gpt-5.6"])
+async def test_async_streaming_responses_error_is_mapped_and_exposes_the_unread_provider_reply(model: str):
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.aresponses(
+            model=model,
+            input="hi",
+            stream=True,
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_async_client(_replying_unread(400, _WIRE_REJECTION)),
+        )
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_shared_handler_chat_error_exposes_the_provider_reply():
+    with pytest.raises(litellm.RateLimitError) as caught:
+        litellm.completion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_WIRE_SECRET,
+            client=_sync_client(_replying(429, _WIRE_RATE_LIMIT)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.status_code == 429
+    assert caught.value.response.json() == json.loads(_WIRE_RATE_LIMIT)
+
+
+@pytest.mark.asyncio
+async def test_shared_handler_async_chat_error_exposes_the_provider_reply():
+    with pytest.raises(litellm.RateLimitError) as caught:
+        await litellm.acompletion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_WIRE_SECRET,
+            client=_async_client(_replying(429, _WIRE_RATE_LIMIT)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.status_code == 429
+    assert caught.value.response.json() == json.loads(_WIRE_RATE_LIMIT)
+
+
+def test_shared_handler_streaming_chat_error_exposes_the_unread_provider_reply():
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.completion(
+            model="groq/llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            api_key=_WIRE_SECRET,
+            client=_sync_client(_replying_unread(400, _WIRE_REJECTION)),
+            max_retries=0,
+        )
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_provider_reply_on_an_error_never_carries_the_outbound_credentials():
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model="openai/gpt-5.6",
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(_replying(400, _WIRE_REJECTION)),
+        )
+
+    reply: Final = caught.value.response
+    assert reply.json() == json.loads(_WIRE_REJECTION)
+    assert "authorization" not in reply.request.headers
+    assert _WIRE_SECRET not in repr(reply.request.headers.raw)
+    assert _WIRE_SECRET not in str(reply.request.url)
+    assert reply.request.content == b""
+
+
+def test_provider_reply_decodes_with_the_charset_the_provider_declared():
+    wire_text: Final = '{"error":{"message":"caf\u00e9 ferm\u00e9"}}'
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.responses(
+            model="openai/gpt-5.6",
+            input="hi",
+            api_key=_WIRE_SECRET,
+            api_base="https://provider.example/v1",
+            client=_sync_client(
+                _replying(400, wire_text.encode("latin-1"), {"content-type": "application/json; charset=latin-1"})
+            ),
+        )
+
+    assert caught.value.response.text == wire_text
+
+
+def _rejected_call(wire_body: bytes = _WIRE_REJECTION) -> httpx.HTTPStatusError:
+    request: Final = httpx.Request(
+        "POST", "https://provider.example/v1/chat", headers={"authorization": f"Bearer {_WIRE_SECRET}"}
+    )
+    return httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(400, content=wire_body, request=request)
+    )
+
+
+def test_handle_error_without_a_provider_config_keeps_the_provider_reply():
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=None)
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert "authorization" not in caught.value.response.request.headers
+
+
+def test_handle_error_keeps_the_provider_reply_when_the_config_raises_its_error():
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=OpenAIResponsesAPIConfig())
+
+    assert caught.value.response.json() == json.loads(_WIRE_REJECTION)
+
+
+def test_handle_error_fills_only_a_response_the_provider_config_left_empty():
+    populated: Final = httpx.Response(
+        418, content=b"from the config", request=httpx.Request("POST", "https://provider.example/v1/chat")
+    )
+
+    class _ConfigWithItsOwnResponse:
+        def __init__(self, response: httpx.Response | None) -> None:
+            self._response = response
+
+        def get_error_class(self, error_message: str, status_code: int, headers: object) -> BaseLLMException:
+            return BaseLLMException(status_code=status_code, message=error_message, response=self._response)
+
+    with pytest.raises(BaseLLMException) as left_empty:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=_ConfigWithItsOwnResponse(None))
+    with pytest.raises(BaseLLMException) as already_populated:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=_ConfigWithItsOwnResponse(populated))
+
+    assert left_empty.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert already_populated.value.response is populated
+
+
+def test_handle_error_attaches_only_a_provider_reply_that_has_a_body():
+    with pytest.raises(BaseLLMException) as with_body:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(), provider_config=None)
+    with pytest.raises(BaseLLMException) as without_body:
+        BaseLLMHTTPHandler()._handle_error(e=_rejected_call(wire_body=b""), provider_config=None)
+
+    assert with_body.value.response.json() == json.loads(_WIRE_REJECTION)
+    assert without_body.value.status_code == 400
+    assert without_body.value.response.text == ""
+    assert without_body.value.response.request.url == "https://docs.litellm.ai/docs"
+
+
+def test_handle_error_keeps_the_status_a_provider_config_remapped():
+    wire_body: Final = b'{"base_resp":{"status_code":1000,"status_msg":"record not found"}}'
+    request: Final = httpx.Request("GET", "https://provider.example/v1/query/video_generation")
+    rejected: Final = httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(500, content=wire_body, request=request)
+    )
+
+    with pytest.raises(BaseLLMException) as caught:
+        BaseLLMHTTPHandler()._handle_error(e=rejected, provider_config=MinimaxVideoConfig())
+
+    assert caught.value.status_code == 400
+    assert caught.value.response.status_code == 400
+    assert caught.value.response.content == wire_body

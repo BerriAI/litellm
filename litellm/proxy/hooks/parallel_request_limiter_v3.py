@@ -45,6 +45,11 @@ from litellm.constants import (
     RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY,
 )
 from litellm.exceptions import ServiceUnavailableError
+from litellm.google_genai.adapters.transformation import (
+    generate_content_body_to_completion,
+    google_genai_config_field,
+    google_genai_request_config,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
@@ -1018,10 +1023,8 @@ def _extraction_input_text(data: Mapping[str, object]) -> str:
 
 
 def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
-    if not isinstance(data, dict):
-        return None
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config: Final = data.get("config") if "config" in data else data.get("generationConfig")
+        config: Final = google_genai_request_config(data)
         google_cap_values: Final = tuple(
             parsed
             for field in ("maxOutputTokens", "max_output_tokens")
@@ -1030,6 +1033,8 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
             if parsed is not None
         )
         return max(google_cap_values, default=None)
+    if not isinstance(data, dict):
+        return None
     if call_type in RESPONSES_API_CALL_TYPES:
         responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
         if responses_cap is None:
@@ -1081,26 +1086,10 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
-    contents: Final = data.get("contents") if isinstance(data, dict) else None
-    if (
-        not isinstance(data, dict)
-        or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES
-        or not isinstance(contents, (dict, list))
-    ):
+    if not isinstance(data, dict) or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
         return None
-    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
-
-    config: Final = data.get("config") if "config" in data else data.get("generationConfig")
-    return GoogleGenAIAdapter().translate_generate_content_to_completion(
-        model=data.get("model") if isinstance(data.get("model"), str) else "",
-        contents=contents,
-        config=config if isinstance(config, dict) else None,
-        systemInstruction=data.get("systemInstruction"),
-        system_instruction=data.get("system_instruction"),
-        tools=data.get("tools"),
-        toolConfig=data.get("toolConfig"),
-        tool_config=data.get("tool_config"),
-    )
+    model: Final = data.get("model")
+    return generate_content_body_to_completion(body=data, model=model if isinstance(model, str) else "")
 
 
 def _has_explicit_output_cap(data: object, call_type: str | None) -> bool:
@@ -1432,13 +1421,9 @@ def no_max_tokens_output_floor(
 
 
 def get_output_candidate_count(data: object, call_type: str | None = None) -> int:
+    config: Final = google_genai_request_config(data) if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES else None
     if not isinstance(data, Mapping):
         return 1
-    config: Final = (
-        (data.get("config") if "config" in data else data.get("generationConfig"))
-        if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES
-        else None
-    )
     candidate_values: Final = (
         data.get("n"),
         data.get("best_of"),
@@ -1455,13 +1440,13 @@ def get_output_candidate_count(data: object, call_type: str | None = None) -> in
 
 
 def write_implicit_output_cap(data: object, call_type: str | None, effective_cap: int) -> bool:
+    google_config_field: Final = google_genai_config_field(data) or "config"
     if not isinstance(data, dict):
         return False
     if call_type in GOOGLE_GENAI_NATIVE_CALL_TYPES:
-        config_field: Final = "config" if "config" in data or "generationConfig" not in data else "generationConfig"
-        config: Final = data.get(config_field)
+        config: Final = data.get(google_config_field)
         if config is None or isinstance(config, dict):
-            data[config_field] = {  # rebind-ok: routed request needs cap
+            data[google_config_field] = {  # rebind-ok: routed request needs cap
                 **(config or {}),
                 "maxOutputTokens": effective_cap,
             }

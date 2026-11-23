@@ -31,6 +31,23 @@ pub fn lax_bool(value: &Value) -> Option<bool> {
     }
 }
 
+/// `TypeAdapter(float).validate_python(value)`, or `None` where pydantic raises `ValidationError`.
+/// A text value is read as `float(text)` reads it, which pydantic matches for the forms LiteLLM
+/// stores.
+pub fn lax_float(value: &Value) -> Option<f64> {
+    use num_traits::ToPrimitive;
+    match value {
+        Value::Float(number) => Some(*number),
+        Value::Int(number) => number.to_f64().filter(|number| number.is_finite()),
+        Value::Bool(flag) => Some(f64::from(u8::from(*flag))),
+        Value::Str(text) => crate::number::float(text),
+        Value::Bytes(bytes) => std::str::from_utf8(bytes)
+            .ok()
+            .and_then(crate::number::float),
+        _ => None,
+    }
+}
+
 /// `TypeAdapter(int).validate_python(value)`, or `None` where pydantic raises `ValidationError`.
 pub fn lax_int(value: &Value) -> Option<BigInt> {
     match value {

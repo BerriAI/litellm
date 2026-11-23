@@ -7,6 +7,7 @@ Every test builds its core through ``make_core`` on the ``host`` fixture, so it 
 import datetime
 import gc
 import io
+import traceback
 import weakref
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from typing import Final
@@ -24,6 +25,7 @@ from tests.unit.test_router.core.scripted_host import (
     completion_response,
     deployment,
     embedding_response,
+    rust_core,
     server_error,
 )
 
@@ -457,27 +459,96 @@ class _RequestState:
     pass
 
 
+class _BackoffInterrupted(BaseException):
+    pass
+
+
+class _InterruptedBackoffHost(ScriptedHost):
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+    def sleep_sync(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        raise _BackoffInterrupted("backoff interrupted")
+
+
+@pytest.mark.parametrize("endpoint", ["acompletion", "completion"])
+async def test_an_interrupted_retry_backoff_frees_its_request_without_a_gc_pass(endpoint: str) -> None:
+    host: Final = _InterruptedBackoffHost()
+    host.answer("openai/d1", _raise_server_error)
+    core: Final = rust_core(host, model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
+
+    async def interrupted_request() -> weakref.ReferenceType[_RequestState]:
+        state: Final = _RequestState()
+        with pytest.raises(_BackoffInterrupted, match="backoff interrupted"):
+            await core.call(endpoint, {"model": "g", "messages": MESSAGES, "metadata": {"state": state}})
+        assert host.deployments_called() == ["d1"]
+        assert len(host.sleeps) == 1
+        host.calls.clear()
+        host.raised.clear()
+        return weakref.ref(state)
+
+    gc.disable()
+    try:
+        assert (await interrupted_request())() is None
+    finally:
+        gc.enable()
+
+
+def _raise_server_error(**_kwargs: object) -> object:
+    raise server_error()
+
+
 async def _request_state_after_a_call(
-    core: RouterCore, host: ScriptedHost, endpoint: str
+    core: RouterCore, host: ScriptedHost, endpoint: str, outcome: str
 ) -> "weakref.ref[_RequestState]":
     state: Final = _RequestState()
-    _ = await core.call(endpoint, {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}})
+    request: Final = {"model": "g", "messages": MESSAGES, "max_tokens": 5, "metadata": {"state": state}}
+    if outcome in ("failed", "all_fail"):
+        with pytest.raises(litellm.InternalServerError) as raised:
+            await core.call(endpoint, request)
+        origin: Final = "_answer_sync" if endpoint == "completion" else "_answer_async"
+        assert origin in {frame.name for frame in traceback.extract_tb(raised.value.__traceback__)}
+        del raised
+    else:
+        _ = await core.call(endpoint, request)
+    assert [call.deployment_id for call in host.calls] == {
+        "success": ["d1"],
+        "recovered": ["d1", "d1"],
+        "failed": ["d1", "d1", "d2", "d2"],
+        "retry_then_ok": ["d1", "d1"],
+        "all_fail": ["d1", "d1", "d2", "d2"],
+    }[outcome]
     host.calls.clear()
     host.raised.clear()
     return weakref.ref(state)
 
 
 @pytest.mark.parametrize("endpoint", ["acompletion", "aanthropic_messages", "completion"])
-@pytest.mark.parametrize("retry_then_succeed", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "recovered", "failed", "retry_then_ok", "all_fail"])
 async def test_a_finished_call_frees_its_request_without_a_gc_pass(
-    make_core: MakeCore, host: ScriptedHost, endpoint: str, retry_then_succeed: bool
+    make_core: MakeCore, host: ScriptedHost, endpoint: str, outcome: str
 ):
-    if retry_then_succeed:
-        host.answer("openai/d1", server_error("d1"), None)
-    core: Final = make_core(model_list=[deployment("g", "d1")], num_retries=1, retry_after=0)
+    core: Final = make_core(
+        model_list=[deployment("g", "d1"), deployment("fallback", "d2")],
+        num_retries=1,
+        retry_after=0,
+        allowed_fails=100,
+        fallbacks=[{"g": ["fallback"]}],
+    )
+    if outcome == "failed":
+        host.answer("*", _raise_server_error)
+    elif outcome == "recovered":
+        host.answer("*", _raise_server_error, None)
+    elif outcome == "retry_then_ok":
+        host.answer("openai/d1", server_error("d1"), completion_response())
+    elif outcome == "all_fail":
+        host.answer("openai/d1", server_error("d1"))
+        host.answer("openai/d2", server_error("d2"))
     gc.disable()
     try:
-        state: Final = await _request_state_after_a_call(core, host, endpoint)
+        state: Final = await _request_state_after_a_call(core, host, endpoint, outcome)
         assert state() is None, "the finished call's request stays in a reference cycle until the next gc pass"
     finally:
         gc.enable()

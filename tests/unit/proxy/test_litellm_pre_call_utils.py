@@ -1345,7 +1345,9 @@ async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_l
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.guardrails.guardrail_hooks.presidio import OPTIONAL_PresidioPIIMasking
     from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_proxy_server_request_for_spend_logs_payload,
+    )
 
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     messages: Final = [{"role": "user", "content": "email probe@example.invalid"}]
@@ -8072,13 +8074,25 @@ async def test_add_litellm_data_to_request_stamps_used_client_oauth_token(path, 
     async def metadata_for(client_headers: dict) -> dict:
         request_mock = _make_request_mock(path, {"Content-Type": "application/json", **client_headers})
         updated = await add_litellm_data_to_request(
-            data={"model": "anthropic-claude", "messages": [{"role": "user", "content": "hello"}]},
+            data={
+                "model": "anthropic-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "metadata": {"used_client_oauth_token": True, "claude_subscription_usage": {"is_overage": False}},
+                "litellm_metadata": {
+                    "used_client_oauth_token": True,
+                    "claude_subscription_usage": {"is_overage": False},
+                },
+            },
             request=request_mock,
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
             proxy_config=MagicMock(),
             general_settings={"forward_client_headers_to_llm_api": True},
             version="test-version",
         )
+        other_metadata = "metadata" if metadata_variable_name == "litellm_metadata" else "litellm_metadata"
+        assert "used_client_oauth_token" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated.get(other_metadata, {})
+        assert "claude_subscription_usage" not in updated[metadata_variable_name]
         return updated[metadata_variable_name]
 
     def spend_log_row_metadata(request_metadata: dict) -> dict:
@@ -8584,6 +8598,70 @@ async def test_key_cache_metadata_only_keeps_request_controls_the_key_allows(
     )
 
     assert updated["cache"] == expected_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache_control_header, request_cache, allowed_cache_controls, expected_cache",
+    [
+        pytest.param("no-cache", None, [], {"no-cache": True}, id="no-cache-skips-the-cache-read"),
+        pytest.param("No-Cache", None, [], {"no-cache": True}, id="directive-names-in-any-case"),
+        pytest.param(
+            "max-age=0,no-cache", None, [], {"no-cache": True}, id="directives-without-a-space-after-the-comma"
+        ),
+        pytest.param("NO-STORE", None, [], {"no-store": True}, id="no-store-skips-the-cache-write"),
+        pytest.param(
+            "no-cache, no-store",
+            {"no-cache": False},
+            [],
+            {"no-cache": False, "no-store": True},
+            id="body-controls-win",
+        ),
+        pytest.param(
+            "no-cache, no-store", None, ["no-store"], {"no-store": True}, id="key-allowed-directives-are-kept"
+        ),
+        pytest.param("no-cache", None, ["ttl"], None, id="key-disallowed-directives-are-ignored-not-rejected"),
+        pytest.param("s-maxage=60, no-store", None, [], {"no-store": True}, id="s-maxage-leaves-the-body-ttl-alone"),
+    ],
+)
+async def test_cache_control_header_reaches_the_request_cache(
+    cache_control_header: str,
+    request_cache: dict[str, object] | None,
+    allowed_cache_controls: list[str],
+    expected_cache: dict[str, object] | None,
+):
+    """A client that sends the standard header gets the same behaviour as the body `cache` dict."""
+    updated: Final = await _add_data_with_cache_control_header(
+        cache_control_header,
+        {"ttl": 300, **({} if request_cache is None else {"cache": request_cache})},
+        UserAPIKeyAuth(api_key="hashed-key", allowed_cache_controls=allowed_cache_controls),
+    )
+
+    assert updated.get("cache") == expected_cache
+    assert updated["ttl"] == 300
+
+
+async def _add_data_with_cache_control_header(
+    cache_control_header: str, request_fields: dict[str, object], key: UserAPIKeyAuth
+) -> dict[str, object]:
+    return await add_litellm_data_to_request(
+        data={"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hello"}], **request_fields},
+        request=Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/chat/completions",
+                "scheme": "http",
+                "server": ("localhost", 4000),
+                "query_string": b"",
+                "headers": [(b"cache-control", cache_control_header.encode())],
+            }
+        ),
+        user_api_key_dict=key,
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
 
 
 class TestPromotedTraceControlFields:
@@ -9201,6 +9279,15 @@ def test_client_typesafe_danger_zone_headers_stay_off_other_providers(custom_llm
     assert _headers_forwarded_to(TYPESAFE_DANGER_ZONE_HEADERS, custom_llm_provider) == {}
 
 
+def _unsigned_jwt_segment(payload: Mapping[str, str | Mapping[str, str]]) -> str:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
+
+
+_UNSIGNED_CHATGPT_JWT: Final = ".".join(
+    (_unsigned_jwt_segment({"alg": "none"}), _unsigned_jwt_segment({"https://api.openai.com/auth": {}}), "")
+)
+
+
 @pytest.mark.parametrize("authorization_header_name", AUTHORIZATION_HEADER_CASINGS)
 def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(authorization_header_name):
     assert add_provider_specific_headers_to_request(data={}, headers=_client_headers(authorization_header_name)) is True
@@ -9212,6 +9299,8 @@ def test_add_provider_specific_headers_reports_a_forwarded_oauth_credential(auth
         _client_headers(None),
         {"content-type": "application/json", "authorization": "Bearer sk-a-normal-key"},
         {"anthropic-beta": "claude-code-20250219", "authorization": "Bearer sk-ant-api03-a-configured-key"},
+        {"x-litellm-api-key": "Bearer sk-proxy-virtual-key", "authorization": "sk-ant-oat01-never-forwarded"},
+        {"x-litellm-api-key": "Bearer sk-proxy-virtual-key", "authorization": f"Bearer {_UNSIGNED_CHATGPT_JWT}"},
     ],
 )
 def test_add_provider_specific_headers_reports_no_oauth_credential_without_a_forwarded_token(headers):
@@ -9424,6 +9513,8 @@ _PLANTED_STAMPS = {
     "rate_limit_fallback": {"original_model_group": "spoofed-group", "descriptor_key": "model_per_key"},
     "request_retry_count": -100,
     "previous_models": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 101}],
+    "failed_fallback_attempts": [{"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 102}],
+    "client_seen_attempt": {"exception_type": "Timeout", "deployment_id": "spoofed", "attempted_retries": 103},
     "_client_output_ceiling": {"api_base": "https://attacker.example"},
     ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: 10**9,
     USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: 10**9,
@@ -9461,6 +9552,8 @@ async def test_add_litellm_data_to_request_strips_router_reserved_stamps_from_bo
     assert "_client_output_ceiling" not in updated["metadata"]
     assert "request_retry_count" not in updated["metadata"]
     assert "previous_models" not in updated["metadata"]
+    assert "failed_fallback_attempts" not in updated["metadata"]
+    assert "client_seen_attempt" not in updated["metadata"]
     assert ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY not in updated["metadata"]
     assert updated["metadata"]["client_key"] == "client_value"

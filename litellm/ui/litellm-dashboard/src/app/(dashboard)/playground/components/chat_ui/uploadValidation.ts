@@ -11,7 +11,6 @@ export const MAX_CHAT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGE_EDIT_BYTES = 20 * 1024 * 1024;
 export const MAX_AUDIO_BYTES = 25 * 1024 * 1024;
 export const MAX_IMAGE_EDIT_COUNT = 10;
-export const MAX_CHAT_ATTACHMENT_COUNT = 1;
 
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]);
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);

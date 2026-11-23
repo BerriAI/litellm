@@ -6,7 +6,7 @@ import base64
 import logging
 import time
 from collections.abc import Callable, Mapping
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +14,14 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -39,6 +46,9 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     pre_db_read_auth_checks,
 )
+from litellm.proxy.common_utils.http_parsing_utils import populate_request_with_path_params, read_request_body
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -1307,6 +1317,37 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compliance_route", ["/compliance/gdpr", "/compliance/eu-ai-act"])
+async def test_compliance_check_of_a_log_ignores_the_logged_model_for_model_access(compliance_route: str) -> None:
+    user: Final = LiteLLM_UserTable(
+        user_id="restricted-user", models=["allowed-model"], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    token: Final = UserAPIKeyAuth(user_id="restricted-user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    async def run_common_checks(route: str, request_body: dict[str, object]) -> bool:
+        return await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            valid_token=token,
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+        )
+
+    assert await run_common_checks(compliance_route, {"request_id": "log-1", "model": "openai/some-deployment"})
+    with pytest.raises(ModelAccessDeniedProxyException):
+        await run_common_checks(
+            "/chat/completions",
+            {"model": "openai/some-deployment", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+
 @pytest.mark.parametrize(
     "provider,model",
     [
@@ -1670,6 +1711,10 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
         )
         == "hosted_vllm/gpt-oss-20b"
     )
+    assert (
+        get_model_from_request(request_data={}, route="/gemini/v1beta/models/gemini-text:v1:generateContent")
+        == "gemini-text:v1"
+    )
 
 
 _URL_SELECTED_MODEL_ROUTES: Final = (
@@ -1677,6 +1722,8 @@ _URL_SELECTED_MODEL_ROUTES: Final = (
     ("/models/premium-model:generateContent", "premium-model"),
     ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
     ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/v1beta/models/premium-model:countTokens", "premium-model"),
+    ("/v1beta/models/premium-model:7b:countTokens", "premium-model:7b"),
     ("/openai/deployments/premium-model/images/generations", "premium-model"),
     ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
 )
@@ -1706,6 +1753,21 @@ def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_u
     assert get_model_from_request(request_data=request_data, route=route) == url_model
 
 
+@pytest.mark.parametrize(
+    "route, url_model",
+    [("/v1beta/models/premium-model:countTokens", "premium-model"), ("/models/premium-model:7b:countTokens", "premium-model:7b")],
+)
+def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
+    monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"completion_model": "forced-model"})
+    monkeypatch.setattr(proxy_server, "user_model", "cli-model")
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == url_model
+
+
 @pytest.mark.usefixtures("no_inference_model_override")
 @pytest.mark.parametrize(
     "route, path_params",
@@ -1732,6 +1794,10 @@ def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_b
     [
         ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
         ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {}, None, "body-model"),
+        ("/v1beta/models/:countTokens", {"completion_model": "configured"}, "cli", "body-model"),
         ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
         ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
         ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
@@ -1765,6 +1831,12 @@ def test_get_model_from_request_applies_the_handlers_server_model_precedence(
 @pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
 def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
     assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1beta/models/:generateContent", "/models/:countTokens"])
+def test_get_model_from_request_finds_no_model_when_neither_url_nor_body_names_one(route: str) -> None:
+    assert get_model_from_request(request_data={}, route=route) is None
 
 
 @pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
@@ -2633,6 +2705,9 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         "/realtime/calls",
         "/v1/realtime/calls",
         "/openai/v1/realtime/calls",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
     ],
 )
 def test_get_model_from_request_extracts_realtime_session_model(route):
@@ -3960,6 +4035,98 @@ class TestIsRequestBodySafeBlocksFallbackSmuggle:
                 llm_router=None,
                 model="gpt-4",
             )
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"extra_body": {"fallbacks": "default"}}, id="default"),
+        pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="list"),
+        pytest.param({"extra_body": '{"fallbacks": [{"model": "claude-opus-5-5"}]}'}, id="stringified"),
+        pytest.param(
+            {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+            id="inside_a_fallback_target",
+        ),
+        pytest.param(
+            {"context_window_fallbacks": [{"model": "claude-sonnet-5", "extra_body": '{"fallbacks": "default"}'}]},
+            id="inside_a_stringified_context_window_fallback_target",
+        ),
+    ],
+)
+def test_client_chosen_server_side_fallbacks_in_extra_body_are_rejected(request_fields: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-5-5",
+        )
+
+
+_EXTRA_BODY_FALLBACKS_REQUESTS: Final = (
+    pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="extra_body"),
+    pytest.param(
+        {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+        id="inside_a_fallback_target",
+    ),
+)
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_with_the_proxy_wide_opt_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={"allow_client_side_credentials": True},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
+
+
+def _claude_router(configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"anthropic/{model_name}",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+            for model_name in ("claude-sonnet-5-5", "claude-sonnet-5")
+        ]
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_when_every_deployment_opts_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={},
+        llm_router=_claude_router(["fallbacks"]),
+        model="claude-sonnet-5-5",
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_stay_rejected_when_deployments_opt_in_to_another_param(
+    request_fields: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=_claude_router(["api_base"]),
+            model="claude-sonnet-5-5",
+        )
+
+
+def test_extra_body_without_fallbacks_is_allowed() -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", "extra_body": {"stop_sequences": ["5"]}},
+        general_settings={},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
 
 
 class TestIsRequestBodySafeRejectsUrlValuedFallback:
@@ -6580,6 +6747,96 @@ async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_c
         )
 
 
+_OAUTH_AUTHORIZE_PATH: Final = "/MS_Office/upstream/authorize"
+
+
+def _asgi_request(
+    path: str, query_string: bytes, body: bytes, *, extra_scope: Mapping[str, object] = MappingProxyType({})
+) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST" if body else "GET",
+            "path": path,
+            "headers": [(b"content-type", b"application/json")] if body else [],
+            "query_string": query_string,
+            **extra_scope,
+        },
+        receive,
+    )
+
+
+async def _initial_body_check_admits(request: Request, monkeypatch: pytest.MonkeyPatch) -> bool:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request_data: Final = populate_request_with_path_params(
+        request_data=await read_request_body(request), request=request
+    )
+    return await _auth_admits(request, request_data, request.url.path)
+
+
+@pytest.mark.asyncio
+async def test_auth_admits_oauth_query_credentials_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH,
+        b"response_type=code&client_id=test-client",
+        b"",
+        extra_scope={"endpoint": _pass_through_endpoint()},
+    )
+    assert await _initial_body_check_admits(request, monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query_string,body,extra_scope",
+    [
+        pytest.param(b"", b'{"client_id": "body-client"}', {}, id="body"),
+        pytest.param(b"client_id=query-client", b'{"client_id": "body-client"}', {}, id="body-and-query"),
+        pytest.param(b"", b"", {"path_params": {"client_id": "path-client"}}, id="path-param"),
+    ],
+)
+async def test_auth_still_rejects_non_query_credentials_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch, query_string: bytes, body: bytes, extra_scope: Mapping[str, object]
+) -> None:
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH, query_string, body, extra_scope={**extra_scope, "endpoint": _pass_through_endpoint()}
+    )
+    assert not await _initial_body_check_admits(request, monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,query_string",
+    [
+        ("/v1/chat/completions", b"client_id=test-client"),
+        ("/v1/vector_stores/vs_test/files", b"api_base=http://attacker.invalid/v1"),
+    ],
+)
+async def test_auth_still_rejects_query_credentials_on_native_routes(
+    monkeypatch: pytest.MonkeyPatch, path: str, query_string: bytes
+) -> None:
+    assert not await _initial_body_check_admits(_asgi_request(path, query_string, b""), monkeypatch)
+
+
+@pytest.mark.asyncio
+async def test_auth_rejects_query_credentials_on_a_pass_through_whose_body_was_never_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH, b"client_id=test-client", b"", extra_scope={"endpoint": _pass_through_endpoint()}
+    )
+    request_data: Final = populate_request_with_path_params(request_data={}, request=request)
+    assert not await _auth_admits(request, request_data, _OAUTH_AUTHORIZE_PATH)
+
+
+@pytest.mark.parametrize("metadata_key", ["allowed_s3_buckets", "required_customer_headers"])
 @pytest.mark.parametrize(
     "role,stored,sent,refused",
     [
@@ -6590,15 +6847,15 @@ async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_c
         (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
     ],
 )
-def test_only_proxy_admins_change_a_teams_s3_bucket_list(
-    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+def test_only_proxy_admins_change_protected_team_metadata(
+    metadata_key: str, role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 
-    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    existing: Final = None if stored is None else {metadata_key: stored, "project": "x"}
     request: Final = UpdateTeamRequest(
-        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+        team_id="t1", metadata={"project": "x"} if sent is None else {metadata_key: sent, "project": "x"}
     )
     caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
 
@@ -6612,7 +6869,7 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
             data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
         )
     assert rejection.value.status_code == 403
-    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+    assert f"Only proxy admins can set {metadata_key} on a team." in str(rejection.value.detail)
 
 
 @pytest.mark.parametrize(

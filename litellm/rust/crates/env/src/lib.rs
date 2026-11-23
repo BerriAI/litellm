@@ -37,6 +37,26 @@ impl Lookup for ProcessEnvironment {
     }
 }
 
+/// The process environment captured once, as `(name, value)` pairs in the order `os.environ`
+/// lists them, for code that reads several variables and must see them all as of one moment.
+pub type Environment = [(String, String)];
+
+/// The process environment, as `os.environ` holds it: every variable whose name and value are
+/// valid Unicode.
+pub fn process_environment() -> Vec<(String, String)> {
+    std::env::vars_os()
+        .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+        .collect()
+}
+
+/// The value `environment` holds for `name`, the first one when it is listed twice.
+pub fn variable<'a>(environment: &'a Environment, name: &str) -> Option<&'a str> {
+    environment
+        .iter()
+        .find(|(key, _)| key == name)
+        .map(|(_, value)| value.as_str())
+}
+
 pub fn resolve_non_empty(
     value: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
@@ -182,6 +202,21 @@ mod tests {
             _ => None,
         };
         assert_eq!(resolve_non_empty(value, &env, names).as_deref(), expected);
+    }
+
+    #[rstest]
+    #[case::present("SET", Some("value"))]
+    #[case::empty_is_kept("EMPTY", Some(""))]
+    #[case::first_of_two("TWICE", Some("first"))]
+    #[case::absent("ABSENT", None)]
+    fn variable_reads_a_captured_environment(#[case] name: &str, #[case] expected: Option<&str>) {
+        let environment = [
+            ("SET".to_owned(), "value".to_owned()),
+            ("EMPTY".to_owned(), String::new()),
+            ("TWICE".to_owned(), "first".to_owned()),
+            ("TWICE".to_owned(), "second".to_owned()),
+        ];
+        assert_eq!(variable(&environment, name), expected);
     }
 
     #[rstest]

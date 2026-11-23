@@ -10,7 +10,7 @@ all get a route that reads only that.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from itertools import chain
@@ -110,36 +110,35 @@ def _delete_seeded_rows(prefix: str) -> None:
     write_rows('DELETE FROM "LiteLLM_BudgetTable" WHERE budget_id LIKE %s', (f"{prefix}-budget-%",))
 
 
-@pytest.fixture(scope="module")
-def large_team(session_gateway: Gateway) -> Iterator[LargeTeam]:
+@pytest.fixture
+def large_team(gateway: Gateway, scenario: Scenario) -> LargeTeam:
     prefix: Final = f"roster{uuid.uuid4().hex[:12]}"
-    with session_gateway.scenario() as scenario:
-        team_id: Final = scenario.team(team_alias=f"{prefix} team", team_member_budget=DEFAULT_MEMBER_BUDGET)
-        metadata: Final = object_value(
-            object_value(session_gateway.get("/team/info", {"team_id": team_id})["team_info"])["metadata"]
-        )
-        default_budget_id: Final = string_value(metadata["team_member_budget_id"])
-        scenario.cleanups.callback(_delete_seeded_rows, prefix)
-        write_rows(SEED_USERS_SQL, (prefix, prefix, prefix, str(ROSTER), team_id, str(SIGNED_IN_MEMBER), str(ROSTER)))
-        own: Final = (str(OWN_BUDGET_MEMBER), str(CUSTOM_BUDGETS))
-        write_rows(SEED_BUDGETS_SQL, (prefix, str(CUSTOM_BUDGETS), prefix, *own, *own))
-        write_rows(
-            SEED_MEMBERSHIPS_SQL,
-            (
-                prefix,
-                team_id,
-                str(OWN_BUDGET_MEMBER),
-                prefix,
-                prefix,
-                str(CUSTOM_BUDGETS),
-                default_budget_id,
-                str(WITH_MEMBERSHIP),
-            ),
-        )
-        write_rows(SEED_ROSTER_SQL, (prefix, prefix, prefix, str(ROSTER), team_id))
-        write_rows('ANALYZE "LiteLLM_TeamMembership"', ())
-        write_rows('ANALYZE "LiteLLM_UserTable"', ())
-        yield LargeTeam(team_id=team_id, prefix=prefix, default_budget_id=default_budget_id)
+    team_id: Final = scenario.team(team_alias=f"{prefix} team", team_member_budget=DEFAULT_MEMBER_BUDGET)
+    metadata: Final = object_value(
+        object_value(gateway.get("/team/info", {"team_id": team_id})["team_info"])["metadata"]
+    )
+    default_budget_id: Final = string_value(metadata["team_member_budget_id"])
+    scenario.cleanups.callback(_delete_seeded_rows, prefix)
+    write_rows(SEED_USERS_SQL, (prefix, prefix, prefix, str(ROSTER), team_id, str(SIGNED_IN_MEMBER), str(ROSTER)))
+    own: Final = (str(OWN_BUDGET_MEMBER), str(CUSTOM_BUDGETS))
+    write_rows(SEED_BUDGETS_SQL, (prefix, str(CUSTOM_BUDGETS), prefix, *own, *own))
+    write_rows(
+        SEED_MEMBERSHIPS_SQL,
+        (
+            prefix,
+            team_id,
+            str(OWN_BUDGET_MEMBER),
+            prefix,
+            prefix,
+            str(CUSTOM_BUDGETS),
+            default_budget_id,
+            str(WITH_MEMBERSHIP),
+        ),
+    )
+    write_rows(SEED_ROSTER_SQL, (prefix, prefix, prefix, str(ROSTER), team_id))
+    write_rows('ANALYZE "LiteLLM_TeamMembership"', ())
+    write_rows('ANALYZE "LiteLLM_UserTable"', ())
+    return LargeTeam(team_id=team_id, prefix=prefix, default_budget_id=default_budget_id)
 
 
 def _page(

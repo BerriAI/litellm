@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
-from types import MappingProxyType, SimpleNamespace
+from types import MappingProxyType
 from typing import Final
 
 import psycopg
@@ -22,7 +22,6 @@ from litellm_proxy_extras.migration_lock import MIGRATION_LOCK_KEY, migration_lo
 from litellm_proxy_extras.migration_recovery import roll_back_failed_inert_migration
 from litellm_proxy_extras.request_log_indexes import (
     END_USER_RESTRICTED_PREDICATE,
-    END_USER_RESTRICTED_QUERY,
     REQUEST_LOG_INDEXES,
     RequestLogIndex,
     build_index_on_partitioned_table,
@@ -44,6 +43,9 @@ requires_db: Final = pytest.mark.skipif(
 REPO: Final = Path(__file__).resolve().parents[4]
 PACKAGE: Final = REPO / "litellm" / "proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO / "litellm/scripts" / "db" / "partition_spend_logs.sql"
+END_USER_RESTRICTED_QUERY: Final = (
+    REPO / "litellm/rust/crates/repositories/src/end_user/queries/find_restricted_end_user_ids.sql"
+).read_text()
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"
 CALL_ID_INDEX_MIGRATION: Final = "20260831120001_spend_logs_litellm_call_id_index"
 API_KEY_INDEX: Final = "LiteLLM_SpendLogs_api_key_startTime_idx"
@@ -951,7 +953,6 @@ async def test_literal_restricted_ids_match_the_prisma_filter_with_null_empty_an
     scratch_database: str,
 ) -> None:
     from prisma import Prisma
-    from litellm.repositories.table_repositories import EndUserRepository
 
     with psycopg.connect(scratch_database, autocommit=True) as conn:
         conn.execute('ALTER TABLE "LiteLLM_EndUserTable" ALTER COLUMN blocked DROP NOT NULL')
@@ -993,10 +994,14 @@ async def test_literal_restricted_ids_match_the_prisma_filter_with_null_empty_an
                 },
             )
         )
-        repository: Final = EndUserRepository(SimpleNamespace(db=database))
-        assert frozenset(await repository.find_restricted_ids(5001)) == expected
+
+        async def restricted_ids() -> frozenset[str]:
+            rows: Final = await database.query_raw(END_USER_RESTRICTED_QUERY, 5001)
+            return frozenset(row["user_id"] for row in rows)
+
+        assert await restricted_ids() == expected
         assert ensure_request_log_indexes(scratch_database, "public", indexes=(END_USER_INDEX,)) is True
-        assert frozenset(await repository.find_restricted_ids(5001)) == expected
+        assert await restricted_ids() == expected
 
 
 @requires_db

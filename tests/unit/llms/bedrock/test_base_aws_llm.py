@@ -3594,6 +3594,81 @@ def _recording_boto3_client(recorded: dict[str, dict[str, object]]) -> Callable[
     return _client
 
 
+@pytest.mark.parametrize(
+    ("identity_field", "sts_field", "first_value", "second_value"),
+    [
+        ("bedrock_session_tag_fields", "Tags", ({"Key": "user_api_key_alias", "Value": "agent-one"},),
+         ({"Key": "user_api_key_alias", "Value": "agent-two"},)),
+        ("bedrock_session_name_fields", "RoleSessionName", "agent-one", "agent-two"),
+    ],
+)
+def test_identity_sessions_reach_sts_and_do_not_share_cached_credentials(
+    monkeypatch: pytest.MonkeyPatch, identity_field: str, sts_field: str, first_value: object, second_value: object
+) -> None:
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    monkeypatch.setattr(litellm, identity_field, ["user_api_key_alias"])
+    auth = AwsAuthParams(
+        aws_access_key_id="AKIACALLER",
+        aws_secret_access_key="caller-secret",
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+    )
+    recorded: dict[str, dict[str, object]] = {}
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", side_effect=_recording_boto3_client(recorded)),
+    ):
+        aws = BaseAWSLLM()
+        first = aws.resolve_credentials(auth, "us-east-1", {"metadata": {"user_api_key_alias": "agent-one"}})
+        first_params = recorded["assume_role"]
+        second = aws.resolve_credentials(auth, "us-east-1", {"litellm_metadata": {"user_api_key_alias": "agent-two"}})
+        repeated = aws.resolve_credentials(auth, "us-east-1", {"metadata": {"user_api_key_alias": "agent-one"}})
+    assert first is repeated
+    assert first is not second
+    assert first_params[sts_field] == first_value
+    assert recorded["assume_role"][sts_field] == second_value
+
+
+@pytest.mark.parametrize("attribution", ["tags", "derived-name", "static-tags"])
+@pytest.mark.parametrize("denied", [False, True])
+def test_attributed_same_role_never_uses_ambient_credentials(
+    monkeypatch: pytest.MonkeyPatch, attribution: str, denied: bool
+) -> None:
+    from botocore.exceptions import ClientError
+
+    from litellm.types.llms.bedrock import AwsAuthParams
+
+    monkeypatch.setattr(litellm, "bedrock_session_tag_fields", ["user_api_key_alias"] if attribution == "tags" else None)
+    monkeypatch.setattr(
+        litellm, "bedrock_session_name_fields", ["user_api_key_alias"] if attribution == "derived-name" else None
+    )
+    recorded: dict[str, dict[str, object]] = {}
+    sts = _recording_boto3_client(recorded)("sts")
+    sts.get_caller_identity.return_value = {
+        "Arn": "arn:aws:sts::123456789012:assumed-role/litellm-target/gateway"
+    }
+    if denied:
+        sts.assume_role.side_effect = ClientError({"Error": {"Code": "AccessDenied", "Message": "denied"}}, "AssumeRole")
+    aws = BaseAWSLLM()
+    auth = AwsAuthParams(
+        aws_role_name="arn:aws:iam::123456789012:role/litellm-target",
+        aws_session_tags=({"Key": "deployment", "Value": "static"},) if attribution == "static-tags" else None,
+    )
+    identity = {"metadata": {"user_api_key_alias": "agent-one"}}
+    with (
+        patch.dict(os.environ, _os_environ_without_aws_keys(), clear=True),
+        patch("boto3.client", return_value=sts),
+    ):
+        if denied:
+            with pytest.raises(ClientError, match="AccessDenied"):
+                aws.resolve_credentials(auth, "us-east-1", identity)
+        else:
+            credentials = aws.resolve_credentials(auth, "us-east-1", identity)
+            assert credentials.access_key == "ASIAASSUMED"
+    assert sts.assume_role.call_count == 1
+    assert sts.get_caller_identity.call_count == 0
+
+
 def test_resolve_credentials_forwards_static_keys_role_session_and_external_id():
     """Every field the role-assumption route reads must reach STS, so a dropped struct field fails here."""
     from litellm.types.llms.bedrock import AwsAuthParams

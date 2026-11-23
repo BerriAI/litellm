@@ -367,6 +367,22 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens == 25
         assert result.total_tokens == 40  # 15 + 25
 
+    def test_video_output_tokens_keep_their_own_detail_instead_of_counting_as_text(self) -> None:
+        """Gemini Live Avatar bills video output at its own rate, so the tokens must not fold into text."""
+        usage: Final = {
+            "input_tokens": 10,
+            "output_tokens": 30000,
+            "total_tokens": 30010,
+            "output_tokens_details": {"audio_tokens": 100, "text_tokens": 20, "video_tokens": 29880},
+        }
+
+        details: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+            usage
+        ).completion_tokens_details
+
+        assert details is not None
+        assert (details.video_tokens, details.audio_tokens, details.text_tokens) == (29880, 100, 20)
+
     def test_transform_response_api_usage_with_image_tokens(self):
         """Test transformation handles image_tokens from image generation responses.
 

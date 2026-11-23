@@ -72,7 +72,7 @@ test.describe("Cache write cost tiers", () => {
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
     await expect(modelIdCell).toBeVisible({ timeout: 15_000 });
     await modelIdCell.click();

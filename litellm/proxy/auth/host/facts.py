@@ -33,7 +33,6 @@ class KeyFacts:
     team_id: str | None
     team_object_permission_id: str | None
     project_id: str | None
-    end_user_id: str | None
     last_refreshed_at: float | None
 
 
@@ -117,7 +116,7 @@ def team_facts(team: LiteLLM_TeamTable) -> FoundTeam:
 
 
 class TeamMissing(str, Enum):
-    """Why `get_team_object` found no team: its `TeamNotFoundError`, or any other `HTTPException`."""
+    """Why `read_team` found no team: its `TeamNotFoundError`, or a read that failed with the database reachable."""
 
     ABSENT = "absent"
     UNREADABLE = "unreadable"
@@ -209,6 +208,5 @@ def key_facts(token: UserAPIKeyAuth) -> KeyFacts:
         team_id=token.team_id,
         team_object_permission_id=token.team_object_permission_id,
         project_id=token.project_id,
-        end_user_id=token.end_user_id,
         last_refreshed_at=token.last_refreshed_at,
     )

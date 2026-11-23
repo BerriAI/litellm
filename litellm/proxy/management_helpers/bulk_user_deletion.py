@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -51,8 +51,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.redis.stores.spend_counters import user_counter
 from litellm.repositories.table_repositories import (
     OrganizationMembershipRepository,
-    TeamMembershipRepository,
 )
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (

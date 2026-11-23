@@ -16,16 +16,21 @@ fn mapping(value: Option<&Value>) -> Option<&Map<String, Value>> {
     value.and_then(Value::as_object)
 }
 
-fn config(request: &Map<String, Value>) -> Option<&Value> {
-    if request.contains_key("config") {
-        request.get("config")
-    } else {
-        request.get("generationConfig")
+const CONFIG_FIELDS: [&str; 3] = ["config", "generationConfig", "generation_config"];
+
+pub fn config_field(request: &Map<String, Value>) -> Out<Option<&'static str>> {
+    for field in CONFIG_FIELDS {
+        if let Some(value) = request.get(field)
+            && truthy(value)?
+        {
+            return Ok(Some(field));
+        }
     }
+    Ok(None)
 }
 
-pub fn request_config(request: &Map<String, Value>) -> Option<&Map<String, Value>> {
-    mapping(config(request))
+pub fn request_config(request: &Map<String, Value>) -> Out<Option<&Map<String, Value>>> {
+    Ok(config_field(request)?.and_then(|field| mapping(request.get(field))))
 }
 
 fn typed_text_fields(
@@ -337,7 +342,7 @@ pub fn translated_messages(request: &Map<String, Value>, call_type: &str) -> Out
         Some(Value::Array(items)) => items.iter().collect(),
         _ => return Ok(None),
     };
-    if side_paths_need_python(request, request_config(request))? {
+    if side_paths_need_python(request, request_config(request)?)? {
         return Err(PythonServed);
     }
     let instruction = match request.get("systemInstruction") {

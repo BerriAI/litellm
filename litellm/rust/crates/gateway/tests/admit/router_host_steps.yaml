@@ -1,0 +1,30 @@
+# A router setting router-core serves through a host step the native host does not answer sends to
+# Python each request for a group whose call would make that step. These three reach every group,
+# so every request that names a model group goes, over the first of them.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    routing_strategy: least-busy
+    enable_pre_call_checks: true
+    enable_health_check_routing: true
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: router_settings.routing_strategy
+
+  - name: a model the config does not name
+    headers: {authorization: Bearer gateway-key}
+    body: {model: gpt, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: unknown_model

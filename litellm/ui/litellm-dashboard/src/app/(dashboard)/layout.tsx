@@ -30,6 +30,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/s
 import { useCloseMobileSidebarOn } from "@/components/shared/MobileSidebar";
 import { sidebarProviderClassName, sidebarWidthStyle } from "@/components/shared/sidebarStyles";
 import { cn } from "@/lib/cva.config";
+import { Page } from "@/components/shared/Page";
 import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPaletteProvider";
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
@@ -116,11 +117,41 @@ export function AgentControlPlaneView() {
 
 const FULL_BLEED_SEGMENTS = new Set(["logs"]);
 
+const PAGE_FRAME_CLASS_NAMES = {
+  default: "",
+  fill: "h-full",
+  fixed: "h-full overflow-hidden pb-0 sm:pb-0",
+} as const;
+
+const FRAMED_SEGMENTS: ReadonlyMap<string, keyof typeof PAGE_FRAME_CLASS_NAMES> = new Map([
+  ["admin-panel", "default"],
+  ["agents", "default"],
+  ["api-keys", "fill"],
+  ["budgets", "fill"],
+  ["caching", "default"],
+  ["cost-optimization", "default"],
+  ["cost-tracking", "default"],
+  ["guardrails", "default"],
+  ["guardrails-monitor", "default"],
+  ["logging-and-alerts", "default"],
+  ["logs", "fill"],
+  ["mcp-servers", "fill"],
+  ["memory", "default"],
+  ["playground", "fixed"],
+  ["prompts", "default"],
+  ["router-settings", "default"],
+  ["search-tools", "fill"],
+  ["tag-management", "fill"],
+  ["ui-theme", "default"],
+  ["vector-stores", "default"],
+  ["workflows", "default"],
+]);
+
 function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: string }) {
   useCloseMobileSidebarOn(navigationKey);
   return null;
 }
-const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers"]);
+const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps", "app-groups"]);
 
 function DashboardShell({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
@@ -140,6 +171,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
   const isFullBleed = FULL_BLEED_SEGMENTS.has(routeSegment);
+  const pageFrame = FRAMED_SEGMENTS.get(routeSegment);
   // A manual toggle holds only for the route it was made on; full-bleed routes default to collapsed.
   const [sidebarOverride, setSidebarOverride] = useState<{ segment: string; collapsed: boolean } | null>(null);
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
@@ -202,7 +234,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
               }
             >
               <TelemetryEnvBanner />
-              {children}
+              {pageFrame === undefined ? (
+                children
+              ) : (
+                <Page className={PAGE_FRAME_CLASS_NAMES[pageFrame]}>{children}</Page>
+              )}
             </div>
           </SidebarInset>
         </CommandPaletteProvider>

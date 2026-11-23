@@ -299,7 +299,7 @@ def _jsonrpc_text_method(text: str) -> str | None:
     if value is None:
         return None
     try:
-        method: Final = json.loads(value.group(1))
+        method: Final = _DECODED_JSON.validate_python(json.loads(value.group(1)))
     except ValueError:
         return None
     return method if isinstance(method, str) else None

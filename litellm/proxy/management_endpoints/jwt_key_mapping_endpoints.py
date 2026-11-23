@@ -14,14 +14,14 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     hash_token,
 )
-from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     user_api_key_has_admin_view,
 )
-from litellm.repositories.table_repositories import JWTKeyMappingRepository
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.jwt_key_mapping_repository import JWTKeyMappingRepository
 
 router: Final = APIRouter()
 
@@ -32,11 +32,11 @@ def _mapping_cache_keys(jwt_claim_name: str, jwt_claim_value: str, jwt_issuer: s
     """A global mapping also answers lookups from every configured issuer, which cache their misses per issuer."""
     from litellm.proxy.proxy_server import litellm_jwtauth
 
-    own_key: Final = jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, jwt_issuer)
+    own_key: Final = AuthObject.jwt_key_mapping(jwt_claim_name, jwt_claim_value, jwt_issuer).key
     if jwt_issuer:
         return (own_key,)
     issuer_keys: Final = tuple(
-        jwt_key_mapping_cache_key(jwt_claim_name, jwt_claim_value, issuer_config.issuer)
+        AuthObject.jwt_key_mapping(jwt_claim_name, jwt_claim_value, issuer_config.issuer).key
         for issuer_config in litellm_jwtauth.issuers or ()
     )
     return tuple(dict.fromkeys((own_key, *issuer_keys)))

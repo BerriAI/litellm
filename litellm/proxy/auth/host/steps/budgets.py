@@ -26,7 +26,7 @@ from fastapi import Request
 
 import litellm
 from litellm._internal_context import with_service_target
-from litellm.constants import AUTH_OBJECTS_TARGET, GLOBAL_PROXY_SPEND_CACHE_KEY
+from litellm.constants import AUTH_OBJECTS_TARGET
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.user import LiteLLM_UserTable
@@ -47,10 +47,12 @@ from litellm.proxy.auth.user_api_key_auth import (
     get_model_from_request_context,
     get_model_names_for_budget_checks,
 )
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_auth_cache_key
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.spend_tracking.native_budgets import native_budget_decision
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import team_member_counter
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.types.integrations.slack_alerting import CallInfo, Litellm_EntityType
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -106,17 +108,15 @@ class BudgetChecks:
     async def _team_membership(
         self, prisma_client: PrismaClient, user_id: str, team_id: str
     ) -> LiteLLM_TeamMembership | None:
-        cache_key: Final = team_membership_auth_cache_key(team_id=team_id, user_id=user_id)
+        cache_key: Final = AuthObject.team_membership(team_id=team_id, user_id=user_id)
         cached: Final = await self.user_api_key_cache.async_get_cache(key=cache_key, model_type=LiteLLM_TeamMembership)
         if cached is not None:
             return cached
-        db_member: Final = await TeamMembershipRepository(prisma_client).table.find_first(
-            where={"user_id": user_id, "team_id": team_id},
-            include={"litellm_budget_table": True},
+        membership: Final = await bounded_db_lookup(
+            TeamMembershipRepository(prisma_client).find_with_budget(user_id, team_id), name="team_membership"
         )
-        if db_member is None:
+        if membership is None:
             return None
-        membership: Final = LiteLLM_TeamMembership.model_validate(db_member.model_dump())
         await self.user_api_key_cache.async_set_cache(
             key=cache_key, value=membership, model_type=LiteLLM_TeamMembership, ttl=5
         )
@@ -135,7 +135,7 @@ class BudgetChecks:
         membership: Final = await self._team_membership(self.prisma_client, user_id, team_id)
         if membership is None or membership.litellm_budget_table is None:
             return
-        max_budget: Final = membership.litellm_budget_table.effective_max_budget(now=datetime.now(timezone.utc))
+        max_budget: Final = membership.effective_budget_with_rollover(now=datetime.now(timezone.utc))
         if max_budget is None or max_budget <= 0:
             return
         from litellm.proxy.proxy_server import get_current_spend  # noqa: PLC0415  # proxy global
@@ -224,7 +224,7 @@ async def proxy_budget_alert(
 ) -> None:
     with tracer.trace("litellm.proxy.auth.get_global_proxy_spend"):
         spend: Final = await fetch_global_spend_with_event_coordination(
-            cache_key=GLOBAL_PROXY_SPEND_CACHE_KEY,
+            cache_key=AuthObject.global_proxy_spend(),
             user_api_key_cache=user_api_key_cache,
             prisma_client=prisma_client,
         )

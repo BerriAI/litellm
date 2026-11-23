@@ -54,7 +54,7 @@ class PromptSpec(LiteLLMBaseModel):
     environment: str | None = "development"
     created_by: str | None = None
 
-    def __init__(self, **data) -> None:
+    def __init__(self, **data: object) -> None:
         if "prompt_info" not in data:
             data["prompt_info"] = PromptInfo(prompt_type="config")
         elif "prompt_info" in data:

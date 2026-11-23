@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     chat_completion_prompt_cache_breakpoints_for_wire,
+    with_only_content_part_prompt_cache_breakpoints,
     without_prompt_cache_breakpoints,
 )
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -576,6 +577,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             custom_llm_provider, api_base
         )
 
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Whether a target that does not read OpenAI's full breakpoint dialect still takes a content part's
+        ``prompt_cache_breakpoint`` under drop_params."""
+        return False
+
     def _messages_and_tools_in_cache_mark_dialect(
         self,
         model: str,
@@ -612,6 +618,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
         drop_params: Final = _drops_params(litellm_params)
         drops_breakpoints: Final = not reads_breakpoints and drop_params
+        keeps_content_part_breakpoints: Final = drops_breakpoints and self._keeps_content_part_prompt_cache_breakpoints(
+            model, litellm_params
+        )
         renamed: Final = (
             [
                 AnthropicCacheControlHook.cache_control_as_prompt_cache_breakpoints(
@@ -620,6 +629,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 for message in messages
             ]
             if reads_breakpoints
+            else [with_only_content_part_prompt_cache_breakpoints(message) for message in messages]
+            if keeps_content_part_breakpoints
             else [without_prompt_cache_breakpoints(message) for message in messages]
             if drops_breakpoints
             else list(messages)

@@ -1,6 +1,7 @@
+use crate::error::InvalidCredentials;
 use crate::{
-    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, ModelAccessDenied, PremiumRequired,
-    RbacDenial, TeamDenial, VerifyDenial,
+    BudgetExceeded, Error, JwtDenial, KeyDenial, KeyFailure, KeyHash, ModelAccessDenied,
+    PremiumRequired, RbacDenial, TeamDenial, VerifyDenial,
 };
 
 /// `ProxyErrorTypes` values a denial carries.
@@ -12,8 +13,6 @@ pub enum ErrorType {
     ExpiredKey,
     #[strum(serialize = "no_db_connection")]
     NoDbConnection,
-    #[strum(serialize = "token_not_found_in_db")]
-    TokenNotFoundInDb,
     #[strum(serialize = "auth_provider_unavailable")]
     AuthProviderUnavailable,
     #[strum(serialize = "model_cost_map_missing")]
@@ -49,6 +48,12 @@ pub enum PublicDenial {
     BudgetExceeded(BudgetExceeded),
     /// `TeamNotFoundError(team_id)`
     TeamNotFound { team_id: String },
+    /// `KeyNotFoundError(hashed_token)`, whose status, type, param and message are that class's own.
+    KeyNotFound { hash: KeyHash },
+    /// `NoMatchingJWTPublicKeyError(message)`, which the auth exception handler reports as a 401.
+    NoMatchingJwtPublicKey { message: String },
+    /// `IdJagIsNotABearerTokenError(message)`, which the auth exception handler reports as a 401.
+    IdJagNotBearer { message: String },
 }
 
 fn proxy(
@@ -96,7 +101,7 @@ impl Error {
             Self::Key(denial) => denial.public(),
             Self::Jwt(denial) => denial.public(),
             Self::BudgetExceeded(exceeded) => PublicDenial::BudgetExceeded(exceeded.clone()),
-            Self::HostFailed => return None,
+            Self::HostFailed | Self::HostDeclined => return None,
         })
     }
 }
@@ -117,7 +122,7 @@ impl KeyDenial {
                 status: 401,
                 detail: self.to_string(),
             },
-            Self::NotFound => proxy(401, self, ErrorType::TokenNotFoundInDb, Some("key")),
+            Self::NotFound { hash } => PublicDenial::KeyNotFound { hash: hash.clone() },
             Self::NoToken => http(401, self),
         }
     }
@@ -160,8 +165,13 @@ impl VerifyDenial {
                 proxy(503, self, ErrorType::AuthProviderUnavailable, None)
             }
             Self::Expired => proxy(401, self, ErrorType::ExpiredKey, None),
+            Self::Key(KeyFailure::NoMatch { .. }) => PublicDenial::NoMatchingJwtPublicKey {
+                message: self.to_string(),
+            },
+            Self::IdJagNotBearer => PublicDenial::IdJagNotBearer {
+                message: self.to_string(),
+            },
             Self::Malformed(_)
-            | Self::IdJagNotBearer
             | Self::Key(_)
             | Self::Invalid(_)
             | Self::Assertion(_)
@@ -189,7 +199,7 @@ impl RbacDenial {
 impl TeamDenial {
     pub(crate) fn public(&self) -> PublicDenial {
         match self {
-            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => http(404, self),
+            Self::TeamNotFound { .. } | Self::TeamAliasNotFound { .. } => auth(&InvalidCredentials),
             Self::TeamAliasAmbiguous { .. } => http(400, self),
             Self::NoDb | Self::NoTeamInToken { .. } => plain(self),
             Self::NoTeamsInToken
@@ -258,13 +268,8 @@ mod tests {
 
     #[rstest]
     #[case::not_found(
-        KeyDenial::NotFound.into(),
-        PublicDenial::Proxy {
-            status: 401,
-            message: "Authentication Error, Invalid API key provided.".to_owned(),
-            error_type: ErrorType::TokenNotFoundInDb,
-            param: Some("key".to_owned()),
-        }
+        KeyDenial::NotFound { hash: KeyHash::new("looked-up") }.into(),
+        PublicDenial::KeyNotFound { hash: KeyHash::new("looked-up") }
     )]
     #[case::no_db_configured(
         KeyDenial::NoDbConfigured.into(),
@@ -387,11 +392,11 @@ mod tests {
     )]
     #[case::team_not_found(
         TeamDenial::TeamNotFound { team_id: "t".to_owned() },
-        http(404, "Team doesn't exist in db. Team=t. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_not_found(
         TeamDenial::TeamAliasNotFound { alias: "eng".to_owned() },
-        http(404, "Team with alias 'eng' doesn't exist in db. Create team via `/team/new` call.")
+        auth(&"Authentication Error, invalid credentials")
     )]
     #[case::alias_ambiguous(
         TeamDenial::TeamAliasAmbiguous { alias: "eng".to_owned() },
@@ -495,7 +500,20 @@ mod tests {
     )]
     #[case::unknown_kid(
         VerifyDenial::Key(KeyFailure::NoMatch { keys: Searched::Url(JWKS.to_owned()), kid: None }),
-        PublicDenial::Plain { message: format!("No matching public key found. keys={JWKS}, kid=unset") }
+        PublicDenial::NoMatchingJwtPublicKey {
+            message: format!("No matching public key found. keys={JWKS}, kid=unset")
+        }
+    )]
+    #[case::id_jag(
+        VerifyDenial::IdJagNotBearer,
+        PublicDenial::IdJagNotBearer {
+            message: "an ID-JAG is an authorization grant, not a bearer token; redeem it at the token endpoint"
+                .to_owned()
+        }
+    )]
+    #[case::missing_jwks_url(
+        VerifyDenial::Key(KeyFailure::MissingUrl),
+        PublicDenial::Plain { message: "Missing JWT Public Key URL from environment.".to_owned() }
     )]
     #[case::assertion(
         VerifyDenial::Assertion(AssertionRejection::Invalid(TokenError::MissingClaim("jti".to_owned()))),

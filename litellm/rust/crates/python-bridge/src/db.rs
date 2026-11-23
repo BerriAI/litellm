@@ -2,6 +2,7 @@ use std::{sync::Arc, time::UNIX_EPOCH};
 
 use litellm_db::{Call, ClientIdentity, Endpoint, Observer, Outcome, Pools, QueryEvent};
 use litellm_db_resolve::{Limits, Overlay, REPLICA_URL, Rule, WRITER_URL};
+use litellm_host_python::PythonContext;
 use litellm_secret_value::SecretValue;
 use pyo3::{exceptions::PyValueError, prelude::*};
 
@@ -14,7 +15,20 @@ const HEALTH_CHECK: Call = Call {
     operation: None,
 };
 
-struct PythonEvents(Py<PyAny>);
+tokio::task_local! {
+    static CALLER: PythonContext;
+}
+
+/// Runs `operation` as the Python caller's database work: each query it reports is recorded inside the caller's
+/// `contextvars` context, so service logging parents the event under the caller's request span.
+pub(crate) fn for_caller<F: Future>(
+    py: Python<'_>,
+    operation: F,
+) -> PyResult<impl Future<Output = F::Output> + use<F>> {
+    Ok(CALLER.scope(PythonContext::capture(py)?, operation))
+}
+
+struct PythonEvents(Arc<Py<PyAny>>);
 
 impl Observer for PythonEvents {
     fn record(&self, event: QueryEvent) {
@@ -27,20 +41,30 @@ impl Observer for PythonEvents {
             Outcome::Succeeded => None,
             Outcome::Failed(message) => Some(message),
         };
+        let args = (
+            event.call.call_type,
+            event.call.table,
+            event.call.operation,
+            started_at,
+            event.duration.as_secs_f64(),
+            failure,
+        );
+        let events = Arc::clone(&self.0);
+        let caller = CALLER.try_with(PythonContext::clone).ok();
         Python::attach(|py| {
-            let events = self.0.bind(py);
-            if let Err(error) = events.call_method1(
-                "record",
-                (
-                    event.call.call_type,
-                    event.call.table,
-                    event.call.operation,
-                    started_at,
-                    event.duration.as_secs_f64(),
-                    failure,
-                ),
-            ) {
-                error.write_unraisable(py, Some(events));
+            let recorded = match caller {
+                Some(context) => {
+                    let events = Arc::clone(&events);
+                    context
+                        .enter(py, move |py| {
+                            events.bind(py).call_method1("record", args).map(|_| ())
+                        })
+                        .and_then(|recorded| recorded)
+                }
+                None => events.bind(py).call_method1("record", args).map(|_| ()),
+            };
+            if let Err(error) = recorded {
+                error.write_unraisable(py, Some(events.bind(py)));
             }
         });
     }
@@ -81,7 +105,7 @@ impl DatabaseEndpoint {
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))?;
             for ignored in &ignored {
-                litellm_tracing::warn!(
+                tracing::warn!(
                     "Database setting {} is ignored by the native pool: {}",
                     ignored.setting,
                     ignored.consequence
@@ -107,7 +131,7 @@ pyo3::create_exception!(
     "A native database operation failed. The kind attribute is litellm-db's ErrorKind, and unavailable and requeue_safe are the error's is_unavailable and is_requeue_safe."
 );
 
-fn map_error(error: litellm_db::Error) -> PyErr {
+pub(crate) fn map_error(error: litellm_db::Error) -> PyErr {
     let kind: &'static str = error.kind().into();
     let failure = NativeDatabaseFailure::new_err(litellm_error::Report::new(&error).to_string());
     let decided = Python::attach(|py| {
@@ -119,6 +143,24 @@ fn map_error(error: litellm_db::Error) -> PyErr {
     match decided {
         Ok(()) => failure,
         Err(error) => error,
+    }
+}
+
+impl NativeDatabase {
+    /// What a Rust repository needs to run its queries on these pools. Statements are named only when both
+    /// sides name them, since a read can land on either.
+    pub(crate) fn repository_database(&self) -> PyResult<litellm_repositories::Database> {
+        let names_statements = self.writer_endpoint.names_statements()
+            && self
+                .reader_endpoint
+                .as_ref()
+                .is_none_or(Endpoint::names_statements);
+        Ok(litellm_repositories::Database::new(
+            self.pools.clone(),
+            Arc::clone(&self.events),
+            self.writer_endpoint.socket_timeout().map_err(map_error)?,
+            names_statements,
+        ))
     }
 }
 
@@ -140,7 +182,7 @@ impl NativeDatabase {
                 writer_endpoint: writer,
                 reader_endpoint: reader,
                 pools,
-                events: Arc::new(PythonEvents(events)),
+                events: Arc::new(PythonEvents(Arc::new(events))),
             })
         })
     }

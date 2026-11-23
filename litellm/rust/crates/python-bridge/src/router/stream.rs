@@ -8,7 +8,10 @@ use litellm_router_core::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use super::{RouterCall, attempt_outcome, config, config_error_to_pyerr, document, host::Finish};
+use super::{
+    RouterCall, attempt_outcome, config, config_error_to_pyerr, document,
+    host::{Finish, PythonRouterHost},
+};
 
 /// A stream recovery a host wrapper asks for.
 #[derive(Clone, Copy)]
@@ -80,15 +83,15 @@ pub(super) fn recover(
         let response = match recovery {
             Recovery::Retry => {
                 router
-                    .retry_stream(op, request, stream_origin, failure)
+                    .retry_stream(&PythonRouterHost, op, request, stream_origin, failure)
                     .await
             }
             Recovery::Fallback => {
                 router
-                    .fallback_stream(op, request, stream_origin, failure)
+                    .fallback_stream(&PythonRouterHost, op, request, stream_origin, failure)
                     .await
             }
         };
-        response.map(Finish::Call)
+        response.map(Finish::Call).map_err(|ended| ended.error)
     }))
 }
