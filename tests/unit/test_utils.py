@@ -3526,28 +3526,55 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
 
 
 @pytest.mark.parametrize("provider", ("anthropic", "openai", "azure", "azure_ai", "hosted_vllm", "litellm_proxy"))
-@pytest.mark.parametrize("source", ("kwargs", "extra_body", "mapped_extra_body"))
-def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str, source: str) -> None:
+def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str) -> None:
     from litellm.utils import add_provider_specific_params_to_optional_params
 
     routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first", "vs-second"]}
-    tools: Final = [{"type": "file_search", "vector_store_ids": ["vs-tool"]}]
-    extras: Final = {**routing_params, "provider_option": True, "tools": tools}
-    passed_params: Final = extras if source == "kwargs" else {"extra_body": extras} if source == "extra_body" else {}
-    optional_params: Final = {"extra_body": extras} if source == "mapped_extra_body" else {}
+    provider_params: Final = {"provider_option": True, "tools": [{"type": "file_search", "vector_store_ids": ["vs"]}]}
 
     result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
-        optional_params=optional_params,
-        passed_params=passed_params,
+        optional_params={},
+        passed_params={**routing_params, **provider_params},
         custom_llm_provider=provider,
         openai_params=[],
     )
 
-    expected_extras: Final = extras if provider == "litellm_proxy" else {"provider_option": True, "tools": tools}
-    expected: Final = (
-        expected_extras if provider == "anthropic" and source == "kwargs" else {"extra_body": expected_extras}
+    forwarded: Final = {**routing_params, **provider_params} if provider == "litellm_proxy" else provider_params
+    assert result == (forwarded if provider == "anthropic" else {"extra_body": forwarded})
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+def test_explicit_extra_body_vector_store_keys_reach_the_provider_as_sent(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    extra_body: Final = {"vector_store_ids": ["vs-first"], "provider_option": True}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={"extra_body": extra_body},
+        custom_llm_provider=provider,
+        openai_params=[],
     )
-    assert result == expected
+
+    assert result == {"extra_body": extra_body}
+
+
+def test_custom_handler_still_receives_vector_store_routing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "my-rag-llm", "custom_handler": litellm.CustomLLM()}]
+    )
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first"]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params=dict(routing_params),
+        custom_llm_provider="my-rag-llm",
+        openai_params=[],
+    )
+
+    assert result == routing_params
 
 
 @pytest.mark.parametrize(
