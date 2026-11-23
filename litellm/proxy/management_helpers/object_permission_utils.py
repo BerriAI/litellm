@@ -84,6 +84,13 @@ class ObjectPermissionUpsert:
     object_permission_id: str
     record: dict[str, object]
 
+    async def write(self, prisma_client: PrismaClient) -> str:
+        row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
+            where={"object_permission_id": self.object_permission_id},
+            data={"create": self.record, "update": self.record},
+        )
+        return row.object_permission_id
+
 
 async def prepare_object_permission_upsert(
     new_object_permission: Mapping[str, object],
@@ -92,15 +99,8 @@ async def prepare_object_permission_upsert(
     can_grant_apps: bool = False,
 ) -> ObjectPermissionUpsert:
     """
-    Read-and-merge half of an object permission upsert; performs no writes.
-
-    Merges the sent grants over the existing row (looked up by
-    ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
-    returns the id plus the full record to upsert. The id is pinned inside the record
-    because the column has ``@default(uuid())``, so a create without it would mint a
-    different id than the one the caller links. ``mcp_tool_permissions`` is serialized
-    to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
-    "3e64" being interpreted as floats).
+    Validate the supplied grants before any dependent writes. The update includes only supplied fields
+    so it cannot restore another writer's changes to omitted grants.
 
     Keeping this separate from the write lets callers run the upsert inside the same
     transaction as the row that links ``object_permission_id``, so a rolled-back
@@ -123,28 +123,12 @@ async def prepare_object_permission_upsert(
             prisma_client=prisma_client,
             field=field,
         )
-    merged: Final[dict[str, object]] = {
-        key: value
-        for key, value in (
-            *existing_fields.items(),
-            *new_object_permission.items(),
-            ("object_permission_id", object_permission_id),
-        )
+    record: Final[dict[str, object]] = {
+        key: safe_dumps(value) if key in ("mcp_event_permissions", "mcp_tool_permissions") else value
+        for key, value in new_object_permission.items()
         if can_grant_apps or key != "apps"
     }
-    record: Final[dict[str, object]] = {
-        **merged,
-        **(
-            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
-            if "mcp_tool_permissions" in merged
-            else {}
-        ),
-        **(
-            {"mcp_event_permissions": safe_dumps(merged["mcp_event_permissions"])}
-            if "mcp_event_permissions" in merged
-            else {}
-        ),
-    }
+    record["object_permission_id"] = object_permission_id
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 
 
@@ -206,17 +190,7 @@ async def handle_update_object_permission_common(
         prisma_client=prisma_client,
         can_grant_apps=can_grant_apps,
     )
-    created_object_permission_row: Final = await ObjectPermissionRepository(prisma_client).table.upsert(
-        where={"object_permission_id": upsert.object_permission_id},
-        data={
-            "create": upsert.record,
-            "update": upsert.record,
-        },
-    )
-
-    verbose_proxy_logger.debug("created_object_permission_row: %s", created_object_permission_row)
-
-    return created_object_permission_row.object_permission_id
+    return await upsert.write(prisma_client)
 
 
 async def invalidate_cached_object_permissions(
