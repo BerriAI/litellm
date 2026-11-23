@@ -110,16 +110,22 @@ class EventStore(Protocol):
 
     async def terminate(self, subscription_id: str) -> None: ...
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         """Terminate the row only while it is still this upstream subscription; False when it changed or ended."""
         ...
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
         ...
 
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
         """Delete the row only while it is still held for this upstream subscription's unsubscribe."""
         ...
 
@@ -142,6 +148,8 @@ class EventStore(Protocol):
         ...
 
     async def has_pending(self, subscription_id: str) -> bool: ...
+
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool: ...
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool: ...
 
@@ -305,31 +313,50 @@ class PrismaEventStore:
     async def terminate(self, subscription_id: str) -> None:
         await self._subscriptions.update_many(where={"id": subscription_id}, data={"status": "terminated"})
 
-    async def end_if_current(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        ended: Final = await self._subscriptions.update_many(
-            where={
-                "id": subscription_id,
-                "upstream_subscription_id": upstream_subscription_id,
-                "status": _NOT_TERMINATED,
-            },
-            data={"status": "terminated"},
-        )
+    async def end_if_current(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
+        async with self._client.tx() as tx:
+            ended: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={
+                    "id": subscription_id,
+                    **({"generation": generation} if generation is not None else {}),
+                    "upstream_subscription_id": upstream_subscription_id,
+                    "status": _NOT_TERMINATED,
+                },
+                data={"status": "terminated"},
+            )
+            if ended:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        held: Final = await self._subscriptions.update_many(
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
+        async with self._client.tx() as tx:
+            held: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where={
+                    "id": subscription_id,
+                    **({"generation": generation} if generation is not None else {}),
+                    "upstream_subscription_id": upstream_subscription_id,
+                    "status": {"in": ["active", "suspended"]},
+                },
+                data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
+            )
+            if held:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
+        return held > 0
+
+    async def delete_held(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> None:
+        await self._subscriptions.delete_many(
             where={
                 "id": subscription_id,
                 "upstream_subscription_id": upstream_subscription_id,
-                "status": {"in": ["active", "suspended"]},
-            },
-            data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
-        )
-        return held > 0
-
-    async def delete_held(self, subscription_id: str, upstream_subscription_id: str | None) -> None:
-        await self._subscriptions.delete_many(
-            where={"id": subscription_id, "upstream_subscription_id": upstream_subscription_id, "status": "pending"}
+                "status": "pending",
+                **({"generation": generation} if generation else {}),
+            }
         )
 
     async def delete(self, subscription_id: str) -> None:
@@ -389,6 +416,26 @@ class PrismaEventStore:
             await self._deliveries.find_first(where={"subscription_id": subscription_id, "delivered_at": None})
             is not None
         )
+
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        """Acknowledge duplicates, but retry if the subscription changed after signature verification."""
+        checked: Final = await self._raw.query_raw(
+            """WITH current AS (
+                SELECT id FROM "LiteLLM_MCPEventSubscription"
+                WHERE id = $1 AND generation = $2 AND status = $3 FOR SHARE
+            ), inserted AS (
+                INSERT INTO "LiteLLM_MCPEventDelivery" (subscription_id, delivery_id, body, webhook_id, next_attempt_at)
+                SELECT id, $4, $5, $6, $7::timestamp FROM current ON CONFLICT (delivery_id) DO NOTHING
+            ) SELECT id FROM current""",
+            delivery.subscription_id,
+            row.generation,
+            row.status,
+            delivery.delivery_id,
+            delivery.body,
+            delivery.webhook_id,
+            delivery.next_attempt_at.isoformat(),
+        )
+        return bool(checked)
 
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         from prisma.errors import UniqueViolationError
