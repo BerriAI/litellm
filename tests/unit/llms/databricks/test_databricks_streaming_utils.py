@@ -15,6 +15,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.streaming_utils import ModelResponseIterator
 
 
@@ -222,3 +223,96 @@ async def test_async_stream_without_done_marker_ends_after_the_last_chunk():
     chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
 
     assert [(chunk["text"], chunk["finish_reason"]) for chunk in chunks] == [("144", ""), ("", "stop")]
+
+
+_SSE_LINES_WITH_NON_DATA_FIELDS: Final = (
+    ": keep-alive",
+    "retry: 1000",
+    "id: 1",
+    "event: message",
+    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
+    '"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":null}]}',
+    "",
+    "id: 2",
+    "event: message",
+    '{"id":"c","object":"chat.completion.chunk","created":1,"model":"m",'
+    '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+    "",
+    "id: 3",
+    "event: message",
+    'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[],'
+    '"usage":{"prompt_tokens":37,"completion_tokens":2,"total_tokens":39}}',
+    "",
+)
+_PARSED_NON_DATA_FIELD_STREAM: Final = [("ok", "", None), ("", "stop", None), ("", "", 37)]
+
+
+def test_sync_stream_skips_sse_non_data_fields():
+    chunks: Final = list(
+        ModelResponseIterator(streaming_response=iter(_SSE_LINES_WITH_NON_DATA_FIELDS), sync_stream=True)
+    )
+
+    assert [
+        (chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks
+    ] == _PARSED_NON_DATA_FIELD_STREAM
+
+
+@pytest.mark.asyncio
+async def test_async_stream_skips_sse_non_data_fields():
+    async def lines():
+        for line in _SSE_LINES_WITH_NON_DATA_FIELDS:
+            yield line
+
+    chunks: Final = [chunk async for chunk in ModelResponseIterator(streaming_response=lines(), sync_stream=False)]
+
+    assert [
+        (chunk["text"], chunk["finish_reason"], (chunk["usage"] or {}).get("prompt_tokens")) for chunk in chunks
+    ] == _PARSED_NON_DATA_FIELD_STREAM
+
+
+def _watsonx_sse_event(event_id: int, body: dict[str, object]) -> bytes:
+    return f"id: {event_id}\nevent: message\ndata: {json.dumps(body)}\n\n".encode()
+
+
+def _watsonx_stream_body() -> bytes:
+    chunk_header: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "granite"}
+    events: Final = (
+        {**chunk_header, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
+        {**chunk_header, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk_header, "choices": [], "usage": {"prompt_tokens": 37, "completion_tokens": 2, "total_tokens": 39}},
+    )
+    return b"".join(_watsonx_sse_event(event_id, event) for event_id, event in enumerate(events, start=1))
+
+
+_WATSONX_STREAM_ARGS: Final = {
+    "model": "watsonx/ibm/granite-4-h-small",
+    "api_base": "http://upstream.test",
+    "token": "test-token",
+    "project_id": "test-project",
+    "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+    "stream": True,
+    "stream_options": {"include_usage": True},
+}
+
+
+def _watsonx_stream_response(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_watsonx_stream_body())
+
+
+def test_watsonx_sync_stream_reports_provider_usage() -> None:
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_watsonx_stream_response)))
+
+    stream: Final = litellm.completion(**_WATSONX_STREAM_ARGS, client=client)
+    usages: Final = [chunk.usage for chunk in stream if getattr(chunk, "usage", None)]
+
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(37, 2)]
+
+
+@pytest.mark.asyncio
+async def test_watsonx_async_stream_reports_provider_usage() -> None:
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_watsonx_stream_response))
+
+    stream: Final = await litellm.acompletion(**_WATSONX_STREAM_ARGS, client=client)
+    usages: Final = [chunk.usage async for chunk in stream if getattr(chunk, "usage", None)]
+
+    assert [(usage.prompt_tokens, usage.completion_tokens) for usage in usages] == [(37, 2)]

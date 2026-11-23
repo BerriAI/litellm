@@ -27,6 +27,7 @@ def _usage_block(usage: Usage) -> ChatCompletionUsageBlock:
 
 
 _JSON_CHUNK: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
+_SSE_NON_DATA_FIELD_PREFIXES: Final = (":", "event:", "id:", "retry:")
 
 
 class ModelResponseIterator:
@@ -153,6 +154,8 @@ class ModelResponseIterator:
 
 
 def _sse_data(raw_chunk: str) -> str:
+    if raw_chunk.startswith(_SSE_NON_DATA_FIELD_PREFIXES):
+        return ""
     return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
 
 
