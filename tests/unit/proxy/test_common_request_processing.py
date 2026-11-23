@@ -6,6 +6,7 @@ import datetime
 import gc
 import gzip
 import json
+import threading
 import time
 import traceback
 import weakref
@@ -46,7 +47,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
-from litellm.litellm_core_utils.core_helpers import FinishEvidence
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -6818,6 +6819,41 @@ class TestStreamingClientDisconnectLogging:
         assert request_data["metadata"]["client_disconnected"] is True
         assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
 
+    @pytest.mark.parametrize(
+        "logged_litellm_params",
+        [
+            {"metadata": {"tags": ["chat"]}},
+            {"metadata": {"user_api_key": "hashed"}, "litellm_metadata": {"tags": ["responses"]}},
+            {"metadata": {"tags": ["chat"]}, "litellm_metadata": {}},
+        ],
+        ids=["chat_route_metadata", "responses_route_litellm_metadata", "empty_litellm_metadata"],
+    )
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_reaches_the_metadata_the_spend_log_reads(
+        self, logged_litellm_params: dict[str, dict[str, object]]
+    ):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        logging_obj: Final = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": copy.deepcopy(logged_litellm_params)}
+        tags_before: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
+        request_data: Final = {
+            "litellm_logging_obj": logging_obj,
+            **copy.deepcopy(logged_litellm_params),
+            "litellm_params": copy.deepcopy(logged_litellm_params),
+        }
+
+        recorded: Final = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+
+        logged: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+        assert recorded is True
+        assert logged["client_disconnected"] is True
+        assert logged["error_information"]["error_class"] == "ClientDisconnected"
+        assert logged.get("tags") == tags_before
+        assert get_litellm_metadata_from_kwargs(request_data)["error_information"]["error_code"] == "499"
+
     @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
         from litellm.proxy.common_request_processing import (
@@ -12248,6 +12284,31 @@ class TestStreamingClientDisconnectBilling:
         assert getattr(usage, "cache_creation_input_tokens", None) == 3
         assert usage.prompt_tokens_details is not None
         assert usage.prompt_tokens_details.cached_tokens == 7
+
+
+    @pytest.mark.asyncio
+    async def test_building_the_responses_disconnect_partial_leaves_the_event_loop_serving(self):
+        other_request_served: Final = threading.Event()
+
+        class _SlowPartialStream:
+            built_while_loop_served = False
+
+            def partial_response_on_disconnect(self) -> None:
+                self.built_while_loop_served = other_request_served.wait(timeout=2)
+
+        async def _serve_other_request() -> None:
+            other_request_served.set()
+
+        logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
+        logging_obj.model_call_details = {}
+        stream: Final = _SlowPartialStream()
+        other_request: Final = asyncio.create_task(_serve_other_request())
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, stream)
+        await other_request
+
+        assert stream.built_while_loop_served is True
+        assert billed is False
 
 
 def _apply_stream_usage_tracking(

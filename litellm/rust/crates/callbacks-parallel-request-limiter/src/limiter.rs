@@ -423,7 +423,9 @@ pub(crate) fn auth_members(
     Ok(members)
 }
 
-fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
+/// The statuses a callback that ran earlier published, as the answer this limiter starts its own
+/// from: a member that is `None` is left out.
+pub fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
     let Some(Value::Object(mut statuses)) = input.fields.raw(Field::RateLimitStatuses)?.cloned()
     else {
         return Ok(None);
@@ -936,6 +938,46 @@ impl ParallelRequestLimiter {
     ) {
         if !facts.reuses_request_slot {
             self.release_stashed(state, false, ctx).await;
+        }
+    }
+
+    /// `raise_if_over_limit_before_body`: refuses a call from its caller alone once a limit that
+    /// needs no body is used up. Counters are only read, so an admitted call is still counted by
+    /// [`Self::pre_call`]. A token limit is left to it too when tokens are reserved before the call.
+    pub async fn before_body(
+        &self,
+        descriptors: &[Descriptor],
+        policy: PolicyFacts,
+        request: Option<&RequestRedis>,
+    ) -> Option<Abort> {
+        if descriptors.is_empty() {
+            return None;
+        }
+        let settings = self.engine.settings();
+        let ctx = Ctx {
+            policy: policy.into(),
+            request,
+        };
+        match self
+            .engine
+            .should_rate_limit(
+                descriptors,
+                true,
+                settings.tpm_reservation_enabled,
+                None,
+                false,
+                ctx,
+            )
+            .await
+        {
+            Ok(response) => refusal::rate_limited(
+                &response,
+                descriptors,
+                None,
+                self.engine.now(),
+                settings.window_size,
+            ),
+            Err(Unverifiable) => Some(refusal::unverifiable()),
         }
     }
 
