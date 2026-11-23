@@ -1,5 +1,7 @@
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import FastAPI, Request
@@ -44,7 +46,33 @@ def test_returns_the_identity_auth_resolved_for_the_caller(caller, role):
     response = client.get(USERS_ME_PATH, headers={"Authorization": "Bearer k"})
 
     assert response.status_code == 200
-    assert response.json() == {"user_id": "u-1", "user_role": role.value, "user_email": "u1@example.com"}
+    assert response.json() == {
+        "user_id": "u-1",
+        "user_role": role.value,
+        "user_email": "u1@example.com",
+        "user_alias": None,
+    }
+
+
+def test_current_user_returns_the_saved_alias_without_email(caller, mocker):
+    user_id = "abc301ea-49c0-47c9-aee2-53b86a550582"
+    authenticate_as(UserAPIKeyAuth(user_id=user_id, user_role=LitellmUserRoles.PROXY_ADMIN))
+    find_unique = AsyncMock(return_value=SimpleNamespace(user_id=user_id, user_alias="Acme Developer"))
+    mocker.patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=SimpleNamespace(litellm_usertable=SimpleNamespace(find_unique=find_unique))),
+    )
+
+    response = client.get(USERS_ME_PATH)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "user_id": user_id,
+        "user_role": "proxy_admin",
+        "user_email": None,
+        "user_alias": "Acme Developer",
+    }
+    find_unique.assert_awaited_once_with(where={"user_id": user_id})
 
 
 def test_key_without_a_user_gets_a_404_problem_document(caller):

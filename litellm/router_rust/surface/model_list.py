@@ -54,6 +54,7 @@ _Stable: TypeAlias = dict[tuple[str, int], tuple[object, Entry]]
 
 
 _DATETIME: Final = TypeAdapter(datetime.datetime)
+_DUMPED_VALUE: Final = TypeAdapter(object)
 _Field = TypeVar("_Field")  # rebind-ok: a TypeVar cannot be Final
 
 
@@ -61,7 +62,7 @@ def _dumped_as(adapter: TypeAdapter[_Field]) -> Callable[[object], object]:
     """A value validated by ``adapter``, then dumped back to its Python form."""
 
     def dump(value: object) -> object:
-        return adapter.dump_python(adapter.validate_python(value), exclude_none=True)
+        return _DUMPED_VALUE.validate_python(adapter.dump_python(adapter.validate_python(value), exclude_none=True))
 
     return dump
 

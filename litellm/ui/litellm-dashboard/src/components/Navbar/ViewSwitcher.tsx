@@ -1,4 +1,5 @@
 import { useTerminology } from "@/contexts/TerminologyContext";
+import { useGrantedApps } from "@/app/(dashboard)/apps/_components/useGrantedApps";
 import React from "react";
 import { useTranslation } from "react-i18next";
 import { usePathname, useRouter } from "next/navigation";
@@ -13,7 +14,7 @@ import { Check, ChevronDown, ChevronsUpDown } from "lucide-react";
 import BetaBadge from "@/components/BetaBadge";
 import { BUILT_IN_MODES, usePluginMode } from "@/contexts/PluginModeContext";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { uiHref } from "@/utils/uiHref";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import i18n from "@/i18n/i18n";
 import { productNames } from "@/i18n/untranslated/productNames";
@@ -25,9 +26,7 @@ const MOYAI = "moyai";
 const LENS = "lens";
 
 function isWorkspaceRoute(pathname: string, workspace: string): boolean {
-  const routes = [uiHref(workspace)];
-  if (process.env.NODE_ENV === "development") routes.push(`/ui/${workspace}`);
-  return routes.some((route) => pathname === route || pathname.startsWith(`${route}/`));
+  return routeSegmentForPathname(pathname) === workspace;
 }
 
 function routeWorkspaceLabel(pathname: string): string | undefined {
@@ -62,6 +61,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
   const router = useRouter();
 
   const chatEnabled = Boolean(uiSettings?.values?.enable_chat_ui);
+  const { isProxyAdmin, opensCustomerManagement } = useGrantedApps();
 
   const normalizedPathname = (pathname ?? "").replace(/\/+$/, "");
   const isChatRoute = isWorkspaceRoute(normalizedPathname, CHAT);
@@ -83,7 +83,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
 
   const selectMode = (key: string) => {
     if (key === CUSTOMER_PORTAL) {
-      router.push(uiHref("customers"));
+      router.push(uiHref(isProxyAdmin ? "customers" : "apps"));
       return;
     }
     if (mode === CUSTOMER_PORTAL && key === GATEWAY) {
@@ -153,7 +153,7 @@ export default function ViewSwitcher({ className, contentClassName, collapsed = 
       ),
       onClick: () => selectMode(e.key),
     })),
-    customerPortalItem,
+    ...[customerPortalItem].filter(() => opensCustomerManagement),
     chatItem,
     {
       key: LENS,

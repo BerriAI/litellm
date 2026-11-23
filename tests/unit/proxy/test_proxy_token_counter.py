@@ -45,7 +45,15 @@ from starlette.types import Message
 import litellm
 from litellm import Router
 from litellm._logging import JsonFormatter, verbose_logger, verbose_proxy_logger
+from litellm.litellm_core_utils.get_model_cost_map import (
+    GetModelCostMap,
+    ModelCostMapReloaded,
+    install_model_cost_map,
+)
+from litellm.litellm_core_utils.tokenizer import HuggingFace
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.messages.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.messages.responses_adapters.transformation import LiteLLMAnthropicToResponsesAPIAdapter
 from litellm.llms.azure_ai.anthropic.count_tokens import handler as azure_ai_count_tokens_http
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -88,7 +96,7 @@ from litellm.proxy.proxy_server import (
 from litellm.responses.litellm_completion_transformation.session_handler import ResponsesSessionHandler
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
-from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import (
     ADDRESSED_RESPONSE_ID_FIELD,
@@ -97,6 +105,8 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -2988,14 +2998,107 @@ _FILL_FORM: Final = {
         "required": list(_FORM_FIELDS),
     },
 }
+_DEPLOYMENT_TOOLS: Final = (
+    {
+        "name": "configure_deployment",
+        "description": (
+            "Configure a model deployment with routing, limits, retries, fallbacks and observability settings for a "
+            "production gateway"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "Deployment name"},
+                "provider": {
+                    "type": "string",
+                    "enum": ["openai", "azure", "anthropic", "bedrock", "vertex_ai", "xai"],
+                    "description": "Upstream provider",
+                },
+                "limits": {
+                    "type": "object",
+                    "description": "Rate limits",
+                    "properties": {
+                        "rpm": {"type": "integer", "description": "Requests per minute"},
+                        "tpm": {"type": "integer", "description": "Tokens per minute"},
+                        "max_parallel": {"type": "integer", "description": "Max parallel requests"},
+                    },
+                },
+                "retries": {
+                    "type": "object",
+                    "description": "Retry policy",
+                    "properties": {
+                        "count": {"type": "integer"},
+                        "backoff_seconds": {"type": "number"},
+                        "retry_on": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Error classes to retry",
+                        },
+                    },
+                },
+                "fallbacks": {
+                    "type": "array",
+                    "description": "Ordered fallback deployments",
+                    "items": {
+                        "type": "object",
+                        "properties": {"model": {"type": "string"}, "weight": {"type": "number"}},
+                    },
+                },
+                "observability": {
+                    "type": "object",
+                    "properties": {
+                        "log_requests": {"type": "boolean"},
+                        "callbacks": {"type": "array", "items": {"type": "string"}},
+                        "sample_rate": {"type": "number", "description": "Fraction of requests to trace"},
+                    },
+                },
+                "tags": {"type": "array", "items": {"type": "string"}, "description": "Free-form tags"},
+            },
+            "required": ["name", "provider"],
+        },
+    },
+    {
+        "name": "search_docs",
+        "description": "Search the internal documentation",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "send_email",
+        "description": "Send an email to a recipient",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "to": {"type": "string", "description": "Recipient address"},
+                "subject": {"type": "string", "description": "Subject line"},
+                "body": {"type": "string", "description": "Plain text body"},
+            },
+            "required": ["to", "subject", "body"],
+        },
+    },
+)
 _WEATHER_SYSTEM: Final = "You are a helpful assistant that answers weather questions briefly."
 _AZURE_GROK_4_1: Final = "azure_ai/grok-4-1-fast-reasoning"
 _FIREWORKS_DEEPSEEK_V4_1: Final = "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash"
 _XAI_GROK_4_3: Final = "xai/grok-4.3"
+_AZURE_GROK_4_1_NON_REASONING: Final = "azure_ai/grok-4-1-fast-non-reasoning"
+_AZURE_GROK_4_3: Final = "azure_ai/grok-4.3"
+_VERTEX_GROK_4_3: Final = "vertex_ai/xai/grok-4.3"
+_MANTLE_GROK_4_3: Final = "bedrock_mantle/xai.grok-4.3"
+_PERPLEXITY_GROK_4_3: Final = "perplexity/xai/grok-4.3"
 _NATIVE_RESPONSES_BASE: Final = {
     _AZURE_GROK_4_1: "https://unused.services.ai.azure.com/models",
+    _AZURE_GROK_4_1_NON_REASONING: "https://unused.services.ai.azure.com/models",
     _FIREWORKS_DEEPSEEK_V4_1: "https://unused.invalid",
     _XAI_GROK_4_3: "https://unused.invalid",
+    _PERPLEXITY_GROK_4_3: "https://unused.invalid",
+    _VERTEX_GROK_4_3: "https://unused.invalid",
 }
 
 
@@ -3013,10 +3116,23 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
     return tuple({**_GET_WEATHER, "name": f"get_weather_{index}"} for index in range(count))
 
 
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
+@pytest.fixture
+def checked_in_cost_map() -> None:
+    assert isinstance(
+        install_model_cost_map(GetModelCostMap.read_local_model_cost_map_bytes()), ModelCostMapReloaded
+    )
+
+
 # usage.input_tokens plus cache_read_input_tokens that POST /v1/messages billed for these requests with the user turn
 # "What is the weather in Paris?" through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and
-# xAI grok-4.3 on 2026-10-29, and usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
-# 2026-10-30
+# xAI grok-4.3 on 2026-10-29, usage.prompt_tokens that POST /v1/chat/completions billed through DeepSeek's API on
+# 2026-10-30, and usage.input_tokens that POST /v1/messages billed through xAI grok-4.3-latest, Kyma grok-4.3, Azure AI
+# Foundry grok-4-1-fast-non-reasoning and grok-4.3, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3 on 2026-11-17,
+# except the request with no tools through Azure AI Foundry grok-4.3, billed on 2026-11-21
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3044,6 +3160,32 @@ def _get_weather_copies(count: int) -> tuple[dict[str, object], ...]:
         ("deepseek/deepseek-v4-pro", None, (_GET_WEATHER,), 367),
         ("deepseek/deepseek-v4-pro", None, _THREE_TOOLS, 493),
         ("deepseek/deepseek-v4-pro", _WEATHER_SYSTEM, (_GET_WEATHER,), 378),
+        ("xai/grok-4.3-latest", None, (), 199),
+        ("xai/grok-4.3-latest", None, (_GET_WEATHER,), 283),
+        ("xai/grok-4.3-latest", None, _THREE_TOOLS, 402),
+        ("xai/grok-4.3-latest", None, (_FILL_FORM,), 530),
+        ("xai/grok-4.3-latest", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        ("kyma/grok-4.3", None, (), 199),
+        ("kyma/grok-4.3", None, (_GET_WEATHER,), 283),
+        ("kyma/grok-4.3", None, _THREE_TOOLS, 402),
+        ("kyma/grok-4.3", None, (_FILL_FORM,), 530),
+        ("kyma/grok-4.3", _WEATHER_SYSTEM, (_GET_WEATHER,), 297),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 175),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_GET_WEATHER,), 369),
+        (_AZURE_GROK_4_1_NON_REASONING, None, _THREE_TOOLS, 457),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (_FILL_FORM,), 562),
+        (_AZURE_GROK_4_1_NON_REASONING, _WEATHER_SYSTEM, (_GET_WEATHER,), 380),
+        (_AZURE_GROK_4_3, None, (), 11),
+        (_AZURE_GROK_4_3, None, (_GET_WEATHER,), 96),
+        (_AZURE_GROK_4_3, None, _THREE_TOOLS, 215),
+        (_AZURE_GROK_4_3, None, (_FILL_FORM,), 343),
+        (_AZURE_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 110),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
+        (_VERTEX_GROK_4_3, None, (_FILL_FORM,), 688),
+        (_VERTEX_GROK_4_3, _WEATHER_SYSTEM, (_GET_WEATHER,), 455),
+        (_MANTLE_GROK_4_3, None, (), 37),
     ],
 )
 async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
@@ -3076,11 +3218,13 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 # usage.input_tokens that POST /v1/responses billed for these requests with the input "What is the weather in Paris?"
-# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29
+# through Azure AI Foundry grok-4-1-fast-reasoning, Fireworks deepseek-v4p1-flash and xAI grok-4.3 on 2026-10-29, and
+# through Azure AI Foundry grok-4-1-fast-non-reasoning, Perplexity xai/grok-4.3 and Vertex AI xai/grok-4.3 on 2026-11-17
+@pytest.mark.usefixtures("checked_in_cost_map")
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("model", "system", "tools", "billed_prompt_tokens"),
@@ -3092,6 +3236,11 @@ async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing
         (_AZURE_GROK_4_1, _WEATHER_SYSTEM, (_GET_WEATHER,), 170),
         (_FIREWORKS_DEEPSEEK_V4_1, None, (_GET_WEATHER,), 304),
         (_XAI_GROK_4_3, None, (_GET_WEATHER,), 283),
+        (_AZURE_GROK_4_1_NON_REASONING, None, (), 181),
+        (_PERPLEXITY_GROK_4_3, None, (), 218),
+        (_VERTEX_GROK_4_3, None, (), 342),
+        (_VERTEX_GROK_4_3, None, (_GET_WEATHER,), 441),
+        (_VERTEX_GROK_4_3, None, _THREE_TOOLS, 560),
     ],
 )
 async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_shipped_framing(
@@ -3125,7 +3274,7 @@ async def test_responses_estimate_matches_the_billed_responses_prompt_with_the_s
     )
 
     assert counted.count_source == "local_estimate"
-    assert abs(counted.total_tokens - billed_prompt_tokens) <= billed_prompt_tokens * 0.05
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
 
 
 def _single_deployment_router(litellm_params: dict[str, object], model_info: dict[str, object]) -> Router:
@@ -3214,6 +3363,65 @@ async def test_azure_responses_estimate_stays_at_or_just_over_the_billed_prompt_
     )
 
     assert billed_prompt_tokens <= counted <= billed_prompt_tokens * 1.02
+
+
+# usage.input_tokens that POST /v1/messages billed through Bedrock Mantle xai.grok-4.3, and POST /v1/responses through
+# Perplexity xai/grok-4.3 and Azure AI Foundry grok-4-1-fast-non-reasoning, on 2026-11-17 for the input "What is the
+# weather in Paris?" with these tools. Each host bills more hidden tokens per tool as the schema grows, so one flat
+# tool framing per host lands from 0 to 175 tokens over these bills on Mantle, 102 on Perplexity and 74 on Azure
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "responses", "tools", "billed_prompt_tokens", "most_over"),
+    [
+        (_MANTLE_GROK_4_3, False, (_GET_WEATHER,), 114, 180),
+        (_MANTLE_GROK_4_3, False, _THREE_TOOLS, 256, 180),
+        (_MANTLE_GROK_4_3, False, (_FILL_FORM,), 424, 180),
+        (_MANTLE_GROK_4_3, False, _DEPLOYMENT_TOOLS, 789, 180),
+        (_PERPLEXITY_GROK_4_3, True, (_GET_WEATHER,), 308, 110),
+        (_PERPLEXITY_GROK_4_3, True, _THREE_TOOLS, 442, 110),
+        (_PERPLEXITY_GROK_4_3, True, (_FILL_FORM,), 555, 110),
+        (_PERPLEXITY_GROK_4_3, True, _DEPLOYMENT_TOOLS, 913, 110),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_GET_WEATHER,), 178, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _THREE_TOOLS, 276, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, (_FILL_FORM,), 371, 80),
+        (_AZURE_GROK_4_1_NON_REASONING, True, _DEPLOYMENT_TOOLS, 614, 80),
+    ],
+)
+async def test_a_host_whose_tool_prompt_grows_with_the_schema_counts_at_or_a_bounded_amount_over_the_bill(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    responses: bool,
+    tools: tuple[dict[str, object], ...],
+    billed_prompt_tokens: int,
+    most_over: int,
+):
+    router: Final = _single_deployment_router(
+        {"model": model, "api_base": _NATIVE_RESPONSES_BASE.get(model, "https://unused.invalid")}, {}
+    )
+    sent_tools: Final = tuple(_responses_function(tool) for tool in tools) if responses else tools
+
+    counted: Final = await _count_with_router(monkeypatch, router, sent_tools, responses)
+
+    assert (
+        billed_prompt_tokens <= counted <= billed_prompt_tokens + most_over
+    ), f"{model} counted {counted} for a request billed {billed_prompt_tokens}"
+
+
+@pytest.mark.usefixtures("checked_in_cost_map")
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tools", [(), (_GET_WEATHER,), _THREE_TOOLS])
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(
+    monkeypatch: pytest.MonkeyPatch, tools: tuple[dict[str, object], ...]
+):
+    govcloud: Final = _single_deployment_router(
+        {"model": "bedrock_mantle/us-gov-west-1/xai.grok-4.3", "api_base": "https://unused.invalid"}, {}
+    )
+    commercial: Final = _single_deployment_router({"model": _MANTLE_GROK_4_3, "api_base": "https://unused.invalid"}, {})
+
+    assert await _count_with_router(monkeypatch, govcloud, tools, False) == await _count_with_router(
+        monkeypatch, commercial, tools, False
+    )
 
 
 # POST /v1/responses billed the same usage.input_tokens with strict unset and false on 2026-10-29, 283 for one tool
@@ -3396,6 +3604,119 @@ def _shipped_kimi_k3_framing() -> int:
     framing: Final = cost_map_entry("bedrock/us.moonshotai.kimi-k3")["token_count_framing"]
     assert isinstance(framing, int)
     return framing
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = _single_deployment_router({"model": model}, {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chat_fallback", [False, True])
+@pytest.mark.parametrize("with_edits", [False, True])
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_provider_count_removes_only_the_first_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, chat_fallback: bool, with_edits: bool, as_blocks: bool
+) -> None:
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", chat_fallback)
+    router: Final = _single_deployment_router(
+        {"model": "openai/gpt-6.2-sol", "api_key": "test-key", "store": False}, {}
+    )
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    bodies: Final[list[dict[str, object]]] = []  # mutable-ok: records the HTTP peer's input
+
+    def peer(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47}, request=request)
+
+    with patch.object(
+        openai_count_tokens_http,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        assert (
+            await _input_tokens(
+                router,
+                {
+                    "model": "counted",
+                    "messages": [{"role": "user", "content": "Hello"}],
+                    "system": [
+                        {"type": "text", "text": billing_a},
+                        {"type": "text", "text": billing_b},
+                        {"type": "text", "text": "Be concise."},
+                    ]
+                    if as_blocks
+                    else billing_a + "\n" + billing_b + "\nBe concise.",
+                    **({"context_management": _CLEAR_TOOL_USES} if with_edits else {}),
+                },
+            )
+            == 47
+        )
+
+    assert bodies[0]["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+            if as_blocks
+            else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+        },
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]},
+    ]
+
+
+@pytest.mark.parametrize("as_blocks", [False, True])
+def test_generation_keeps_the_second_adjacent_billing_block(as_blocks: bool) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "openai/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [
+            {"type": "text", "text": billing_a},
+            {"type": "text", "text": billing_b},
+            {"type": "text", "text": "Be concise."},
+        ]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    responses: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(request)
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": billing_b}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else billing_b + "\nBe concise.",
+    }
+    assert responses["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": billing_b}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": billing_b + "\nBe concise."}],
+    }
 
 
 @pytest.mark.asyncio
@@ -4332,6 +4653,85 @@ class _MistralCountTokensPeer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("prefix", ["ordinary", "single", "adjacent", "empty_first", "literal", "header_only", "style"])
+async def test_mistral_count_system_matches_the_generation_http_payload(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, prefix: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    before, after = {
+        "ordinary": (["answer=OK"], ["answer=OK"]),
+        "single": ([billing_a, "Be concise."], ["Be concise."]),
+        "adjacent": ([billing_a, billing_b, "answer=OK"], [billing_b, "answer=OK"]),
+        "empty_first": (["", billing_b, "Be concise."], ["", billing_b, "Be concise."]),
+        "literal": (
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+            ["x-anthropic-billing-header: not metadata", "answer=OK"],
+        ),
+        "header_only": ([billing_a], []),
+        "style": ([billing_a, "style=concise"], ["style=concise"]),
+    }[prefix]
+    system: Final = [{"type": "text", "text": text} for text in before] if as_blocks else "\n".join(before)
+    expected: Final = ("" if as_blocks else "\n").join(after)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "mistral-agent",
+                "litellm_params": {"model": "mistral/mistral-large-4", "api_key": "test-key"},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock:
+        counted: Final = respx.post("https://api.mistral.ai/v1/responses/input_tokens").mock(
+            return_value=httpx.Response(200, json={"input_tokens": 57})
+        )
+        generated: Final = respx.post("https://api.mistral.ai/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-test",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "mistral-large-4",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 57, "completion_tokens": 1, "total_tokens": 58},
+                },
+            )
+        )
+        assert (
+            await _input_tokens(
+                router, {"model": "mistral-agent", "messages": [{"role": "user", "content": "Hello"}], "system": system}
+            )
+            == 57
+        )
+        await litellm.anthropic.messages.acreate(
+            model="mistral/mistral-large-4",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "Hello"}],
+            system=system,
+            max_tokens=32,
+        )
+    sent: Final = json.loads(generated.calls.last.request.content)
+    assert sent["messages"] == ([{"role": "system", "content": expected}] if expected else []) + [
+        {"role": "user", "content": "Hello"}
+    ]
+    count_body: Final = json.loads(counted.calls.last.request.content)
+    assert count_body == {
+        "model": "mistral-large-4",
+        "input": (
+            [{"type": "message", "role": "developer", "content": [{"type": "input_text", "text": expected}]}]
+            if expected
+            else []
+        )
+        + [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Hello"}]}],
+    }
+
+
+@pytest.mark.asyncio
 async def test_messages_count_tokens_sends_mistral_the_messages_the_inference_polyfill_edits() -> None:
     router: Final = Router(
         model_list=[
@@ -4583,6 +4983,36 @@ class _BedrockCountTokensBody(BaseModel):
 def _bedrock_counted_request(request_body: bytes) -> str:
     invoke_model: Final = _BedrockCountTokensBody.model_validate_json(request_body).input.invoke_model
     return base64.b64decode(invoke_model.body).decode()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("provider", ["gemini", "bedrock"])
+async def test_nontranslating_provider_count_removes_only_the_first_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, provider: str
+) -> None:
+    billing_a: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    billing_b: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    body: Final[dict[str, JsonValue]] = {
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": [{"type": "text", "text": text} for text in (billing_a, billing_b, "Be concise.")]
+        if as_blocks
+        else billing_a + "\n" + billing_b + "\nBe concise.",
+    }
+    expected: Final = (
+        [{"text": text} for text in (billing_b, "Be concise.")]
+        if as_blocks
+        else [{"text": billing_b + "\nBe concise."}]
+    )
+    if provider == "bedrock":
+        response, sent = await _count_on_a_bridged_provider_count_api(body, monkeypatch)
+        assert response == {"input_tokens": 57, "litellm_count_source": "provider"}
+        assert json.loads(sent[0].content)["input"]["converse"]["system"] == expected
+        return
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, sent_bodies = await _count_through_the_messages_endpoint(router, {**body, "model": "gemini-agent"})
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(sent_bodies[0])["generateContentRequest"]["systemInstruction"] == {"parts": expected}
 
 
 async def _count_on_a_bridged_provider_count_api(
@@ -5736,6 +6166,9 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
     spend_logs.assert_awaited_once_with("chatcmpl-stored", ("chatcmpl-stored", "resp_client_form"))
 
 
+_MULTILINGUAL_TEXT: Final = "日本語のテキストとहिन्दी पाठ और русский текст. " * 20
+
+
 @pytest.mark.asyncio
 async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base_models_tokenizer(
     monkeypatch: pytest.MonkeyPatch,
@@ -5754,12 +6187,568 @@ async def test_token_counter_counts_a_custom_azure_deployment_name_with_its_base
             ]
         ),
     )
-    messages: Final = [{"role": "user", "content": "日本語のテキストとहिन्दी पाठ और русский текст. " * 20}]
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
 
     named: Final = await count_request_tokens(request=TokenCountRequest(model="named", messages=messages))
     served: Final = await count_request_tokens(request=TokenCountRequest(model="served", messages=messages))
 
     assert named.total_tokens == served.total_tokens
+
+
+_LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "lookup_order",
+            "description": "Look up an order by its id",
+            "parameters": {"type": "object", "properties": {"order_id": {"type": "string"}}, "required": ["order_id"]},
+        },
+    }
+)
+
+
+_FLASH_BASE_MODEL: Final = "azure_ai/deepseek-v4-flash"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("served_model", "named_params", "named_model_info", "tools"),
+    [
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            [dict(_LOOKUP_TOOL)],
+            id="model_info base_model, one tool",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash"},
+            {"base_model": _FLASH_BASE_MODEL},
+            None,
+            id="model_info base_model, text only",
+        ),
+        pytest.param(
+            "azure_ai/DeepSeek-V4-Flash-0731",
+            {"model": "azure_ai/my-flash", "base_model": _FLASH_BASE_MODEL},
+            {},
+            [dict(_LOOKUP_TOOL)],
+            id="litellm_params base_model",
+        ),
+        pytest.param(
+            "anthropic/claude-opus-5-5",
+            {"model": "anthropic/my-opus"},
+            {"base_model": "anthropic/claude-opus-5-5"},
+            None,
+            id="provider-prefixed claude base_model",
+        ),
+    ],
+)
+async def test_token_counter_counts_a_custom_named_deployment_like_the_base_model_it_declares(
+    monkeypatch: pytest.MonkeyPatch,
+    served_model: str,
+    named_params: Mapping[str, str],
+    named_model_info: Mapping[str, str],
+    tools: list[dict[str, JsonValue]] | None,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "https://example.services.ai.azure.com"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "named",
+                    "litellm_params": {**named_params, **credentials},
+                    "model_info": dict(named_model_info),
+                },
+                {"model_name": "served", "litellm_params": {"model": served_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    named: Final = await _token_counter_route(TokenCountRequest(model="named", messages=messages, tools=tools))
+    served: Final = await _token_counter_route(TokenCountRequest(model="served", messages=messages, tools=tools))
+
+    assert named.total_tokens == served.total_tokens
+
+
+@pytest.fixture
+def no_huggingface_tokenizer_loaded() -> Iterator[None]:
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+    yield
+    _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES.flush_cache()
+
+
+_LLAMA_3_HUB_TOKENIZER: Final = "Xenova/llama-3-tokenizer"
+
+
+async def _token_counter_route(request: TokenCountRequest) -> TokenCountResponse:
+    return await token_counter(
+        request=request, http_request=_json_request({}, "python-httpx/0.28.1"), fastapi_response=Response()
+    )
+
+
+def _stub_hub_downloads(monkeypatch: pytest.MonkeyPatch, download: Callable[[str], None]) -> None:
+    downloaded: Final = litellm.utils._load_huggingface_tokenizer("deepseek")
+
+    def from_pretrained(identifier: str, revision: str = "main", token: str | None = None) -> HuggingFace:
+        download(identifier)
+        return downloaded
+
+    monkeypatch.setattr(litellm.utils.tokenizer_dispatch, "from_pretrained", from_pretrained)
+
+
+def _hanging_llama_download(
+    monkeypatch: pytest.MonkeyPatch, download_started: threading.Event, hub_released: threading.Event
+) -> None:
+    def llama_download_hangs(identifier: str) -> None:
+        if identifier == _LLAMA_3_HUB_TOKENIZER:
+            download_started.set()
+            hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, llama_download_hangs)
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_custom_named_llama_deployment_counts_with_tiktoken_while_its_tokenizer_download_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                }
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(identifier: str) -> None:
+        downloads.append(identifier)
+        download_started.set()
+        hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def burst_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            burst: Final = asyncio.gather(*(tokenizer_type() for _ in range(20)))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return tuple(await asyncio.wait_for(burst, 8))
+        finally:
+            hub_released.set()
+
+    assert set(_run_on_skippable_clock(burst_past_the_wait)) == {"openai_tokenizer"}
+    assert downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_custom_named_deepseek_deployment_keeps_its_bundled_tokenizer_while_a_hub_download_fills_the_load_slots(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                },
+                {
+                    "model_name": "my-deepseek",
+                    "litellm_params": {"model": "hosted_vllm/my-deepseek", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"},
+                },
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def deepseek_while_the_llama_download_hangs() -> str:
+        llama: Final = asyncio.ensure_future(tokenizer_type("my-llama"))
+        try:
+            await asyncio.to_thread(download_started.wait, 10)
+            return await asyncio.wait_for(tokenizer_type("my-deepseek"), 5)
+        finally:
+            hub_released.set()
+            await llama
+
+    assert asyncio.run(deepseek_while_the_llama_download_hangs()) == "huggingface_tokenizer"
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    "model_info",
+    [{}, {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"}],
+    ids=["no base_model", "base_model naming its own model"],
+)
+def test_named_llama_deployment_keeps_waiting_for_its_slow_tokenizer_download(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, str]
+) -> None:
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "llama-3.3-70b",
+                    "litellm_params": {
+                        "model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct",
+                        "api_base": "http://127.0.0.1:9/v1",
+                    },
+                    "model_info": model_info,
+                }
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type() -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model="llama-3.3-70b", messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(tokenizer_type())
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            await asyncio.wait({count}, timeout=1)
+        finally:
+            hub_released.set()
+        return (await asyncio.wait_for(count, 8),)
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("huggingface_tokenizer",)
+
+
+def _custom_named_llama_router(model_info: Mapping[str, object]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "my-llama",
+                "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct", **model_info},
+            }
+        ]
+    )
+
+
+async def _my_llama_tokenizer_type() -> str:
+    response: Final = await _token_counter_route(
+        TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+    )
+    return response.tokenizer_type or ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_custom_named_llama_deployment_counts_with_its_base_models_tokenizer_once_downloaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _custom_named_llama_router({}))
+    _stub_hub_downloads(monkeypatch, lambda identifier: None)
+
+    assert await _my_llama_tokenizer_type() == "huggingface_tokenizer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    ("model", "base_model"),
+    [
+        pytest.param(
+            "anthropic/claude-sonnet-5-5", "bedrock/us.anthropic.claude-sonnet-5-5", id="bundled claude tokenizer"
+        ),
+        pytest.param(
+            "databricks/databricks-meta-llama-3-3-70b-instruct",
+            "bedrock/meta.llama3-3-70b-instruct-v1:0",
+            id="hub llama tokenizer",
+        ),
+    ],
+)
+async def test_base_model_without_a_tokenizer_leaves_the_deployment_on_its_own_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch, model: str, base_model: str
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": model, **credentials}},
+            ]
+        ),
+    )
+    _stub_hub_downloads(monkeypatch, lambda identifier: None)
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based: Final = await _token_counter_route(TokenCountRequest(model="based", messages=messages))
+    own: Final = await _token_counter_route(TokenCountRequest(model="own", messages=messages))
+
+    assert (based.tokenizer_type, based.total_tokens) == ("huggingface_tokenizer", own.total_tokens)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_deployment_with_a_custom_tokenizer_never_waits_for_its_base_models_tokenizer_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        _custom_named_llama_router(
+            {"custom_tokenizer": {"identifier": "lit-tests/my-llama", "revision": "main", "auth_token": None}}
+        ),
+    )
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def llama_download_hangs(identifier: str) -> None:
+        downloads.append(identifier)
+        if identifier == _LLAMA_3_HUB_TOKENIZER:
+            hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, llama_download_hangs)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+    try:
+        tokenizer_type: Final = await asyncio.wait_for(_my_llama_tokenizer_type(), 5)
+    finally:
+        hub_released.set()
+
+    assert tokenizer_type == "huggingface_tokenizer"
+    assert downloads == ["lit-tests/my-llama"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_cooling_down_deployment_with_a_custom_tokenizer_never_downloads_its_base_models_tokenizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    router: Final = _custom_named_llama_router(
+        {
+            "id": "my-llama-deployment",
+            "custom_tokenizer": {"identifier": "lit-tests/my-llama", "revision": "main", "auth_token": None},
+        }
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    downloads: Final[list[str]] = []
+    _stub_hub_downloads(monkeypatch, downloads.append)
+    router.health().cooldowns.add_deployment_to_cooldown(
+        model_id="my-llama-deployment",
+        original_exception=Exception("rate limited"),
+        exception_status=429,
+        cooldown_time=60,
+    )
+
+    assert await _my_llama_tokenizer_type() == "openai_tokenizer"
+    assert downloads == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_custom_named_deployments_whose_base_models_share_a_tokenizer_download_it_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": name,
+                    "litellm_params": {"model": f"hosted_vllm/{name}", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": f"hosted_vllm/meta-llama/{base_model}"},
+                }
+                for name, base_model in (
+                    ("my-llama-70b", "Llama-3.3-70B-Instruct"),
+                    ("my-llama-8b", "Llama-3.1-8B-Instruct"),
+                )
+            ]
+        ),
+    )
+    download_started: Final = threading.Event()
+    second_download: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    downloads: Final[list[str]] = []
+
+    def hanging_download(identifier: str) -> None:
+        downloads.append(identifier)
+        (second_download if download_started.is_set() else download_started).set()
+        hub_released.wait(10)
+
+    _stub_hub_downloads(monkeypatch, hanging_download)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def tokenizer_type(model: str) -> str:
+        response: Final = await _token_counter_route(
+            TokenCountRequest(model=model, messages=[{"role": "user", "content": "What is new?"}])
+        )
+        return response.tokenizer_type or ""
+
+    first: Final = asyncio.ensure_future(tokenizer_type("my-llama-70b"))
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+        second: Final = asyncio.ensure_future(tokenizer_type("my-llama-8b"))
+        await asyncio.to_thread(second_download.wait, 0.5)
+    finally:
+        hub_released.set()
+
+    assert await asyncio.wait_for(asyncio.gather(first, second), 8) == ["huggingface_tokenizer"] * 2
+    assert downloads == [_LLAMA_3_HUB_TOKENIZER]
+
+
+@pytest.mark.asyncio
+async def test_deployment_whose_own_model_has_a_tokenizer_keeps_it_when_base_model_names_another(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credentials: Final = {"api_key": "sk-test", "api_base": "http://127.0.0.1:9/v1"}
+    own_model: Final = "hosted_vllm/deepseek-ai/DeepSeek-V4-Flash"
+    base_model: Final = "anthropic/claude-opus-5-5"
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "based",
+                    "litellm_params": {"model": own_model, **credentials},
+                    "model_info": {"base_model": base_model},
+                },
+                {"model_name": "own", "litellm_params": {"model": own_model, **credentials}},
+                {"model_name": "base", "litellm_params": {"model": base_model, **credentials}},
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": _MULTILINGUAL_TEXT}]
+
+    based, own, base = [
+        (await _token_counter_route(TokenCountRequest(model=name, messages=messages))).total_tokens
+        for name in ("based", "own", "base")
+    ]
+
+    assert based == own != base
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+async def test_framed_count_still_estimates_while_base_model_tokenizer_downloads_hang(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "my-llama",
+                    "litellm_params": {"model": "hosted_vllm/my-llama", "api_base": "http://127.0.0.1:9/v1"},
+                    "model_info": {"base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct"},
+                },
+                {
+                    "model_name": "kimi",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {
+                        "custom_tokenizer": {"identifier": "lit-tests/kimi", "revision": "main", "auth_token": None}
+                    },
+                },
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_MAX_RUNNING", 1)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+    llama: Final = asyncio.ensure_future(
+        _token_counter_route(
+            TokenCountRequest(model="my-llama", messages=[{"role": "user", "content": "What is new?"}])
+        )
+    )
+    try:
+        await asyncio.to_thread(download_started.wait, 10)
+        framed: Final = await asyncio.wait_for(_count_status("kimi"), 5)
+    finally:
+        hub_released.set()
+        await llama
+
+    assert framed == "local_estimate"
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_custom_named_deployment_counts_like_before_while_its_base_model_tokenizer_download_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "framed-llama",
+                    "litellm_params": {"model": "bedrock/us.moonshotai.kimi-k3"},
+                    "model_info": {
+                        "base_model": "hosted_vllm/meta-llama/Llama-3.3-70B-Instruct",
+                        "token_count_framing": 7,
+                    },
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server, "_get_provider_token_counter", lambda deployment, model: (counter, model, "bedrock")
+    )
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(_count_status("framed-llama"))
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return (await asyncio.wait_for(count, 8),)
+        finally:
+            hub_released.set()
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("local_estimate",)
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(

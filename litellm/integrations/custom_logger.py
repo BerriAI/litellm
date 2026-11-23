@@ -23,7 +23,6 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LLMResponseTypes,
     ModelResponse,
-    ModelResponseStream,
     StandardAuditLogPayload,
     StandardBatchLineItemsPayload,
     StandardCallbackDynamicParams,
@@ -31,7 +30,7 @@ from litellm.types.utils import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import HTTPException
+    from fastapi import APIRouter, HTTPException
     from opentelemetry.trace import Span as _Span
 
     from litellm.caching.caching import DualCache
@@ -110,6 +109,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+
+    async def async_setup_proxy(self) -> "APIRouter | None":
+        """
+        Runs once when the proxy starts, before it serves traffic. Raising aborts startup.
+
+        HTTP API routes on a returned router are added to the proxy behind LiteLLM key auth.
+        Websocket routes, mounts and plain Starlette routes are refused.
+        """
+        return None
+
+    async def async_close_proxy(self) -> None:
+        """Runs when the proxy shuts down, after in-flight requests and queued logs have drained."""
 
     @staticmethod
     def get_callback_env_vars(callback_name: str | None = None) -> list[str]:
@@ -321,7 +332,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
@@ -555,7 +566,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         user_api_key_dict: UserAPIKeyAuth,
         response: Any,
         request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+    ) -> AsyncGenerator[object, None]:
         async for item in response:
             yield item
 

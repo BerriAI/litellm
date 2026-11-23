@@ -4,21 +4,28 @@ use axum::{
 };
 use litellm_error::Source;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, thiserror::Error, strum::IntoStaticStr)]
 pub enum Error {
     #[error("missing or invalid bearer token")]
+    #[strum(serialize = "invalid_token")]
     InvalidToken,
     #[error("missing or invalid API key")]
+    #[strum(serialize = "invalid_api_key")]
     InvalidApiKey,
     #[error("credential has expired")]
+    #[strum(serialize = "expired")]
     Expired,
     #[error("operation is not permitted")]
+    #[strum(serialize = "forbidden")]
     Forbidden,
     #[error("authentication service unavailable")]
+    #[strum(serialize = "unavailable")]
     Unavailable(#[source] Source),
     #[error("gateway auth not configured")]
+    #[strum(serialize = "unconfigured")]
     Unconfigured,
     #[error("authenticated request context is missing")]
+    #[strum(serialize = "missing_identity")]
     MissingIdentity,
 }
 

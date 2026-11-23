@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from httpx import Headers, Response
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import subscript
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, ensure_api_route, join_api_base
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -22,6 +24,8 @@ if TYPE_CHECKING:
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AnthropicBatchRequestCounts(TypedDict, total=False):
@@ -302,6 +306,8 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
         from litellm.cost_calculator import BaseTokenUsageProcessor
         from litellm.types.utils import Usage
 
+        from ..chat.transformation import response_body
+
         response_text: Final = raw_response.text.strip()
         all_usage: Final[list[Usage]] = []
 
@@ -313,11 +319,11 @@ class AnthropicBatchesConfig(BaseBatchesConfig):
                 if not line:
                     continue
                 try:
-                    response_json: Mapping[str, Mapping[str, dict[str, object]]] = json.loads(line)
+                    response_json = _DECODED_JSON.validate_python(json.loads(line))
                     # Update model_response with the parsed JSON
-                    completion_response = response_json["result"]["message"]
+                    completion_response = subscript(subscript(response_json, "result"), "message")
                     transformed_response = self.anthropic_chat_config.transform_parsed_response(
-                        completion_response=completion_response,
+                        completion_response=response_body(completion_response),
                         raw_response=raw_response,
                         model_response=model_response,
                     )

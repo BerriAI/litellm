@@ -95,8 +95,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.119",
-    "litellm-enterprise==0.1.87",
+    "litellm-proxy-extras==0.4.120",
+    "litellm-enterprise==0.1.88",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -255,6 +255,7 @@ dev = [
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -298,6 +299,7 @@ ci = [
     # The Riva tests serve NVIDIA's own message definitions, which checks
     # LiteLLM's hand-written copy of them on every run.
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -595,6 +597,7 @@ banned-module-level-imports = ["prisma"]
 "litellm.rust_bridge._native.RustTagRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustObjectPermissionRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustSpendLogRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 
 [tool.ruff.lint.per-file-ignores]
 "litellm/main.py" = ["F401"]
