@@ -513,9 +513,10 @@ class BaseResponsesAPIStreamingIterator:
                         "type": ResponsesAPIStreamEvents.ERROR.value,
                     }
                 )
+                tool_input_fix: Final = _string_tool_input_fix(typed_chunk)
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=_with_string_tool_input(typed_chunk),
+                    parsed_chunk={**typed_chunk, **tool_input_fix} if tool_input_fix else typed_chunk,
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -1925,14 +1926,14 @@ _STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
 )
 
 
-def _with_string_tool_input(chunk: dict[str, object]) -> dict[str, object]:
+def _string_tool_input_fix(chunk: Mapping[str, object]) -> Mapping[str, str]:
     field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
     if field_name is None:
-        return chunk
+        return {}
     value: Final = chunk.get(field_name)
     if isinstance(value, str):
-        return chunk
-    return {**chunk, field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
+        return {}
+    return {field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
