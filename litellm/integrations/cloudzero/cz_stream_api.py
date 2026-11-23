@@ -19,13 +19,33 @@
 """Output modules for writing CBF data to various destinations."""
 
 import zoneinfo
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Literal, Protocol
 
 import httpx
 import polars as pl
 from rich.console import Console
+
+
+class _ConsolePrinter(Protocol):
+    """The part of rich's Console this module calls."""
+
+    def print(self, *objects: object) -> None: ...
+
+
+class _SizedFrame(Protocol):
+    """The part of a polars DataFrame the batching code calls without reading rows."""
+
+    def is_empty(self) -> bool: ...
+
+    def __len__(self) -> int: ...
+
+
+class _RowFrame(_SizedFrame, Protocol):
+    """The part of a polars DataFrame the payload code calls to read rows."""
+
+    def iter_rows(self, *, named: Literal[True]) -> Iterable[dict[str, object]]: ...
 
 
 class CloudZeroStreamer:
@@ -36,7 +56,7 @@ class CloudZeroStreamer:
         self.api_key = api_key
         self.connection_id = connection_id
         self.base_url = "https://api.cloudzero.com"
-        self.console = Console()
+        self.console: _ConsolePrinter = Console()
 
         # Set timezone - default to UTC
         self.user_timezone: zoneinfo.ZoneInfo | timezone
@@ -49,7 +69,7 @@ class CloudZeroStreamer:
         else:
             self.user_timezone = timezone.utc
 
-    def send_batched(self, data: pl.DataFrame, operation: str = "replace_hourly") -> None:
+    def send_batched(self, data: _SizedFrame, operation: str = "replace_hourly") -> None:
         """Send CBF data in daily batches to CloudZero AnyCost API."""
         if data.is_empty():
             self.console.print("[yellow]No data to send to CloudZero[/yellow]")
@@ -67,7 +87,7 @@ class CloudZeroStreamer:
         for batch_date, batch_data in daily_batches.items():
             self._send_daily_batch(batch_date, batch_data, operation)
 
-    def _group_by_date(self, data: pl.DataFrame) -> dict[str, pl.DataFrame]:
+    def _group_by_date(self, data: pl.DataFrame) -> dict[str, _RowFrame]:
         """Group data by date, converting to UTC and validating dates."""
         daily_batches: Final[dict[str, list[dict[str, object]]]] = {}
 
@@ -153,7 +173,7 @@ class CloudZeroStreamer:
         except ValueError as e:
             raise ValueError(f"Could not parse timestamp '{timestamp_str}': {e}")
 
-    def _send_daily_batch(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> None:
+    def _send_daily_batch(self, batch_date: str, batch_data: _RowFrame, operation: str) -> None:
         """Send a single daily batch to CloudZero API."""
         if batch_data.is_empty():
             return
@@ -189,7 +209,7 @@ class CloudZeroStreamer:
             )
             raise
 
-    def _prepare_batch_payload(self, batch_date: str, batch_data: pl.DataFrame, operation: str) -> Mapping[str, object]:
+    def _prepare_batch_payload(self, batch_date: str, batch_data: _RowFrame, operation: str) -> Mapping[str, object]:
         """Prepare batch payload according to CloudZero AnyCost API format."""
         # Convert batch_date to month for the API (YYYY-MM format)
         try:
@@ -200,11 +220,9 @@ class CloudZeroStreamer:
             month_str = datetime.now().strftime("%Y-%m")
 
         # Convert DataFrame rows to API format
-        data_records: Final = []
-        for row in batch_data.iter_rows(named=True):
-            record = self._convert_cbf_to_api_format(row)
-            if record:
-                data_records.append(record)
+        data_records: Final = [
+            record for row in batch_data.iter_rows(named=True) if (record := self._convert_cbf_to_api_format(row))
+        ]
 
         payload: Final[Mapping[str, object]] = {"month": month_str, "operation": operation, "data": data_records}
 

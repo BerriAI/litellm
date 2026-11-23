@@ -42,7 +42,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AnthropicTextError(BaseLLMException):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.anthropic.com/v1/complete")
@@ -86,14 +86,14 @@ class AnthropicTextConfig(BaseConfig):
     # makes headers for API call
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if api_key is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
@@ -111,10 +111,10 @@ class AnthropicTextConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         prompt: Final = self._get_anthropic_text_prompt_from_messages(messages=messages, model=model)
         ## Load Config
         config: Final[Mapping[str, object]] = MappingProxyType(litellm.AnthropicTextConfig.get_config())
@@ -132,7 +132,7 @@ class AnthropicTextConfig(BaseConfig):
 
         return data
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Anthropic /complete API Ref: https://docs.anthropic.com/en/api/complete
         """
@@ -149,11 +149,11 @@ class AnthropicTextConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Follows the same logic as the AnthropicConfig.map_openai_params method (which is the Anthropic /messages API)
 
@@ -186,10 +186,10 @@ class AnthropicTextConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -228,7 +228,9 @@ class AnthropicTextConfig(BaseConfig):
         setattr(model_response, "usage", usage)
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AnthropicTextError(
             status_code=status_code,
             message=error_message,
