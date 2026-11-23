@@ -25,7 +25,11 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import StartupOutputSettings, print_startup_message, print_startup_warning, terminal_text
-from litellm.constants import DEFAULT_MAX_REQUEST_HEADER_SIZE, DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.constants import (
+    DEFAULT_MAX_REQUEST_HEADER_SIZE,
+    DEFAULT_NUM_WORKERS_LITELLM_PROXY,
+    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
+)
 from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
@@ -486,8 +490,9 @@ class ProxyInitializationHelpers:
             uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         elif litellm_log := os.environ.get("LITELLM_LOG"):
             uvicorn_args["log_level"] = resolve_log_level(litellm_log)
-        if keepalive_timeout is not None:
-            uvicorn_args["timeout_keep_alive"] = keepalive_timeout
+        uvicorn_args["timeout_keep_alive"] = (
+            DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS if keepalive_timeout is None else keepalive_timeout
+        )
         if timeout_worker_healthcheck is not None:
             if "timeout_worker_healthcheck" in inspect.signature(uvicorn.Config.__init__).parameters:
                 uvicorn_args["timeout_worker_healthcheck"] = timeout_worker_healthcheck
@@ -918,7 +923,11 @@ class ProxyInitializationHelpers:
             ProxyInitializationHelpers.gunicorn_keepalive_and_trusted_proxies()
             if server is Server.GUNICORN
             else (
-                uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                (
+                    DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS
+                    if server is Server.UVICORN
+                    else uvicorn.Config(app="", log_config=None).timeout_keep_alive
+                )
                 if keepalive_timeout is None
                 else keepalive_timeout,
                 uvicorn_trusted_proxies(None),

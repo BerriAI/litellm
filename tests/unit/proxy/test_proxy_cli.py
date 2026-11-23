@@ -5051,6 +5051,32 @@ def test_control_plane_cli_serves_the_real_app_with_uvicorn_options(monkeypatch:
     assert (response.status_code, response.json()) == (200, {"status": "ok"})
 
 
+@pytest.mark.parametrize(
+    ("argv", "env_timeout", "expected"),
+    [
+        ([], None, 95),
+        ([], "0", 0),
+        ([], "5", 5),
+        (["--keepalive_timeout", "0"], "5", 0),
+        (["--keepalive_timeout", "5"], "0", 5),
+    ],
+)
+def test_uvicorn_serves_the_effective_keepalive_timeout(
+    argv: list[str], env_timeout: str | None, expected: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for name in ("DATABASE_URL", "DIRECT_URL", "KEEPALIVE_TIMEOUT", "LITELLM_RUST_FIRST"):
+        monkeypatch.delenv(name, raising=False)
+    if env_timeout is not None:
+        monkeypatch.setenv("KEEPALIVE_TIMEOUT", env_timeout)
+
+    with patch("uvicorn.run") as serve:
+        result: Final = CliRunner().invoke(run_server, ["--local", "--port", "45999", *argv])
+
+    assert result.exit_code == 0, result.output
+    serve.assert_called_once()
+    assert serve.call_args.kwargs["timeout_keep_alive"] == expected
+
+
 def test_limit_concurrency_environment_reaches_control_plane_serve(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
