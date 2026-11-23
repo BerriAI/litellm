@@ -10,8 +10,9 @@ import { toast } from "@/lib/toast";
 import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
-import type { EntityType, EntityUsageExportModalProps, ExportFormat, ExportType } from "./types";
-import { downloadBlob, exportFilename } from "./utils";
+import type { EntityType, EntityUsageExportModalProps, ExportType, UsageExportFormat } from "./types";
+import { buildUsageReportHtml, parseUsageReportRows, printUsageReport } from "./usageReport";
+import { downloadBlob, exportFilename, exportBasename } from "./utils";
 
 const ENTITY_LABEL_KEYS: Record<EntityType, ParseKeys> = {
   user: "usage.export.modal.entities.user",
@@ -33,7 +34,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   canIncludeMetadata,
 }) => {
   const { t } = useTranslation();
-  const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
+  const [exportFormat, setExportFormat] = useState<UsageExportFormat>("csv");
   const [exportType, setExportType] = useState<ExportType>("daily");
   const [includeMetadata, setIncludeMetadata] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -44,8 +45,24 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   const handleExport = async () => {
     setIsExporting(true);
     try {
-      const blob = await onExport(exportType, exportFormat, includeMetadata);
-      downloadBlob(blob, exportFilename(entityType, exportType, exportFormat, dateRange));
+      if (exportFormat === "pdf") {
+        const rows = await parseUsageReportRows(await onExport(exportType, "json", false));
+        const report = {
+          title: exportBasename(entityType, exportType, dateRange),
+          heading: modalTitle,
+          entityType,
+          exportType,
+          rows,
+          dateRange,
+          selectedFilters,
+          generatedAt: new Date(),
+          t,
+        };
+        printUsageReport(buildUsageReportHtml(report), t("usage.export.report.frameTitle"), report.title);
+      } else {
+        const blob = await onExport(exportType, exportFormat, includeMetadata);
+        downloadBlob(blob, exportFilename(entityType, exportType, exportFormat, dateRange));
+      }
       toast.success(t("usage.export.modal.success", { entity: entityLabel, format: exportFormat.toUpperCase() }));
       onClose();
     } catch (error) {
@@ -71,7 +88,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
           <ExportSummary dateRange={dateRange} selectedFilters={selectedFilters} />
           <ExportTypeSelector value={exportType} onChange={setExportType} entityType={entityType} />
           <ExportFormatSelector value={exportFormat} onChange={setExportFormat} />
-          {canIncludeMetadata && (
+          {canIncludeMetadata && exportFormat !== "pdf" && (
             <div>
               <div className="flex items-center gap-2">
                 <Checkbox
