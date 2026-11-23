@@ -58,9 +58,9 @@ def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsErro
         case NoCredentialsError() | PartialCredentialsError():
             return _missing_aws_credentials(
                 error,
-                "Set aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
-                "deployment, or AWS credentials in the proxy environment. On EC2, check that the instance has a role "
-                "and its instance metadata service answers.",
+                "Give the deployment aws_access_key_id and aws_secret_access_key, an aws_profile_name whose profile "
+                "holds credentials, aws_role_name, or api_key, or set AWS credentials in the proxy environment. On "
+                "EC2, check that the instance has a role and its instance metadata service answers.",
             )
         case _:
             return None
