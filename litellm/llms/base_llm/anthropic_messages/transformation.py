@@ -26,8 +26,8 @@ class BaseAnthropicMessagesConfig(ABC):
         headers: dict,
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:
@@ -71,8 +71,8 @@ class BaseAnthropicMessagesConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -92,8 +92,8 @@ class BaseAnthropicMessagesConfig(ABC):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
@@ -111,8 +111,8 @@ class BaseAnthropicMessagesConfig(ABC):
     def sign_request(
         self,
         headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -177,7 +177,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         model: str,
         httpx_response: httpx.Response,
-        request_body: dict,
+        request_body: dict[str, object],
         litellm_logging_obj: LiteLLMLoggingObj,
     ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
