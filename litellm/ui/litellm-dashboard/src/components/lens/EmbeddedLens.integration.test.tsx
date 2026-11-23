@@ -95,8 +95,9 @@ it("renders the connected frame's Lens navigation in the gateway sidebar and kee
       { channel: "litellm-lens:v1", command: { type: "tab", value: "findings" } },
       window.location.origin,
     );
-    const agent = sidebar.getByRole("combobox", { name: "Agent" });
+    const agent = sidebar.getByRole("combobox", { name: "Agent: support_agent" });
     await user.click(agent);
+    await user.type(await screen.findByRole("combobox", { name: "Agent" }), "release");
     await user.keyboard("{ArrowDown}");
     await user.click(await screen.findByRole("option", { name: "release_agent" }));
     expect(postMessage).toHaveBeenLastCalledWith(

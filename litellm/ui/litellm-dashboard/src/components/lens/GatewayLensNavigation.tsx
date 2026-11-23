@@ -16,7 +16,14 @@ import {
   Sparkles,
 } from "lucide-react";
 import { z } from "zod";
-import { Combobox, ComboboxContent, ComboboxInput, ComboboxItem, ComboboxList } from "@/components/ui/combobox";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxTrigger,
+} from "@/components/ui/combobox";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
 
 export const LENS_FRAME_CHANNEL = "litellm-lens:v1";
@@ -77,35 +84,45 @@ export function GatewayLensNavigation({ collapsed }: { collapsed: boolean }) {
   const { t } = useTranslation();
   if (!navigation) return null;
   const { activeTab, tabs, agents, currentAgent, agentLabel, bookCallLabel } = navigation.model;
+  const selectedAgent =
+    currentAgent === null
+      ? null
+      : agents.find(({ value }) => value === currentAgent) ?? { value: currentAgent, label: currentAgent };
   const select = (selection: Selection) => {
     navigation.select(selection);
     setOpenMobile(false);
   };
   return (
     <nav aria-label={t("lensWorkspace.frameTitle")} className="flex flex-col gap-2 px-3 pb-3">
-      {!collapsed && currentAgent !== null && (
-        <Combobox
-          items={agents}
-          value={agents.find(({ value }) => value === currentAgent) ?? { value: currentAgent, label: currentAgent }}
-          isItemEqualToValue={(item, selected) => item.value === selected.value}
-          itemToStringLabel={(item) => item.label}
-          onValueChange={(item) => {
-            if (item) select({ type: "agent", value: item.value });
-          }}
-        >
-          <ComboboxInput aria-label={agentLabel} />
-          <ComboboxContent>
-            <ComboboxList>
-              {(item: (typeof agents)[number]) => (
-                <ComboboxItem key={item.value} value={item}>
-                  {item.label}
-                </ComboboxItem>
-              )}
-            </ComboboxList>
-          </ComboboxContent>
-        </Combobox>
-      )}
       <SidebarMenu>
+        {!collapsed && selectedAgent !== null && (
+          <SidebarMenuItem>
+            <Combobox
+              items={agents}
+              value={selectedAgent}
+              isItemEqualToValue={(item, selected) => item.value === selected.value}
+              itemToStringLabel={(item) => item.label}
+              onValueChange={(item) => {
+                if (item) select({ type: "agent", value: item.value });
+              }}
+            >
+              <ComboboxTrigger aria-label={`${agentLabel}: ${selectedAgent.label}`} render={<SidebarMenuButton />}>
+                <Bot aria-hidden />
+                <span className="min-w-0 flex-1 truncate">{selectedAgent.label}</span>
+              </ComboboxTrigger>
+              <ComboboxContent>
+                <ComboboxInput aria-label={agentLabel} showTrigger={false} />
+                <ComboboxList>
+                  {(item: (typeof agents)[number]) => (
+                    <ComboboxItem key={item.value} value={item}>
+                      {item.label}
+                    </ComboboxItem>
+                  )}
+                </ComboboxList>
+              </ComboboxContent>
+            </Combobox>
+          </SidebarMenuItem>
+        )}
         {tabs.map(({ value, label, status }) => {
           const Icon = tabIcons.get(value) ?? Activity;
           return (
