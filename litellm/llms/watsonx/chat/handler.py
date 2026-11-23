@@ -3,7 +3,6 @@ from typing import Final
 
 import httpx
 
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 
@@ -15,7 +14,7 @@ watsonx_chat_transformation: Final = IBMWatsonXChatConfig()
 
 
 class WatsonXChatHandler(OpenAILikeChatHandler):
-    def __init__(self, **kwargs: object):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
     def completion(
@@ -27,15 +26,15 @@ class WatsonXChatHandler(OpenAILikeChatHandler):
         custom_llm_provider: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
-        print_verbose: Callable[..., object],
-        encoding: object,
+        print_verbose: Callable,
+        encoding,
         api_key: str | None,
-        logging_obj: LiteLLMLoggingObj,
+        logging_obj,
         optional_params: dict,
-        acompletion: object = None,
+        acompletion=None,
         litellm_params: dict = {},
         headers: dict | None = None,
-        logger_fn: object = None,
+        logger_fn=None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         custom_endpoint: bool | None = None,

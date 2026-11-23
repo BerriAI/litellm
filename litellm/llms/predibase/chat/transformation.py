@@ -109,11 +109,11 @@ class PredibaseConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -154,7 +154,7 @@ class PredibaseConfig(BaseConfig):
         request_data: dict,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -274,10 +274,10 @@ class PredibaseConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
+        optional_params: dict,
         litellm_params: dict,
-        headers: Mapping[str, object],
-    ) -> dict[str, object]:
+        headers: dict,
+    ) -> dict:
         custom_prompt_dict: Final = litellm_params.get("custom_prompt_dict", {})
         if model in custom_prompt_dict:
             model_prompt_details: Final = custom_prompt_dict[model]
@@ -325,8 +325,8 @@ class PredibaseConfig(BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         tenant_id: Final = litellm_params.get("predibase_tenant_id") or litellm_params.get("tenant_id")
@@ -357,8 +357,8 @@ class PredibaseConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

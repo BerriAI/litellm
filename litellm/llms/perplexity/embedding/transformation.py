@@ -77,8 +77,8 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         if api_base:
@@ -88,7 +88,7 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
             return clean_api_base
         return "https://api.perplexity.ai/v1/embeddings"
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "dimensions",
             "encoding_format",
@@ -96,11 +96,11 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         for k, v in non_default_params.items():
             if k == "dimensions":
                 optional_params["dimensions"] = v
@@ -110,14 +110,14 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, object],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         if api_key is None:
             api_key = get_secret_str("PERPLEXITYAI_API_KEY") or get_secret_str("PERPLEXITY_API_KEY")
         return {
@@ -129,9 +129,9 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: Mapping[str, object],
-        headers: Mapping[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        headers: dict,
+    ) -> dict:
         return {
             "model": model,
             "input": input,
@@ -163,9 +163,9 @@ class PerplexityEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: Mapping[str, object] = {},
-        optional_params: Mapping[str, object] = {},
-        litellm_params: Mapping[str, object] = {},
+        request_data: dict = {},
+        optional_params: dict = {},
+        litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
             raw_response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
