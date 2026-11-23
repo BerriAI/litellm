@@ -20,7 +20,7 @@ from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.models.team import LiteLLM_ModelTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable, Member
+from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_ProjectTableCachedObj, LiteLLM_TeamTable, Member
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
@@ -38,6 +38,7 @@ from litellm.types.agents import AgentResponse
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from tests.unit.caching.redis_batch_double import FakeNatives, fake_send
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 from tests.unit.redis.stores.auth_cache_double import shared_cache
 from tests.unit.redis.stores.test_router_cooldowns import FakeCooldowns
@@ -182,6 +183,25 @@ async def test_newer_cached_team_values_replace_the_keys_copy() -> None:
         Member(user_id="u", role="admin"),
     )
     assert token.team_member_spend == 2.0
+
+
+@pytest.mark.asyncio
+async def test_a_key_auto_registered_for_a_jwt_takes_its_projects_alias_and_metadata() -> None:
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(
+        AuthObject.project("p1"),
+        LiteLLM_ProjectTableCachedObj(
+            project_id="p1", project_alias="Project One", metadata={"tags": ["a"]}, created_by="a", updated_by="a"
+        ),
+        model_type=LiteLLM_ProjectTableCachedObj,
+    )
+    host: Final = _host(cache=cache, prisma_client=prisma_with_empty_config())
+
+    token: Final = await host.finish_auto_registered_jwt(
+        UserAPIKeyAuth(token="hashed", project_id="p1"), {}, None, None, None, None
+    )
+
+    assert (token.project_alias, token.project_metadata) == ("Project One", {"tags": ["a"]})
 
 
 def _host_whose_team_read_fails(monkeypatch: pytest.MonkeyPatch, error: Exception) -> PythonAuthHost:

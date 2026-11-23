@@ -1652,6 +1652,7 @@ async def test_personal_key_agent_billing_inherits_adopted_organization_limits(
         billed.organization_metadata,
     ) == ("org-1", 5, 50, {"k": "v"})
     assert billed.organization_max_budget == 100
+    assert billed.organization_alias == "org-one"
     assert (auth.org_id, auth.organization_rpm_limit, auth.organization_tpm_limit, auth.organization_metadata) == (
         None,
         None,

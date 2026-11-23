@@ -136,6 +136,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     resolve_customer_hierarchy,
 )
 from litellm.proxy.auth.customer_provisioning import registration_refusal, resolve_registered_customer
+from litellm.proxy.auth.grants import organization_grants, owner_grants, project_grants, stamp
 from litellm.proxy.auth.host import identity as auth_identity
 from litellm.proxy.auth.impersonation import (
     IMPERSONATE_USER_HEADER,
@@ -2414,14 +2415,7 @@ async def _inherit_org_identity(
     )
     if org_object is None:
         return
-    user_api_key_auth_obj.organization_alias = org_object.organization_alias
-    user_api_key_auth_obj.organization_metadata = org_object.metadata
-    budget: Final = org_object.litellm_budget_table
-    if budget is None:
-        return
-    user_api_key_auth_obj.organization_max_budget = budget.max_budget
-    user_api_key_auth_obj.organization_tpm_limit = budget.tpm_limit
-    user_api_key_auth_obj.organization_rpm_limit = budget.rpm_limit
+    stamp(user_api_key_auth_obj, organization_grants(org_object))
 
 
 def is_no_auth_dev_mode(master_key: str | None, general_settings: Mapping[str, object]) -> bool:
@@ -2801,8 +2795,7 @@ async def run_centralized_common_checks(
         )
 
     if project_object is not None:
-        user_api_key_auth_obj.project_metadata = project_object.metadata
-        user_api_key_auth_obj.project_alias = project_object.project_alias
+        stamp(user_api_key_auth_obj, project_grants(project_object))
 
     if (
         end_user_id
@@ -3614,14 +3607,7 @@ async def return_user_api_key_auth_obj(
         **valid_token_dict,
     }
     if user_obj is not None:
-        user_api_key_kwargs.update(
-            user_tpm_limit=user_obj.tpm_limit,
-            user_rpm_limit=user_obj.rpm_limit,
-            user_email=user_obj.user_email,
-            user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=user_obj.effective_max_budget(),
-            user_model_max_budget=getattr(user_obj, "model_max_budget", None),
-        )
+        user_api_key_kwargs.update(owner_grants(user_obj))
     if user_obj is not None and is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -3979,7 +3965,6 @@ async def _run_post_custom_auth_checks(
             proxy_logging_obj=proxy_logging_obj,
         )
         if _project_obj is not None:
-            valid_token.project_metadata = _project_obj.metadata
-            valid_token.project_alias = _project_obj.project_alias
+            stamp(valid_token, project_grants(_project_obj))
 
     return valid_token

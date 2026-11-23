@@ -12,12 +12,11 @@ import litellm
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import cache_key_object
+from litellm.proxy.auth.grants import owner_grants, with_project
 from litellm.proxy.auth.host.facts import (
     EndUserParams,
     EndUserRow,
     with_end_user,
-    with_owner,
-    with_project,
 )
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
 from litellm.proxy.auth.team_grants import newer_team_row_update
@@ -51,7 +50,7 @@ def auto_registered_key(
             "api_key": key.token,
             "jwt_claims": dict(claims),
             "user_email": user_email,
-            "user_model_max_budget": None if user is None else user.model_max_budget,
+            "user_model_max_budget": None if user is None else owner_grants(user)["user_model_max_budget"],
         }
     )
 
@@ -80,8 +79,8 @@ def _with_team_grant(token: UserAPIKeyAuth, grant: RustTeamGrant) -> UserAPIKeyA
 
 
 def _context_token(context: RustKeyContext) -> UserAPIKeyAuth:
-    """The key with what its checks loaded: the owner's per-model budget, the team's values and the project's."""
-    return with_project(_with_team_grant(with_owner(context.key, context.owner), context.team), context.project)
+    """The key with its team's and its project's values. Its owner's are stamped where the key path ends."""
+    return with_project(_with_team_grant(context.key, context.team), context.project)
 
 
 async def project(outcome: RustAuthOutcome, host: PythonAuthHost) -> UserAPIKeyAuth:
