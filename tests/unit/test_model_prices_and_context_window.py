@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -13,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.openai.chat.gpt_reasoning_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.types.utils import CompletionTokensDetailsWrapper, PromptTokensDetailsWrapper, SearchFreeRequests, Usage
@@ -519,9 +521,9 @@ def test_gemini_deep_research_previews_accept_the_documented_input_window(prices
     assert prices[model]["max_output_tokens"] == 65_536
 
 
-# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions
+# https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions, checked 2026-11-21
 VERTEX_GEMINI_FLASH_RETIREMENT_DATES: Final = MappingProxyType(
-    {"gemini-3.6-flash": "2026-11-19", "gemini-3.7-flash": "2027-01-28"}
+    {"gemini-3.6-flash": "2027-01-28", "gemini-3.7-flash": "2027-01-28"}
 )
 
 
@@ -1344,3 +1346,71 @@ def test_deepinfra_new_catalog_models_resolve_pricing_and_capabilities(
     assert litellm.supports_video_input(model=model) is supports_video_input
     assert litellm.supports_audio_input(model=model) is supports_audio_input
     assert "reasoning_effort" in DeepInfraConfig().get_supported_openai_params(model=model)
+
+
+# Probed against Bedrock Converse in us-east-1 on 2026-11-19: each id takes toolChoice auto, any, and a named tool
+BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS: Final = (
+    "mistral.mistral-large-3-675b-instruct",
+    "mistral.ministral-3-14b-instruct",
+    "mistral.ministral-3-8b-instruct",
+    "mistral.ministral-3-3b-instruct",
+)
+WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("route", ("", "converse/"))
+@pytest.mark.parametrize("model", BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+@pytest.mark.parametrize(
+    ("tool_choice", "converse_tool_choice"),
+    (
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_weather"}}, {"tool": {"name": "get_weather"}}),
+    ),
+)
+def test_bedrock_converse_mistral_rows_send_tool_choice_to_bedrock(
+    local_model_cost_map: None,
+    route: str,
+    model: str,
+    tool_choice: str | dict[str, JsonValue],
+    converse_tool_choice: dict[str, JsonValue],
+) -> None:
+    optional_params: Final = litellm.get_optional_params(
+        model=f"{route}{model}", custom_llm_provider="bedrock", tools=[dict(WEATHER_TOOL)], tool_choice=tool_choice
+    )
+
+    assert optional_params["tool_choice"] == converse_tool_choice
+
+
+def _region_pinned_bedrock_converse_rows(prices: CostMap) -> Iterator[tuple[str, str]]:
+    return (
+        (key, base)
+        for key, row in prices.items()
+        if key.startswith("bedrock/")
+        and row.get("litellm_provider") == "bedrock_converse"
+        and (base := BedrockModelInfo.get_base_model(key)) in prices
+    )
+
+
+def _capabilities_missing_from_one_side(prices: CostMap, key: str, base: str) -> Iterator[str]:
+    capabilities: Final = sorted({name for name in (*prices[key], *prices[base]) if name.startswith("supports_")})
+    return (
+        f"{key} {name}={prices[key].get(name)} but {base} {name}={prices[base].get(name)}"
+        for name in capabilities
+        if bool(prices[key].get(name)) != bool(prices[base].get(name))
+    )
+
+
+def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(prices: CostMap) -> None:
+    rows: Final = tuple(_region_pinned_bedrock_converse_rows(prices))
+    assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+
+    assert list(chain.from_iterable(_capabilities_missing_from_one_side(prices, key, base) for key, base in rows)) == []

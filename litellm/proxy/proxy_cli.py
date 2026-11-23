@@ -274,6 +274,16 @@ _GENERAL_SETTINGS: Final = TypeAdapter[Mapping[str, object]](Mapping[str, object
 _DECODED_JSON: Final = TypeAdapter[object](object)
 
 
+class _GunicornSettings(Protocol):
+    def __getattr__(self, name: str, /) -> object: ...
+
+
+def _gunicorn_settings() -> _GunicornSettings:
+    from gunicorn.config import Config as GunicornConfig
+
+    return GunicornConfig()
+
+
 class ProxyInitializationHelpers:
     @staticmethod
     def echo_litellm_version():
@@ -283,7 +293,7 @@ class ProxyInitializationHelpers:
     _echo_litellm_version = echo_litellm_version
 
     @staticmethod
-    def run_health_check(host, port):
+    def run_health_check(host: str, port: int):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(url=f"http://{host}:{port}/health")
         print(json.dumps(response.json(), indent=4))
@@ -333,7 +343,7 @@ class ProxyInitializationHelpers:
     def run_test_chat_completion(
         host: str,
         port: int,
-        model: str,
+        model: str | None,
         test: bool | str,
     ):
         request_model: Final = model or "gpt-3.5-turbo"
@@ -899,14 +909,10 @@ class ProxyInitializationHelpers:
     @staticmethod
     def gunicorn_keepalive_and_trusted_proxies() -> tuple[int, str]:
         """Loaded only when gunicorn is the server, because gunicorn imports ``fcntl``, which Windows lacks."""
-        from gunicorn.config import Config as GunicornConfig
-
-        config: Final = GunicornConfig()
-        keepalive: Final[object] = config.keepalive
-        forwarded_allow_ips: Final[object] = config.forwarded_allow_ips
+        config: Final = _gunicorn_settings()
         return (
-            TypeAdapter(int).validate_python(keepalive),
-            ",".join(TypeAdapter(list[str]).validate_python(forwarded_allow_ips)),
+            TypeAdapter(int).validate_python(config.keepalive),
+            ",".join(TypeAdapter(list[str]).validate_python(config.forwarded_allow_ips)),
         )
 
     @staticmethod
@@ -937,7 +943,7 @@ class ProxyInitializationHelpers:
     @staticmethod
     def maybe_setup_prometheus_multiproc_dir(
         num_workers: int,
-        litellm_settings: dict | None,
+        litellm_settings: Mapping[str, object] | None,
         prometheus_metrics_port: int | None = None,
     ) -> str | None:
         """
@@ -977,7 +983,7 @@ class _ControlPlaneLicense(Protocol):
     def is_premium(self) -> bool: ...
 
 
-def _decrypt_env_var() -> Mapping[str, str]:
+def _decrypt_env_var() -> Mapping[str, str | bool]:
     from litellm.secret_managers.aws_secret_manager import decrypt_env_var
 
     return decrypt_env_var()
@@ -997,17 +1003,17 @@ def _migrate_control_plane() -> None:
 
 @dataclass(frozen=True, slots=True)
 class CliDependencies:
-    decrypt_env: Callable[[], Mapping[str, str]] = _decrypt_env_var
+    decrypt_env: Callable[[], Mapping[str, str | bool]] = _decrypt_env_var
     license_check: Callable[[], _ControlPlaneLicense] = _control_plane_license_check
     migrate_control_plane: Callable[[], None] = _migrate_control_plane
 
 
-def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str]]) -> None:
+def _decrypt_kms_env_vars(decrypt_env: Callable[[], Mapping[str, str | bool]]) -> None:
     if os.getenv("USE_AWS_KMS") != "True":
         return
 
     for key, value in decrypt_env().items():
-        os.environ[key] = value
+        os.environ[key] = value  # pyright: ignore[reportArgumentType]  # environ raises its own TypeError for a bool
 
 
 def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | None) -> "Tls | None":
@@ -1371,50 +1377,50 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
 @click.pass_context
 def run_server(
     ctx: click.Context,
-    cli_args,
+    cli_args: tuple[str, ...],
     host: str,
     port: int,
-    api_base,
-    api_version,
-    model,
-    alias,
-    add_key,
-    headers,
-    save,
-    debug,
-    detailed_debug,
-    temperature,
-    max_tokens,
-    request_timeout,
-    drop_params,
-    add_function_to_prompt,
+    api_base: str | None,
+    api_version: str,
+    model: str | None,
+    alias: str | None,
+    add_key: str | None,
+    headers: str | None,
+    save: bool,
+    debug: bool,
+    detailed_debug: bool,
+    temperature: float | None,
+    max_tokens: int | None,
+    request_timeout: int | None,
+    drop_params: bool,
+    add_function_to_prompt: bool,
     config: str | None,
-    max_budget,
+    max_budget: float | None,
     test: str | bool | None,
-    local,
+    local: bool,
     num_workers: int,
-    granian_threads,
-    test_async,
-    iam_token_db_auth,
+    granian_threads: int | None,
+    test_async: bool,
+    iam_token_db_auth: bool,
     azure_postgresql_auth: bool,
-    num_requests,
-    use_queue,
+    num_requests: int,
+    use_queue: bool,
     health: bool,
-    setup,
+    setup: bool,
     version: bool,
-    run_gunicorn,
-    run_hypercorn,
-    run_granian,
+    run_gunicorn: bool,
+    run_hypercorn: bool,
+    run_granian: bool,
     ssl_keyfile_path: str | None,
     ssl_certfile_path: str | None,
-    ciphers,
+    ciphers: str | None,
     log_config: str | None,
     use_prisma_db_push: bool,
     skip_server_startup: bool,
     validate_config: bool,
     check_migrations_against_existing_data: bool,
     keepalive_timeout: int | None,
-    timeout_worker_healthcheck,
+    timeout_worker_healthcheck: int | None,
     max_request_header_size: int | None,
     max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
@@ -1426,7 +1432,7 @@ def run_server(
     prometheus_metrics_port: int | None,
     control_plane: bool,
 ):
-    dependencies: Final = ctx.obj if isinstance(ctx.obj, CliDependencies) else CliDependencies()
+    dependencies: Final = ctx.find_object(CliDependencies) or CliDependencies()
     if cli_args:
         if cli_args == ("xai-oauth", "login"):
             from litellm.llms.xai.oauth import XAIOAuthAuthenticator

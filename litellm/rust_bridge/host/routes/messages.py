@@ -13,6 +13,7 @@ import json
 import os
 import socket
 import ssl
+import typing
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
 from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
@@ -45,6 +46,7 @@ from litellm.litellm_core_utils.core_helpers import (
     normalize_drop_params,
     only,
     proxy_request_headers,
+    require_attributes,
     stream_cost_injection_requested,
 )
 from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
@@ -85,6 +87,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
 from litellm.llms.anthropic.messages.native.utils import (
     continues_message_thread,
+    diagnostics_refusal,
     message_thread_not_found_body,
     message_thread_unsupported_body,
     normalize_native_messages,
@@ -127,7 +130,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, ProviderSpecificHeader, anthropic_wif_litellm_params
 from litellm.utils import clamp_max_tokens
 
-_RaisedT: Final = TypeVar("_RaisedT", bound=Exception)
+_RaisedT = TypeVar("_RaisedT", bound=Exception)
 _METADATA: Final = TypeAdapter(dict[str, object])
 _BODY_FIELDS: Final = frozenset(_native.messages_optional_params())
 
@@ -191,11 +194,28 @@ def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
 
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
     params: Final = _anthropic_metadata(
-        known_params(_BODY_FIELDS.difference(handler.additional_drop_paths(request), _dropped_thread(request)), request)
+        known_params(
+            _BODY_FIELDS.difference(
+                handler.additional_drop_paths(request),
+                _dropped_thread(request),
+                () if _diagnostics_provider(request) is None else ("diagnostics",),
+            ),
+            request,
+        )
     )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:
         return params
     return _with_deployment_effort(params, request)
+
+
+def _messages_config(request: Mapping[str, object]) -> tuple[str, BaseAnthropicMessagesConfig | None]:
+    """The provider and Messages config of a call, as Python's handler resolves them."""
+    model, provider, _, _ = _requested_provider(
+        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
+    )
+    return str(provider), native_messages_config(
+        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
+    )
 
 
 def _thread_provider(request: Mapping[str, object]) -> str | None:
@@ -203,15 +223,32 @@ def _thread_provider(request: Mapping[str, object]) -> str | None:
     resolves it, or None when the call carries no thread or its config serves threads."""
     if request.get("thread") is None:
         return None
-    model, provider, _, _ = _requested_provider(
-        str(request["model"]), optional_str(request.get("custom_llm_provider")), _handler_params(request)
-    )
-    config: Final = native_messages_config(
-        model, provider, request.get("model_info"), optional_str(request.get("api_base"))
-    )
+    provider, config = _messages_config(request)
     if config is not None and config.supports_message_threads():
         return None
-    return str(provider)
+    return provider
+
+
+def _diagnostics_provider(request: Mapping[str, object]) -> str | None:
+    """The provider of a call carrying diagnostics its native Messages config rejects, or None."""
+    if request.get("diagnostics") is None or "diagnostics" in handler.additional_drop_paths(request):
+        return None
+    provider, config = _messages_config(request)
+    if config is None or config.supports_diagnostics():
+        return None
+    return provider
+
+
+def _refuse_unsupported_diagnostics(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses diagnostics its provider rejects, or drops them under drop_params."""
+    provider: Final = _diagnostics_provider(request)
+    if provider is None:
+        return
+    refusal: Final = diagnostics_refusal(provider, str(request["model"]), request.get("drop_params"))
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    raise refusal
 
 
 def _dropped_thread(request: Mapping[str, object]) -> tuple[str, ...]:
@@ -653,6 +690,7 @@ def unrequested_stream(
 _UPSTREAM_ARGS: Final = TypeAdapter(tuple[int, str])
 _UPSTREAM_HEADERS: Final = TypeAdapter(list[tuple[str, str]])
 _INVOCATION_METRICS: Final = "amazon-bedrock-invocationMetrics"
+_CHUNK_JSON: Final = TypeAdapter(object)
 _BODY_CUT: Final = TypeAdapter(tuple[int, int | None, bool])
 _ERROR_CLASS: TypeAlias = Callable[..., Exception]
 _GOOGLE_LOGIN_FAILURE: Final = TypeAdapter(tuple[str, str])
@@ -1180,9 +1218,15 @@ def _raised_like_python(error: _RaisedT, request_provider: str) -> _RaisedT:
     return error if request_provider in _MAIN_NATIVE_ERROR_PROVIDERS else _raised(error)
 
 
+class _ChunkPayload(typing.Protocol):
+    def pop(self, key: str, default: Mapping[str, object], /) -> object: ...
+
+
 def _chunk_parser_failure(text: str) -> Exception:
     try:
-        json.loads(text).pop(_INVOCATION_METRICS, {})
+        require_attributes(_CHUNK_JSON.validate_python(json.loads(text)), _ChunkPayload, "pop").pop(
+            _INVOCATION_METRICS, {}
+        )
     except Exception as error:  # noqa: BLE001  # the chunk parser's own failure is what Python raised
         return error
     return ValueError(text)
@@ -1427,6 +1471,7 @@ def settings(
     call_settings: Final = _with_call_settings(configured, request, kwargs.get("litellm_logging_obj"))
     if call_settings.mock_response is None and not call_settings.mcp_gateway:
         _refuse_unsupported_thread(request, asynchronous)
+        _refuse_unsupported_diagnostics(request, asynchronous)
     return asdict(call_settings)
 
 

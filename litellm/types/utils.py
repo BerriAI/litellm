@@ -2538,6 +2538,9 @@ class Embedding(OpenAIObject):
         setattr(self, key, value)
 
 
+_ITEM_USAGE: Final = TypeAdapter(tuple[Usage, ...], config=ConfigDict(strict=True))
+
+
 class EmbeddingResponse(OpenAIObject):
     model: str | None = None
     """The model used for embedding."""
@@ -2563,6 +2566,11 @@ class EmbeddingResponse(OpenAIObject):
 
     _response_headers: dict | None = None
     _response_ms: float | None = None
+    _item_usage: tuple[Usage, ...] = ()
+
+    @property
+    def item_usage(self) -> tuple[Usage, ...]:
+        return self._item_usage
 
     def __init__(
         self,
@@ -2572,6 +2580,7 @@ class EmbeddingResponse(OpenAIObject):
         data: list | list[Embedding] | None = None,
         hidden_params=None,
         _response_headers=None,
+        item_usage: tuple[Usage, ...] = (),
         **params,
     ) -> None:
         object: Final = "list"
@@ -2597,6 +2606,14 @@ class EmbeddingResponse(OpenAIObject):
 
         if hidden_params:
             self._hidden_params = hidden_params
+        self._item_usage = EmbeddingResponse._typed_item_usage(item_usage)
+
+    @staticmethod
+    def _typed_item_usage(value: object) -> tuple[Usage, ...]:
+        try:
+            return _ITEM_USAGE.validate_python(value)
+        except ValidationError:
+            return ()
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -3089,6 +3106,10 @@ class TranscriptionResponse(OpenAIObject):
     def set_audio_transcription_duration(self, duration: float) -> None:
         self._hidden_params["audio_transcription_duration"] = duration
 
+    def report_duration_usage_when_provider_sent_none(self, duration: object) -> None:
+        if self.usage is None and isinstance(duration, (int, float)) and duration > 0:
+            self.usage = TranscriptionUsageDurationObject(type="duration", seconds=duration)
+
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
@@ -3181,6 +3202,7 @@ class AdapterCompletionStreamWrapper:
 
 class StandardLoggingUserAPIKeyMetadata(TypedDict):
     user_api_key_app_id: ReadOnly[NotRequired[str | None]]
+    user_api_key_app_group_id: ReadOnly[NotRequired[str | None]]
     user_api_key_app_alias: ReadOnly[NotRequired[str | None]]
     user_api_key_hash: str | None  # hash of the litellm virtual key used
     user_api_key_alias: str | None
@@ -4775,6 +4797,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
+    PERPLEXITY_ORCHESTRATOR = "perplexity_orchestrator"
     TYPESAFE = "typesafe"
     PARALLEL_AI = "parallel_ai"
     NACE = "nace"
@@ -4790,6 +4813,7 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    GNANI = "gnani"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
     NADIR = "nadir"
@@ -4842,6 +4866,7 @@ class LlmProviders(str, Enum):
     INFINITY = "infinity"
     DEEPGRAM = "deepgram"
     ELEVENLABS = "elevenlabs"
+    GRADIUM = "gradium"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
     LANGFUSE = "langfuse"
@@ -4896,6 +4921,7 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
+    RESETDATA = "resetdata"
     PINSTRIPES = "pinstripes"
     COGNITION = "cognition"
     CORALBRICKS = "coralbricks"

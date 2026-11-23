@@ -10,7 +10,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.lens import TraceReceiver
 from litellm.integrations.lens.exporter import LensExporter
-from litellm.integrations.lens.lens_trace_adapter import export_traces
 from litellm.integrations.lens.remote import LensConnection, RemoteTraceStore
 from litellm.integrations.lens.storage import LensTraceStorage
 
@@ -57,7 +56,7 @@ async def manage_tracing(
             if receiver_factory
             else TraceReceiver(storage=LensTraceStorage(RemoteTraceStore(client)))
         )
-        async with _export_requests(LensExporter(client)), export_traces(connection):
+        async with _export_requests(LensExporter(client)):
             yield tracing
 
 

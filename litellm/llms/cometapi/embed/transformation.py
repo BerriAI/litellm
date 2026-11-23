@@ -8,6 +8,7 @@ from typing import Final
 import httpx
 from pydantic import ConfigDict, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -20,6 +21,7 @@ from ..common_utils import CometAPIException
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _INT: Final = TypeAdapter(int)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
@@ -140,7 +142,8 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage_payload: Final = _JSON_OBJECT.validate_python(raw_response_json.get("usage", {}))
+        response_body: Final = require_get(_DECODED_JSON.validate_python(raw_response_json))
+        usage_payload: Final = _JSON_OBJECT.validate_python(response_body.get("usage", {}))
         usage: Final = Usage(
             prompt_tokens=_INT.validate_python(usage_payload.get("prompt_tokens", 0) or 0),
             total_tokens=_INT.validate_python(usage_payload.get("total_tokens", 0) or 0),

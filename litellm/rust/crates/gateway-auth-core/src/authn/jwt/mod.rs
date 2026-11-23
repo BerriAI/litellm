@@ -12,7 +12,7 @@ use litellm_config::{JwtAuthSettings, RolePermissions};
 
 pub use mapping::{
     KeyMappingRow, KeyMappingWrite, KeyOrigin, MappedClaim, MappedJwt, MappedKey,
-    NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL, mapping_cache_key,
+    NO_MAPPING_SENTINEL, PROXY_ADMIN_SENTINEL,
 };
 pub(crate) use operator::custom_validate;
 pub(crate) use userinfo::decode;
@@ -28,9 +28,9 @@ use crate::routes::{RouteGroups, passthrough::ForwardedRoutes};
 #[derive(Clone, Debug, Default)]
 pub struct JwtSettings {
     pub config: JwtAuthSettings,
-    /// `JWT_PUBLIC_KEY_URL`, comma-separated.
+    /// `litellm_jwtauth.public_key_url`, else `JWT_PUBLIC_KEY_URL`, comma-separated.
     pub public_key_urls: Vec<String>,
-    /// `JWT_AUDIENCE`
+    /// `litellm_jwtauth.audience`, else `JWT_AUDIENCE`
     pub audience: Option<String>,
     /// `JWT_ISSUER`
     pub issuer: Option<String>,

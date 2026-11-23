@@ -27,7 +27,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import LiteLLMBatch, Usage
+from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
@@ -949,9 +949,10 @@ async def test_spend_charged_while_the_database_is_unreachable_reaches_the_share
         shared_windows=database.replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 3, 4)
-    assert usage["claude-opus*"]["budget_reset_at"] == datetime.fromtimestamp(
-        WINDOW_EPOCH + 24 * 3600, tz=timezone.utc
-    ).isoformat()
+    assert (
+        usage["claude-opus*"]["budget_reset_at"]
+        == datetime.fromtimestamp(WINDOW_EPOCH + 24 * 3600, tz=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.asyncio
@@ -1004,7 +1005,9 @@ def test_an_access_group_named_after_a_served_model_never_widens_that_models_ent
         resolved: Final = resolve_model_budget(
             model="gpt-4o-mini",
             model_max_budget=model_max_budget,
-            model_access_groups=lambda model, team_id: model_access_groups_of(router=router, model=model, team_id=team_id),
+            model_access_groups=lambda model, team_id: model_access_groups_of(
+                router=router, model=model, team_id=team_id
+            ),
         )
         return None if resolved is None else resolved.budget_model
 
@@ -1178,3 +1181,233 @@ async def test_concurrent_first_charges_on_one_replica_both_count():
         shared_windows=_WindowSpendDatabase().replica(),
     )
     assert usage["claude-opus*"]["current_spend"] == round(CHAT_COST * 2, 4)
+
+
+@pytest.mark.asyncio
+async def test_a_live_session_charges_a_delegated_response_to_the_delegated_models_budget():
+    delegated: Final = {
+        "type": "response.event",
+        "event": {
+            "type": "response.completed",
+            "response": {
+                "id": "resp-1",
+                "model": "gpt-4o-mini",
+                "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+            },
+        },
+    }
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    voice_cost: Final = 0.02
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": voice_cost + delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": {"gpt-live-1": budget, "gpt-4o-mini": budget}}
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(), results=[{"type": "session.closed", "usage": {"seconds": 12}}, delegated]
+        ),
+    )
+
+    assert {
+        model: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d")
+        for model in ("gpt-live-1", "gpt-4o-mini")
+    } == {"gpt-live-1": pytest.approx(voice_cost), "gpt-4o-mini": pytest.approx(delegated_cost)}
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: Final = ("a-shared", "z-capped", "team-capped")
+    calls_the_model: Final = {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "a-shared", "litellm_params": calls_the_model},
+                {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {"model_name": "flagship", "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-test"}},
+                {
+                    "model_name": f"model_name_{TEAM_ID}_capped",
+                    "litellm_params": calls_the_model,
+                    "model_info": {"team_id": TEAM_ID, "team_public_model_name": "team-capped"},
+                },
+            ]
+        ),
+    )
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {"user_api_key_model_max_budget": dict.fromkeys((*groups, "flagship"), budget)}
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert {
+        group: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{group}:1d") for group in (*groups, "flagship")
+    } == {**{group: pytest.approx(delegated_cost) for group in groups}, "flagship": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_once_to_a_budget_that_covers_several_of_its_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    groups: Final = ("a-shared", "z-capped", "team-capped")
+    calls_the_model: Final = {"model": "openai/gpt-4o-mini", "api_key": "sk-test"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "a-shared", "litellm_params": calls_the_model},
+                {"model_name": "z-capped", "litellm_params": calls_the_model},
+                {
+                    "model_name": f"model_name_{TEAM_ID}_capped",
+                    "litellm_params": calls_the_model,
+                    "model_info": {"team_id": TEAM_ID, "team_public_model_name": "team-capped"},
+                },
+            ]
+        ),
+    )
+    delegated_cost: Final = (
+        1000 * litellm.model_cost["gpt-4o-mini"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-4o-mini"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": delegated_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {"metadata": {"user_api_key_model_max_budget": {"*": budget}}},
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": "gpt-4o-mini",
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:*:1d") == pytest.approx(delegated_cost)
+
+
+@pytest.mark.asyncio
+async def test_a_delegated_response_is_charged_at_the_regional_price_of_its_session():
+    model: Final = next(
+        name
+        for name, info in litellm.model_cost.items()
+        if info.get("litellm_provider") == "openai"
+        and info.get("mode") == "chat"
+        and info.get("regional_processing_uplift_multiplier_eu", 1.0) > 1.0
+    )
+    regional_cost: Final = litellm.model_cost[model]["regional_processing_uplift_multiplier_eu"] * (
+        1000 * litellm.model_cost[model]["input_cost_per_token"]
+        + 500 * litellm.model_cost[model]["output_cost_per_token"]
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "_arealtime",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "_arealtime",
+                "response_cost": regional_cost,
+                "model": "gpt-live-1",
+                "model_group": "gpt-live-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "data_residency": "eu",
+                "metadata": {"user_api_key_model_max_budget": {model: {"budget_limit": 1.0, "time_period": "1d"}}},
+            },
+        },
+        response_obj=LiteLLMRealtimeStreamLoggingObject(
+            usage=Usage(),
+            results=[
+                {
+                    "type": "response.event",
+                    "event": {
+                        "type": "response.completed",
+                        "response": {
+                            "id": "resp-1",
+                            "model": model,
+                            "usage": {"input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+                        },
+                    },
+                }
+            ],
+        ),
+    )
+
+    assert await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") == pytest.approx(regional_cost), model
