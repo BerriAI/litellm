@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast,
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs
 
 import litellm
@@ -28,6 +29,7 @@ from litellm.constants import (
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -52,7 +54,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -1573,6 +1575,132 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
         verbose_logger.debug("Failed to build partial Responses API response for disconnect billing: %s", e)
         return None
     return partial if isinstance(partial, ResponseIncompleteEvent) else None
+
+
+_STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+_PER_REQUEST_COST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
+_TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
+_COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
+
+
+def _summed_count(primary: object, fallback: object) -> object:
+    if isinstance(primary, Mapping) and isinstance(fallback, Mapping):
+        return _summed_counts(_STR_KEYED.validate_python(primary), _STR_KEYED.validate_python(fallback))
+    if isinstance(primary, (int, float)) and isinstance(fallback, (int, float)):
+        return primary + fallback
+    return primary if fallback is None else fallback
+
+
+def _summed_counts(primary: Mapping[str, object], fallback: Mapping[str, object]) -> Mapping[str, object]:
+    keys: Final = (*primary, *(key for key in fallback if key not in primary))
+    return MappingProxyType({key: _summed_count(primary.get(key), fallback.get(key)) for key in keys})
+
+
+def _usage_of_both_deployments(
+    primary: ResponseAPIUsage | None, fallback: ResponseAPIUsage | None
+) -> ResponseAPIUsage | None:
+    if primary is None or fallback is None:
+        return fallback if primary is None else primary
+    return ResponseAPIUsage.model_validate(
+        to_jsonable_python(_summed_counts(primary.model_dump(), fallback.model_dump()), fallback=dict)
+    )
+
+
+def _response_cost(response: ResponsesAPIResponse) -> object:
+    hidden_cost: Final = (get_hidden_params(response) or {}).get("response_cost")
+    return getattr(response.usage, "cost", None) if hidden_cost is None else hidden_cost
+
+
+def stream_logging(stream: object) -> LiteLLMLoggingObj | None:
+    logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
+    return logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None
+
+
+def stream_cost_breakdown(stream: object) -> CostBreakdown | None:
+    logging_obj: Final = stream_logging(stream)
+    return None if logging_obj is None else logging_obj.cost_breakdown
+
+
+@dataclass(frozen=True, slots=True)
+class PricedPartial:
+    event: ResponseIncompleteEvent
+    breakdown: CostBreakdown | None
+
+    @property
+    def priced(self) -> bool:
+        return isinstance(_response_cost(self.event.response), (int, float))
+
+    @property
+    def cost(self) -> float:
+        cost: Final = _response_cost(self.event.response)
+        return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+
+def priced_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    event: Final = partial_responses_incomplete_event_on_disconnect(stream)
+    if event is None:
+        return None
+    priced: Final = isinstance(_response_cost(event.response), (int, float))
+    return PricedPartial(event, stream_cost_breakdown(stream) if priced else None)
+
+
+def held_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    logging_obj: Final = stream_logging(stream)
+    if logging_obj is None:
+        return priced_partial_on_disconnect(stream)
+    with logging_obj.pricing_left_unrecorded():
+        return priced_partial_on_disconnect(stream)
+
+
+def _primary_fixed_margin(primary: PricedPartial, fallback: PricedPartial) -> float:
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
+        return 0.0
+    return primary.breakdown.get("margin_fixed_amount", 0.0)
+
+
+def _summed_cost_entry(key: str, primary: Mapping[str, object], fallback: Mapping[str, object]) -> object:
+    if key in _PER_REQUEST_COST_KEYS:
+        return fallback[key] if key in fallback else primary[key]
+    return _summed_count(primary.get(key), fallback.get(key))
+
+
+def _cost_breakdown_of_both_deployments(primary: PricedPartial, fallback: PricedPartial) -> CostBreakdown | None:
+    if not primary.priced:
+        return fallback.breakdown
+    if not fallback.priced:
+        return primary.breakdown
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
+        return None
+    first: Final = _STR_KEYED.validate_python(primary.breakdown)
+    final: Final = _STR_KEYED.validate_python(fallback.breakdown)
+    keys: Final = (*first, *(key for key in final if key not in first))
+    summed: Final = MappingProxyType({key: _summed_cost_entry(key, first, final) for key in keys})
+    primary_fee: Final = _primary_fixed_margin(primary, fallback)
+    charged_once: Final = MappingProxyType(
+        {key: total - primary_fee for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
+    )
+    return _COST_BREAKDOWN.validate_python({**summed, **charged_once})
+
+
+def _billed_at(event: ResponseIncompleteEvent, usage: ResponseAPIUsage | None, cost: float) -> ResponseIncompleteEvent:
+    billed: Final = event.response.model_copy(
+        update={"usage": None if usage is None else usage.model_copy(update={"cost": cost})}
+    )
+    set_hidden_params(billed, {**(get_hidden_params(event.response) or {}), "response_cost": cost})
+    return event.model_copy(update={"response": billed})
+
+
+def partial_billed_for_both_deployments(primary: PricedPartial, fallback: PricedPartial | None) -> PricedPartial:
+    if fallback is None:
+        return PricedPartial(_billed_at(primary.event, primary.event.response.usage, primary.cost), primary.breakdown)
+    return PricedPartial(
+        _billed_at(
+            fallback.event,
+            _usage_of_both_deployments(primary.event.response.usage, fallback.event.response.usage),
+            primary.cost + fallback.cost - _primary_fixed_margin(primary, fallback),
+        ),
+        _cost_breakdown_of_both_deployments(primary, fallback),
+    )
 
 
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:

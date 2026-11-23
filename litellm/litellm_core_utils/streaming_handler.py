@@ -215,6 +215,7 @@ class _VertexChunkLike(Protocol):
 
 class _ParsedChunkHiddenParams(LiteLLMBaseModel):
     provider_specific_fields: Mapping[str, object] | None = None
+    anthropic_message_start: bool = False
 
 
 def _provider_response_model(chunk: object) -> str | None:
@@ -246,6 +247,7 @@ def _provider_hidden_params(
             for key, value in (
                 ("provider_response_model", provider_response_model),
                 ("provider_specific_fields", provider_specific_fields),
+                ("anthropic_message_start", True if parsed is not None and parsed.anthropic_message_start else None),
             )
             if value is not None
         }
