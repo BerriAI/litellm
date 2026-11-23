@@ -32,6 +32,7 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioPerRequestConfig,
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import PresidioAnalyzeRequest, PresidioAnalyzeResponseItem
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, StreamingChoices
 
@@ -632,6 +633,118 @@ async def test_logging_hook_masks_the_response_too(presidio_guardrail):
 
     assert "[CREDIT_CARD]" in result_response.choices[0].message.content
     assert "4111-1111-1111-1111" not in result_response.choices[0].message.content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["aresponses", "responses"])
+async def test_logging_hook_masks_responses_request_and_response(presidio_guardrail, call_type):
+    """
+    Regression: async_logging_hook only handled chat completions, so a Responses
+    API call in `logging_only` mode reached the content logs with the raw PII
+    from its input, instructions and output, even though the live response was
+    (correctly) left alone.
+    """
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "model": "gpt-5",
+        "instructions": "The user card is 4111-1111-1111-1111",
+        "input": [
+            {"role": "user", "content": "My card is 4111-1111-1111-1111"},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "It is 4111-1111-1111-1111"}],
+            },
+        ],
+    }
+    response = ResponsesAPIResponse(
+        id="resp_123",
+        created_at=0,
+        model="gpt-5",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Your card is 4111-1111-1111-1111"}],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "charge_card",
+                "arguments": '{"card": "4111-1111-1111-1111"}',
+                "status": "completed",
+            },
+        ],
+    )
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type=call_type,
+    )
+
+    assert result_kwargs["instructions"] == "The user card is [CREDIT_CARD]"
+    assert result_kwargs["input"][0]["content"] == "My card is [CREDIT_CARD]"
+    assert result_kwargs["input"][1]["content"][0]["text"] == "It is [CREDIT_CARD]"
+
+    message_item = result_response.output[0]
+    assert message_item["content"][0]["text"] == "Your card is [CREDIT_CARD]"
+    function_call_item = result_response.output[1]
+    assert getattr(function_call_item, "arguments") == '{"card": "[CREDIT_CARD]"}'
+
+    print("✓ Logging hook masks Responses request and response")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", ["anthropic_messages", "aanthropic_messages"])
+async def test_logging_hook_masks_anthropic_messages_request_and_response(presidio_guardrail, call_type):
+    """
+    Regression: async_logging_hook only handled chat completions, so an
+    Anthropic Messages call in `logging_only` mode reached the content logs
+    with raw PII in both the request messages and the response content blocks.
+    """
+
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        return text.replace("4111-1111-1111-1111", "[CREDIT_CARD]")
+
+    presidio_guardrail.check_pii = mock_check_pii
+
+    test_kwargs = {
+        "model": "claude-sonnet-4-5",
+        "messages": [
+            {"role": "user", "content": "My card is 4111-1111-1111-1111"},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "It is 4111-1111-1111-1111"}],
+            },
+        ],
+    }
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Your card is 4111-1111-1111-1111"}],
+    }
+
+    result_kwargs, result_response = await presidio_guardrail.async_logging_hook(
+        kwargs=test_kwargs,
+        result=response,
+        call_type=call_type,
+    )
+
+    assert result_kwargs["messages"][0]["content"] == "My card is [CREDIT_CARD]"
+    assert result_kwargs["messages"][1]["content"][0]["text"] == "It is [CREDIT_CARD]"
+    assert result_response["content"][0]["text"] == "Your card is [CREDIT_CARD]"
+
+    print("✓ Logging hook masks Anthropic Messages request and response")
 
 
 @pytest.mark.asyncio

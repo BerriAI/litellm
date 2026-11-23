@@ -70,6 +70,7 @@ from litellm.types.guardrails import (
     PiiEntityType,
     PresidioPerRequestConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.proxy.guardrails.guardrail_hooks.presidio import (
     PresidioAnalyzeRequest,
     PresidioAnalyzeResponseItem,
@@ -1227,7 +1228,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Masks the input and output before logging to langfuse, datadog, etc.
         """
-        if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
+        if call_type in (
+            "completion",
+            "acompletion",
+            "anthropic_messages",
+            "aanthropic_messages",
+        ):  # /chat/completions and /v1/messages requests
             messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
@@ -1296,8 +1302,96 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data=kwargs,
                     mode="mask",
                 )
+        elif call_type in ("aresponses", "responses"):  # /v1/responses requests
+            presidio_config = self.get_presidio_settings_from_request_data(kwargs)
+
+            await self._mask_responses_input_for_logging(kwargs=kwargs, presidio_config=presidio_config)
+
+            if isinstance(result, ResponsesAPIResponse):
+                await self._process_responses_response_for_pii(
+                    response=result,
+                    request_data=kwargs,
+                    mode="mask",
+                )
 
         return kwargs, result
+
+    async def _mask_responses_input_for_logging(
+        self,
+        kwargs: dict,
+        presidio_config: PresidioPerRequestConfig | None,
+    ) -> None:
+        instructions: Final = kwargs.get("instructions", None)
+        if isinstance(instructions, str):
+            kwargs["instructions"] = await self.check_pii(
+                text=instructions,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=kwargs,
+            )
+
+        input_value: Final = kwargs.get("input", None)
+        if isinstance(input_value, str):
+            kwargs["input"] = await self.check_pii(
+                text=input_value,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=kwargs,
+            )
+        elif isinstance(input_value, list):
+            for item in input_value:
+                await self._mask_responses_input_item(item=item, presidio_config=presidio_config, request_data=kwargs)
+
+    async def _mask_responses_input_item(
+        self,
+        item: object,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict,
+    ) -> None:
+        content: Final = item.get("content", None) if isinstance(item, dict) else getattr(item, "content", None)
+        if isinstance(content, str):
+            masked: Final = await self.check_pii(
+                text=content,
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+            if isinstance(item, dict):
+                item["content"] = masked
+            else:
+                _write_attribute(item, "content", masked)
+        elif isinstance(content, list):
+            for part in content:
+                await self._mask_responses_input_part(
+                    part=part, presidio_config=presidio_config, request_data=request_data
+                )
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            item["text"] = await self.check_pii(
+                text=item["text"],
+                output_parse_pii=False,
+                presidio_config=presidio_config,
+                request_data=request_data,
+            )
+
+    async def _mask_responses_input_part(
+        self,
+        part: object,
+        presidio_config: PresidioPerRequestConfig | None,
+        request_data: dict,
+    ) -> None:
+        text: Final = part.get("text", None) if isinstance(part, dict) else getattr(part, "text", None)
+        if not isinstance(text, str):
+            return
+        masked: Final = await self.check_pii(
+            text=text,
+            output_parse_pii=False,
+            presidio_config=presidio_config,
+            request_data=request_data,
+        )
+        if isinstance(part, dict):
+            part["text"] = masked
+        else:
+            _write_attribute(part, "text", masked)
 
     async def async_post_call_success_hook(
         self,
@@ -1409,6 +1503,62 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     request_data=request_data,
                 )
 
+        return response
+
+    async def _process_responses_response_for_pii(
+        self,
+        response: ResponsesAPIResponse,
+        request_data: dict,
+        mode: Literal["mask", "unmask"],
+    ) -> ResponsesAPIResponse:
+        """
+        Process a Responses API response for PII masking/unmasking.
+        Walks the same output surface as `_unmask_responses_api_completed_chunk`:
+        message items' content blocks and function call arguments. Output items
+        and content blocks may be plain dicts or provider SDK objects.
+        """
+        metadata: Final = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Final = metadata.get("pii_tokens", {})
+        presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
+
+        async def pii_processed_text(text: str) -> str:
+            match mode:
+                case "unmask":
+                    return self._unmask_pii_text(text, pii_tokens)
+                case "mask":
+                    return await self.check_pii(
+                        text=text,
+                        output_parse_pii=False,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
+
+        for output_item in response.output or []:
+            content: Final = (
+                output_item.get("content", None)
+                if isinstance(output_item, dict)
+                else getattr(output_item, "content", None)
+            )
+            if isinstance(content, list):
+                for content_block in content:
+                    if isinstance(content_block, dict):
+                        block_text = content_block.get("text")
+                        if isinstance(block_text, str):
+                            content_block["text"] = await pii_processed_text(block_text)
+                    elif isinstance(getattr(content_block, "text", None), str):
+                        _write_attribute(content_block, "text", await pii_processed_text(content_block.text))
+
+            arguments: Final = (
+                output_item.get("arguments", None)
+                if isinstance(output_item, dict)
+                else getattr(output_item, "arguments", None)
+            )
+            if isinstance(arguments, str):
+                processed_arguments: Final = await pii_processed_text(arguments)
+                if isinstance(output_item, dict):
+                    output_item["arguments"] = processed_arguments
+                else:
+                    _write_attribute(output_item, "arguments", processed_arguments)
         return response
 
     async def _process_response_for_pii(
