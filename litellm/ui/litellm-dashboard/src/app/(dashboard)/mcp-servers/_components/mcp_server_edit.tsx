@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Info, TriangleAlert } from "lucide-react";
@@ -26,6 +27,7 @@ import {
   MCPServer,
   MCPServerCostInfo,
   TRANSPORT,
+  supportsEvents,
   TRANSPORT_ITEMS,
   AUTH_TYPE_ITEMS,
   getMcpOAuthMode,
@@ -80,6 +82,7 @@ import {
   parsesAsJsonObject,
   selectControl,
   selectTriggerControl,
+  switchControl,
   tagsControl,
   textControl,
 } from "./mcpFieldRules";
@@ -161,6 +164,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       extra_headers: mcpServer.extra_headers || [],
       oauth_flow_type: oauth2FlowToFormValue(mcpServer.oauth2_flow),
       dcr_bridge: Boolean(mcpServer.dcr_bridge),
+      events_enabled: Boolean(mcpServer.events?.enabled),
+      events_allowed: mcpServer.events?.allowed_events ?? [],
       token_validation_json: mcpServer.token_validation
         ? JSON.stringify(mcpServer.token_validation, null, 2)
         : undefined,
@@ -188,6 +193,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [logoUrl, setLogoUrl] = useState<string | undefined>(mcpServer.mcp_info?.logo_url || undefined);
   const authType = mountedValues.auth_type as string | undefined;
   const transportType = mountedValues.transport as string | undefined;
+  const eventsSupported = supportsEvents(transportType ?? effectiveTransport, mcpServer.mcp_info?.protocol_version);
   const isStdioTransport = transportType === "stdio";
   const isOpenAPITransport = transportType === TRANSPORT.OPENAPI;
   const isMCPTransport = !isStdioTransport && !isOpenAPITransport;
@@ -999,6 +1005,45 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       step={1}
                       placeholder={t("mcpServers.serverEdit.fields.rpmPlaceholder")}
                       className="w-full rounded-lg"
+                    />
+                  )}
+                </MountedFormField>
+
+                <MountedFormField
+                  name="events_enabled"
+                  label={t("mcpServers.serverEdit.events.enabled")}
+                  className="grid grid-cols-[1fr_auto] items-center gap-x-4"
+                  help={t(
+                    eventsSupported
+                      ? "mcpServers.serverEdit.events.description"
+                      : "mcpServers.serverEdit.events.requirements",
+                  )}
+                >
+                  {(control) => (
+                    <Switch
+                      aria-label={t("mcpServers.serverEdit.events.enabled")}
+                      disabled={!eventsSupported && !control.value}
+                      {...switchControl(control)}
+                    />
+                  )}
+                </MountedFormField>
+
+                <MountedFormField
+                  label={
+                    <span className="text-sm font-medium text-foreground flex items-center">
+                      {t("mcpServers.serverEdit.events.allowed")}
+                      <SimpleTooltip content={t("mcpServers.serverEdit.events.allowedTooltip")}>
+                        <Info className="ml-2 size-4 text-info hover:text-info/80 cursor-help" />
+                      </SimpleTooltip>
+                    </span>
+                  }
+                  name="events_allowed"
+                >
+                  {(control) => (
+                    <MultiSelect
+                      {...tagsControl(control, t)}
+                      placeholder={t("mcpServers.serverEdit.events.allowedPlaceholder")}
+                      className="rounded-lg"
                     />
                   )}
                 </MountedFormField>

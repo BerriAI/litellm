@@ -11,8 +11,12 @@ import {
   MCP_OAUTH2_FLOW_M2M,
   OAUTH_FLOW,
   TRANSPORT,
+  EVENTS_PROTOCOL_VERSION,
+  supportsEvents,
+  handleTransport,
   isClientForwardedTokenMode,
   preservedAdminCredentials,
+  type MCPServerEventsConfig,
 } from "@/components/mcp_tools/types";
 import { AUTH_TYPES_REQUIRING_CREDENTIALS, reduceStaticHeaders } from "./createServerPayload";
 import { TOOL_DISPLAY_NAME_PATTERN, normalizeEnvVars } from "./utils";
@@ -33,6 +37,8 @@ export interface EditServerFormValues {
   readonly oauth_passthrough?: boolean;
   readonly dcr_bridge?: boolean;
   readonly token_validation_json?: string;
+  readonly events_enabled?: boolean;
+  readonly events_allowed?: readonly string[];
   readonly mcp_access_groups?: readonly MCPAccessGroupValue[];
   readonly transport?: string;
   readonly server_name?: string;
@@ -89,6 +95,7 @@ export interface EditServerUiState {
 
 export type BuildEditPayloadResult =
   | { readonly kind: "ok"; readonly payload: EditServerPayload }
+  | { readonly kind: "incompatible_events" }
   | { readonly kind: "invalid_tool_display_name"; readonly displayName: string }
   | { readonly kind: "stdio_config_missing_command" }
   | { readonly kind: "invalid_stdio_json" }
@@ -120,6 +127,8 @@ export const editPayloadErrorMessage = (
   t: TFunction,
 ): string => {
   switch (result.kind) {
+    case "incompatible_events":
+      return t("mcpServers.serverEdit.events.requirements");
     case "invalid_tool_display_name":
       return t("mcpServers.editServerPayload.errors.invalidToolDisplayName", { displayName: result.displayName });
     case "stdio_config_missing_command":
@@ -300,8 +309,16 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     oauth_passthrough: oauthPassthroughRaw,
     dcr_bridge: dcrBridgeRaw,
     token_validation_json: rawTokenValidationJson,
+    events_enabled: eventsEnabledRaw,
+    events_allowed: eventsAllowedRaw,
     ...rawRestValues
   } = values;
+
+  const eventsEnabled = eventsEnabledRaw ?? mcpServer.events?.enabled;
+  const transport = rawRestValues.transport ?? handleTransport(mcpServer.transport, mcpServer.spec_path);
+  if (eventsEnabled && !supportsEvents(transport, mcpServer.mcp_info?.protocol_version)) {
+    return { kind: "incompatible_events" };
+  }
 
   const accessGroups = (rawRestValues.mcp_access_groups || []).map((g) =>
     typeof g === "string" ? g : g.name || String(g),
@@ -383,6 +400,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     server_id: mcpServer.server_id,
     mcp_info: {
       ...(mcpServer.mcp_info ?? {}),
+      ...(eventsEnabled ? { protocol_version: EVENTS_PROTOCOL_VERSION } : {}),
       server_name: mcpInfoServerName,
       description: restValues.description,
       logo_url: logoUrl || undefined,
@@ -428,8 +446,26 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     ...(tokenValidation.value !== null || mcpServer.token_validation
       ? { token_validation: tokenValidation.value }
       : {}),
+    ...eventsEntry(mcpServer.events, eventsEnabledRaw, eventsAllowedRaw),
     ...credentialsEntry,
   };
 
   return { kind: "ok", payload };
 };
+
+export function eventsEntry(
+  current: MCPServerEventsConfig | null | undefined,
+  enabled: boolean | undefined,
+  allowed: readonly string[] | undefined,
+): { readonly events?: MCPServerEventsConfig } {
+  const nextEnabled = enabled ?? current?.enabled ?? false;
+  const allowedEvents = allowed ?? current?.allowed_events ?? [];
+  if (!nextEnabled && !current && allowedEvents.length === 0) return {};
+  return {
+    events: {
+      ...(current ?? {}),
+      enabled: nextEnabled,
+      allowed_events: allowedEvents.length > 0 ? [...allowedEvents] : null,
+    },
+  };
+}

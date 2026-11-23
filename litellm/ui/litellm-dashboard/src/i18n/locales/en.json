@@ -13460,6 +13460,14 @@
       "actions": {
         "cancel": "Cancel",
         "save": "Save Changes"
+      },
+      "events": {
+        "enabled": "MCP events",
+        "requirements": "MCP events require HTTP or stdio transport and protocol 2026-07-28. Set the upstream protocol to auto or 2026-07-28.",
+        "description": "Relay this server's events with the same keys, guardrails and logs as tool calls. Enabling events pins auto negotiation to 2026-07-28 and requires mcp_events_enabled in general settings.",
+        "allowed": "Allowed event types",
+        "allowedTooltip": "Glob patterns such as build.* that limit which upstream event types the gateway publishes. Leave empty to allow every type.",
+        "allowedPlaceholder": "Leave empty to allow every event type"
       }
     },
     "oauthFormFields": {
