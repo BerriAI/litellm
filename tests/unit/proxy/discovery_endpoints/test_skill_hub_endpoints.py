@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import io
 import json
@@ -10,7 +11,7 @@ import zipfile
 import zlib
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -23,6 +24,7 @@ import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, UserAPIKeyAuth
+from litellm.proxy.proxy_server import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository, get_skill_submission_repository
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
     MAX_ARCHIVE_ENTRIES,
@@ -31,9 +33,11 @@ from litellm.proxy.discovery_endpoints.agent_skills_archive import (
 from litellm.proxy.discovery_endpoints.skill_hub_endpoints import import_http_client
 from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
 from litellm.proxy.utils import InternalUsageCache
-from litellm.repositories.plugin_upload_repository import PluginUploadRepository
+from litellm.redis.stores.auth_cache import AuthObject
+from litellm.repositories.plugin_upload_repository import DOWNLOAD_EXPORT_BATCH_SIZE, PluginUploadRepository
 from litellm.repositories.skill_submission_repository import SkillSubmissionRepository
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.skill_submission_rows import SubmissionRows
 
 NAME: Final = "portable-notes"
@@ -84,8 +88,7 @@ class HubClient:
 
 @pytest.fixture
 async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
-    prisma: Final = MagicMock()
-    prisma.writer_db = prisma.db
+    prisma: Final = prisma_with_empty_config()
     prisma.db.execute_raw = AsyncMock(return_value=1)
     prisma.get_data = AsyncMock(return_value=None)
     prisma.db.litellm_skillstable.find_many = AsyncMock(return_value=[])
@@ -128,14 +131,14 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
     monkeypatch.setattr(proxy_server, "master_key", MASTER_KEY)
     monkeypatch.setattr(proxy_server, "general_settings", {})
-    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(litellm, "public_skills_index", True)
     monkeypatch.setenv("PROXY_BASE_URL", "http://test")
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     for key, skills in ((GRANTED_KEY, [NAME]), (PLAIN_KEY, [])):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
                 token=proxy_server.hash_token(key),
                 user_role=proxy_server.LitellmUserRoles.INTERNAL_USER,
                 object_permission=LiteLLM_ObjectPermissionTable(object_permission_id=key, skills=skills),
@@ -147,8 +150,8 @@ async def hub(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[HubClient]:
         (VIEWER_KEY, proxy_server.LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY),
     ):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(token=proxy_server.hash_token(key), user_role=role, user_id=key),
         )
     async with (
         httpx.AsyncClient(transport=httpx.MockTransport(upstream), trust_env=False) as source_client,
@@ -397,6 +400,57 @@ async def test_deleted_skill_is_not_served_when_download_cannot_be_recorded(hub:
     assert hub.downloads.create.await_count == (0 if key is None else 2)
 
 
+@pytest.mark.parametrize("key,status", ((None, 401), (PLAIN_KEY, 403), (VIEWER_KEY, 403), (MASTER_KEY, 404)))
+async def test_download_export_rejects_non_admins_and_unknown_skills(
+    hub: HubClient, key: str | None, status: int,
+) -> None:
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(key))
+    assert response.status_code == status, response.text
+    hub.downloads.find_many.assert_not_called()
+
+
+async def test_download_export_reads_all_batches_without_counting_or_mixing_skills(hub: HubClient) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    record: Final = _stored_upload(hub)
+    events: Final = tuple(
+        prisma_models.LiteLLM_ClaudeCodePluginDownload(
+            id=index, plugin_id=record.id if index % 2 else "other-skill",
+            downloaded_at=datetime(2026, 10, 1, tzinfo=timezone.utc),
+            authenticated=True, digest="a" * 64, user_email=f"reader-{index}@example.test",
+        )
+        for index in range(1, DOWNLOAD_EXPORT_BATCH_SIZE * 2 + 4)
+    )
+
+    async def find_many(
+        *, where: Mapping[str, str | Mapping[str, int]], order: Mapping[str, str], take: int,
+    ) -> tuple[prisma_models.LiteLLM_ClaudeCodePluginDownload, ...]:
+        before: Final = where.get("id")
+        cursor: Final = before["lt"] if isinstance(before, Mapping) else len(events) + 1
+        ordered: Final = sorted(events, key=lambda row: row.id, reverse=order["id"] == "desc")
+        return tuple(row for row in ordered if row.plugin_id == where["plugin_id"] and row.id < cursor)[:take]
+
+    hub.downloads.find_many = AsyncMock(side_effect=find_many)
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(MASTER_KEY))
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["content-disposition"] == f"attachment; filename*=UTF-8''{NAME}.csv"
+    rows: Final = tuple(csv.DictReader(io.StringIO(response.text)))
+    assert tuple(row["download_id"] for row in rows) == tuple(str(row.id) for row in reversed(events) if row.plugin_id == record.id)
+    assert tuple(row["user_email"] for row in rows) == tuple(row.user_email for row in reversed(events) if row.plugin_id == record.id)
+    assert hub.downloads.find_many.await_count == 2
+    hub.downloads.count.assert_not_called()
+
+
+async def test_download_export_keeps_empty_history_as_a_valid_csv(hub: HubClient) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    _stored_upload(hub)
+    hub.downloads.find_many = AsyncMock(return_value=[])
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/downloads/export", headers=_headers(MASTER_KEY))
+    assert response.status_code == 200, response.text
+    assert response.text == "download_id,downloaded_at,user_email,user_id,team,key,version\r\n"
+
+
 @pytest.mark.parametrize("key,enabled_only,names", (
     (PLAIN_KEY, False, ("other-notes", NAME)),
     (MASTER_KEY, True, ("other-notes", NAME)),
@@ -552,9 +606,10 @@ async def test_publication_limit_is_shared_by_user_and_route_and_resets(
 ) -> None:
     for key in (PLAIN_KEY, GRANTED_KEY):
         proxy_server.user_api_key_cache.set_cache(
-            key=proxy_server.hash_token(key),
-            value=UserAPIKeyAuth(
-                token=proxy_server.hash_token(key), user_id=user_id,
+            AuthObject.virtual_key(proxy_server.hash_token(key)),
+            UserAPIKeyAuth(
+                token=proxy_server.hash_token(key),
+                user_id=user_id,
                 user_role=role,
             ),
         )

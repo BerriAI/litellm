@@ -11,6 +11,18 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  rollover_max_budget Float?
+  apps LiteLLM_AppTable[] @relation("AppBudget")
+  app_groups LiteLLM_AppGroupTable[] @relation("AppGroupBudget")
+  app_group_org_budgets LiteLLM_AppGroupCustomerOrgTable[] @relation("AppGroupOrgBudget")
+  app_default_tiers LiteLLM_AppTable[] @relation("AppDefaultTier")
+  app_default_members LiteLLM_AppTable[] @relation("AppDefaultMember")
+  app_org_tiers LiteLLM_AppCustomerOrgTable[] @relation("AppOrgTier")
+  app_org_budgets LiteLLM_AppCustomerOrgTable[] @relation("AppOrgBudget")
+  app_member_budgets LiteLLM_AppCustomerMemberTable[] @relation("AppMemberBudget")
+  app_org_overrides LiteLLM_AppCustomerOrgTable[] @relation("AppOrgOverride")
+  app_org_members LiteLLM_AppCustomerOrgTable[] @relation("AppOrgMember")
+  app_member_overrides LiteLLM_AppCustomerMemberTable[] @relation("AppMemberOverride")
   customer_organization_defaults LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationDefaultBudget")
   customer_organizations LiteLLM_CustomerOrganizationTable[] @relation("CustomerOrganizationBudget")
   customer_teams LiteLLM_CustomerTeamTable[] @relation("CustomerTeamBudget")
@@ -50,7 +62,100 @@ model LiteLLM_BudgetTable {
   organization_membership LiteLLM_OrganizationMembership[] // budgets of Users within a Organization
 }
 
+model LiteLLM_AppGroupTable {
+  app_group_id String @id @default(uuid())
+  name String @unique
+  description String?
+  metadata Json?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppGroupBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  spend Float @default(0.0)
+  spend_reset_window String?
+  apps LiteLLM_AppTable[]
+  customer_organizations LiteLLM_AppGroupCustomerOrgTable[]
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+}
+
+model LiteLLM_AppGroupCustomerOrgTable {
+  app_group_id String
+  customer_org_id String
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppGroupOrgBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  spend Float @default(0.0)
+  spend_reset_window String?
+  app_group LiteLLM_AppGroupTable @relation(fields: [app_group_id], references: [app_group_id], onDelete: Cascade)
+  customer_org LiteLLM_CustomerOrganizationTable @relation(fields: [customer_org_id], references: [customer_org_id], onDelete: Cascade)
+  @@id([app_group_id, customer_org_id])
+  @@index([customer_org_id])
+}
+
+model LiteLLM_AppTable {
+  app_id String @id @default(uuid())
+  app_group_id String?
+  app_group LiteLLM_AppGroupTable? @relation(fields: [app_group_id], references: [app_group_id], onDelete: Restrict)
+  @@index([app_group_id])
+  resource_type String?
+  resource_id String?
+  alias String @unique
+  spend Float @default(0.0)
+  spend_reset_window String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppBudget", fields: [budget_id], references: [budget_id])
+  default_tier_budget_id String?
+  default_tier_budget LiteLLM_BudgetTable? @relation("AppDefaultTier", fields: [default_tier_budget_id], references: [budget_id])
+  default_customer_member_budget_id String?
+  default_customer_member_budget LiteLLM_BudgetTable? @relation("AppDefaultMember", fields: [default_customer_member_budget_id], references: [budget_id])
+  auto_create_customers Boolean @default(true)
+  customer_margin Float?
+  customer_organizations LiteLLM_AppCustomerOrgTable[]
+  customer_members LiteLLM_AppCustomerMemberTable[]
+  @@unique([resource_type, resource_id])
+  created_at DateTime @default(now())
+  created_by String
+  updated_at DateTime @default(now()) @updatedAt
+  updated_by String
+}
+
+model LiteLLM_AppCustomerOrgTable {
+  app_id String
+  customer_org_id String
+  spend Float @default(0.0)
+  spend_reset_window String?
+  tier_budget_id String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppOrgBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_override_id String?
+  budget_override_expires_at DateTime?
+  customer_member_budget_id String?
+  app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
+  customer_org LiteLLM_CustomerOrganizationTable @relation(fields: [customer_org_id], references: [customer_org_id], onDelete: Cascade)
+  tier_budget LiteLLM_BudgetTable? @relation("AppOrgTier", fields: [tier_budget_id], references: [budget_id])
+  budget_override LiteLLM_BudgetTable? @relation("AppOrgOverride", fields: [budget_override_id], references: [budget_id])
+  customer_member_budget LiteLLM_BudgetTable? @relation("AppOrgMember", fields: [customer_member_budget_id], references: [budget_id])
+  @@id([app_id, customer_org_id])
+}
+
+model LiteLLM_AppCustomerMemberTable {
+  app_id String
+  customer_member_id String
+  spend Float @default(0.0)
+  spend_reset_window String?
+  budget_override_id String?
+  budget_id String?
+  budget LiteLLM_BudgetTable? @relation("AppMemberBudget", fields: [budget_id], references: [budget_id], onDelete: Restrict)
+  budget_override_expires_at DateTime?
+  app LiteLLM_AppTable @relation(fields: [app_id], references: [app_id], onDelete: Cascade)
+  customer_member LiteLLM_CustomerMemberTable @relation(fields: [customer_member_id], references: [customer_member_id], onDelete: Cascade)
+  budget_override LiteLLM_BudgetTable? @relation("AppMemberOverride", fields: [budget_override_id], references: [budget_id])
+  @@id([app_id, customer_member_id])
+}
+
 model LiteLLM_CustomerOrganizationTable {
+  app_groups LiteLLM_AppGroupCustomerOrgTable[]
+  apps LiteLLM_AppCustomerOrgTable[]
   spend Float @default(0.0)
   budget_template_ids String[] @default([])
   budget_id String?
@@ -91,6 +196,7 @@ model LiteLLM_CustomerTeamTable {
 }
 
 model LiteLLM_CustomerMemberTable {
+  apps LiteLLM_AppCustomerMemberTable[]
   spend Float @default(0.0)
   spend_reset_window String?
   customer_member_id String @id @default(uuid())
@@ -391,6 +497,8 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    rollover_max_budget Float?
+    rollover_credit Float?
     budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
@@ -444,6 +552,7 @@ model LiteLLM_ObjectPermissionTable {
   search_tools          String[]       @default([]) // search_tool_name values this key/team/user may call
   mcp_tool_search_enabled Boolean?
   skills                String[]       @default([]) // Claude Code plugin names granted to this key/team beyond the public (enabled) set
+  apps                  String[]       @default([])
   teams                 LiteLLM_TeamTable[]
   projects              LiteLLM_ProjectTable[]
   verification_tokens   LiteLLM_VerificationToken[]
@@ -595,6 +704,7 @@ model LiteLLM_SSOIdentityAssertion {
 
 // Generate Tokens for Proxy
 model LiteLLM_VerificationToken {
+    key_id String? @unique @default(uuid())
     token      String   @id
     key_name   String?
     key_alias   String?
@@ -697,6 +807,7 @@ model LiteLLM_DeprecatedVerificationToken {
 
 // Audit table for deleted keys - preserves spend and key information for historical tracking
 model LiteLLM_DeletedVerificationToken {
+    key_id String?
     id                      String   @id @default(uuid())
     token                   String   // Original token (hashed)
     key_name                String?
@@ -895,6 +1006,7 @@ model LiteLLM_UserNotifications {
 }
 
 model LiteLLM_TeamMembership {
+  rollover_credit Float?
   // Use this table to track the Internal User's Spend within a Team + Set Budgets, rpm limits for the user within the team
   user_id    String
   team_id    String
@@ -978,6 +1090,7 @@ model LiteLLM_DailyUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1016,6 +1129,7 @@ model LiteLLM_DailyGlobalSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1050,6 +1164,7 @@ model LiteLLM_DailyOrganizationSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1070,6 +1185,9 @@ model LiteLLM_DailyOrganizationSpend {
 
 // Track daily end user (customer) spend metrics per model and key
 model LiteLLM_DailyCustomerMemberSpend {
+  app_group_id String @default("")
+  @@index([app_group_id, customer_org_id, date])
+  app_id String @default("")
   id                  String   @id
   date                String
   customer_org_id     String
@@ -1086,12 +1204,15 @@ model LiteLLM_DailyCustomerMemberSpend {
   completion_tokens   BigInt   @default(0)
   cache_read_input_tokens BigInt @default(0)
   cache_creation_input_tokens BigInt @default(0)
+  cache_cost Float @default(0.0)
+  priced_cache_tokens BigInt @default(0)
   compression_saved_tokens BigInt @default(0)
   compression_savings_spend Float @default(0.0)
   prompt_caching_savings_spend Float @default(0.0)
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend Float @default(0.0)
   guardrail_spend Float @default(0.0)
+  customer_margin_spend Float @default(0.0)
   api_requests        BigInt   @default(0)
   successful_requests BigInt   @default(0)
   failed_requests     BigInt   @default(0)
@@ -1128,6 +1249,7 @@ model LiteLLM_DailyEndUserSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1166,6 +1288,7 @@ model LiteLLM_DailyAgentSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1204,6 +1327,7 @@ model LiteLLM_DailyTeamSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1245,6 +1369,7 @@ model LiteLLM_DailyTagSpend {
   gateway_injected_caching_savings_spend Float @default(0.0)
   autorouter_savings_spend     Float       @default(0.0)
   guardrail_spend              Float       @default(0.0)
+  customer_margin_spend              Float       @default(0.0)
   spend               Float    @default(0.0)
   api_requests        BigInt      @default(0)
   successful_requests BigInt      @default(0)
@@ -1349,6 +1474,7 @@ model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use t
   api_key String?
   request_tags Json? @default("[]")
   end_user_id String?
+  creator_billing_context Json?
   updated_at DateTime @updatedAt
   updated_by String?
 

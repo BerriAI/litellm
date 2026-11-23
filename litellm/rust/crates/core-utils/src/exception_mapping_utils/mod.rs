@@ -41,7 +41,7 @@
 //! - Only the OpenAI-compatible, Vertex AI and Cohere mappers are ported; every other
 //!   provider goes straight to the status table. Trigger: a Rust route for such a provider.
 
-use super::secret_redaction::SecretRedactor;
+use litellm_redaction::SecretRedactor;
 
 mod cohere;
 mod openai;

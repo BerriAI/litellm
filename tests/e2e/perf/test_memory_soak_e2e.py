@@ -44,7 +44,7 @@ from e2e_config import (
 from e2e_http import NoBody
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
 from lifecycle import ResourceManager
-from memory_readings import RssReading, WorkerKey, settled_rss_per_worker
+from memory_readings import RssReading, WorkerKey, assert_same_rss_workers, settled_rss_per_worker
 from models import (
     ChatMessage,
     ChatResponse,
@@ -209,14 +209,6 @@ def _slope(values: Sequence[float]) -> float:
     return sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, values, strict=True)) / spread
 
 
-def _assert_same_workers(before: Mapping[WorkerKey, RssReading], after: Mapping[WorkerKey, RssReading]) -> None:
-    assert before.keys() == after.keys(), (
-        f"the workers answering /debug/memory/summary changed across the soak, so not every worker can be compared "
-        f"with itself: gone {sorted(before.keys() - after.keys())} (a restart or OOM kill), new "
-        f"{sorted(after.keys() - before.keys())}"
-    )
-
-
 def _spend_logged_share(proxy: ProxyClient, call_ids: Sequence[str], deadline: float) -> float:
     logged: Final = sum(1 for call_id in call_ids if proxy.spend_logs(SpendLogsParams(request_id=call_id)))
     share: Final = logged / max(1, len(call_ids))
@@ -281,7 +273,7 @@ class TestMemorySoak:
         after: Final = _rss_after_forced_full_gc(proxy)
 
         for checkpoint in (*checkpoints, after):
-            _assert_same_workers(before, checkpoint)
+            assert_same_rss_workers(before, checkpoint)
         workers: Final = frozenset(before)
         fleet: Final = tuple(_fleet(checkpoint, workers) for checkpoint in (before, *checkpoints, after))
         slope_kib: Final = (

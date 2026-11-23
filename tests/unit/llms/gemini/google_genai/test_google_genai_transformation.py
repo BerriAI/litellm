@@ -9,7 +9,7 @@ from respx import MockRouter
 import litellm
 from litellm.google_genai import agenerate_content_stream
 from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
-from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_CHARACTERS
+from litellm.llms.vertex_ai.common_utils import GEMINI_MAX_ENUM_BYTES
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _PROMPT: Final = "Hello, can you tell me a short joke?"
@@ -283,7 +283,7 @@ def test_normalize_response_schema_sends_integer_enums_to_gemini_3(
 
 @pytest.mark.parametrize(
     ("value_count", "integer_enum_sent"),
-    [(GEMINI_MAX_ENUM_CHARACTERS // 10, True), (GEMINI_MAX_ENUM_CHARACTERS // 10 + 1, False)],
+    [(GEMINI_MAX_ENUM_BYTES // 10, True), (GEMINI_MAX_ENUM_BYTES // 10 + 1, False)],
 )
 def test_normalize_response_schema_drops_integer_enums_past_the_enum_budget(
     value_count: int, integer_enum_sent: bool

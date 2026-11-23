@@ -8,12 +8,14 @@ from openai.types.responses import ResponseFunctionWebSearch
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
-from litellm.types.llms.anthropic import claude_hosted_web_tool_call
+from litellm.types.llms.anthropic import ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicUsage
+from litellm.types.llms.gemini import GEMINI_SEARCH_TOOL_ID_PREFIX
 from litellm.types.llms.openai import AllMessageValues, ResponseAPIUsage
-from litellm.types.responses.main import with_hosted_web_tool_arguments
+from litellm.types.responses.main import hosted_web_tool_call, web_search_call_tool_id, with_hosted_web_tool_arguments
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_SCANNED_HOSTED_SEARCH_TOOL_ID_PREFIXES: Final = (ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX, GEMINI_SEARCH_TOOL_ID_PREFIX)
 
 
 def _anthropic_stream_chunk_events(item: object) -> list[dict]:
@@ -37,7 +39,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
                 continue
             try:
                 parsed = _DECODED_JSON.validate_python(json.loads(payload))
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(parsed, dict):
                 events.append(parsed)
@@ -149,9 +151,17 @@ def web_search_call(item: object) -> ResponseFunctionWebSearch | None:
         return None
 
 
-def claude_hosted_web_tool_arguments(item: object) -> str | None:
+def scanned_hosted_web_tool_call(item: object) -> tuple[str, str, str] | None:
     search: Final = web_search_call(item)
-    hosted_call: Final = None if search is None else claude_hosted_web_tool_call(search)
+    tool_id: Final = None if search is None else web_search_call_tool_id(search.id)
+    if search is None or tool_id is None or not tool_id.startswith(_SCANNED_HOSTED_SEARCH_TOOL_ID_PREFIXES):
+        return None
+    hosted_call: Final = hosted_web_tool_call(search.action)
+    return None if hosted_call is None else (tool_id, *hosted_call)
+
+
+def hosted_web_tool_arguments(item: object) -> str | None:
+    hosted_call: Final = scanned_hosted_web_tool_call(item)
     return None if hosted_call is None else hosted_call[2]
 
 
@@ -210,8 +220,9 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
     ``ResponseAPIUsage`` for a synthetic guardrail-blocked /v1/responses stream.
 
     A mid-stream block carries the events received so far as a list; real usage
-    rides on the ``response.completed`` event's response when the upstream sent
-    one. Non-list originals defer to ``blocked_responses_api_usage``.
+    rides on the ``response.completed`` or ``response.incomplete`` event's
+    response when the upstream sent one. Non-list originals defer to
+    ``blocked_responses_api_usage``.
     """
     if not isinstance(original_response, list):
         return blocked_responses_api_usage(original_response)
@@ -219,7 +230,7 @@ def blocked_responses_stream_usage(original_response: object) -> ResponseAPIUsag
         (
             response
             for item in reversed(original_response)
-            if stream_item_field(item, "type") == "response.completed"
+            if stream_item_field(item, "type") in ("response.completed", "response.incomplete")
             and (response := stream_item_field(item, "response")) is not None
         ),
         None,
@@ -279,6 +290,10 @@ def filter_messages_by_skip_flags(
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
 def role_out_of_guardrail_scope(

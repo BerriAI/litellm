@@ -17,12 +17,13 @@ from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, I
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import CodeType, FrameType, MappingProxyType, SimpleNamespace
-from typing import TYPE_CHECKING, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import openai
 import pytest
+import responses
 import respx
 from fastapi import HTTPException
 from opentelemetry import trace
@@ -111,6 +112,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
 from typing import List, Optional
@@ -7921,6 +7923,14 @@ async def _create_batches(router: Router, model_group: str, attempts: int) -> No
         )
 
 
+async def _batch_create_refused(router: Router, model_group: str) -> bool:
+    try:
+        await _create_batches(router, model_group, attempts=1)
+    except litellm.RateLimitError:
+        return True
+    return False
+
+
 def _azure_chat_row_with_provider_param() -> dict[str, object]:
     row: Final = _azure_sku_deployment("gpt-mixed", "chat-sku", "chat")
     return {**row, "litellm_params": {**row["litellm_params"], "model": "chat-sku", "custom_llm_provider": "azure"}}
@@ -8177,37 +8187,354 @@ async def test_acreate_batch_on_a_mixed_wildcard_group_only_reaches_batch_deploy
     assert batch_route.call_count == 20
 
 
+_AZURE_BATCH_DEPLOYMENT_REFUSAL: Final = {
+    "error": {"code": "OperationNotSupported", "message": "The current operation is not allowed in this deployment."}
+}
+
+
 @pytest.mark.asyncio
-async def test_chat_calls_after_a_batch_create_still_use_every_deployment_in_the_group(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Only the batch create itself is narrowed to mode batch deployments. Chat calls the same task makes
-    afterwards keep load balancing across the whole group."""
+async def test_chat_calls_on_a_mixed_azure_group_stay_off_its_batch_deployment(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     router: Final = litellm.Router(
         model_list=[
-            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-deployment"),
-            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-deployment"),
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
         ],
         num_retries=0,
     )
 
     with respx.mock(assert_all_called=False) as respx_mock:
-        respx_mock.post(host="batch-sku.openai.azure.com").mock(
+        batch_creates: Final = respx_mock.post(host="batch-sku.openai.azure.com", path__regex=r"/batches").mock(
             return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
         )
+        batch_chats: Final = respx_mock.post(host="batch-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(400, json=_AZURE_BATCH_DEPLOYMENT_REFUSAL)
+        )
+        chats: Final = respx_mock.post(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
         await _create_batches(router, "gpt-mixed", attempts=2)
+        for _ in range(20):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
 
-    chat_deployments: Final = {
-        (
-            await router.acompletion(
-                model="gpt-mixed", messages=[{"role": "user", "content": "hi"}], mock_response="ok"
-            )
-        )._hidden_params["model_id"]
-        for _ in range(40)
-    }
+    assert (batch_creates.call_count, chats.call_count, batch_chats.call_count) == (2, 20, 0)
 
-    assert chat_deployments == {"chat-deployment", "batch-deployment"}
+
+@pytest.mark.asyncio
+async def test_a_too_long_prompt_on_a_mixed_azure_group_takes_its_context_window_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", max_input_tokens=20),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+            _azure_sku_deployment("gpt-large", "large-sku", "chat"),
+        ],
+        enable_pre_call_checks=True,
+        context_window_fallbacks=[{"gpt-mixed": ["gpt-large"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        mixed_group: Final = respx_mock.post(host__regex=r"(chat|batch)-sku\.openai\.azure\.com").mock(
+            return_value=httpx.Response(400, json=_AZURE_BATCH_DEPLOYMENT_REFUSAL)
+        )
+        large: Final = respx_mock.post(host="large-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        response: Final = await router.acompletion(
+            model="gpt-mixed", messages=[{"role": "user", "content": "hi " * 200}]
+        )
+
+    assert (response.id, mixed_group.call_count, large.call_count) == (_AZURE_CHAT_COMPLETION["id"], 0, 1)
+
+
+_AZURE_FILE_DELETED: Final = {"id": "file-batch-input", "object": "file", "deleted": True}
+_AZURE_FILE_LIST: Final = {"object": "list", "data": [], "has_more": False}
+_AZURE_FINE_TUNING_JOB: Final = {
+    "id": "ftjob-1",
+    "object": "fine_tuning.job",
+    "created_at": 0,
+    "model": "gpt-mixed",
+    "status": "running",
+    "fine_tuned_model": None,
+    "training_file": "file-batch-input",
+    "hyperparameters": {"n_epochs": 3},
+    "organization_id": None,
+    "result_files": [],
+    "validation_file": None,
+    "trained_tokens": None,
+    "seed": 0,
+    "error": None,
+}
+_AZURE_VECTOR_STORE_SEARCH: Final = {
+    "object": "vector_store.search_results.page",
+    "search_query": ["hi"],
+    "data": [],
+    "has_more": False,
+    "next_page": None,
+}
+_AZURE_CONTAINER: Final = {
+    "id": "cntr_1",
+    "object": "container",
+    "created_at": 0,
+    "status": "running",
+    "expires_after": {"anchor": "last_active_at", "minutes": 20},
+    "last_active_at": 0,
+    "name": "sandbox",
+}
+_MIXED_GROUP_BATCH_API_CALLS: Final = {
+    "retrieve-batch": (
+        lambda router: router.aretrieve_batch(model="gpt-mixed", batch_id="batch_created"),
+        _AZURE_BATCH_CREATED,
+    ),
+    "cancel-batch": (
+        lambda router: router.acancel_batch(model="gpt-mixed", batch_id="batch_created"),
+        _AZURE_BATCH_CREATED,
+    ),
+    "upload-file": (
+        lambda router: router.acreate_file(model="gpt-mixed", purpose="user_data", file=io.BytesIO(b"hi")),
+        _AZURE_FILE_CREATED,
+    ),
+    "file-content": (
+        lambda router: router.afile_content(model="gpt-mixed", file_id="file-batch-input"),
+        _AZURE_FILE_CREATED,
+    ),
+    "delete-file": (
+        lambda router: router.afile_delete(model="gpt-mixed", file_id="file-batch-input"),
+        _AZURE_FILE_DELETED,
+    ),
+    "list-files": (lambda router: router.afile_list(model="gpt-mixed"), _AZURE_FILE_LIST),
+    "create-fine-tuning-job": (
+        lambda router: router.acreate_fine_tuning_job(model="gpt-mixed", training_file="file-batch-input"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "retrieve-fine-tuning-job": (
+        lambda router: router.aretrieve_fine_tuning_job(model="gpt-mixed", fine_tuning_job_id="ftjob-1"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "cancel-fine-tuning-job": (
+        lambda router: router.acancel_fine_tuning_job(model="gpt-mixed", fine_tuning_job_id="ftjob-1"),
+        _AZURE_FINE_TUNING_JOB,
+    ),
+    "list-fine-tuning-jobs": (
+        lambda router: router.alist_fine_tuning_jobs(model="gpt-mixed"),
+        {"object": "list", "data": [_AZURE_FINE_TUNING_JOB], "has_more": False},
+    ),
+    "search-vector-store": (
+        lambda router: router.avector_store_search(model="gpt-mixed", vector_store_id="vs_1", query="hi"),
+        _AZURE_VECTOR_STORE_SEARCH,
+    ),
+    "create-container": (
+        lambda router: router.acreate_container(model="gpt-mixed", name="sandbox"),
+        _AZURE_CONTAINER,
+    ),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "answer"), _MIXED_GROUP_BATCH_API_CALLS.values(), ids=_MIXED_GROUP_BATCH_API_CALLS.keys()
+)
+async def test_resource_scoped_calls_on_a_mixed_azure_group_still_reach_its_batch_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    answer: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        respx_mock.route(host="chat-sku.openai.azure.com").mock(return_value=httpx.Response(200, json=answer))
+        batch_deployment: Final = respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=answer)
+        )
+        for _ in range(20):
+            await call(router)
+
+    assert batch_deployment.call_count > 0
+
+
+async def _is_rate_limited(call: Awaitable[object]) -> bool:
+    try:
+        await call
+    except openai.RateLimitError:
+        return True
+    return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "answer"),
+    [_MIXED_GROUP_BATCH_API_CALLS["delete-file"], _MIXED_GROUP_BATCH_API_CALLS["retrieve-fine-tuning-job"]],
+    ids=["delete-file", "retrieve-fine-tuning-job"],
+)
+async def test_a_rate_limited_batch_api_call_moves_batch_calls_off_a_mixed_azure_chat_deployment_and_keeps_chat_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    answer: Mapping[str, object],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch"),
+        ],
+        num_retries=0,
+        cooldown_time=3600,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chats: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        respx_mock.route(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(429, json={"error": {"code": "429", "message": "Rate limit reached"}})
+        )
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(return_value=httpx.Response(200, json=answer))
+        rate_limited_calls: Final = [await _is_rate_limited(call(router)) for _ in range(20)]
+        for _ in range(20):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (rate_limited_calls.count(True), chats.call_count) == (1, 20)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "file_calls_stay_on_the_chat_deployment"),
+    [("afile_delete", False), ("aretrieve_fine_tuning_job", False), ("acompletion", True)],
+)
+async def test_a_logged_rate_limit_moves_only_batch_calls_off_a_mixed_azure_chat_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    call_type: str,
+    file_calls_stay_on_the_chat_deployment: bool,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-sku"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-sku"),
+        ],
+        num_retries=0,
+        cooldown_time=3600,
+    )
+    _ = router.deployment_callback_on_failure(
+        {
+            "call_type": call_type,
+            "exception": litellm.RateLimitError(message="Rate limit reached", llm_provider="azure", model="chat-sku"),
+            "litellm_params": {"model_info": {"id": "chat-sku"}, "metadata": {"model_group": "gpt-mixed"}},
+        },
+        None,
+        0,
+        1,
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        chats: Final = respx_mock.post(host="chat-sku.openai.azure.com", path__regex=r"/chat/completions").mock(
+            return_value=httpx.Response(200, json=_AZURE_CHAT_COMPLETION)
+        )
+        chat_deployment_file_calls: Final = respx_mock.route(host="chat-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_DELETED)
+        )
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_DELETED)
+        )
+        for _ in range(20):
+            await router.afile_delete(model="gpt-mixed", file_id="file-batch-input")
+        for _ in range(20):
+            await router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}])
+
+    assert (chat_deployment_file_calls.called, chats.call_count) == (file_calls_stay_on_the_chat_deployment, 20)
+
+
+class _ChatDeploymentAtItsLimit(CustomLogger):
+    def __init__(self, deployment_id: str = "chat-sku") -> None:
+        super().__init__()
+        self.deployment_id: Final = deployment_id
+        self.refusals: int = 0
+
+    async def async_pre_call_check(self, deployment: Mapping[str, object], parent_otel_span: object) -> None:
+        model_info: Final = deployment.get("model_info")
+        if isinstance(model_info, Mapping) and model_info.get("id") == self.deployment_id:
+            self.refusals += 1
+            raise litellm.RateLimitError(message="rpm exceeded", llm_provider="azure", model=self.deployment_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call", "expected_chat_refusals"),
+    [
+        (lambda router: router.afile_delete(model="gpt-mixed", file_id="file-batch-input"), 1),
+        (lambda router: router.acompletion(model="gpt-mixed", messages=[{"role": "user", "content": "hi"}]), 20),
+    ],
+    ids=["delete-file", "chat"],
+)
+async def test_a_pre_call_rate_limit_refusal_moves_only_batch_calls_off_a_mixed_azure_chat_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    call: Callable[[Router], Awaitable[object]],
+    expected_chat_refusals: int,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-mixed", "chat-sku", "chat", id="chat-sku"),
+            _azure_sku_deployment("gpt-mixed", "batch-sku", "batch", id="batch-sku"),
+        ],
+        num_retries=0,
+        cooldown_time=3600,
+    )
+    refuser: Final = _ChatDeploymentAtItsLimit()
+
+    with (
+        patch.object(litellm, "callbacks", [refuser]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_FILE_DELETED)
+        )
+        for _ in range(20):
+            with contextlib.suppress(litellm.RateLimitError):
+                await call(router)
+
+    assert refuser.refusals == expected_chat_refusals
+
+
+@pytest.mark.asyncio
+async def test_a_pre_call_refusal_of_a_batch_create_moves_batch_creates_to_the_azure_batch_only_peer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            _azure_sku_deployment("gpt-batch", "batch-sku", "batch", id="batch-sku"),
+            {
+                "model_name": "gpt-batch",
+                "litellm_params": {"model": "openai/gpt-batch", "api_key": "sk-dummy"},
+                "model_info": {"id": "openai-batch", "mode": "batch"},
+            },
+        ],
+        num_retries=0,
+        cooldown_time=3600,
+    )
+    refuser: Final = _ChatDeploymentAtItsLimit("openai-batch")
+
+    with (
+        patch.object(litellm, "callbacks", [refuser]),  # test-quality-ok: router reads this global
+        respx.mock(assert_all_called=False) as respx_mock,
+    ):
+        respx_mock.route(host="batch-sku.openai.azure.com").mock(
+            return_value=httpx.Response(200, json=_AZURE_BATCH_CREATED)
+        )
+        refused: Final = [await _batch_create_refused(router, "gpt-batch") for _ in range(20)]
+
+    assert (refuser.refusals, sum(refused)) == (1, 1)
 
 
 @pytest.mark.asyncio
@@ -13293,11 +13620,13 @@ class TestMemberAutoRouterInference:
         )
         self.database = SimpleNamespace(
             db=SimpleNamespace(
-                litellm_teamtable=SimpleNamespace(find_unique=AsyncMock(return_value=self.team)),
-                litellm_teammembership=SimpleNamespace(find_unique=AsyncMock(return_value=None)),
                 litellm_accessgrouptable=SimpleNamespace(find_unique=AsyncMock()),
             )
         )
+        self.stores = install_rust_auth_stores(
+            monkeypatch, RustAuthStores(team=FakeTeamStore(rows={"router-team": self.team}))
+        )
+        self.teams = self.stores.team
         monkeypatch.setattr(proxy_server, "user_api_key_cache", self.cache)
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
@@ -13419,9 +13748,9 @@ class TestMemberAutoRouterInference:
         assert first.model == "permitted-model" and first.routing_decision is not None
         assert first.routing_decision["cause"] == "llm_classifier"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_teamtable.find_unique.await_count == 1
-        assert self.database.db.litellm_teammembership.find_unique.await_count == 1
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        assert len(self.teams.lookups) == 1
+        assert len(self.stores.team_membership.lookups) == 1
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={"members_with_roles": []}
         )
         await delete_cache_team_object(
@@ -13468,9 +13797,10 @@ class TestMemberAutoRouterInference:
                 )
             )
         )
-        self.database.db.litellm_teamtable.find_unique.return_value = (
-            None if state == "deleted" else self.team.model_copy(update={"blocked": state == "blocked"})
-        )
+        if state == "deleted":
+            del self.teams.rows["router-team"]
+        else:
+            self.teams.rows["router-team"] = self.team.model_copy(update={"blocked": state == "blocked"})
         if state == "unavailable":
             monkeypatch.setattr(proxy_server, "prisma_client", None)
         with pytest.raises(HTTPException) as error:
@@ -13500,9 +13830,9 @@ class TestMemberAutoRouterInference:
         from litellm.models.organization import LiteLLM_OrganizationTable
         from litellm.models.team_membership import LiteLLM_TeamMembership
         from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
-        from litellm.proxy.common_utils.user_api_key_cache import team_membership_reservation_cache_key
+        from litellm.redis.stores.auth_cache import AuthObject
 
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if ceiling == "team" else self.team.models,
                 "organization_id": "router-org" if ceiling == "organization" else None,
@@ -13510,7 +13840,7 @@ class TestMemberAutoRouterInference:
         )
         if ceiling == "member":
             await self.cache.async_set_cache(
-                key=team_membership_reservation_cache_key(user_id="router-member", team_id="router-team"),
+                key=AuthObject.team_membership_reservation(user_id="router-member", team_id="router-team"),
                 value=LiteLLM_TeamMembership(
                     user_id="router-member",
                     team_id="router-team",
@@ -13520,7 +13850,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "organization":
             await self.cache.async_set_cache(
-                key="org_id:router-org",
+                key=AuthObject.org("router-org"),
                 value=LiteLLM_OrganizationTable(
                     organization_id="router-org",
                     budget_id="org-budget",
@@ -13532,7 +13862,7 @@ class TestMemberAutoRouterInference:
             )
         elif ceiling == "project":
             await self.cache.async_set_cache(
-                key="project_id:router-project",
+                key=AuthObject.project("router-project"),
                 value=LiteLLM_ProjectTableCachedObj(
                     project_id="router-project",
                     team_id="router-team",
@@ -13555,16 +13885,19 @@ class TestMemberAutoRouterInference:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("group_owner", ("team", "key"))
-    async def test_access_group_grants_are_cached_and_revoked(self, group_owner: str) -> None:
-        from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+    async def test_access_group_grants_are_cached_and_revoked(
+        self, group_owner: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 
         group: Final = LiteLLM_AccessGroupTable(
             access_group_id="router-group",
             access_group_name="Router targets",
             access_model_names=["permitted-model"],
         )
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group
-        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(
+        stores: Final = self.stores
+        stores.access_group.seed("router-group", group)
+        self.teams.rows["router-team"] = self.team.model_copy(
             update={
                 "models": ["member-router"] if group_owner == "team" else self.team.models,
                 "access_group_ids": ["router-group"] if group_owner == "team" else [],
@@ -13581,14 +13914,12 @@ class TestMemberAutoRouterInference:
         router: Final = self._router()
         assert (await self._route(router, request)).model == "permitted-model"
         assert (await self._route(router, request)).model == "permitted-model"
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 1
-        self.database.db.litellm_accessgrouptable.find_unique.return_value = group.model_copy(
-            update={"access_model_names": []}
-        )
+        assert len(stores.access_group.lookups) == 1
+        stores.access_group.seed("router-group", group.model_copy(update={"access_model_names": []}))
         await evict_and_broadcast(cache_keys=("access_group_id:router-group",), user_api_key_cache=self.cache)
         with pytest.raises(ProxyException, match="is not available for this API key"):
             await self._route(router, request)
-        assert self.database.db.litellm_accessgrouptable.find_unique.await_count == 2
+        assert len(stores.access_group.lookups) == 2
 
     @pytest.mark.asyncio
     async def test_sdk_router_does_not_import_proxy_dependencies(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15362,6 +15693,283 @@ async def test_router_caller_entra_rejection_on_a_stream_leaves_the_shared_deplo
 
     with pytest.raises(litellm.AuthenticationError):
         await stream_request(router)
+
+
+_AWS_DEPLOYMENT: Final = MappingProxyType(
+    {"aws_access_key_id": "configured-key-id", "aws_secret_access_key": "configured-secret"}
+)
+_VERTEX_DEPLOYMENT: Final = MappingProxyType(
+    {"vertex_project": "configured-project", "vertex_location": "us-central1", "vertex_credentials": "configured"}
+)
+_AZURE_DEPLOYMENT: Final = MappingProxyType(
+    {"api_base": "https://litellm-qa.openai.azure.com", "api_version": "2025-04-01-preview", "api_key": "configured"}
+)
+_OPENAI_DEPLOYMENT: Final = MappingProxyType({"api_key": "configured-key", "organization": "org-configured"})
+
+_CallerFailure: TypeAlias = type[litellm.AuthenticationError | litellm.NotFoundError | litellm.RateLimitError]
+
+
+def _shared_pair_router(
+    litellm_params: Mapping[str, object], default_litellm_params: Mapping[str, object] | None = None
+) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "shared-model",
+                "litellm_params": {**litellm_params},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("shared-a", "shared-b")
+        ],
+        default_litellm_params=None if default_litellm_params is None else {**default_litellm_params},
+        num_retries=0,
+    )
+
+
+async def _shared_deployments_cooled_after(
+    router: Router, failure: _CallerFailure, caller_fields: Mapping[str, object]
+) -> bool:
+    with pytest.raises(failure):
+        await router.acompletion(
+            model="shared-model",
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response=failure(message="The provider refused the request.", llm_provider="openai", model="m"),
+            **caller_fields,
+        )
+    return bool(await router.health().cooldowns.async_get_active_cooldowns(["shared-a", "shared-b"], None))
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure"),
+    [
+        pytest.param(
+            {"model": "bedrock_mantle/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_profile_name": "caller-profile"},
+            litellm.AuthenticationError,
+            id="bedrock_mantle",
+        ),
+        pytest.param(
+            {"model": "sagemaker/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_session_token": "caller-session"},
+            litellm.AuthenticationError,
+            id="sagemaker",
+        ),
+        pytest.param(
+            {"model": "sagemaker_chat/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_role_name": "caller-role"},
+            litellm.AuthenticationError,
+            id="sagemaker_chat",
+        ),
+        pytest.param(
+            {"model": "sagemaker_nova/configured-endpoint", **_AWS_DEPLOYMENT},
+            {"aws_secret_access_key": "caller-secret"},
+            litellm.AuthenticationError,
+            id="sagemaker_nova",
+        ),
+        pytest.param(
+            {"model": "vertex_ai_beta/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_ai_credentials": "caller-credentials"},
+            litellm.AuthenticationError,
+            id="vertex_ai_beta",
+        ),
+        pytest.param(
+            {"model": "azure_text/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_text",
+        ),
+        pytest.param(
+            {
+                "model": "azure_ai/gpt-6.2-sol",
+                "api_base": "https://litellm-qa.services.ai.azure.com",
+                "azure_ad_token": "configured-token",
+            },
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="azure_ai",
+        ),
+        pytest.param(
+            {"model": "text-completion-openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            id="text_completion_openai",
+        ),
+        pytest.param(
+            {"model": "gpt-6.2-sol", "custom_llm_provider": "azure", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.AuthenticationError,
+            id="custom_llm_provider_over_the_model_name",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"aws_region_name": "eu-west-1"},
+            litellm.NotFoundError,
+            id="aws_region_on_not_found",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_location": "europe-west4"},
+            litellm.NotFoundError,
+            id="vertex_location_on_not_found",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_credentials": "configured", "vertex_location": "us-central1"},
+            {"vertex_credentials": "caller-credentials-for-another-project"},
+            litellm.NotFoundError,
+            id="vertex_credentials_picking_another_project",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_can_cause_leaves_the_shared_deployment_routable(
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+) -> None:
+    router: Final = _shared_pair_router(litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is False
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("litellm_params", "caller_fields", "failure", "default_litellm_params"),
+    [
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "default-token"},
+            litellm.AuthenticationError,
+            {"azure_ad_token": "default-token"},
+            id="echoed_router_default",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", "vertex_project": "configured-project"},
+            {"vertex_ai_project": "configured-project"},
+            litellm.NotFoundError,
+            None,
+            id="echoed_vertex_project_under_its_alias",
+        ),
+        pytest.param(
+            {"model": "azure_ai/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": ""},
+            litellm.AuthenticationError,
+            None,
+            id="empty_caller_value",
+        ),
+        pytest.param(
+            {"model": "bedrock/anthropic.claude-opus-5-5", **_AWS_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.AuthenticationError,
+            None,
+            id="field_bedrock_does_not_read",
+        ),
+        pytest.param(
+            {"model": "openai/gpt-6.2-sol", **_OPENAI_DEPLOYMENT},
+            {"organization": "org-caller"},
+            litellm.RateLimitError,
+            None,
+            id="openai_organization_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "azure/gpt-6.2-sol", **_AZURE_DEPLOYMENT},
+            {"azure_ad_token": "caller-token"},
+            litellm.RateLimitError,
+            None,
+            id="azure_token_on_a_rate_limit",
+        ),
+        pytest.param(
+            {"model": "vertex_ai/gemini-4-neon", **_VERTEX_DEPLOYMENT},
+            {"vertex_credentials": "caller-credentials"},
+            litellm.RateLimitError,
+            None,
+            id="vertex_credentials_on_a_rate_limit",
+        ),
+    ],
+)
+async def test_router_failure_a_caller_field_cannot_cause_cools_down_the_shared_deployment(
+    litellm_params: Mapping[str, object],
+    caller_fields: Mapping[str, object],
+    failure: _CallerFailure,
+    default_litellm_params: Mapping[str, object] | None,
+) -> None:
+    router: Final = _shared_pair_router(litellm_params, default_litellm_params)
+
+    assert await _shared_deployments_cooled_after(router, failure, caller_fields) is True
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.parametrize(
+    ("caller_organization", "cooled"),
+    [pytest.param("org-credential", True, id="echoed"), pytest.param("org-caller", False, id="caller_own")],
+)
+async def test_router_caller_organization_is_compared_with_the_deployment_credential(
+    caller_organization: str, cooled: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-openai",
+                credential_info={"custom_llm_provider": "openai"},
+                credential_values={"api_key": "configured-key", "organization": "org-credential"},
+            )
+        ],
+    )
+    router: Final = _shared_pair_router({"model": "openai/gpt-6.2-sol", "litellm_credential_name": "shared-openai"})
+
+    assert (
+        await _shared_deployments_cooled_after(
+            router, litellm.AuthenticationError, {"organization": caller_organization}
+        )
+        is cooled
+    )
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")
+async def test_router_vertex_stream_failing_on_a_caller_project_leaves_the_shared_deployment_routable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.router_rust.invoke.streaming import _RECORDINGS
+    from tests.integration._support.vertex import service_account_json
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "vertex-model",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-4-neon",
+                    "vertex_credentials": service_account_json("configured-project", "https://oauth2.test"),
+                    "vertex_project": "configured-project",
+                    "vertex_location": "us-central1",
+                },
+                "model_info": {"id": "vertex-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as token_endpoint, respx.mock:
+        token_endpoint.add(
+            responses.POST,
+            "https://oauth2.test/_oauth/token",
+            json={"access_token": "configured-token", "token_type": "Bearer", "expires_in": 3600},
+        )
+        stream_route: Final = respx.post(url__startswith="https://us-central1-aiplatform.googleapis.com").mock(
+            return_value=httpx.Response(404, json={"error": {"code": 404, "message": "Project not found"}})
+        )
+        with pytest.raises(litellm.NotFoundError):
+            await router.acompletion(
+                model="vertex-model",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                vertex_project="caller-project",
+            )
+        await asyncio.gather(*_RECORDINGS)
+
+    assert "/projects/caller-project/" in str(stream_route.calls.last.request.url)
+    assert await router.health().cooldowns.async_get_active_cooldowns(["vertex-deployment"], None) == []
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "isolate_litellm_state", "setup_and_teardown")

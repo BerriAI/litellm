@@ -84,7 +84,7 @@ pub async fn fetch(
         .when(|rejected| rejected.retryable)
         .adjust(|rejected, wait| wait.map(|wait| policy.delay(wait, rejected.retry_after)))
         .notify(|rejected, wait| {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "LiteLLM: model cost map fetch attempt {}/{} failed ({}); retrying in {:.1}s",
                 made.load(Ordering::Relaxed),
                 policy.max_attempts,
