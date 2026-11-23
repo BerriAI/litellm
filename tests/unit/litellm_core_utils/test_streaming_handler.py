@@ -1721,6 +1721,155 @@ async def test_aborted_stream_raises_instead_of_finishing_successfully(
 
 @pytest.mark.parametrize("async_stream", [False, True])
 @pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize(
+    "upstream_chunks",
+    [
+        pytest.param(
+            (
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="one_choice_per_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_opened_in_one_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},
+                ),
+                (
+                    {"index": 0, "delta": {"content": " there"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": " there"}, "finish_reason": None},
+                ),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_batched_without_roles",
+        ),
+        pytest.param(
+            (
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_with_empty_answer",
+        ),
+        pytest.param(
+            (
+                ({"index": None, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="first_choice_opened_without_index",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_repeated_in_one_chunk",
+        ),
+    ],
+)
+async def test_streamed_n_choices_each_open_with_one_assistant_role(
+    async_stream: bool,
+    transport: str,
+    upstream_chunks: tuple[tuple[dict[str, object], ...], ...],
+    logging_obj: Logging,
+) -> None:
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-n2",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": list(chunk_choices),
+                }
+            )
+            + "\n\n"
+            for chunk_choices in upstream_chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    emitted_choices: Final = tuple(
+        (0 if choice.index is None else choice.index, choice.delta.role)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+    )
+    role_indexes: Final = sorted(index for index, role in emitted_choices if role == "assistant")
+    opening_roles: Final = {
+        index: next(role for choice_index, role in emitted_choices if choice_index == index) for index in (0, 1)
+    }
+    assert role_indexes == [0, 1]
+    assert opening_roles == {0: "assistant", 1: "assistant"}
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
 async def test_stream_with_null_choices_chunk_finishes_normally(
     async_stream: bool, transport: str, logging_obj: Logging
 ) -> None:
@@ -9743,6 +9892,10 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
             function_id="1245",
         ),
     )
+    opening_chunk_positions: Final = frozenset(
+        next(position for position, upstream in enumerate(chunks) if upstream["choices"][0]["index"] == index)
+        for index in {upstream["choices"][0]["index"] for upstream in chunks}
+    )
 
     for idx, chunk in enumerate(response):
         chunk_dict = {}
@@ -9755,10 +9908,9 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunks[idx].pop("created")
         if chunks[idx]["system_fingerprint"] is None:
             chunks[idx].pop("system_fingerprint", None)
-        if idx == 0:
+        if idx in opening_chunk_positions:
             for choice in chunk_dict["choices"]:
-                if "role" in choice["delta"]:
-                    choice["delta"].pop("role")
+                assert choice["delta"].pop("role") == "assistant"
 
         for choice in chunks[idx]["choices"]:
             # ignore finish reason None - since our pydantic object is set to exclude_none = true
@@ -11044,6 +11196,34 @@ def _completion_chunk(
         object="text_completion",
         choices=[{"index": 0, "text": text, "finish_reason": finish_reason, "logprobs": None, **choice_extras}],
     )
+
+
+def test_text_completion_n_choices_each_open_with_one_assistant_role(logging_obj: Logging) -> None:
+    emitted: Final = tuple(
+        CustomStreamWrapper(
+            completion_stream=iter(
+                tuple(
+                    Completion.construct(
+                        id="cmpl-n2",
+                        created=1,
+                        model="m",
+                        object="text_completion",
+                        choices=[{"index": index, "text": text, "finish_reason": None, "logprobs": None}],
+                    )
+                    for index, text in ((1, "Hi"), (0, "Hello"), (1, " there"), (0, " there"))
+                )
+            ),
+            model="m",
+            custom_llm_provider="text-completion-openai",
+            logging_obj=logging_obj,
+        )
+    )
+
+    emitted_choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in emitted))
+    assert sorted(choice.index for choice in emitted_choices if choice.delta.role == "assistant") == [0, 1]
+    assert {
+        index: next(choice.delta.role for choice in emitted_choices if choice.index == index) for index in (0, 1)
+    } == {0: "assistant", 1: "assistant"}
 
 
 @pytest.mark.parametrize("final_text", [", 6", ""], ids=["text-then-finish", "finish-only"])
