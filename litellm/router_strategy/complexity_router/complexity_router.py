@@ -21,6 +21,7 @@ import hashlib
 import json
 import random
 import re
+import sys
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
@@ -536,6 +537,62 @@ _MIN_QUOTED_TURN_CHARS: Final = 120
 _CLASSIFIER_CIRCUIT_OPEN_SIGNAL: Final = "classifier-circuit-open"
 
 _CJK_CHARACTER: Final = re.compile("[぀-ヿㇰ-ㇿ㐀-䶿一-鿿豈-﫿ｦ-ﾝ\U00020000-\U0003ffff]")
+
+
+_PLUGIN_CLEANUP_GRACE_S: Final = 2.0
+# Strong references to plugins still cleaning up after the grace, dropped as each one finishes.
+_DETACHED_PLUGINS: Final[set[asyncio.Future[str | None]]] = set()  # mutable-ok: see above
+
+
+def _release_detached_plugin(plugin: asyncio.Future[str | None]) -> None:
+    _DETACHED_PLUGINS.discard(plugin)
+    if not plugin.cancelled():
+        _ = plugin.exception()
+
+
+async def _classify_within_deadline(classify: Awaitable[str | None], timeout_s: float) -> str | None:
+    """Run `classify` bounded by `timeout_s`, raising asyncio.TimeoutError at the deadline.
+
+    On CPython 3.12+ this is asyncio.wait_for, which runs the plugin inline in the caller's
+    task. On 3.10 and 3.11 wait_for returns a finished result after the caller was cancelled
+    and returns from a second cancellation while the plugin is still cleaning up, so there
+    the plugin runs in its own task, as wait_for does on those versions. After the deadline
+    or the caller's cancellation it is cancelled once and awaited for up to
+    _PLUGIN_CLEANUP_GRACE_S with further cancellations absorbed, then left to finish on its
+    own; a caller cancellation is re-raised, so no result is ever returned after one.
+    """
+    if sys.version_info >= (3, 12):
+        return await asyncio.wait_for(classify, timeout_s)
+    plugin: Final = asyncio.ensure_future(classify)
+    cancelled_by_caller: asyncio.CancelledError | None = None  # rebind-ok: re-raised once the plugin finishes
+    try:
+        _ = await asyncio.wait((plugin,), timeout=timeout_s)
+    except asyncio.CancelledError as cancelled:
+        cancelled_by_caller = cancelled  # rebind-ok: held until the plugin has finished
+    if plugin.done() and cancelled_by_caller is None:
+        return plugin.result()
+    _ = plugin.cancel()
+    loop: Final = asyncio.get_running_loop()
+    give_up_at: Final = loop.time() + _PLUGIN_CLEANUP_GRACE_S
+    while not plugin.done():
+        remaining = give_up_at - loop.time()
+        if remaining <= 0:
+            _DETACHED_PLUGINS.add(plugin)
+            plugin.add_done_callback(_release_detached_plugin)
+            if cancelled_by_caller is not None:
+                raise cancelled_by_caller
+            raise asyncio.TimeoutError
+        try:
+            _ = await asyncio.wait((plugin,), timeout=remaining)
+        except asyncio.CancelledError as cancelled:
+            cancelled_by_caller = cancelled_by_caller or cancelled
+    if cancelled_by_caller is not None:
+        if not plugin.cancelled():
+            _ = plugin.exception()
+        raise cancelled_by_caller
+    if plugin.cancelled():
+        raise asyncio.TimeoutError
+    return plugin.result()
 
 
 def _is_opencode_user_agent(user_agent: str) -> bool:
@@ -2614,8 +2671,8 @@ class ComplexityRouter(CustomLogger):
                 candidate_models=tuple(model for pool in pools.values() for model in pool),
                 metadata=kwargs.get(get_metadata_variable_name_from_kwargs(kwargs)) or EMPTY_MAPPING,
             )
-            verdict: Final = await asyncio.wait_for(
-                plugin.classify(context), timeout=self.config.classifier_plugin_timeout_ms / 1000
+            verdict: Final = await _classify_within_deadline(
+                plugin.classify(context), self.config.classifier_plugin_timeout_ms / 1000
             )
         except asyncio.TimeoutError as e:
             return self._classifier_failure_outcome(
