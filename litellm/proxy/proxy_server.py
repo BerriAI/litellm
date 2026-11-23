@@ -2063,8 +2063,12 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         )
         from litellm.proxy.pass_through_endpoints.pass_through_endpoints import pass_through_endpoint_logging
 
-        await pass_through_endpoint_logging.resume_background_response_polls(
-            api_base=openai_passthrough_base_url(), poll_headers=openai_passthrough_poll_headers
+        await resources.enter_async_context(
+            database_runtime.background_task(
+                pass_through_endpoint_logging.sweep_background_response_polls_periodically(
+                    api_base=openai_passthrough_base_url(), poll_headers=openai_passthrough_poll_headers
+                )
+            )
         )
 
     # Start background health checks AFTER models are loaded and index is built

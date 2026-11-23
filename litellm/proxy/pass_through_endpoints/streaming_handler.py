@@ -326,6 +326,76 @@ class PassThroughStreamingHandler:
                     verbose_proxy_logger.error("Error scheduling chunk_processor logging: %s", e)
                 else:
                     bind_budget_reservation_to_callbacks(litellm_logging_obj.litellm_params)
+            PassThroughStreamingHandler._schedule_background_create_registration(
+                passthrough_success_handler_obj=passthrough_success_handler_obj,
+                endpoint_type=endpoint_type,
+                response=response,
+                raw_bytes=raw_bytes,
+                request_body=resolved_request_body,
+                litellm_logging_obj=litellm_logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+            )
+
+    @staticmethod
+    def _schedule_background_create_registration(
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        endpoint_type: EndpointType,
+        response: httpx.Response,
+        raw_bytes: Sequence[bytes],
+        request_body: Mapping[str, object],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        start_time: datetime,
+    ) -> None:
+        if endpoint_type != EndpointType.OPENAI or response.status_code >= 400 or not raw_bytes:
+            return
+        if not OpenAIPassthroughLoggingHandler.creates_in_background(url_route, request_body):
+            return
+        GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+            async_coroutine=PassThroughStreamingHandler._register_background_create_left_unfinished(
+                passthrough_success_handler_obj=passthrough_success_handler_obj,
+                create_request=response.request,
+                raw_bytes=tuple(raw_bytes),
+                request_body=request_body,
+                litellm_logging_obj=litellm_logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+            )
+        )
+
+    @staticmethod
+    async def _register_background_create_left_unfinished(
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        create_request: httpx.Request,
+        raw_bytes: Sequence[bytes],
+        request_body: Mapping[str, object],
+        litellm_logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        start_time: datetime,
+    ) -> None:
+        created: Final = await asyncify(PassThroughStreamingHandler._background_response_left_unfinished_by_stream)(
+            raw_bytes
+        )
+        if created is None:
+            return
+        call_details: Final = as_str_mapping(litellm_logging_obj.model_call_details) or {}
+        custom_llm_provider: Final = call_details.get("custom_llm_provider", "openai")
+        await passthrough_success_handler_obj.register_background_response_create(
+            create_request=create_request,
+            response_fields=_REQUEST_FIELDS.validate_python(created.model_dump(mode="json")),
+            request_body=request_body,
+            logging_obj=litellm_logging_obj,
+            url_route=url_route,
+            start_time=start_time,
+            custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+        )
+
+    @staticmethod
+    def _background_response_left_unfinished_by_stream(raw_bytes: Sequence[bytes]) -> ResponsesAPIResponse | None:
+        return OpenAIPassthroughLoggingHandler.background_response_left_unfinished_by_stream(
+            PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
+        )
 
     @staticmethod
     def _retain_anthropic_response_headers(

@@ -9,6 +9,7 @@ import os
 import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -37,6 +38,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.passthrough.main import raise_for_provider_status
@@ -81,6 +83,20 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy.pass_through_endpoints.background_response_creator import (
+    BackgroundResponseCreateContext,
+    PrismaBackgroundResponseCreatorStore,
+)
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    FetchOutcome,
+)
+from litellm.proxy.pass_through_endpoints.background_response_settlement import (
+    PrismaBackgroundResponseSettlementStore,
+)
+from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
@@ -4531,6 +4547,194 @@ async def test_a_resumed_background_response_poll_has_no_headers_without_an_open
     monkeypatch.delenv("OPENAI_IDENTITY_TOKEN_FILE", raising=False)
 
     assert await openai_passthrough_poll_headers("https://api.openai.com/") is None
+
+
+DELETED_RESPONSE_ID: Final = "resp_080b10ff5d740c69006ad3de732e5087"
+DELETED_RESPONSE_CREATOR_CALL_ID: Final = "0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40"
+FINISHED_BACKGROUND_RESPONSE: Final = {
+    "id": DELETED_RESPONSE_ID,
+    "object": "response",
+    "created_at": 1792269939,
+    "status": "completed",
+    "background": True,
+    "model": "gpt-5.4-mini-2026-03-17",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _TrackedCreatorRow:
+    response_id: str
+    upstream_url: str
+    create_context: object
+
+
+class _TrackedCreators:
+    def __init__(self) -> None:
+        context: Final = BackgroundResponseCreateContext(
+            model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+            litellm_call_id=DELETED_RESPONSE_CREATOR_CALL_ID,
+            litellm_trace_id="5f1d2c3b-8e7a-4b69-9c0d-1a2b3c4d5e6f",
+            start_time=datetime(2026, 10, 17, 13, 47, 3, tzinfo=timezone.utc),
+            metadata={"user_api_key_team_id": "team-creator"},
+        )
+        self.rows: Final = {
+            DELETED_RESPONSE_ID: _TrackedCreatorRow(
+                DELETED_RESPONSE_ID, "https://api.openai.com/v1/responses", context.model_dump(mode="json")
+            )
+        }
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _TrackedCreatorRow | None:
+        return self.rows.get(where["response_id"])
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return int(self.rows.pop(where["response_id"], None) is not None)
+
+
+class _SettlementClaims:
+    def __init__(self) -> None:
+        self.claimed: Final[set[str]] = set()
+
+    async def create_many(self, data: list[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        new_ids: Final = {row["response_id"] for row in data} - self.claimed
+        self.claimed.update(new_ids)
+        return len(new_ids)
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        self.claimed.discard(where["response_id"])
+        return 1
+
+
+class _ReadBeforeDelete:
+    def __init__(self, answer: FetchOutcome | Exception) -> None:
+        self.answer: Final = answer
+        self.requests: Final[list[BackgroundResponsePollRequest]] = []
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        self.requests.append(request)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+async def _delete_tracked_response(
+    creators: _TrackedCreators,
+    fetch: _ReadBeforeDelete,
+    events: list[str],
+    endpoint: str = f"v1/responses/{DELETED_RESPONSE_ID}",
+) -> object:
+    async def record_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        events.append(f"billed {logging_obj.litellm_call_id}")
+
+    async def forward(*args: object, **kwargs: object) -> Mapping[str, object]:
+        events.append("forwarded")
+        return {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+    request: Final = MagicMock(spec=Request)
+    request.method = "DELETE"
+    request.headers = {}
+    request.query_params = {}
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.pass_through_endpoint_logging",
+            passthrough_logging,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=forward,
+        ),
+    ):
+        return await openai_proxy_route(
+            endpoint=endpoint,
+            request=request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_finished_background_response_bills_its_creator_once_before_forwarding(
+    local_model_cost_map,
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    events: Final[list[str]] = []
+
+    deleted: Final = await _delete_tracked_response(creators, fetch, events)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == [f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
+    (read,) = fetch.requests
+    assert read.url == httpx.URL(f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}")
+    assert ("authorization", "Bearer sk-test-key") in read.headers
+    assert creators.rows == {}
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
+    local_model_cost_map,
+) -> None:
+    creators: Final = _TrackedCreators()
+    events: Final[list[str]] = []
+
+    deleted: Final = await _delete_tracked_response(
+        creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
+    )
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["forwarded"]
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoint", "answer", "reads"),
+    [
+        pytest.param(
+            f"v1/responses/{DELETED_RESPONSE_ID}",
+            {**FINISHED_BACKGROUND_RESPONSE, "status": "in_progress", "usage": None},
+            1,
+            id="still_running",
+        ),
+        pytest.param("v1/responses/resp_untracked", FINISHED_BACKGROUND_RESPONSE, 0, id="untracked"),
+        pytest.param(f"v1/responses/{DELETED_RESPONSE_ID}/input_items", FINISHED_BACKGROUND_RESPONSE, 0, id="sub_route"),
+    ],
+)
+async def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
+    endpoint: str, answer: Mapping[str, object], reads: int, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=answer))
+    events: Final[list[str]] = []
+
+    deleted: Final = await _delete_tracked_response(creators, fetch, events, endpoint)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["forwarded"]
+    assert len(fetch.requests) == reads
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
 
 
 class TestCursorProxyRoute:

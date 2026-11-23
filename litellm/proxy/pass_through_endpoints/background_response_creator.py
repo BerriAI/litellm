@@ -10,8 +10,9 @@ from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
+from litellm.constants import BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS, X_LITELLM_DISABLE_CALLBACKS
 from litellm.interactions.background_cost_polling import is_carried_metadata_key, json_values, spend_metadata
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, proxy_request_headers
 from litellm.litellm_core_utils.internal_call_metadata import BUDGET_RESERVATION_METADATA_KEYS
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.repositories.table_repositories import BackgroundResponseCreatorRepository
@@ -26,6 +27,8 @@ class BackgroundResponseCreateContext(BaseModel):
     litellm_trace_id: str
     start_time: datetime
     metadata: Mapping[str, JsonValue]
+    no_log: bool = False
+    disabled_callbacks: tuple[str, ...] = ()
 
 
 class BackgroundResponseCreator(BaseModel):
@@ -44,6 +47,15 @@ def upstream_url_without_query(url: httpx.URL) -> str:
     return str(httpx.URL(scheme=url.scheme, host=url.host, port=url.port, path=url.path.rstrip("/")))
 
 
+def _disabled_callbacks(
+    litellm_params: Mapping[str, object] | None, requested: Sequence[str] | None
+) -> tuple[str, ...]:
+    header: Final = (proxy_request_headers(litellm_params) or {}).get(X_LITELLM_DISABLE_CALLBACKS)
+    if isinstance(header, str):
+        return tuple(sorted({name.strip().lower() for name in header.split(",")}))
+    return tuple(requested or ())
+
+
 def background_response_creator(
     logging_obj: LiteLLMLoggingObj,
     response_id: str,
@@ -53,6 +65,7 @@ def background_response_creator(
     start_time: datetime,
 ) -> BackgroundResponseCreator:
     metadata: Final = spend_metadata(logging_obj)
+    litellm_params: Final = as_str_mapping(logging_obj.model_call_details.get("litellm_params"))
     return BackgroundResponseCreator(
         response_id=response_id,
         upstream_url=upstream_url_without_query(create_url),
@@ -63,6 +76,10 @@ def background_response_creator(
             litellm_trace_id=logging_obj.litellm_trace_id,
             start_time=start_time,
             metadata=json_values((key, value) for key, value in metadata.items() if _carries(key)),
+            no_log=(litellm_params or {}).get("no-log") is True,
+            disabled_callbacks=_disabled_callbacks(
+                litellm_params, logging_obj.standard_callback_dynamic_params.get("litellm_disabled_callbacks")
+            ),
         ),
     )
 
@@ -88,16 +105,24 @@ class SettlesForCreator:
     response_body: Mapping[str, object]
 
 
-BackgroundResponseSettlementDecision: TypeAlias = NotASettlement | SettledBefore | SettlesForCaller | SettlesForCreator
+@dataclass(frozen=True, slots=True)
+class CreatorBillDeferred:
+    pass
+
+
+BackgroundResponseSettlementDecision: TypeAlias = (
+    NotASettlement | SettledBefore | SettlesForCaller | SettlesForCreator | CreatorBillDeferred
+)
 
 NOT_A_SETTLEMENT: Final = NotASettlement()
 SETTLED_BEFORE: Final = SettledBefore()
 SETTLES_FOR_CALLER: Final = SettlesForCaller()
+CREATOR_BILL_DEFERRED: Final = CreatorBillDeferred()
 
 
 def leaves_the_caller_unbilled(decision: BackgroundResponseSettlementDecision) -> bool:
     match decision:
-        case SettledBefore() | SettlesForCreator():
+        case SettledBefore() | SettlesForCreator() | CreatorBillDeferred():
             return True
         case NotASettlement() | SettlesForCaller():
             return False
@@ -116,6 +141,7 @@ class _NewCreatorRow(TypedDict):
     response_id: ReadOnly[str]
     upstream_url: ReadOnly[str]
     create_context: ReadOnly[object]
+    poll_lease_expires_at: ReadOnly[datetime]
 
 
 class _CreatorKey(TypedDict):
@@ -126,8 +152,30 @@ class _Later(TypedDict):
     gt: ReadOnly[datetime]
 
 
-class _CreatedAfter(TypedDict):
+class _Earlier(TypedDict):
+    lt: ReadOnly[datetime]
+
+
+class _LeaseExpiry(TypedDict):
+    poll_lease_expires_at: ReadOnly[_Earlier | None]
+
+
+class _UnleasedCreator(TypedDict):
+    response_id: ReadOnly[str]
+    OR: ReadOnly[tuple[_LeaseExpiry, ...]]
+
+
+class _UnleasedSince(TypedDict):
     created_at: ReadOnly[_Later]
+    OR: ReadOnly[tuple[_LeaseExpiry, ...]]
+
+
+class _CreatedBefore(TypedDict):
+    created_at: ReadOnly[_Earlier]
+
+
+class _Lease(TypedDict):
+    poll_lease_expires_at: ReadOnly[datetime]
 
 
 class BackgroundResponseCreatorTable(Protocol):
@@ -135,19 +183,49 @@ class BackgroundResponseCreatorTable(Protocol):
 
     def find_unique(self, *, where: _CreatorKey) -> Awaitable[_CreatorRow | None]: ...
 
-    def find_many(self, *, where: _CreatedAfter) -> Awaitable[Sequence[_CreatorRow]]: ...
+    def find_many(self, *, where: _UnleasedSince) -> Awaitable[Sequence[_CreatorRow]]: ...
 
-    def delete_many(self, *, where: _CreatorKey) -> Awaitable[int]: ...
+    def update_many(self, *, data: _Lease, where: _CreatorKey | _UnleasedCreator) -> Awaitable[int]: ...
+
+    def delete_many(self, *, where: _CreatorKey | _CreatedBefore) -> Awaitable[int]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseRenewed:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CreatorGone:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseUnrecorded:
+    pass
+
+
+LeaseRenewal: TypeAlias = LeaseRenewed | CreatorGone | LeaseUnrecorded
+
+LEASE_RENEWED: Final = LeaseRenewed()
+CREATOR_GONE: Final = CreatorGone()
+LEASE_UNRECORDED: Final = LeaseUnrecorded()
 
 
 class BackgroundResponseCreatorStore(Protocol):
-    async def register(self, creator: BackgroundResponseCreator) -> None: ...
+    async def register(self, creator: BackgroundResponseCreator, poll_lease_expires_at: datetime) -> None: ...
 
     async def creator(self, response_id: str) -> BackgroundResponseCreator | None: ...
 
     async def forget(self, response_id: str) -> None: ...
 
-    async def unsettled(self, created_after: datetime) -> Sequence[BackgroundResponseCreator]: ...
+    async def unleased(self, created_after: datetime, now: datetime) -> Sequence[BackgroundResponseCreator]: ...
+
+    async def take_lease(self, response_id: str, now: datetime, until: datetime) -> bool: ...
+
+    async def renew_lease(self, response_id: str, until: datetime) -> LeaseRenewal: ...
+
+    async def prune(self, created_before: datetime) -> None: ...
 
 
 def _proxy_creator_table() -> BackgroundResponseCreatorTable | None:
@@ -176,6 +254,10 @@ def _creators(row: _CreatorRow) -> tuple[BackgroundResponseCreator, ...]:
     return (BackgroundResponseCreator(response_id=row.response_id, upstream_url=row.upstream_url, context=context),)
 
 
+def _lease_expired_by(now: datetime) -> tuple[_LeaseExpiry, ...]:
+    return (_LeaseExpiry(poll_lease_expires_at=None), _LeaseExpiry(poll_lease_expires_at=_Earlier(lt=now)))
+
+
 _Result: Final = TypeVar("_Result")
 
 
@@ -184,11 +266,12 @@ class PrismaBackgroundResponseCreatorStore:
     table: Callable[[], BackgroundResponseCreatorTable | None] = _proxy_creator_table
     timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
 
-    async def register(self, creator: BackgroundResponseCreator) -> None:
+    async def register(self, creator: BackgroundResponseCreator, poll_lease_expires_at: datetime) -> None:
         new_row: Final = _NewCreatorRow(
             response_id=creator.response_id,
             upstream_url=creator.upstream_url,
             create_context=_json(creator.context.model_dump(mode="json")),
+            poll_lease_expires_at=poll_lease_expires_at,
         )
         await self._query(
             lambda table: table.create(data=new_row),
@@ -211,13 +294,45 @@ class PrismaBackgroundResponseCreatorStore:
             f"forget the creator of settled background response {response_id}",
         )
 
-    async def unsettled(self, created_after: datetime) -> Sequence[BackgroundResponseCreator]:
+    async def unleased(self, created_after: datetime, now: datetime) -> Sequence[BackgroundResponseCreator]:
         rows: Final = await self._query(
-            lambda table: table.find_many(where=_CreatedAfter(created_at=_Later(gt=created_after))),
+            lambda table: table.find_many(
+                where=_UnleasedSince(created_at=_Later(gt=created_after), OR=_lease_expired_by(now))
+            ),
             (),
-            "list the unsettled background responses to resume polling",
+            "list the unleased background responses to resume polling",
         )
         return tuple(chain.from_iterable(_creators(row) for row in rows))
+
+    async def take_lease(self, response_id: str, now: datetime, until: datetime) -> bool:
+        taken: Final = await self._query(
+            lambda table: table.update_many(
+                data=_Lease(poll_lease_expires_at=until),
+                where=_UnleasedCreator(response_id=response_id, OR=_lease_expired_by(now)),
+            ),
+            0,
+            f"take the poll lease of background response {response_id}",
+        )
+        return taken > 0
+
+    async def renew_lease(self, response_id: str, until: datetime) -> LeaseRenewal:
+        renewed: Final = await self._query(
+            lambda table: table.update_many(
+                data=_Lease(poll_lease_expires_at=until), where=_CreatorKey(response_id=response_id)
+            ),
+            None,
+            f"renew the poll lease of background response {response_id}",
+        )
+        if renewed is None:
+            return LEASE_UNRECORDED
+        return LEASE_RENEWED if renewed > 0 else CREATOR_GONE
+
+    async def prune(self, created_before: datetime) -> None:
+        await self._query(
+            lambda table: table.delete_many(where=_CreatedBefore(created_at=_Earlier(lt=created_before))),
+            0,
+            "delete the creators of background responses past their retention",
+        )
 
     async def _query(
         self,

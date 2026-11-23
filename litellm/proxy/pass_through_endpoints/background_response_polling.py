@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Final, TypeAlias
 from urllib.parse import quote
@@ -15,11 +15,23 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
-from .background_response_creator import BackgroundResponseCreator, BackgroundResponseCreatorStore
+from .background_response_creator import (
+    BackgroundResponseCreator,
+    BackgroundResponseCreatorStore,
+    CreatorGone,
+    LeaseRenewed,
+    LeaseUnrecorded,
+)
 
 BACKGROUND_RESPONSE_POLL_SCHEDULE: Final = PollSchedule(
     initial_interval_seconds=5.0, max_interval_seconds=60.0, timeout_seconds=7800.0
 )
+
+BACKGROUND_RESPONSE_POLL_LEASE_SECONDS: Final = 300.0
+
+BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS: Final = 120.0
+
+BACKGROUND_RESPONSE_CREATOR_RETENTION: Final = timedelta(days=30)
 
 POLLABLE_BACKGROUND_RESPONSE_STATUSES: Final = frozenset({"queued", "in_progress"})
 
@@ -108,27 +120,49 @@ class HttpxBackgroundResponseFetch:
         return _fetch_outcome(response)
 
 
+@dataclass(frozen=True, slots=True)
+class PollLease:
+    creators: BackgroundResponseCreatorStore
+    now: Callable[[], datetime]
+    lease_seconds: float
+    hold_seconds: float
+
+    async def renew(self, response_id: str) -> bool:
+        match await self.creators.renew_lease(response_id, self.now() + timedelta(seconds=self.lease_seconds)):
+            case CreatorGone():
+                return False
+            case LeaseRenewed() | LeaseUnrecorded():
+                return True
+
+    async def hold(self, response_id: str) -> None:
+        await self.creators.renew_lease(response_id, self.now() + timedelta(seconds=self.hold_seconds))
+
+
 async def poll_background_response(
     creator: BackgroundResponseCreator,
     request: BackgroundResponsePollRequest,
     settle: SettlePolledResponse,
     fetch: FetchBackgroundResponse,
     schedule: PollSchedule,
+    lease: PollLease,
 ) -> None:
     intervals: Final = poll_intervals(
         schedule.initial_interval_seconds, schedule.max_interval_seconds, schedule.timeout_seconds
     )
     for interval in intervals:
         await asyncio.sleep(interval)
+        if not await lease.renew(creator.response_id):
+            verbose_proxy_logger.debug(
+                "Stopped polling background response %s: another settler already billed it", creator.response_id
+            )
+            return
         match await fetch(request):
             case Fetched(body=body) if body.get("status") in POLLABLE_BACKGROUND_RESPONSE_STATUSES:
                 continue
             case Fetched(body=body):
                 if await settle(creator, body):
                     return
-                verbose_proxy_logger.debug(
-                    "Could not record the settlement of background response %s, will retry", creator.response_id
-                )
+                verbose_proxy_logger.debug("Could not settle background response %s, will retry", creator.response_id)
             case RetryLater(reason=reason):
                 verbose_proxy_logger.debug(
                     "Polling background response %s failed, will retry: %s", creator.response_id, reason
@@ -140,6 +174,7 @@ async def poll_background_response(
                     creator.response_id,
                     status_code,
                 )
+                await lease.hold(creator.response_id)
                 return
     verbose_proxy_logger.warning(
         "Gave up polling background response %s after %ss, so a later read through the proxy bills the key that "
@@ -147,6 +182,7 @@ async def poll_background_response(
         creator.response_id,
         schedule.timeout_seconds,
     )
+    await lease.hold(creator.response_id)
 
 
 async def _poll_logging_failures(
@@ -155,14 +191,12 @@ async def _poll_logging_failures(
     settle: SettlePolledResponse,
     fetch: FetchBackgroundResponse,
     schedule: PollSchedule,
+    lease: PollLease,
 ) -> None:
     try:
-        await poll_background_response(creator, request, settle, fetch, schedule)
-    except Exception:  # noqa: BLE001  # a crashed poll keeps the creator row, so a later read still bills it
+        await poll_background_response(creator, request, settle, fetch, schedule, lease)
+    except Exception:  # noqa: BLE001  # a crashed poll keeps the creator row, so a sweep or a later read still bills it
         verbose_proxy_logger.exception("Polling background response %s failed", creator.response_id)
-
-
-_ACTIVE_POLLS: Final[set["asyncio.Task[None]"]] = set()  # mutable-ok: asyncio needs strong refs to poll tasks
 
 
 def _now() -> datetime:
@@ -181,18 +215,37 @@ class BackgroundResponsePoller:
     schedule: PollSchedule = BACKGROUND_RESPONSE_POLL_SCHEDULE
     database_configured: Callable[[], bool] = _proxy_database_configured
     now: Callable[[], datetime] = _now
+    lease_seconds: float = BACKGROUND_RESPONSE_POLL_LEASE_SECONDS
+    active: dict[str, "asyncio.Task[None]"] = field(  # mutable-ok: asyncio needs strong refs to the polls it runs
+        default_factory=dict
+    )
+
+    def lease_until(self) -> datetime:
+        return self.now() + timedelta(seconds=self.lease_seconds)
+
+    def polls(self, response_id: str) -> bool:
+        return response_id in self.active
 
     def start(
         self,
         creator: BackgroundResponseCreator,
         request: BackgroundResponsePollRequest,
         settle: SettlePolledResponse,
+        creators: BackgroundResponseCreatorStore,
     ) -> "asyncio.Task[None] | None":
-        if not self.database_configured():
+        if not self.database_configured() or self.polls(creator.response_id):
             return None
-        task: Final = asyncio.create_task(_poll_logging_failures(creator, request, settle, self.fetch, self.schedule))
-        _ACTIVE_POLLS.add(task)
-        task.add_done_callback(_ACTIVE_POLLS.discard)
+        lease: Final = PollLease(
+            creators=creators,
+            now=self.now,
+            lease_seconds=self.lease_seconds,
+            hold_seconds=self.schedule.timeout_seconds,
+        )
+        task: Final = asyncio.create_task(
+            _poll_logging_failures(creator, request, settle, self.fetch, self.schedule, lease)
+        )
+        self.active[creator.response_id] = task
+        task.add_done_callback(lambda _: self.active.pop(creator.response_id, None))
         return task
 
 
@@ -207,7 +260,19 @@ def _resumable(creator: BackgroundResponseCreator, api_base_origin: tuple[str, s
     return _origin(httpx.URL(creator.upstream_url)) == api_base_origin and is_pollable_response_id(creator.response_id)
 
 
-async def resume_background_response_polls(
+def _resumed_poll_request(
+    creator: BackgroundResponseCreator, headers: Mapping[str, str]
+) -> BackgroundResponsePollRequest:
+    return BackgroundResponsePollRequest(
+        url=response_url(httpx.URL(creator.upstream_url), creator.response_id), headers=tuple(headers.items())
+    )
+
+
+def pollable_at(creator: BackgroundResponseCreator, url: httpx.URL) -> bool:
+    return _resumable(creator, _origin(url))
+
+
+async def sweep_background_response_polls(
     creators: BackgroundResponseCreatorStore,
     poller: BackgroundResponsePoller,
     settle: SettlePolledResponse,
@@ -215,26 +280,32 @@ async def resume_background_response_polls(
     poll_headers: PollHeaders,
 ) -> tuple["asyncio.Task[None]", ...]:
     try:
-        return await _resume(creators, poller, settle, api_base, poll_headers)
-    except Exception as e:  # noqa: BLE001  # a boot step must survive any failure; an unresumed row waits for a read
+        return await _sweep(creators, poller, settle, api_base, poll_headers)
+    except Exception as e:  # noqa: BLE001  # a failed sweep must not end the sweeps; an unpolled row waits for the next
         verbose_proxy_logger.warning(
-            "Could not resume background response polls, so a later read through the proxy bills the key that "
-            "created each: %s",
+            "Could not resume background response polls, so the next sweep or a later read through the proxy bills "
+            "the key that created each: %s",
             e,
         )
         return ()
 
 
-async def _resume(
+async def _sweep(
     creators: BackgroundResponseCreatorStore,
     poller: BackgroundResponsePoller,
     settle: SettlePolledResponse,
     api_base: str,
     poll_headers: PollHeaders,
 ) -> tuple["asyncio.Task[None]", ...]:
+    now: Final = poller.now()
+    await creators.prune(now - BACKGROUND_RESPONSE_CREATOR_RETENTION)
     api_base_origin: Final = _origin(httpx.URL(api_base))
-    unsettled: Final = await creators.unsettled(poller.now() - timedelta(seconds=poller.schedule.timeout_seconds))
-    resumable: Final = tuple(creator for creator in unsettled if _resumable(creator, api_base_origin))
+    unleased: Final = await creators.unleased(now - timedelta(seconds=poller.schedule.timeout_seconds), now)
+    resumable: Final = tuple(
+        creator
+        for creator in unleased
+        if _resumable(creator, api_base_origin) and not poller.polls(creator.response_id)
+    )
     if not resumable:
         return ()
     headers: Final = await poll_headers(api_base)
@@ -245,15 +316,17 @@ async def _resume(
             len(resumable),
         )
         return ()
+    taken: Final = await asyncio.gather(
+        *(creators.take_lease(creator.response_id, now, poller.lease_until()) for creator in resumable)
+    )
+    leased: Final = tuple(creator for creator, took in zip(resumable, taken, strict=True) if took)
     started: Final = (
-        poller.start(
-            creator,
-            BackgroundResponsePollRequest(
-                url=response_url(httpx.URL(creator.upstream_url), creator.response_id),
-                headers=tuple(headers.items()),
-            ),
-            settle,
-        )
-        for creator in resumable
+        poller.start(creator, _resumed_poll_request(creator, headers), settle, creators) for creator in leased
     )
     return tuple(task for task in started if task is not None)
+
+
+async def sweep_periodically(sweep: Callable[[], Awaitable[object]], interval_seconds: float) -> None:
+    while True:
+        await sweep()
+        await asyncio.sleep(interval_seconds)

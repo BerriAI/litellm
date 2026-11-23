@@ -14,8 +14,14 @@ class _NewSettlementRow(TypedDict):
     response_id: ReadOnly[str]
 
 
+class _SettlementKey(TypedDict):
+    response_id: ReadOnly[str]
+
+
 class BackgroundResponseSettlementTable(Protocol):
     def create_many(self, data: Sequence[_NewSettlementRow], *, skip_duplicates: bool) -> Awaitable[int]: ...
+
+    def delete_many(self, *, where: _SettlementKey) -> Awaitable[int]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,9 +47,9 @@ CLAIM_UNRECORDED: Final = ClaimUnrecorded()
 
 
 class BackgroundResponseSettlementStore(Protocol):
-    async def claim(self, response_id: str) -> bool: ...
-
     async def claim_outcome(self, response_id: str) -> ClaimOutcome: ...
+
+    async def release(self, response_id: str) -> None: ...
 
 
 def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
@@ -58,9 +64,6 @@ def _proxy_settlement_table() -> BackgroundResponseSettlementTable | None:
 class PrismaBackgroundResponseSettlementStore:
     table: Callable[[], BackgroundResponseSettlementTable | None] = _proxy_settlement_table
     timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
-
-    async def claim(self, response_id: str) -> bool:
-        return not isinstance(await self.claim_outcome(response_id), ClaimedBefore)
 
     async def claim_outcome(self, response_id: str) -> ClaimOutcome:
         try:
@@ -77,3 +80,16 @@ class PrismaBackgroundResponseSettlementStore:
             )
             return CLAIM_UNRECORDED
         return CLAIMED if inserted > 0 else CLAIMED_BEFORE
+
+    async def release(self, response_id: str) -> None:
+        try:
+            table: Final = self.table()
+            if table is None:
+                return
+            await asyncio.wait_for(
+                table.delete_many(where=_SettlementKey(response_id=response_id)), timeout=self.timeout_seconds
+            )
+        except Exception as e:  # noqa: BLE001  # an unreleased claim leaves the response unbilled, never billed twice
+            verbose_proxy_logger.warning(
+                "Could not release the settlement of background response %s after its bill failed: %s", response_id, e
+            )

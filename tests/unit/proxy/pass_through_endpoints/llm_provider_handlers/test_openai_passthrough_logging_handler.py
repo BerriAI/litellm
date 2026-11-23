@@ -1,11 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import asyncio
 import contextlib
 import json
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict
 import litellm
 from litellm.proxy import proxy_server
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import EnterpriseCallbackControls
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.token_counter import high_detail_image_token_upper_bound
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler import (
@@ -28,6 +29,8 @@ from litellm.proxy._types import SpendLogsPayload
 from litellm.interactions.background_cost_polling import PollSchedule
 from litellm.proxy.pass_through_endpoints.background_response_creator import PrismaBackgroundResponseCreatorStore
 from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BACKGROUND_RESPONSE_POLL_LEASE_SECONDS,
+    BACKGROUND_RESPONSE_POLL_SCHEDULE,
     BackgroundResponsePoller,
     BackgroundResponsePollRequest,
     Fetched,
@@ -2212,6 +2215,16 @@ class _SettlementTable:
         self.settled_response_ids.update(new_ids)
         return len(new_ids)
 
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        released: Final = where["response_id"] in self.settled_response_ids
+        self.settled_response_ids.discard(where["response_id"])
+        return int(released)
+
+
+class _UnreleasableSettlementTable(_SettlementTable):
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        raise ConnectionResetError("server closed the connection unexpectedly")
+
 
 class _UnreachableSettlementTable:
     async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
@@ -3033,6 +3046,12 @@ READER_METADATA: Final = {
 UPSTREAM_AUTHORIZATION: Final = "Bearer upstream-openai-key"
 CREATOR_RECORDED_AT: Final = datetime(2026, 10, 17, 13, 47, 4, tzinfo=timezone.utc)
 FAST_POLLS: Final = PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=5.0)
+LEASE_LAPSED_AT: Final = CREATOR_RECORDED_AT + timedelta(seconds=BACKGROUND_RESPONSE_POLL_LEASE_SECONDS + 2)
+RESUMED_POLLS: Final = PollSchedule(
+    initial_interval_seconds=0.001,
+    max_interval_seconds=0.001,
+    timeout_seconds=BACKGROUND_RESPONSE_POLL_SCHEDULE.timeout_seconds,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3041,6 +3060,18 @@ class _CreatorRow:
     upstream_url: str
     create_context: object
     created_at: datetime
+    poll_lease_expires_at: object
+
+
+def _lease_open(row: _CreatorRow, where: Mapping[str, object]) -> bool:
+    expiries: Final = where.get("OR")
+    if not isinstance(expiries, Sequence):
+        return True
+    lease: Final = row.poll_lease_expires_at
+    return any(
+        lease is None if expiry["poll_lease_expires_at"] is None else lease < expiry["poll_lease_expires_at"]["lt"]
+        for expiry in expiries
+    )
 
 
 class _CreatorTable:
@@ -3055,6 +3086,7 @@ class _CreatorTable:
             upstream_url=str(data["upstream_url"]),
             create_context=json.loads(json.dumps(getattr(stored_context, "data", stored_context))),
             created_at=CREATOR_RECORDED_AT,
+            poll_lease_expires_at=data.get("poll_lease_expires_at"),
         )
         self.rows[row.response_id] = row
         return row
@@ -3063,10 +3095,20 @@ class _CreatorTable:
         return self.rows.get(where["response_id"])
 
     async def find_many(self, *, where: Mapping[str, Mapping[str, datetime]]) -> list[_CreatorRow]:
-        return [row for row in self.rows.values() if row.created_at > where["created_at"]["gt"]]
+        recent: Final = (row for row in self.rows.values() if row.created_at > where["created_at"]["gt"])
+        return [row for row in recent if _lease_open(row, where)]
 
-    async def delete_many(self, *, where: Mapping[str, str]) -> int:
-        removed: Final = self.rows.pop(where["response_id"], None)
+    async def update_many(self, *, data: Mapping[str, datetime], where: Mapping[str, object]) -> int:
+        row: Final = self.rows.get(str(where["response_id"]))
+        if row is None or not _lease_open(row, where):
+            return 0
+        self.rows[row.response_id] = replace(row, poll_lease_expires_at=data["poll_lease_expires_at"])
+        return 1
+
+    async def delete_many(self, *, where: Mapping[str, object]) -> int:
+        if "created_at" in where:
+            return 0
+        removed: Final = self.rows.pop(str(where["response_id"]), None)
         self.forgotten.set()
         return 0 if removed is None else 1
 
@@ -3085,6 +3127,8 @@ class _ScriptedFetch:
 class _DispatchedRow:
     metadata: Mapping[str, object]
     spend_row: SpendLogsPayload
+    end_time: datetime
+    logging_obj: LiteLLMLoggingObj
 
 
 class _DispatchedSpendRows:
@@ -3121,6 +3165,8 @@ class _DispatchedSpendRows:
                     start_time=start_time,
                     end_time=end_time,
                 ),
+                end_time=end_time,
+                logging_obj=logging_obj,
             )
         )
 
@@ -3135,17 +3181,22 @@ class _DispatchedSpendRows:
 
 
 @dataclass(frozen=True, slots=True)
-class _FirstClaimWaitsUntilTheCreatorIsForgotten:
+class _FirstClaimWaitsUntilASecondClaimLoses:
     table: _SettlementTable
-    creators: _CreatorTable
     first_claim_inserted: asyncio.Event
+    second_claim_lost: asyncio.Event
 
     async def create_many(self, data: Sequence[Mapping[str, str]], *, skip_duplicates: bool) -> int:
         inserted: Final = await self.table.create_many(data, skip_duplicates=skip_duplicates)
-        if inserted:
-            self.first_claim_inserted.set()
-            await self.creators.forgotten.wait()
+        if not inserted:
+            self.second_claim_lost.set()
+            return inserted
+        self.first_claim_inserted.set()
+        await self.second_claim_lost.wait()
         return inserted
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return await self.table.delete_many(where=where)
 
 
 class _ClaimUnrecordedOnCall:
@@ -3160,16 +3211,20 @@ class _ClaimUnrecordedOnCall:
             raise ConnectionResetError("server closed the connection unexpectedly")
         return await self.table.create_many(data, skip_duplicates=skip_duplicates)
 
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return await self.table.delete_many(where=where)
+
 
 class _CreatorDispatchFailsAfterTheCreate:
-    def __init__(self, rows: _DispatchedSpendRows) -> None:
+    def __init__(self, rows: _DispatchedSpendRows, refusals: int) -> None:
         self.rows: Final = rows
+        self.refusals: Final = refusals
         self.refused: Final[list[str]] = []
 
     async def __call__(self, *, logging_obj: LiteLLMLoggingObj, **kwargs: Any) -> None:
         creator_team: Final = CREATOR_METADATA["user_api_key_team_id"]
         team_id: Final = logging_obj.model_call_details["litellm_params"]["metadata"].get("user_api_key_team_id")
-        if team_id == creator_team and self.rows.logged_for(creator_team):
+        if team_id == creator_team and self.rows.logged_for(creator_team) and len(self.refused) < self.refusals:
             self.refused.append(logging_obj.litellm_call_id)
             raise ConnectionResetError("spend log queue closed")
         await self.rows(logging_obj=logging_obj, **kwargs)
@@ -3177,10 +3232,12 @@ class _CreatorDispatchFailsAfterTheCreate:
 
 def _creator_billing_passthrough_logging(
     rows: _DispatchedSpendRows | _CreatorDispatchFailsAfterTheCreate,
-    settlements: _SettlementTable | _FirstClaimWaitsUntilTheCreatorIsForgotten | _ClaimUnrecordedOnCall,
+    settlements: _SettlementTable | _FirstClaimWaitsUntilASecondClaimLoses | _ClaimUnrecordedOnCall,
     creators: _CreatorTable,
     fetch: _ScriptedFetch,
     polls: bool,
+    now: datetime = CREATOR_RECORDED_AT + timedelta(seconds=1),
+    schedule: PollSchedule = FAST_POLLS,
 ) -> PassThroughEndpointLogging:
     return PassThroughEndpointLogging(
         log_dispatch=rows,
@@ -3189,12 +3246,14 @@ def _creator_billing_passthrough_logging(
         ),
         background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
         background_response_poller=BackgroundResponsePoller(
-            fetch=fetch,
-            schedule=FAST_POLLS,
-            database_configured=lambda: polls,
-            now=lambda: CREATOR_RECORDED_AT + timedelta(seconds=1),
+            fetch=fetch, schedule=schedule, database_configured=lambda: polls, now=lambda: now
         ),
     )
+
+
+def _running_poll(passthrough_logging: PassThroughEndpointLogging) -> "asyncio.Task[None]":
+    (poll,) = passthrough_logging.background_response_poller.active.values()
+    return poll
 
 
 def _identified_logging_obj(
@@ -3202,6 +3261,7 @@ def _identified_logging_obj(
     metadata: Mapping[str, object],
     stream: bool = False,
     callbacks: tuple[CustomLogger, ...] = (),
+    litellm_params: Mapping[str, object] = MappingProxyType({}),
 ) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
@@ -3217,7 +3277,7 @@ def _identified_logging_obj(
         model="unknown",
         user="unknown",
         optional_params={},
-        litellm_params={"metadata": dict(metadata)},
+        litellm_params={**litellm_params, "metadata": dict(metadata)},
         call_type="pass_through_endpoint",
     )
     return logging_obj
@@ -3253,11 +3313,12 @@ async def _background_create(
     passthrough_logging: PassThroughEndpointLogging,
     responses_url: str = RESPONSES_URL,
     response_id: str = STORED_RESPONSE_ID,
+    logging_obj: LiteLLMLoggingObj | None = None,
 ) -> None:
     request_body: Final = {**CREATE_REQUEST, "background": True}
     await _passed_through(
         passthrough_logging,
-        _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
+        logging_obj or _identified_logging_obj(CREATE_CALL_ID, CREATOR_METADATA),
         httpx.Request("POST", responses_url, headers={"authorization": UPSTREAM_AUTHORIZATION}, json=request_body),
         responses_url,
         request_body,
@@ -3292,6 +3353,10 @@ async def _poll_settled(creators: _CreatorTable) -> None:
 
 async def _resumed_poll_headers(api_base: str) -> Mapping[str, str]:
     return {"authorization": "Bearer resumed-openai-key"}
+
+
+class _PROXY_SpendLogger(CustomLogger):
+    pass
 
 
 def _assert_billed_to_the_creator(row: _DispatchedRow, create_row: SpendLogsPayload, spend: float) -> None:
@@ -3373,23 +3438,25 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         first_claim_inserted: Final = asyncio.Event()
         passthrough_logging: Final = _creator_billing_passthrough_logging(
             rows,
-            _FirstClaimWaitsUntilTheCreatorIsForgotten(_SettlementTable(), creators, first_claim_inserted),
+            _FirstClaimWaitsUntilASecondClaimLoses(_SettlementTable(), first_claim_inserted, asyncio.Event()),
             creators,
             fetch,
             polls=True,
         )
         await _background_create(passthrough_logging)
+        poll: Final = _running_poll(passthrough_logging)
 
         read: Final = asyncio.create_task(_finished_read(passthrough_logging))
         await asyncio.wait_for(first_claim_inserted.wait(), timeout=5)
         fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
-        await read
+        await asyncio.wait_for(asyncio.gather(read, poll), timeout=5)
 
         create_row: Final = rows.spend_rows()[0]
         (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
         assert len(rows.billed()) == 1
         _assert_billed_to_the_creator(rows.billed()[0], create_row, await _reader_paid_spend())
         assert not read_row["spend"]
+        assert creators.rows == {}
 
     @pytest.mark.asyncio
     async def test_a_restarted_proxy_polls_only_creators_on_its_configured_openai_base(self, local_model_cost_map):
@@ -3406,9 +3473,11 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         )
         create_row: Final = rows.spend_rows()[0]
         fetch: Final = _ScriptedFetch()
-        after_restart: Final = _creator_billing_passthrough_logging(rows, settlements, creators, fetch, polls=True)
+        after_restart: Final = _creator_billing_passthrough_logging(
+            rows, settlements, creators, fetch, polls=True, now=LEASE_LAPSED_AT, schedule=RESUMED_POLLS
+        )
 
-        polls: Final = await after_restart.resume_background_response_polls(
+        polls: Final = await after_restart.sweep_background_response_polls(
             api_base="https://api.openai.com/", poll_headers=_resumed_poll_headers
         )
         fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
@@ -3557,14 +3626,13 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
             rows, _ClaimUnrecordedOnCall(_SettlementTable(), failing_call=2), creators, fetch, polls=True
         )
         await _background_create(passthrough_logging)
+        poll: Final = _running_poll(passthrough_logging)
         await _finished_read(passthrough_logging)
-        creators.forgotten.clear()
 
         fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
         fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
 
-        await _poll_settled(creators)
-        assert len(fetch.requests) == 2
+        await asyncio.wait_for(poll, timeout=5)
         assert len(rows.billed()) == 1
         _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
 
@@ -3624,17 +3692,15 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert not streamed_read.spend_row["spend"]
 
     @pytest.mark.asyncio
-    async def test_a_creator_bill_that_fails_still_logs_the_unbilled_read_and_stops_tracking_the_creator(
-        self, local_model_cost_map
-    ):
+    async def test_a_creator_bill_that_fails_on_a_read_is_billed_once_by_a_later_read(self, local_model_cost_map):
         rows: Final = _DispatchedSpendRows()
         creators: Final = _CreatorTable()
-        dispatch: Final = _CreatorDispatchFailsAfterTheCreate(rows)
+        dispatch: Final = _CreatorDispatchFailsAfterTheCreate(rows, refusals=1)
         passthrough_logging: Final = _creator_billing_passthrough_logging(
             dispatch, _SettlementTable(), creators, _ScriptedFetch(), polls=False
         )
-
         await _background_create(passthrough_logging)
+
         await _finished_read(passthrough_logging)
 
         (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
@@ -3642,7 +3708,163 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert read_row["request_id"] == READ_CALL_ID
         assert not read_row["spend"]
         assert rows.billed() == ()
-        assert creators.rows == {}
+
+        await _finished_read(passthrough_logging)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+        assert not any(row["spend"] for row in rows.logged_for(READER_METADATA["user_api_key_team_id"]))
+
+    @pytest.mark.asyncio
+    async def test_a_failed_creator_bill_whose_claim_cannot_be_released_answers_every_read_and_bills_nobody(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        dispatch: Final = _CreatorDispatchFailsAfterTheCreate(rows, refusals=1)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            dispatch, _UnreleasableSettlementTable(), creators, _ScriptedFetch(), polls=False
+        )
+        await _background_create(passthrough_logging)
+
+        await _finished_read(passthrough_logging)
+        await _finished_read(passthrough_logging)
+
+        assert dispatch.refused == [CREATE_CALL_ID]
+        assert len(rows.logged_for(READER_METADATA["user_api_key_team_id"])) == 2
+        assert not any(row["spend"] for row in rows.logged_for(READER_METADATA["user_api_key_team_id"]))
+        assert rows.billed() == ()
+
+    @pytest.mark.asyncio
+    async def test_a_creator_bill_that_fails_at_the_poll_is_retried_and_bills_the_creator_once(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        dispatch: Final = _CreatorDispatchFailsAfterTheCreate(rows, refusals=1)
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            dispatch, _SettlementTable(), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+
+        await _poll_settled(creators)
+        assert dispatch.refused == [CREATE_CALL_ID]
+        assert len(fetch.requests) == 2
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_a_read_whose_claim_the_database_drops_bills_nobody_and_the_poll_bills_the_creator_once(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _ClaimUnrecordedOnCall(_SettlementTable(), failing_call=1), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+
+        await _finished_read(passthrough_logging)
+
+        (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
+        assert not read_row["spend"]
+        assert rows.billed() == ()
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+
+        assert len(rows.billed()) == 1
+        _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_the_bill_of_a_no_log_create_skips_external_loggers_but_runs_the_proxy_spend_logger(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        create: Final = _identified_logging_obj(
+            CREATE_CALL_ID,
+            CREATOR_METADATA,
+            litellm_params={
+                "no-log": True,
+                "proxy_server_request": {"headers": {"x-litellm-disable-callbacks": "Langfuse, datadog"}},
+            },
+        )
+        await _background_create(passthrough_logging, logging_obj=create)
+
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+
+        (bill,) = rows.billed()
+        bill_params: Final = bill.logging_obj.model_call_details["litellm_params"]
+        _assert_billed_to_the_creator(bill, rows.spend_rows()[0], await _reader_paid_spend())
+        assert not bill.logging_obj.should_run_callback(CustomLogger(), bill_params, "async_success_handler")
+        assert bill.logging_obj.should_run_callback(_PROXY_SpendLogger(), bill_params, "async_success_handler")
+        assert set(
+            EnterpriseCallbackControls.get_disabled_callbacks(
+                bill_params, bill.logging_obj.standard_callback_dynamic_params
+            )
+        ) == set(
+            EnterpriseCallbackControls.get_disabled_callbacks(
+                create.model_call_details["litellm_params"], create.standard_callback_dynamic_params
+            )
+        )
+
+    @pytest.mark.asyncio
+    async def test_the_creator_bill_ends_when_the_response_completed(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        completed_at: Final = DISPATCH_TIME + timedelta(seconds=42)
+        await _background_create(passthrough_logging)
+
+        fetch.outcomes.put_nowait(
+            Fetched(
+                body={
+                    **_stored_response("completed", True, RESPONSES_USAGE),
+                    "completed_at": int(completed_at.timestamp()),
+                }
+            )
+        )
+        await _poll_settled(creators)
+
+        (bill,) = rows.billed()
+        assert bill.end_time == completed_at
+
+    @pytest.mark.asyncio
+    async def test_the_creator_bill_never_ends_before_the_create_started(self, local_model_cost_map):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        await _background_create(passthrough_logging)
+
+        fetch.outcomes.put_nowait(
+            Fetched(
+                body={
+                    **_stored_response("completed", True, RESPONSES_USAGE),
+                    "completed_at": int((DISPATCH_TIME - timedelta(seconds=42)).timestamp()),
+                }
+            )
+        )
+        await _poll_settled(creators)
+
+        (bill,) = rows.billed()
+        assert bill.end_time > DISPATCH_TIME
 
 
 DECISIONS_URL: Final = "https://api.openai.com/v1/decisions"

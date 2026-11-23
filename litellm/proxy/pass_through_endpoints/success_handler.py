@@ -25,9 +25,11 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
 from .background_response_creator import (
+    CREATOR_BILL_DEFERRED,
     NOT_A_SETTLEMENT,
     SETTLED_BEFORE,
     SETTLES_FOR_CALLER,
+    BackgroundResponseCreateContext,
     BackgroundResponseCreator,
     BackgroundResponseCreatorStore,
     BackgroundResponseSettlementDecision,
@@ -37,11 +39,17 @@ from .background_response_creator import (
     leaves_the_caller_unbilled,
 )
 from .background_response_polling import (
+    BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS,
     BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
     PollHeaders,
     is_pollable_response_id,
     poll_request_for_create,
-    resume_background_response_polls,
+    pollable_at,
+    response_url,
+    sweep_background_response_polls,
+    sweep_periodically,
 )
 from .background_response_settlement import (
     BackgroundResponseSettlementStore,
@@ -105,6 +113,20 @@ def _created_model(request_body: Mapping[str, object], response_body: Mapping[st
     return next(
         (model for model in (request_body.get("model"), response_body.get("model")) if isinstance(model, str)), ""
     )
+
+
+def _completed_at(response_body: Mapping[str, object], start_time: datetime) -> datetime:
+    completed_at: Final = response_body.get("completed_at")
+    now: Final = datetime.now(tz=start_time.tzinfo)
+    if isinstance(completed_at, bool) or not isinstance(completed_at, (int, float)):
+        return now
+    completed: Final = datetime.fromtimestamp(completed_at, tz=start_time.tzinfo)
+    return completed if completed >= start_time else now
+
+
+def _creator_litellm_params(context: BackgroundResponseCreateContext) -> Mapping[str, object]:
+    metadata: Final = dict(context.metadata)
+    return {"metadata": metadata, "no-log": True} if context.no_log else {"metadata": metadata}
 
 
 async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
@@ -300,11 +322,15 @@ class PassThroughEndpointLogging:
     ) -> BackgroundResponseSettlementDecision:
         upstream_response_id: Final = _upstream_response_id(settled_response_id)
         creator: Final = await self.background_response_creators.creator(upstream_response_id)
-        if not await self.background_response_settlement.claim(upstream_response_id):
-            return SETTLED_BEFORE
-        if creator is None:
-            return SETTLES_FOR_CALLER
-        return SettlesForCreator(creator=creator, response_body=response_body)
+        match await self.background_response_settlement.claim_outcome(upstream_response_id):
+            case ClaimedBefore():
+                return SETTLED_BEFORE
+            case Claimed() if creator is not None:
+                return SettlesForCreator(creator=creator, response_body=response_body)
+            case ClaimUnrecorded() if creator is not None:
+                return CREATOR_BILL_DEFERRED
+            case Claimed() | ClaimUnrecorded():
+                return SETTLES_FOR_CALLER
 
     async def background_response_settlement_of_call(
         self, method: str, url_route: str, response_fields: Mapping[str, object] | None
@@ -323,7 +349,7 @@ class PassThroughEndpointLogging:
         return await self.background_response_settlement_for(settled_response_id, response_fields)
 
     async def settle_for_creator(self, settlement: SettlesForCreator) -> None:
-        await self._bill_and_forget(settlement.creator, settlement.response_body)
+        await self._bill_creator_once(settlement.creator, settlement.response_body)
 
     async def settle_polled_background_response(
         self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
@@ -335,30 +361,36 @@ class PassThroughEndpointLogging:
             return True
         match await self.background_response_settlement.claim_outcome(creator.response_id):
             case Claimed():
-                await self._bill_and_forget(creator, response_body)
-                return True
+                return await self._bill_creator_once(creator, response_body)
             case ClaimedBefore():
-                await self.background_response_creators.forget(creator.response_id)
                 return True
             case ClaimUnrecorded():
                 return False
 
-    async def _bill_and_forget(self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]) -> None:
-        try:
-            await self.bill_background_response_creator(creator, response_body)
-        except Exception:  # noqa: BLE001  # a failed creator bill must not fail the read that settled it or the poll
-            verbose_proxy_logger.exception(
-                "Could not bill background response %s to the key that created it", creator.response_id
-            )
-        finally:
-            await self.background_response_creators.forget(creator.response_id)
+    async def _bill_creator_once(self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]) -> bool:
+        if not await self.bill_background_response_creator(creator, response_body):
+            await self.background_response_settlement.release(creator.response_id)
+            return False
+        await self.background_response_creators.forget(creator.response_id)
+        return True
 
     async def bill_background_response_creator(
         self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
-    ) -> None:
+    ) -> bool:
+        try:
+            return await self._bill_background_response_creator(creator, response_body)
+        except Exception:  # noqa: BLE001  # a failed creator bill is retried, so it must not fail the read or the poll
+            verbose_proxy_logger.exception(
+                "Could not bill background response %s to the key that created it", creator.response_id
+            )
+            return False
+
+    async def _bill_background_response_creator(
+        self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
+    ) -> bool:
         context: Final = creator.context
         url_route: Final = f"{creator.upstream_url}/{quote(creator.response_id, safe='')}"
-        litellm_params: Final = {"metadata": dict(context.metadata)}
+        litellm_params: Final = _creator_litellm_params(context)
         logging_obj: Final = rebuild_logging_obj(
             model=context.model,
             custom_llm_provider=context.custom_llm_provider,
@@ -369,11 +401,15 @@ class PassThroughEndpointLogging:
             start_time=context.start_time,
             litellm_params=litellm_params,
         )
+        if context.disabled_callbacks:
+            logging_obj.standard_callback_dynamic_params["litellm_disabled_callbacks"] = list(
+                context.disabled_callbacks
+            )
         passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
             url=url_route, request_body={"model": context.model}, request_method="GET"
         )
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
-        await self._log_llm_pass_through(
+        return await self._log_llm_pass_through(
             httpx_response=httpx.Response(200, json=response_body, request=httpx.Request("GET", url_route)),
             response_body=dict(response_body),
             request_body={"model": context.model},
@@ -381,7 +417,7 @@ class PassThroughEndpointLogging:
             url_route=url_route,
             result="",
             start_time=context.start_time,
-            end_time=datetime.now(tz=context.start_time.tzinfo),
+            end_time=_completed_at(response_body, context.start_time),
             cache_hit=False,
             passthrough_logging_payload=passthrough_logging_payload,
             custom_llm_provider=context.custom_llm_provider,
@@ -397,7 +433,7 @@ class PassThroughEndpointLogging:
 
     async def register_background_response_create(
         self,
-        httpx_response: httpx.Response,
+        create_request: httpx.Request,
         response_fields: Mapping[str, object] | None,
         request_body: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
@@ -410,7 +446,7 @@ class PassThroughEndpointLogging:
         )
 
         if response_fields is None or not OpenAIPassthroughLoggingHandler.creates_pollable_background_response(
-            httpx_response.request.method, url_route, request_body, response_fields
+            create_request.method, url_route, request_body, response_fields
         ):
             return
         response_id: Final = _upstream_response_id(str(response_fields["id"]))
@@ -422,28 +458,65 @@ class PassThroughEndpointLogging:
         creator: Final = background_response_creator(
             logging_obj=logging_obj,
             response_id=response_id,
-            create_url=httpx_response.request.url,
+            create_url=create_request.url,
             model=_created_model(request_body, response_fields),
             custom_llm_provider=custom_llm_provider,
             start_time=start_time,
         )
-        await self.background_response_creators.register(creator)
+        await self.background_response_creators.register(creator, self.background_response_poller.lease_until())
         self.background_response_poller.start(
             creator,
-            poll_request_for_create(httpx_response.request, response_id),
+            poll_request_for_create(create_request, response_id),
             self.settle_polled_background_response,
+            self.background_response_creators,
         )
 
-    async def resume_background_response_polls(
+    async def sweep_background_response_polls(
         self, api_base: str, poll_headers: PollHeaders
     ) -> tuple["asyncio.Task[None]", ...]:
-        return await resume_background_response_polls(
+        return await sweep_background_response_polls(
             creators=self.background_response_creators,
             poller=self.background_response_poller,
             settle=self.settle_polled_background_response,
             api_base=api_base,
             poll_headers=poll_headers,
         )
+
+    async def sweep_background_response_polls_periodically(self, api_base: str, poll_headers: PollHeaders) -> None:
+        await sweep_periodically(
+            lambda: self.sweep_background_response_polls(api_base, poll_headers),
+            BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS,
+        )
+
+    async def settle_background_response_before_delete(self, target_url: str, headers: Mapping[str, str]) -> None:
+        try:
+            await self._settle_background_response_before_delete(httpx.URL(target_url), headers)
+        except Exception:  # noqa: BLE001  # settling first must never block or fail the delete it runs before
+            verbose_proxy_logger.exception("Could not settle background response %s before deleting it", target_url)
+
+    async def _settle_background_response_before_delete(
+        self, target_url: httpx.URL, headers: Mapping[str, str]
+    ) -> None:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            deleted_response_id,
+            is_finished_background_response,
+        )
+
+        response_id: Final = deleted_response_id(target_url.path)
+        if response_id is None:
+            return
+        creator: Final = await self.background_response_creators.creator(_upstream_response_id(response_id))
+        if creator is None or not pollable_at(creator, target_url):
+            return
+        match await self.background_response_poller.fetch(
+            BackgroundResponsePollRequest(
+                url=response_url(httpx.URL(creator.upstream_url), creator.response_id), headers=tuple(headers.items())
+            )
+        ):
+            case Fetched(body=body) if is_finished_background_response(body):
+                await self.settle_polled_background_response(creator, body)
+            case _:
+                return
 
     def normalize_llm_passthrough_logging_payload(
         self,
@@ -837,7 +910,7 @@ class PassThroughEndpointLogging:
                 forwarded=kwargs,
             )
             await self.register_background_response_create(
-                httpx_response=httpx_response,
+                create_request=httpx_response.request,
                 response_fields=response_fields,
                 request_body=request_body,
                 logging_obj=logging_obj,
@@ -862,7 +935,7 @@ class PassThroughEndpointLogging:
         finalize_before_dispatch: bool,
         background_response_settled_before: bool,
         forwarded: Mapping[str, object],
-    ) -> None:
+    ) -> bool:
         try:
             normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
                 httpx_response=httpx_response,
@@ -882,7 +955,7 @@ class PassThroughEndpointLogging:
             if not finalize_before_dispatch:
                 raise
             verbose_proxy_logger.exception("Unable to prepare pass-through success logging")
-            return
+            return False
         normalized_response_object: Final = normalized_llm_passthrough_logging_payload[
             "standard_logging_response_object"
         ]
@@ -907,6 +980,7 @@ class PassThroughEndpointLogging:
             standard_pass_through_logging_payload=passthrough_logging_payload,
             **kwargs,
         )
+        return True
 
     def is_vertex_route(self, url_route: str) -> bool:
         if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):

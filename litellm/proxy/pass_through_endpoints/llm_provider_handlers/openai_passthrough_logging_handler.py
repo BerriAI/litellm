@@ -35,7 +35,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
 from litellm.types.decisions import OpenAIDecisionResponse
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponseCreatedEvent, ResponsesAPIResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     SETTLES_BACKGROUND_RESPONSE_KWARG,
     BackgroundResponseSettlement,
@@ -133,6 +133,21 @@ def _responses_sub_route(path: str) -> tuple[str, ...] | None:
     segments: Final = path.rstrip("/").split("/")
     anchor: Final = max((index for index, segment in enumerate(segments) if segment == "responses"), default=None)
     return None if anchor is None else tuple(segments[anchor + 1 :])
+
+
+def deleted_response_id(path: str) -> str | None:
+    match _responses_sub_route(path):
+        case (response_id,) if response_id:
+            return response_id
+        case _:
+            return None
+
+
+def _created_response(chunk: str) -> ResponsesAPIResponse | None:
+    try:
+        return ResponseCreatedEvent.model_validate_json(chunk.removeprefix("data: ")).response
+    except ValueError:
+        return None
 
 
 def _finishes_at_create(method: str, url_route: str, response_body: Mapping[str, object]) -> bool:
@@ -304,9 +319,7 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     ) -> bool:
         return (
             method == "POST"
-            and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-            and _responses_sub_route(urlparse(url_route).path) == ()
-            and request_body.get("background") is True
+            and OpenAIPassthroughLoggingHandler.creates_in_background(url_route, request_body)
             and response_body.get("status") in POLLABLE_BACKGROUND_RESPONSE_STATUSES
             and isinstance(response_body.get("id"), str)
         )
@@ -319,6 +332,21 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route) and (
             creates_in_background or resumes_a_response
         )
+
+    @staticmethod
+    def creates_in_background(url_route: str, request_body: Mapping[str, object]) -> bool:
+        return (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            and _responses_sub_route(urlparse(url_route).path) == ()
+            and request_body.get("background") is True
+        )
+
+    @staticmethod
+    def background_response_left_unfinished_by_stream(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:
+        if OpenAIResponsesAPIConfig.parse_terminal_event_from_stream_chunks(all_chunks) is not None:
+            return None
+        created: Final = (_created_response(chunk) for chunk in all_chunks if "response.created" in chunk)
+        return next((response for response in created if response is not None), None)
 
     @staticmethod
     def background_response_settled_by_stream(all_chunks: Sequence[str]) -> ResponsesAPIResponse | None:

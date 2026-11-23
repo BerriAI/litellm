@@ -1,6 +1,7 @@
 import asyncio
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+import contextlib
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -14,11 +15,13 @@ from litellm.proxy.pass_through_endpoints.background_response_creator import (
     PrismaBackgroundResponseCreatorStore,
 )
 from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BACKGROUND_RESPONSE_CREATOR_RETENTION,
     BACKGROUND_RESPONSE_POLL_SCHEDULE,
     BackgroundResponsePoller,
     HttpxBackgroundResponseFetch,
     poll_request_for_create,
-    resume_background_response_polls,
+    sweep_background_response_polls,
+    sweep_periodically,
 )
 
 RESUMED_AT: Final = datetime(2026, 10, 17, 16, 0, 0, tzinfo=timezone.utc)
@@ -82,21 +85,58 @@ class _Row:
     upstream_url: str
     create_context: object
     created_at: datetime
+    poll_lease_expires_at: datetime | None = None
+
+
+def _row(
+    creator: BackgroundResponseCreator, created_at: datetime = RESUMED_AT, lease: datetime | None = None
+) -> _Row:
+    return _Row(creator.response_id, creator.upstream_url, creator.context.model_dump(mode="json"), created_at, lease)
+
+
+def _lease_matches(lease: datetime | None, expiry: Mapping[str, datetime] | None) -> bool:
+    if expiry is None:
+        return lease is None
+    return lease is not None and lease < expiry["lt"]
+
+
+def _lease_open(row: _Row, where: Mapping[str, object]) -> bool:
+    expiries: Final = where.get("OR")
+    if not isinstance(expiries, Sequence):
+        return True
+    return any(_lease_matches(row.poll_lease_expires_at, expiry["poll_lease_expires_at"]) for expiry in expiries)
 
 
 class _CreatorTable:
-    def __init__(self, rows: tuple[tuple[BackgroundResponseCreator, datetime], ...]) -> None:
-        self.rows: Final = tuple(
-            _Row(creator.response_id, creator.upstream_url, creator.context.model_dump(mode="json"), created_at)
-            for creator, created_at in rows
-        )
+    def __init__(self, *rows: _Row) -> None:
+        self.rows: Final = {row.response_id: row for row in rows}
 
     async def find_many(self, *, where: Mapping[str, Mapping[str, datetime]]) -> list[_Row]:
-        return [row for row in self.rows if row.created_at > where["created_at"]["gt"]]
+        recent: Final = (row for row in self.rows.values() if row.created_at > where["created_at"]["gt"])
+        return [row for row in recent if _lease_open(row, where)]
+
+    async def update_many(self, *, data: Mapping[str, datetime], where: Mapping[str, object]) -> int:
+        row: Final = self.rows.get(str(where["response_id"]))
+        if row is None or not _lease_open(row, where):
+            return 0
+        self.rows[row.response_id] = replace(row, poll_lease_expires_at=data["poll_lease_expires_at"])
+        return 1
+
+    async def delete_many(self, *, where: Mapping[str, Mapping[str, datetime]]) -> int:
+        pruned: Final = tuple(
+            response_id for response_id, row in self.rows.items() if row.created_at < where["created_at"]["lt"]
+        )
+        for response_id in pruned:
+            del self.rows[response_id]
+        return len(pruned)
 
 
-def _store(*rows: tuple[BackgroundResponseCreator, datetime]) -> PrismaBackgroundResponseCreatorStore:
-    table: Final = _CreatorTable(rows)
+class _UnreachableLeases(_CreatorTable):
+    async def update_many(self, *, data: Mapping[str, datetime], where: Mapping[str, object]) -> int:
+        raise ConnectionResetError("server closed the connection unexpectedly")
+
+
+def _store(table: _CreatorTable) -> PrismaBackgroundResponseCreatorStore:
     return PrismaBackgroundResponseCreatorStore(table=lambda: table, timeout_seconds=5)
 
 
@@ -108,15 +148,15 @@ async def _no_credential(api_base: str) -> None:
     return None
 
 
-async def _resume(
+async def _swept(
     provider: _Provider,
     settled: _Settled,
-    *rows: tuple[BackgroundResponseCreator, datetime],
+    table: _CreatorTable,
     poll_headers: Callable[[str], object] = _credential,
     poller: BackgroundResponsePoller | None = None,
 ) -> int:
-    polls: Final = await resume_background_response_polls(
-        creators=_store(*rows),
+    polls: Final = await sweep_background_response_polls(
+        creators=_store(table),
         poller=poller or provider.poller(),
         settle=settled,
         api_base="https://api.openai.com/",
@@ -126,9 +166,31 @@ async def _resume(
     return len(polls)
 
 
-async def _polled(provider: _Provider, settled: _Settled, schedule: PollSchedule = FAST) -> None:
+async def _resume(
+    provider: _Provider,
+    settled: _Settled,
+    *rows: tuple[BackgroundResponseCreator, datetime],
+    poll_headers: Callable[[str], object] = _credential,
+    poller: BackgroundResponsePoller | None = None,
+) -> int:
+    table: Final = _CreatorTable(*(_row(creator, created_at) for creator, created_at in rows))
+    return await _swept(provider, settled, table, poll_headers, poller)
+
+
+async def _polled(
+    provider: _Provider,
+    settled: _Settled,
+    schedule: PollSchedule = FAST,
+    table: _CreatorTable | None = None,
+    settle: Callable[[BackgroundResponseCreator, Mapping[str, object]], object] | None = None,
+) -> None:
     create: Final = httpx.Request("POST", RESPONSES_URL, headers={"authorization": "Bearer creator-upstream-key"})
-    poll: Final = provider.poller(schedule).start(_creator(), poll_request_for_create(create, RESPONSE_ID), settled)
+    poll: Final = provider.poller(schedule).start(
+        _creator(),
+        poll_request_for_create(create, RESPONSE_ID),
+        settle or settled,
+        _store(_CreatorTable(_row(_creator())) if table is None else table),
+    )
     assert poll is not None
     await poll
 
@@ -191,7 +253,12 @@ async def test_a_poll_whose_settlement_fails_ends_without_raising():
         raise RuntimeError("spend log write failed")
 
     create: Final = httpx.Request("POST", RESPONSES_URL)
-    poll: Final = provider.poller().start(_creator(), poll_request_for_create(create, RESPONSE_ID), failing_settlement)
+    poll: Final = provider.poller().start(
+        _creator(),
+        poll_request_for_create(create, RESPONSE_ID),
+        failing_settlement,
+        _store(_CreatorTable(_row(_creator()))),
+    )
     assert poll is not None
 
     await poll
@@ -210,7 +277,9 @@ async def test_a_poll_reads_the_response_with_the_create_credentials_and_query_b
         json={"model": "gpt-5.4-mini", "input": "hi", "background": True},
     )
 
-    poll: Final = provider.poller().start(_creator(), poll_request_for_create(create, RESPONSE_ID), _Settled())
+    poll: Final = provider.poller().start(
+        _creator(), poll_request_for_create(create, RESPONSE_ID), _Settled(), _store(_CreatorTable(_row(_creator())))
+    )
     assert poll is not None
     await poll
 
@@ -314,3 +383,107 @@ async def test_a_restart_with_no_row_on_the_configured_origin_polls_nothing_and_
     assert resumed == 0
     assert provider.requests == []
     assert lookups == []
+
+
+@pytest.mark.asyncio
+async def test_a_poll_stops_without_reading_once_another_settler_forgot_the_creator():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    settled: Final = _Settled()
+
+    await _polled(provider, settled, table=_CreatorTable())
+
+    assert provider.requests == []
+    assert settled.bodies == []
+
+
+@pytest.mark.asyncio
+async def test_a_poll_keeps_going_when_the_database_cannot_renew_its_lease():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    settled: Final = _Settled()
+
+    await _polled(provider, settled, table=_UnreachableLeases(_row(_creator())))
+
+    assert settled.bodies == [(RESPONSE_ID, COMPLETED)]
+
+
+@pytest.mark.asyncio
+async def test_two_workers_sweeping_one_store_poll_each_response_once():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    table: Final = _CreatorTable(_row(_creator("resp_first")), _row(_creator("resp_second")))
+
+    swept: Final = await asyncio.gather(
+        _swept(provider, _Settled(), table, poller=provider.poller()),
+        _swept(provider, _Settled(), table, poller=provider.poller()),
+    )
+
+    assert sum(swept) == 2
+    assert sorted(str(request.url) for request in provider.requests) == [
+        f"{RESPONSES_URL}/resp_first",
+        f"{RESPONSES_URL}/resp_second",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_takes_an_expired_or_missing_lease_but_never_a_live_one():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    table: Final = _CreatorTable(
+        _row(_creator("resp_live"), lease=RESUMED_AT + timedelta(seconds=1)),
+        _row(_creator("resp_expired"), lease=RESUMED_AT - timedelta(seconds=1)),
+        _row(_creator("resp_unleased")),
+    )
+
+    await _swept(provider, _Settled(), table)
+
+    assert sorted(str(request.url) for request in provider.requests) == [
+        f"{RESPONSES_URL}/resp_expired",
+        f"{RESPONSES_URL}/resp_unleased",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer", [httpx.Response(404), httpx.Response(200, json=IN_PROGRESS)], ids=["refused", "gave_up"]
+)
+async def test_a_poll_that_ends_unsettled_keeps_the_next_sweep_from_polling_it_again(answer):
+    provider: Final = _Provider((answer,))
+    table: Final = _CreatorTable(_row(_creator()))
+    await _polled(provider, _Settled(), table=table)
+    reads_before_the_sweep: Final = len(provider.requests)
+
+    resumed: Final = await _swept(provider, _Settled(), table)
+
+    assert resumed == 0
+    assert len(provider.requests) == reads_before_the_sweep
+    assert set(table.rows) == {RESPONSE_ID}
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_deletes_only_creators_past_their_retention():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    table: Final = _CreatorTable(
+        _row(_creator("resp_past"), RESUMED_AT - BACKGROUND_RESPONSE_CREATOR_RETENTION - timedelta(seconds=1)),
+        _row(_creator("resp_kept"), RESUMED_AT - BACKGROUND_RESPONSE_CREATOR_RETENTION + timedelta(seconds=1)),
+    )
+
+    await _swept(provider, _Settled(), table)
+
+    assert set(table.rows) == {"resp_kept"}
+
+
+@pytest.mark.asyncio
+async def test_the_periodic_sweep_sweeps_again_after_each_interval():
+    swept_at: Final[list[float]] = []
+    third_sweep: Final = asyncio.Event()
+
+    async def sweep() -> None:
+        swept_at.append(asyncio.get_running_loop().time())
+        if len(swept_at) == 3:
+            third_sweep.set()
+
+    sweeping: Final = asyncio.create_task(sweep_periodically(sweep, 0.01))
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(third_sweep.wait(), timeout=5)
+    sweeping.cancel()
+
+    assert len(swept_at) >= 3
+    assert all(later - earlier >= 0.01 for earlier, later in zip(swept_at, swept_at[1:]))

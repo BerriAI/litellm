@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_BackgroundResponseCreator" (
     "upstream_url" TEXT NOT NULL,
     "create_context" JSONB NOT NULL,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "poll_lease_expires_at" TIMESTAMP(3),
 
     CONSTRAINT "LiteLLM_BackgroundResponseCreator_pkey" PRIMARY KEY ("response_id")
 );
