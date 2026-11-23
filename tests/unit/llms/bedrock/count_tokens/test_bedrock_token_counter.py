@@ -237,8 +237,13 @@ def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
         ({"aws_profile_name": "litellm-test-missing-profile"}, {}, "set aws_profile_name to one that exists"),
         ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}, "Give the deployment aws_access_key_id and aws_secret"),
         ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}, "Run `aws sso login`"),
+        (
+            {"aws_role_name": "arn:aws:iam::123456789012:role/litellm-test", "aws_session_name": "litellm-test"},
+            {},
+            "aws_role_name needs one of these to assume the role from",
+        ),
     ),
-    ids=("none", "unknown-profile", "access-key-without-secret", "sso-never-logged-in"),
+    ids=("none", "unknown-profile", "access-key-without-secret", "sso-never-logged-in", "role-without-base-credentials"),
 )
 @pytest.mark.parametrize(
     "model_to_use",

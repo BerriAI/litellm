@@ -19,6 +19,10 @@ from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensC
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_SSO_LOGIN_FIX: Final = (
+    "Run `aws sso login` for the deployment's aws_profile_name on the proxy host, or set other AWS credentials on "
+    "the deployment."
+)
 
 
 class BedrockCountTokensRequestError(BedrockError):
@@ -49,18 +53,21 @@ def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsErro
             return _missing_aws_credentials(
                 error, "Add that profile to the proxy's AWS config file, or set aws_profile_name to one that exists."
             )
-        case SSOTokenLoadError() | UnauthorizedSSOTokenError() | TokenRetrievalError():
+        case SSOTokenLoadError() | UnauthorizedSSOTokenError():
+            return _missing_aws_credentials(error, _SSO_LOGIN_FIX)
+        case TokenRetrievalError():
             return _missing_aws_credentials(
                 error,
-                "Run `aws sso login` for the deployment's aws_profile_name on the proxy host, or set other AWS "
-                "credentials on the deployment.",
+                f"{_SSO_LOGIN_FIX} If that login is still valid, retry, since an SSO token refresh that failed for a "
+                "moment raises the same error.",
             )
         case NoCredentialsError() | PartialCredentialsError():
             return _missing_aws_credentials(
                 error,
                 "Give the deployment aws_access_key_id and aws_secret_access_key, an aws_profile_name whose profile "
-                "holds credentials, aws_role_name, or api_key, or set AWS credentials in the proxy environment. On "
-                "EC2, check that the instance has a role and its instance metadata service answers.",
+                "holds credentials, or api_key, or set AWS credentials in the proxy environment. aws_role_name needs "
+                "one of these to assume the role from. On EC2, check that the instance has a role and its instance "
+                "metadata service answers.",
             )
         case _:
             return None
@@ -191,10 +198,10 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 response=e.response,
             )
         except Exception as e:
+            verbose_logger.error("Error in CountTokens handler: %s", e)
             credentials_error: Final = aws_credentials_error(e)
             if credentials_error is not None:
                 raise credentials_error from e
-            verbose_logger.error("Error in CountTokens handler: %s", e)
             raise BedrockError(
                 status_code=500,
                 message=f"CountTokens processing error: {e}",

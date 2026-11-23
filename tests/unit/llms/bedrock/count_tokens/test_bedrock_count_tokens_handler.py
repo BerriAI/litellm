@@ -137,15 +137,15 @@ class _FailingCredentialsCountTokensHandler(BedrockCountTokensHandler):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "error",
+    ("error", "retry_hint"),
     (
-        UnauthorizedSSOTokenError(),
-        TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"),
+        (UnauthorizedSSOTokenError(), False),
+        (TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"), True),
     ),
     ids=("legacy-sso-profile", "sso-session-refresh-failed"),
 )
 async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_session_without_calling_bedrock(
-    monkeypatch: pytest.MonkeyPatch, error: Exception
+    monkeypatch: pytest.MonkeyPatch, error: Exception, retry_hint: bool
 ) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     client: Final = AsyncMock(spec=AsyncHTTPHandler)
@@ -161,6 +161,7 @@ async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_sessio
     assert exc_info.value.status_code == 401
     assert exc_info.value.message.startswith("No usable AWS credentials are set, so Bedrock can't count tokens")
     assert "aws sso login" in exc_info.value.message
+    assert ("If that login is still valid, retry" in exc_info.value.message) is retry_hint, exc_info.value.message
     client.post.assert_not_awaited()
 
 
