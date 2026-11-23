@@ -15005,8 +15005,10 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     mcp_server_manager.global_mcp_server_manager.registry[server.server_id] = server
     identity: Final = "https://gateway.example.com/oauth/client-metadata.json"
     table: Final = proxy_server.prisma_client.db.litellm_mcpusercredentials
+    proxy_server.prisma_client.writer_db.litellm_mcpusercredentials = table
     table.find_unique = AsyncMock(return_value=None)
     table.upsert = AsyncMock()
+    table.update_many = AsyncMock(return_value=1)
     await endpoints._store_per_user_token_server_side(
         server,
         "jwt-owner",
@@ -15015,7 +15017,12 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     )
 
     async def saved_row(**kwargs):
-        return SimpleNamespace(credential_b64=table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+        credential_b64: Final[str] = (
+            table.update_many.await_args.kwargs["data"]["credential_b64"]
+            if table.update_many.await_count
+            else table.upsert.call_args.kwargs["data"]["create"]["credential_b64"]
+        )
+        return SimpleNamespace(credential_b64=credential_b64, user_id="jwt-owner", server_id=server.server_id)
 
     table.find_unique.side_effect = saved_row
     if origin is None:
@@ -15042,7 +15049,8 @@ async def test_token_route_preserves_saved_cimd_grant_after_origin_change(
     persisted: Final = await db.get_user_oauth_credential(proxy_server.prisma_client, "jwt-owner", server.server_id)
     assert persisted is not None and persisted["cimd_client_id"] == identity
     assert persisted["refresh_token"] == "rotated"
-    assert table.upsert.await_count == 2
+    assert table.upsert.await_count == 1
+    assert table.update_many.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -15359,12 +15367,20 @@ async def test_managed_refresh_retains_only_the_actual_grant(
                 "access_token": "old-access",
                 "refresh_token": "owner-refresh",
                 "scopes": ["tools.read", "tools.write"],
+                "needs_scopes": ["gist"],
             }
         )
     )
     table = proxy_server.prisma_client.db.litellm_mcpusercredentials
-    table.find_unique = AsyncMock(return_value=SimpleNamespace(credential_b64=credential))
-    table.upsert = AsyncMock()
+    table.find_unique = AsyncMock(
+        return_value=SimpleNamespace(
+            credential_b64=credential,
+            user_id="jwt-owner",
+            server_id=server.server_id,
+        )
+    )
+    proxy_server.prisma_client.writer_db.litellm_mcpusercredentials = table
+    table.update_many = AsyncMock(return_value=1)
     upstream = respx_mock.post(server.token_url).respond(
         200,
         json={
@@ -15389,8 +15405,9 @@ async def test_managed_refresh_retains_only_the_actual_grant(
         refresh_token="owner-refresh",
         scope=requested_scope,
     )
-    saved = db.decode_oauth_payload(table.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    saved = db.decode_oauth_payload(table.update_many.call_args.kwargs["data"]["credential_b64"])
     assert saved is not None and saved.get("scopes") == expected
+    assert saved["needs_scopes"] == ["gist"]
     assert upstream.call_count == 1
     from urllib.parse import parse_qs
 

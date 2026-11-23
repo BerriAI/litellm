@@ -40,7 +40,7 @@ class WebSearchTransformation:
         response: object,
         stream: bool,
         response_format: str = "anthropic",
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict[str, object]]]:
         """
         Transform model response to extract WebSearch tool calls.
 
@@ -80,7 +80,7 @@ class WebSearchTransformation:
     @staticmethod
     def _detect_from_responses_response(
         response: object,
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse a Responses API response for ``litellm_web_search`` function calls.
 
         After pre-request conversion the native web search tool is replaced by a
@@ -95,7 +95,7 @@ class WebSearchTransformation:
         if not isinstance(output, list):
             return False, []
 
-        tool_calls: Final[list[dict]] = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -142,7 +142,7 @@ class WebSearchTransformation:
     @staticmethod
     def _detect_from_non_streaming_response(
         response: object,
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse non-streaming response for WebSearch tool_use"""
 
         # Handle both dict and object responses
@@ -198,7 +198,7 @@ class WebSearchTransformation:
     @staticmethod
     def _detect_from_openai_response(
         response: object,
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse OpenAI-style response for WebSearch tool_calls"""
 
         # Handle both dict and ModelResponse objects
@@ -292,10 +292,10 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_response(
-        tool_calls: list[dict],
+        tool_calls: Sequence[Mapping[str, object]],
         search_results: Sequence[str],
         response_format: str = "anthropic",
-        thinking_blocks: list[dict] | None = None,
+        thinking_blocks: Sequence[Mapping[str, object]] | None = None,
     ) -> tuple[dict, dict | list[dict]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
@@ -326,13 +326,13 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_anthropic(
-        tool_calls: list[dict],
+        tool_calls: Sequence[Mapping[str, object]],
         search_results: Sequence[str],
-        thinking_blocks: list[dict] | None = None,
+        thinking_blocks: Sequence[Mapping[str, object]] | None = None,
     ) -> tuple[dict, dict]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
         # Build assistant message content
-        assistant_content: Final[list[dict]] = []
+        assistant_content: Final[list[Mapping[str, object]]] = []
 
         # Prepend thinking blocks if present.
         # When extended thinking is enabled, Anthropic requires the assistant
@@ -376,7 +376,7 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_openai(
-        tool_calls: list[dict],
+        tool_calls: Sequence[Mapping[str, object]],
         search_results: Sequence[str],
     ) -> tuple[dict, list[dict]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
