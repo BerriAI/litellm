@@ -29,12 +29,10 @@ from litellm.integrations.custom_logger_v2.patches import LiveFields
 from litellm.integrations.custom_logger_v2.planner import Entry, HookPlan, plan_hook
 from litellm.integrations.custom_logger_v2.selection import RequestSelection, Selection
 
-ResultT: Final = TypeVar("ResultT")
+ResultT = TypeVar("ResultT")
 
 SyncLegacyBinding: TypeAlias = Callable[[object, object], object]
 
-# These hook points are the only ones where v1 custom logger subclasses are
-# checked to see if they run in parallel
 PARALLEL_GUARDRAIL_HOOKS: Final = frozenset({Hook.pre_call, Hook.post_call_success})
 LEGACY_READS: Final = frozenset({Field.deprecated_kwargs, Field.deprecated_response_obj})
 PROXY_REQUEST_KEYS: Final[Mapping[Field, str]] = MappingProxyType(
@@ -70,7 +68,9 @@ def legacy_subscription(hook: Hook, parallel: bool) -> Subscription:
         hook=hook,
         handler="call",
         reads=LEGACY_READS,
-        writes=frozenset({Field.deprecated_kwargs}) if spec.writes and not gathered else frozenset(),
+        writes=frozenset({Field.deprecated_kwargs})
+        if spec.writes and spec.legacy_rewrites and not gathered
+        else frozenset(),
         may_abort=may_abort,
         parallel=gathered,
         legacy=True,

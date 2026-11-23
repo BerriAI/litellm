@@ -18,7 +18,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, delete_key_if_present, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process, pool_limit_for_prisma
 from integration._support.wire import Reply, Request, wire_server
 from psycopg import sql
 
@@ -466,7 +466,9 @@ def test_daily_spend_batch_cancelled_while_waiting_for_a_pool_connection_is_writ
     gateway: Gateway, tmp_path: Path
 ) -> None:
     with (
-        _legacy_spend_queue_proxy_with_one_seeded_row(gateway, tmp_path, pool_limit=2) as shutdown,
+        _legacy_spend_queue_proxy_with_one_seeded_row(
+            gateway, tmp_path, pool_limit=pool_limit_for_prisma(2, rust_spend_log_writer=False)
+        ) as shutdown,
         psycopg.connect(os.environ["DATABASE_URL"]) as models,
         psycopg.connect(os.environ["DATABASE_URL"]) as memberships,
     ):

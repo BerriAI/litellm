@@ -10,6 +10,8 @@ export interface PluginSource {
   repo?: string; // Format: "org/repo" for GitHub
   url?: string; // Full URL for other sources
   path?: string; // Subdirectory path for git-subdir
+  ref?: string;
+  sha?: string;
   sha256?: string;
 }
 
@@ -28,9 +30,17 @@ export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginReq
 export type SkillListQuery = NonNullable<operations["list_skills_skill_hub_skills_get"]["parameters"]["query"]>;
 
 export type SkillHubSkill = components["schemas"]["SkillHubSkill"];
-export type SkillMetadata = components["schemas"]["SkillHubMetadata"];
-export type SkillImport = Omit<components["schemas"]["ImportSkillRequest"], "ref"> &
-  Partial<Pick<components["schemas"]["ImportSkillRequest"], "ref">>;
+export type SkillMetadata = Omit<components["schemas"]["SkillHubSubmissionEdit"], "expected_revision">;
+export type SkillUpdate = components["schemas"]["SkillHubUpdate"];
+type SkillCreationMetadata = NonNullable<components["schemas"]["ImportSkillRequest"]["metadata"]>;
+export type SkillUploadMetadata = Omit<SkillCreationMetadata, "version"> &
+  Partial<Pick<SkillCreationMetadata, "version">>;
+export type SkillHubRegisterRequest = SkillUploadMetadata &
+  Pick<components["schemas"]["SkillHubRegistration"], "source">;
+export type SkillImport = Omit<components["schemas"]["ImportSkillRequest"], "ref" | "metadata"> &
+  Partial<Pick<components["schemas"]["ImportSkillRequest"], "ref">> & {
+    metadata?: SkillUploadMetadata | null;
+  };
 export type SkillMutationResponse = SkillHubSkill | components["schemas"]["SkillHubPendingSkill"];
 export type SkillSubmission = components["schemas"]["SkillHubSubmission"];
 

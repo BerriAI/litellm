@@ -62,6 +62,11 @@ def shared_login_github_host() -> str:
     return next((host for host in hosts if host is not None), GITHUB_COPILOT_DEFAULT_HOST)
 
 
+def custom_github_copilot_client_id() -> str | None:
+    client_id: Final = os.getenv("GITHUB_COPILOT_CLIENT_ID")
+    return client_id if client_id and client_id != DEFAULT_GITHUB_CLIENT_ID else None
+
+
 def github_host_endpoints(host: str) -> GithubHostEndpoints:
     normalized: Final = normalized_github_host(host)
     if normalized is None:

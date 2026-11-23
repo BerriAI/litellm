@@ -3789,6 +3789,8 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "anthropic_keycloak_client_secret_ref",
         "anthropic_identity_token_file",
         "openai_identity_token_file",
+        "github_copilot_app_private_key",
+        "github_copilot_app_private_key_ref",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",
@@ -4698,9 +4700,12 @@ async def test_health_endpoint_never_probes_the_default_fallback_for_a_granted_n
 
 def _personal_key_whose_owner_may_call(models: list[str]) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.redis.stores.auth_cache import AuthObject
 
     owner_id: Final = "health-scope-owner-" + "-".join(models)
-    user_api_key_cache.set_cache(key=owner_id, value=LiteLLM_UserTable(user_id=owner_id, models=models))
+    user_api_key_cache.set_cache(
+        key=AuthObject.user(owner_id), value=LiteLLM_UserTable(user_id=owner_id, models=models)
+    )
     return UserAPIKeyAuth(api_key="hashed-test-key", models=[], user_id=owner_id)
 
 

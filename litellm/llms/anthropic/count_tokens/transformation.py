@@ -5,8 +5,9 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 """
 
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from functools import partial
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -17,7 +18,7 @@ from typing import (
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION, DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
@@ -47,6 +48,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
+_COUNT_OPTION: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _COUNTED_MESSAGES: Final = TypeAdapter(list[dict[str, JsonValue]])
 _TRANSFORMED_REQUEST: Final = TypeAdapter(dict[str, object])
 _DROPPED_PATHS: Final = TypeAdapter(tuple[object, ...])
@@ -54,6 +56,8 @@ _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
 _IMAGE_BLOCK: Final = TypeAdapter(ChatCompletionImageObject)
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
+_CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
+_NULL_CONTENT_CHAT_ROLES: Final = frozenset({"user", "assistant", "system"})
 
 
 def _count_image(block: JsonValue) -> JsonValue:
@@ -164,8 +168,31 @@ class _ChatRequestTranslator(Protocol):
     ) -> _ChatParams: ...
 
 
-def _needs_chat_translation(message: Mapping[str, object]) -> bool:
-    return message.get("role") == "tool" or not _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+def _is_plain_message(message: Mapping[str, object]) -> bool:
+    return message.get("role") != "tool" and _PLAIN_MESSAGE_KEYS.issuperset(message.keys())
+
+
+def _string_role(message: Mapping[str, object]) -> str | None:
+    role: Final = message.get("role")
+    return role if isinstance(role, str) else None
+
+
+def _is_contentless_chat_turn(message: Mapping[str, object]) -> bool:
+    return message.get("content") is None and _string_role(message) in _NULL_CONTENT_CHAT_ROLES
+
+
+def _needs_chat_translation(translate_contentless_turns: bool, message: Mapping[str, object]) -> bool:
+    return (translate_contentless_turns and _is_contentless_chat_turn(message)) or not _is_plain_message(message)
+
+
+def _is_system_role(message: Mapping[str, object]) -> bool:
+    return message.get("role") == "system"
+
+
+def _counts_blank_text_as_chat_sends_it(messages: Sequence[Mapping[str, object]]) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.factory import carries_empty_text
+
+    return any(map(carries_empty_text, messages)) and not any(map(_has_non_chat_user_block, messages))
 
 
 def _is_chat_tool(tool: Mapping[str, object]) -> bool:
@@ -310,6 +337,51 @@ def _translated_chat_request(
     )
 
 
+def _fields_with_system_lifted(
+    messages: Sequence[Mapping[str, object]],
+    system: object,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> AnthropicCountFields:
+    request: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(
+        {"messages": messages, "system": system, **({"tools": tools} if tools else {})}
+    )
+    conversation, lifted = _lift_leading_system(request["messages"], request.get("system"))
+    return AnthropicCountFields(messages=conversation, system=lifted, tools=request.get("tools"), options={})
+
+
+def _message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    if "role" not in message:
+        return f"Message {index} must have a 'role' field"
+    if "content" not in message:
+        return f"Message {index} must have a 'content' field"
+    return None
+
+
+def _chat_message_problem(index: int, message: Mapping[str, object]) -> str | None:
+    return None if _string_role(message) in _CHAT_ROLES_WITHOUT_CONTENT else _message_problem(index, message)
+
+
+def _first_message_problem(
+    messages: Sequence[Mapping[str, object]], problem_of: Callable[[int, Mapping[str, object]], str | None]
+) -> ChatCountTranslationError | None:
+    return next(
+        (
+            ChatCountTranslationError(problem)
+            for index, message in enumerate(messages)
+            if (problem := problem_of(index, message)) is not None
+        ),
+        None,
+    )
+
+
+def malformed_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
+    return _first_message_problem(messages, _message_problem)
+
+
+def chat_message_error(messages: Sequence[Mapping[str, object]]) -> ChatCountTranslationError | None:
+    return _first_message_problem(messages, _chat_message_problem)
+
+
 def anthropic_fields_for_chat_tool_use(
     model: str,
     messages: Sequence[Mapping[str, object]],
@@ -317,14 +389,21 @@ def anthropic_fields_for_chat_tool_use(
     tools: Sequence[Mapping[str, object]] | None,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
+    *,
+    translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     counted_tools: Final = tools or ()
-    if (
+    lifts_system: Final = messages_are_converse_turns and any(map(_is_system_role, messages))
+    counts_untranslated: Final = (
         not chat_params
         and not any(map(_needs_tool_translation, counted_tools))
-        and not any(map(_needs_chat_translation, messages))
-    ):
-        return None
+        and not any(map(partial(_needs_chat_translation, translate_contentless_turns), messages))
+        and (messages_are_converse_turns or not _counts_blank_text_as_chat_sends_it(messages))
+        and not (lifts_system and all(map(_is_system_role, messages)))
+    )
+    if counts_untranslated:
+        return _fields_with_system_lifted(messages, system, tools) if lifts_system else None
     untranslatable: Final = _untranslatable_input(messages, counted_tools)
     if untranslatable is not None:
         return untranslatable
@@ -334,10 +413,14 @@ def anthropic_fields_for_chat_tool_use(
     try:
         request: Final = _translated_chat_request(model, messages, system, counted_tools, chat_params, translator)
     except (AnthropicError, BadRequestError) as e:
-        return ChatCountTranslationError(message=str(e.message))
+        return chat_message_error(messages) or ChatCountTranslationError(message=str(e.message))
     except (ValueError, KeyError) as e:
-        return ChatCountTranslationError(message=f"Invalid request for token counting: {e}")
+        return chat_message_error(messages) or ChatCountTranslationError(
+            message=f"Invalid request for token counting: {e}"
+        )
     translated: Final = _ANTHROPIC_CHAT_REQUEST.validate_python(request)
+    if messages and not translated["messages"]:
+        return ChatCountTranslationError(message="At least one non-system message with content is required")
     return AnthropicCountFields(
         messages=translated["messages"],
         system=translated.get("system"),
@@ -362,19 +445,26 @@ def _max_output_tokens(model: str, custom_llm_provider: str | None) -> int:
     )
 
 
+def _json_options(options: Mapping[str, object]) -> Iterator[tuple[str, JsonValue]]:
+    for name, value in options.items():
+        try:
+            yield name, _COUNT_OPTION.validate_python(value)
+        except ValidationError:
+            continue
+
+
 def without_dropped_paths(options: Mapping[str, JsonValue], additional_drop_params: object) -> Mapping[str, JsonValue]:
-    return _COUNT_REQUEST.validate_python(
-        delete_nested_values(
-            options,
-            (
-                path
-                for path in _DROPPED_PATHS.validate_python(
-                    additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
-                )
-                if isinstance(path, str)
-            ),
-        )
+    kept: Final = delete_nested_values(
+        options,
+        (
+            path
+            for path in _DROPPED_PATHS.validate_python(
+                additional_drop_params if isinstance(additional_drop_params, (list, tuple)) else ()
+            )
+            if isinstance(path, str)
+        ),
     )
+    return dict(_json_options(kept))
 
 
 def messages_count_options(
@@ -423,10 +513,22 @@ async def anthropic_count_fields(
     messages_format: TokenCountMessagesFormat,
     translator: _ChatRequestTranslator,
     chat_params: Mapping[str, object] = MappingProxyType({}),
+    messages_are_converse_turns: bool = False,
+    *,
+    translate_contentless_turns: bool = True,
 ) -> AnthropicCountFields | ChatCountTranslationError | None:
     if messages_format != "openai":
         return None
-    return await asyncify(anthropic_fields_for_chat_tool_use)(model, messages, system, tools, translator, chat_params)
+    return await asyncify(anthropic_fields_for_chat_tool_use)(
+        model,
+        messages,
+        system,
+        tools,
+        translator,
+        chat_params,
+        messages_are_converse_turns,
+        translate_contentless_turns=translate_contentless_turns,
+    )
 
 
 class AnthropicCountTokensConfig:

@@ -4,7 +4,7 @@ Anthropic Token Counter implementation using the CountTokens API.
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from pydantic import JsonValue
 
@@ -18,6 +18,7 @@ from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountFields,
     ChatCountTranslationError,
     anthropic_count_fields,
+    malformed_message_error,
     messages_count_options,
 )
 from litellm.llms.base_llm.base_utils import (
@@ -49,7 +50,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
         model_to_use: str,
         messages: list[dict[str, JsonValue]] | None,
         contents: list[dict[str, object]] | None,
-        deployment: dict[str, Any] | None = None,
+        deployment: dict[str, object] | None = None,
         request_model: str = "",
         tools: list[dict[str, JsonValue]] | None = None,
         system: JsonValue = None,
@@ -97,6 +98,9 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 )
             case None:
                 pass
+
+        if (malformed := malformed_message_error(messages)) is not None:
+            return malformed.response(request_model, model_to_use, "anthropic_api")
 
         match options := await asyncify(messages_count_options)(
             AnthropicMessagesConfig(),

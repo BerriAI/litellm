@@ -165,7 +165,6 @@ def test_get_api_base_does_not_trigger_device_login_without_saved_token(
     get_client.assert_not_called()
 
 
-
 @pytest.mark.parametrize(
     ("env_var", "url"),
     [
@@ -183,6 +182,19 @@ def test_get_api_base_looks_up_a_ghe_login_on_its_own_tenant(
         assert Authenticator().get_api_base() == GHE_COPILOT_API
 
     assert route.calls.last.request.headers["authorization"] == f"token {token}"
+
+
+def test_get_api_base_looks_up_again_when_the_login_moves_to_a_ghe_tenant(
+    logged_in_token_dir: tuple[Path, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.get(COPILOT_USER_URL).respond(json={"endpoints": {"api": TENANT_API}})
+        assert Authenticator().get_api_base() == TENANT_API
+
+    monkeypatch.setenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", GHE_ACCESS_TOKEN_URL)
+    with respx.mock(assert_all_called=True) as router:
+        router.get(GHE_COPILOT_USER_URL).respond(json={"endpoints": {"api": GHE_COPILOT_API}})
+        assert Authenticator().get_api_base() == GHE_COPILOT_API
 
 
 @pytest.mark.parametrize(

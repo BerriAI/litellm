@@ -334,7 +334,7 @@ async def test_policies_and_guardrails(
             item_result = await apply_policies(
                 policy_names=data.policy_names,
                 inputs=inp,
-                request_data=data.request_data,
+                request_data=copy.deepcopy(data.request_data),
                 input_type=data.input_type,
                 proxy_logging_obj=logging_obj,
                 guardrail_names=data.guardrail_names,
@@ -813,6 +813,7 @@ async def _stream_llm_competitor_names(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=COMPETITOR_LLM_TEMPERATURE,
+        drop_params=True,
         stream=True,
     )
     buffer = ""
@@ -957,6 +958,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         return parse_variations_response(raw, capped)
@@ -1000,6 +1002,7 @@ async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPET
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         competitors: Final = [

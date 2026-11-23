@@ -1,6 +1,7 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
 import _hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -268,14 +269,23 @@ _needs_shared_openssl: Final = pytest.mark.skipif(
 def test_keys_under_fips_come_from_the_salt_key_are_distinct_and_the_same_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + "5a" * 32)
+    salt_key: Final = "sk-" + "5a" * 32
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
     first: Final = _fips_keys(MASTER_KEY)
     assert first == _fips_keys(MASTER_KEY)
     assert len(set(first)) == 3, first
-    assert first == (
-        "ef694d415772aef09731c47709d4d9da47f7bbfcd6484836dea09c2bb387063b",
-        "d8a7cd70690fbf98c5581301b2e0460f2ad714f7c74b2af1b3dac3e0aa99db85",
-        "5e11e470bf9c838165b70d0b2b82a7ee5e2f00d9449eeb54f7c5bf9491b64354",
+    labels: Final = (
+        b"litellm-mcp-bridge:envelope-signing:",
+        b"litellm-mcp-bridge:envelope-encryption:",
+        b"litellm-mcp-gateway:session-signing:",
+    )
+    assert first == tuple(
+        hmac.digest(
+            salt_key.encode(),
+            (1).to_bytes(4, "big") + label + b"\x00" + MASTER_KEY.encode() + (256).to_bytes(4, "big"),
+            "sha256",
+        ).hex()
+        for label in labels
     )
 
 

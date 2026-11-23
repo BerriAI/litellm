@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.asyncify import can_block_current_thread
 from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
 from .common_utils import (
+    DEFAULT_GITHUB_CLIENT_ID,
     GetAccessTokenError,
     GetDeviceCodeError,
 )
@@ -29,7 +30,6 @@ if TYPE_CHECKING:
     from .github_host import GithubHostEndpoints
 
 # Constants (default values — overridable via environment variables at call time)
-DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_COPILOT_USER_URL: Final = "https://api.github.com/copilot_internal/user"
@@ -81,7 +81,7 @@ _COPILOT_API_BASE_CACHE: Final[_CopilotAPIBaseCache] = cast(  # cast-ok: [LIT006
 
 
 def _copilot_api_base_for_token(access_token: str, endpoints: "GithubHostEndpoints") -> str | None:
-    cache_key: Final = hashlib.sha256(access_token.encode()).hexdigest()
+    cache_key: Final = hashlib.sha256(f"{endpoints.host}\n{access_token}".encode()).hexdigest()
     cached_api_base: Final[object] = _COPILOT_API_BASE_CACHE.get_cache(cache_key)
     if isinstance(cached_api_base, str):
         return cached_api_base

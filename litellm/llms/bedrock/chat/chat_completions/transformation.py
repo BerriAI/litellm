@@ -38,12 +38,14 @@ from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     BedrockError,
     bedrock_model_is_openai_gpt,
     bedrock_rejects_stop_sequences,
     bedrock_runtime_chat_completions_serves_reasoning_inline,
     split_bedrock_region_path,
     strip_bedrock_routing_prefix,
+    strip_bedrock_runtime_route_suffix,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
@@ -368,22 +370,34 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
         litellm_params: dict,  # mutable-ok: BaseConfig signature
         stream: bool | None = None,
     ) -> str:
-        if api_base is not None and "chat/completions" in api_base:
-            return api_base.rstrip("/")
-        aws_region_name: Final = self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
-            optional_params=self._params_with_region_from_path(optional_params, model), model=model
-        )
         configured_runtime_endpoint: Final = optional_params.get("aws_bedrock_runtime_endpoint")
+        runtime_endpoint: Final = (
+            configured_runtime_endpoint
+            if isinstance(configured_runtime_endpoint, str) and configured_runtime_endpoint
+            else None
+        )
+        if runtime_endpoint is None and api_base is not None and "chat/completions" in api_base:
+            return api_base.rstrip("/")
+        default_endpoint_region: Final = (
+            ""
+            if api_base is not None
+            else self._aws_signer._get_aws_region_name(  # pyright: ignore[reportPrivateUsage]  # BaseAWSLLM has no public region resolver
+                optional_params=self._params_with_region_from_path(optional_params, model), model=model
+            )
+        )
         _, proxy_endpoint_url = self._aws_signer.get_runtime_endpoint(
             api_base=api_base,
-            aws_bedrock_runtime_endpoint=(
-                configured_runtime_endpoint if isinstance(configured_runtime_endpoint, str) else None
-            ),
-            aws_region_name=aws_region_name,
+            aws_bedrock_runtime_endpoint=runtime_endpoint,
+            aws_region_name=default_endpoint_region,
         )
-        if proxy_endpoint_url.rstrip("/").endswith("/openai/v1"):
-            return join_api_base(proxy_endpoint_url, "chat/completions")
-        return ensure_api_route(proxy_endpoint_url, "openai/v1/chat/completions")
+        if "chat/completions" in proxy_endpoint_url:
+            return proxy_endpoint_url.rstrip("/")
+        openai_base: Final = strip_bedrock_runtime_route_suffix(
+            proxy_endpoint_url, BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES
+        )
+        if openai_base.endswith("/openai/v1"):
+            return join_api_base(openai_base, "chat/completions")
+        return ensure_api_route(openai_base, "openai/v1/chat/completions")
 
     def _params_with_region_from_path(
         self, optional_params: dict, model: str | None
@@ -471,6 +485,12 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
                 ),
             )
         )
+
+    def _keeps_content_part_prompt_cache_breakpoints(self, model: str, litellm_params: Mapping[str, object]) -> bool:
+        """Keep native content-part breakpoints when the deployment or catalog declares support."""
+        from litellm.integrations.anthropic_cache_control_hook import deployment_prompt_cache_breakpoint_support
+
+        return deployment_prompt_cache_breakpoint_support(model, "bedrock", litellm_params) is True
 
     def _inference_params(
         self, optional_params: Mapping[str, object]
