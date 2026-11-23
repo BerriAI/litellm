@@ -142,3 +142,38 @@ def test_exit_code_fails_on_errors_and_on_warnings_only_when_strict(
     config_path: Final = tmp_path / "config.yaml"
     config_path.write_text(text, encoding="utf-8")
     assert main([str(config_path), *flags]) == exit_code
+
+
+def test_litellm_setting_under_general_settings_is_reported(tmp_path: Path) -> None:
+    text: Final = VALID.replace("general_settings:\n", "general_settings:\n  drop_params: true\n")
+    assert _lint(tmp_path, text) == [
+        "config.yaml:14: warning: general_settings.drop_params: "
+        "not read from general_settings, move it to litellm_settings"
+    ]
+
+
+def test_fallback_targets_that_are_not_a_list_are_an_error(tmp_path: Path) -> None:
+    assert _lint(tmp_path, VALID.replace('["backup"]', "backup")) == [
+        'config.yaml:12: error: litellm_settings.fallbacks[0]: fallbacks for "chat" must be a list of model groups, '
+        "like {chat: [backup]}"
+    ]
+
+
+def test_mistake_in_included_file_is_reported_at_the_include_line(tmp_path: Path) -> None:
+    (tmp_path / "settings.yaml").write_text("router_settings:\n  num_retrys: 2\n", encoding="utf-8")
+    text: Final = VALID.replace(
+        "router_settings:\n  routing_strategy: simple-shuffle\n", "include:\n  - settings.yaml\n"
+    )
+    assert _lint(tmp_path, text) == [
+        'config.yaml:15: warning: router_settings.num_retrys: unknown key, did you mean "num_retries"? '
+        "(in an included file)"
+    ]
+
+
+def test_duplicate_key_in_included_file_is_an_error(tmp_path: Path) -> None:
+    included: Final = tmp_path / "settings.yaml"
+    included.write_text("litellm_settings:\n  set_verbose: true\n  set_verbose: false\n", encoding="utf-8")
+    assert _lint(tmp_path, VALID + "include:\n  - settings.yaml\n") == [
+        f"config.yaml:17: error: include: cannot load included config: {included}:3: "
+        "duplicate key litellm_settings.set_verbose"
+    ]

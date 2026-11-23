@@ -82,12 +82,9 @@ def _source_keys(pattern: str, *relative_globs: str) -> frozenset[str]:
 
     root: Final = Path(litellm.__file__).parent
     regex: Final = re.compile(pattern)
-    return frozenset(
-        match
-        for relative_glob in relative_globs
-        for source in root.glob(relative_glob)
-        for match in regex.findall(source.read_text(encoding="utf-8", errors="ignore"))
-    )
+    sources: Final = itertools.chain.from_iterable(root.glob(relative_glob) for relative_glob in relative_globs)
+    texts: Final = (source.read_text(encoding="utf-8", errors="ignore") for source in sources)
+    return frozenset(itertools.chain.from_iterable(regex.findall(text) for text in texts))
 
 
 @cache
@@ -147,10 +144,14 @@ def _known_routing_strategies() -> frozenset[str]:
     return frozenset(get_args(RoutingStrategyName)) | {member.value for member in RoutingStrategy} | {"priority"}
 
 
-def _is_litellm_setting(key: str) -> bool:
+def _is_module_setting(key: str) -> bool:
     import litellm
 
-    return key in _known_litellm_settings() or hasattr(litellm, key) or key in _quoted_names("**/*.py")
+    return key in _known_litellm_settings() or hasattr(litellm, key)
+
+
+def _is_litellm_setting(key: str) -> bool:
+    return _is_module_setting(key) or key in _quoted_names("**/*.py")
 
 
 def _suggestion(key: str, known: frozenset[str]) -> str:
@@ -260,7 +261,15 @@ def _fallback_findings(section: Mapping[str, object], path: PathKey, known: froz
                 yield Finding("error", (*path, key, index), "must be a mapping like {model_group: [fallback_group]}")
                 continue
             for source, targets in rule.items():
-                names = (source, *(target for target in _sequence(targets) or () if isinstance(target, str)))
+                listed = _sequence(targets)
+                if listed is None:
+                    yield Finding(
+                        "error",
+                        (*path, key, index),
+                        f'fallbacks for "{source}" must be a list of model groups, like {{{source}: [{targets}]}}',
+                    )
+                    continue
+                names = (source, *(target for target in listed if isinstance(target, str)))
                 for name in names:
                     if not _is_known_model(name, known):
                         yield Finding("warning", (*path, key, index), f'model group "{name}" is not in model_list')
@@ -290,7 +299,11 @@ def _section_findings(config: Mapping[str, object], known_models: frozenset[str]
     if general_settings is not None:
         general_candidates = _known_general_settings()
         for key in general_settings:
-            if not _is_general_setting(key):
+            if key not in general_candidates and _is_module_setting(key):
+                yield Finding(
+                    "warning", ("general_settings", key), "not read from general_settings, move it to litellm_settings"
+                )
+            elif not _is_general_setting(key):
                 yield Finding(
                     "warning", ("general_settings", key), f"unknown key{_suggestion(key, general_candidates)}"
                 )
@@ -325,7 +338,13 @@ def _with_includes(config: Mapping[str, object], config_path: Path) -> Mapping[s
         return resolve_include_file_path(include_file, declared_in, root)
 
     async def read(file_path: str) -> Mapping[str, object]:
-        return _MAPPING.validate_python(yaml.safe_load(Path(file_path).read_text(encoding="utf-8")))
+        text: Final = Path(file_path).read_text(encoding="utf-8")
+        node: Final = yaml.compose(text, Loader=yaml.SafeLoader)
+        events: Final = _node_events(node, ()) if node is not None else ()
+        duplicate: Final = next((event for event in events if isinstance(event, Finding)), None)
+        if duplicate is not None:
+            raise ValueError(f"{file_path}:{duplicate.line}: duplicate key {_dotted(duplicate.path)}")
+        return _MAPPING.validate_python(yaml.safe_load(text))
 
     return asyncio.run(resolve_includes(config=config, location=root, resolve=resolve, read=read))
 
@@ -354,10 +373,15 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
             Finding("error", ("include",), f"cannot load included config: {error}", lines.get(("include",))),
         )
     located: Final = (
-        Finding(found.severity, found.path, found.message, _nearest_line(found.path, lines))
-        for found in lint_config(merged, environ)
+        _located(found, lines, has_includes="include" in config) for found in lint_config(merged, environ)
     )
     return tuple(sorted((*duplicates, *located), key=lambda found: (found.line or 0, found.severity)))
+
+
+def _located(found: Finding, lines: Mapping[PathKey, int], *, has_includes: bool) -> Finding:
+    if has_includes and found.path and found.path not in lines:
+        return Finding(found.severity, found.path, f"{found.message} (in an included file)", lines.get(("include",)))
+    return Finding(found.severity, found.path, found.message, _nearest_line(found.path, lines))
 
 
 def _nearest_line(path: PathKey, lines: Mapping[PathKey, int]) -> int | None:
