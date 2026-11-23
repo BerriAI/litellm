@@ -132,10 +132,10 @@ async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
     from prisma.errors import RawQueryError
 
     async with _connected() as store:
-        row = await _active(store)
+        row: Final = await _active(store)
         try:
-            gap = _delivery(row.id)
-            activation = Activation(
+            gap: Final = _delivery(row.id)
+            activation: Final = Activation(
                 client_secret=ROTATED,
                 upstream_subscription_id="up_1",
                 upstream_refresh_before=None,
@@ -146,7 +146,7 @@ async def test_a_gap_insert_failure_rolls_back_the_activation() -> None:
             assert await store.enqueue(gap)
             with pytest.raises(RawQueryError):
                 await store.activate(row.id, activation)
-            unchanged = await store.get(row.id)
+            unchanged: Final = await store.get(row.id)
             assert unchanged is not None and (unchanged.cursor, unchanged.client_secret) == ("c1", SECRET)
         finally:
             await store.delete(row.id)
