@@ -6,7 +6,7 @@ import copy
 import json
 import logging
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from itertools import chain
 from typing import Final, Literal
 from unittest.mock import patch
@@ -4187,7 +4187,13 @@ def _sse_frame(event: dict[str, object], name: str | None = None) -> bytes:
 
 
 def _tool_start(index: int, name: str, tool_input: dict[str, object] | None = None) -> dict[str, object]:
-    block: Final = {"type": "tool_use", "id": f"tu_{index}", "name": name, "input": tool_input or {}}
+    block: Final = {
+        "type": "tool_use",
+        "id": f"tu_{index}",
+        "name": name,
+        "input": tool_input or {},
+        "caller": {"type": "direct"},
+    }
     return {"type": "content_block_start", "index": index, "content_block": block}
 
 
@@ -4217,7 +4223,7 @@ _OPENING: Final = tuple(
                 "model": "claude-sonnet-4-5",
                 "content": [],
                 "stop_reason": None,
-                "usage": {"input_tokens": 10, "output_tokens": 0},
+                "usage": {"input_tokens": 10, "output_tokens": 0, "service_tier": "standard", "inference_geo": "us"},
             },
         },
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
@@ -4314,7 +4320,22 @@ _DENIED_CALL_SHAPES: Final = {
         _sse_frame(_block_stop(1)),
     ),
 }
+
+
+def _call_in_a_comment_broken_by(line_break: bytes) -> tuple[bytes, ...]:
+    return _stream(b": keepalive" + line_break * 2 + b"".join(_RM_RF_CALL).replace(b"\n", line_break) + b"\n")
+
+
+_DENIED_CALLS_ONLY_A_LINE_SPLITTING_CLIENT_READS: Final = {
+    "form-feed": _call_in_a_comment_broken_by(b"\x0c"),
+    "line-separator": _call_in_a_comment_broken_by("\u2028".encode()),
+}
 _LS_STREAM: Final = _stream(*_bash_call(_LS))
+_LS_ONLY_STREAM: Final = (
+    _OPENING[0],
+    *(_sse_frame(event) for event in (_tool_start(0, "Bash"), _input_delta(0, json.dumps(_LS)), _block_stop(0))),
+    *_CLOSING,
+)
 _ALLOWED_CALL_SHAPES: Final = {
     "crlf": tuple(frame.replace(b"\n", b"\r\n") for frame in _LS_STREAM),
     "commented": tuple(b": data: keepalive\n" + frame for frame in _LS_STREAM),
@@ -4326,21 +4347,102 @@ _ALLOWED_CALL_SHAPES: Final = {
         )
     ),
     "byte-order-mark": (b"\xef\xbb\xbf" + _LS_STREAM[0], *_LS_STREAM[1:]),
+    "input-in-the-start-event-and-an-empty-delta": _stream(
+        *(_sse_frame(event) for event in (_tool_start(1, "Bash", _LS), _input_delta(1, ""), _block_stop(1)))
+    ),
+}
+_TOOL_ONLY_SHAPES_THE_CHECK_CANNOT_FORWARD: Final = {
+    "byte-order-mark": (b"\xef\xbb\xbf" + _LS_ONLY_STREAM[0], *_LS_ONLY_STREAM[1:]),
+    "typed-only-by-event-names": tuple(
+        re.sub(rb'"type": "\w+", ', b"", frame, count=1) for frame in _LS_ONLY_STREAM
+    ),
 }
 
 
-def _sdk_message(chunks: list[object]) -> Message:
-    body: Final = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
+def _body(chunks: Sequence[object]) -> bytes:
+    return b"".join(chunk for chunk in chunks if isinstance(chunk, bytes))
+
+
+def _sdk_client(chunks: Sequence[object]) -> anthropic.Anthropic:
+    body: Final = _body(chunks)
     transport: Final = httpx.MockTransport(
         lambda _request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
     )
-    client: Final = anthropic.Anthropic(
-        api_key="test", base_url="http://test", http_client=httpx.Client(transport=transport)
-    )
-    with client.messages.stream(
+    return anthropic.Anthropic(api_key="test", base_url="http://test", http_client=httpx.Client(transport=transport))
+
+
+def _sdk_message(chunks: Sequence[object]) -> Message:
+    with _sdk_client(chunks).messages.stream(
         model="claude-sonnet-4-5", max_tokens=1, messages=[{"role": "user", "content": "hi"}]
     ) as stream:
         return stream.get_final_message()
+
+
+def _tool_input_as_the_typescript_sdk_reads(start_input: object, partial_jsons: Sequence[str]) -> object:
+    # @anthropic-ai/sdk 1.12.0 internal/message-stream-utils.js: `jsonBuf ? partialParse(jsonBuf) : {}` (2026-11-22)
+    if not partial_jsons:
+        return start_input
+    streamed: Final = "".join(partial_jsons)
+    return json.loads(streamed) if streamed else {}
+
+
+def _typescript_sdk_tool_inputs(chunks: Sequence[object]) -> list[object]:
+    events: Final = list(
+        _sdk_client(chunks).messages.create(
+            model="claude-sonnet-4-5", max_tokens=1, messages=[{"role": "user", "content": "hi"}], stream=True
+        )
+    )
+    tool_starts: Final = [
+        (event.index, event.content_block.input)
+        for event in events
+        if event.type == "content_block_start" and event.content_block.type == "tool_use"
+    ]
+    return [
+        _tool_input_as_the_typescript_sdk_reads(
+            start_input,
+            [
+                event.delta.partial_json
+                for event in events
+                if event.type == "content_block_delta" and event.index == index and event.delta.type == "input_json_delta"
+            ],
+        )
+        for index, start_input in tool_starts
+    ]
+
+
+def _data_line_event(line: str) -> dict[str, object] | None:
+    if not line.startswith("data:"):
+        return None
+    try:
+        event: Final = json.loads(line.removeprefix("data:"))
+    except json.JSONDecodeError:
+        return None
+    return event if isinstance(event, dict) else None
+
+
+def _is_tool_use_start(event: dict[str, object]) -> bool:
+    block: Final = event.get("content_block")
+    return event.get("type") == "content_block_start" and isinstance(block, dict) and block.get("type") == "tool_use"
+
+
+def _partial_jsons(events: Sequence[dict[str, object]], index: object) -> list[str]:
+    deltas: Final = [
+        event.get("delta")
+        for event in events
+        if event.get("type") == "content_block_delta" and event.get("index") == index
+    ]
+    return [
+        partial
+        for delta in deltas
+        if isinstance(delta, dict) and isinstance(partial := delta.get("partial_json"), str)
+    ]
+
+
+def _tool_inputs_read_line_by_line(chunks: Sequence[object]) -> list[object]:
+    lines: Final = httpx.Response(200, content=_body(chunks)).iter_lines()
+    events: Final = [event for line in lines if (event := _data_line_event(line)) is not None]
+    tool_indexes: Final = [event.get("index") for event in events if _is_tool_use_start(event)]
+    return [json.loads("".join(_partial_jsons(events, index)) or "{}") for index in tool_indexes]
 
 
 class TestToolPermissionGuardrailAnthropicStreamShapes:
@@ -4388,3 +4490,35 @@ class TestToolPermissionGuardrailAnthropicStreamShapes:
         out: Final = await self._drain(self._bash_ls_only("block"), chunks)
 
         assert _sdk_message(out) == _sdk_message(list(_LS_STREAM))
+        assert _typescript_sdk_tool_inputs(out) == [_LS]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks", _TOOL_ONLY_SHAPES_THE_CHECK_CANNOT_FORWARD.values(), ids=_TOOL_ONLY_SHAPES_THE_CHECK_CANNOT_FORWARD
+    )
+    async def test_allowed_call_the_check_cannot_forward_keeps_every_field_the_upstream_sent(
+        self, chunks: tuple[bytes, ...]
+    ):
+        out: Final = await self._drain(self._bash_ls_only("block"), chunks)
+
+        assert _sdk_message(out) == _sdk_message(list(_LS_ONLY_STREAM))
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "chunks",
+        (*_DENIED_CALL_SHAPES.values(), *_DENIED_CALLS_ONLY_A_LINE_SPLITTING_CLIENT_READS.values()),
+        ids=(*_DENIED_CALL_SHAPES, *_DENIED_CALLS_ONLY_A_LINE_SPLITTING_CLIENT_READS),
+    )
+    async def test_client_splitting_lines_at_every_unicode_break_never_reads_a_denied_call(
+        self, chunks: tuple[bytes, ...]
+    ):
+        out: Final = await self._drain(self._bash_ls_only("rewrite"), chunks)
+
+        assert _RM_RF not in _tool_inputs_read_line_by_line(out)
+
+    @pytest.mark.asyncio
+    async def test_check_judges_the_input_field_the_sdk_reads_when_a_delta_carries_another(self):
+        with pytest.raises(GuardrailRaisedException):
+            await self._drain(
+                self._bash_ls_only("block"), _DENIED_CALL_SHAPES["input-hidden-behind-a-text-field"]
+            )

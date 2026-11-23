@@ -761,14 +761,53 @@ def _with_tool_input_as_delta(
     return start, {"type": "content_block_delta", "index": event.get("index"), "delta": input_delta}
 
 
+_DELTA_FIELD_BY_TYPE: Final = MappingProxyType(
+    {
+        "text_delta": "text",
+        "citations_delta": "citation",
+        "input_json_delta": "partial_json",
+        "thinking_delta": "thinking",
+        "signature_delta": "signature",
+    }
+)
+
+_DELTA_FIELDS: Final = frozenset(_DELTA_FIELD_BY_TYPE.values())
+
+
+def _delta_as_its_type_reads(event: Mapping[str, object]) -> Mapping[str, object]:
+    """A block delta with only the field its ``type`` names, which is the one field an Anthropic SDK applies."""
+    delta: Final = as_str_mapping(event.get("delta")) if event.get("type") == "content_block_delta" else None
+    if delta is None:
+        return event
+    delta_type: Final = delta.get("type")
+    own_field: Final = _DELTA_FIELD_BY_TYPE.get(delta_type) if isinstance(delta_type, str) else None
+    return {
+        **event,
+        "delta": {key: value for key, value in delta.items() if key == own_field or key not in _DELTA_FIELDS},
+    }
+
+
 def _canonical_sse_frames(events: Sequence[Mapping[str, object]]) -> tuple[str, ...]:
+    sdk_events: Final = tuple(_delta_as_its_type_reads(event) for event in events)
     streamed_input_indexes: Final = frozenset(
-        index for event in events if (index := _streamed_input_index(event)) is not None
+        index for event in sdk_events if (index := _streamed_input_index(event)) is not None
     )
     canonical_events: Final = chain.from_iterable(
-        _with_tool_input_as_delta(event, streamed_input_indexes) for event in events
+        _with_tool_input_as_delta(event, streamed_input_indexes) for event in sdk_events
     )
     return tuple(f"event: {event.get('type')}\ndata: {json.dumps(event)}\n\n" for event in canonical_events)
+
+
+def anthropic_sse_frames_as_read(all_chunks: Sequence[object]) -> tuple[bytes, ...]:
+    """The stream's events exactly as assembly reads them, each as one ``event:`` line and one ``data:`` line.
+
+    Every field the upstream sent stays, so a caller that cannot forward a stream some client reads
+    differently than assembly does can deliver these frames instead of a response rebuilt from the assembly.
+    """
+    sse_stream: Final = _joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return ()
+    return tuple(frame.encode() for frame in _canonical_sse_frames(_parsed_sse_events(sse_stream)))
 
 
 def assemble_anthropic_sse_stream(
@@ -826,19 +865,6 @@ def _is_block_index(value: object, expected: int) -> bool:
     return type(value) is int and value == expected
 
 
-_DELTA_FIELD_BY_TYPE: Final = MappingProxyType(
-    {
-        "text_delta": "text",
-        "citations_delta": "citation",
-        "input_json_delta": "partial_json",
-        "thinking_delta": "thinking",
-        "signature_delta": "signature",
-    }
-)
-
-_DELTA_FIELDS: Final = frozenset(_DELTA_FIELD_BY_TYPE.values())
-
-
 def _carries_only_its_own_field(event: Mapping[str, object]) -> bool:
     delta: Final = as_str_mapping(event.get("delta"))
     delta_type: Final = delta.get("type") if delta is not None else None
@@ -848,19 +874,39 @@ def _carries_only_its_own_field(event: Mapping[str, object]) -> bool:
     return _DELTA_FIELDS.intersection(delta) == (frozenset((own_field,)) if own_field else frozenset())
 
 
-def _after_block_event(blocks: tuple[int, bool] | None, event: Mapping[str, object]) -> tuple[int, bool] | None:
+def _starts_with_input(event: Mapping[str, object]) -> bool:
+    block: Final = as_str_mapping(event.get("content_block"))
+    return block is not None and bool(block.get("input"))
+
+
+def _is_input_delta(event: Mapping[str, object]) -> bool:
+    delta: Final = as_str_mapping(event.get("delta"))
+    return delta is not None and delta.get("type") == "input_json_delta"
+
+
+_BlockOrder: TypeAlias = tuple[int, bool, bool]
+
+
+def _after_block_event(blocks: _BlockOrder | None, event: Mapping[str, object]) -> _BlockOrder | None:
+    """The blocks started so far, whether the last one is open, and whether it started with its input."""
     if blocks is None:
         return None
-    started, is_open = blocks
+    started, is_open, started_with_input = blocks
     index: Final = event.get("index")
     match event.get("type"):
         case "content_block_start":
-            return (started + 1, True) if not is_open and _is_block_index(index, started) else None
+            opens_next: Final = not is_open and _is_block_index(index, started)
+            return (started + 1, True, _starts_with_input(event)) if opens_next else None
         case "content_block_delta":
-            reads_alike: Final = is_open and _is_block_index(index, started - 1) and _carries_only_its_own_field(event)
+            reads_alike: Final = (
+                is_open
+                and _is_block_index(index, started - 1)
+                and _carries_only_its_own_field(event)
+                and not (started_with_input and _is_input_delta(event))
+            )
             return blocks if reads_alike else None
         case "content_block_stop":
-            return (started, False) if is_open and _is_block_index(index, started - 1) else None
+            return (started, False, False) if is_open and _is_block_index(index, started - 1) else None
         case _:
             return blocks
 
@@ -880,21 +926,27 @@ def anthropic_sse_reads_alike(all_chunks: Sequence[object]) -> bool:
     client puts a block delta on the block at that list position or index. Assembly reads every one of
     these the same way only when the names and types agree, ``message_start`` comes first with no content,
     and each block starts at the next index and takes its deltas before it stops. The SDKs apply a delta by
-    its ``type`` and assembly by the field it carries, so each delta carries only its type's field. A frame
-    named ``error`` may carry any data, since the SDKs raise on it and other clients read its type. A leading
-    byte order mark stays part of the first field name, as the Python SDK reads it, so these rules refuse it
-    wherever it changes what that SDK reads. No client dispatches a frame the stream never ended, so a stream
-    with one reads differently too.
+    its ``type`` and other clients by the field it carries, so each delta carries only its type's field. The
+    TypeScript SDK replaces a block's start ``input`` once an input delta arrives, even an empty one, and the
+    Python SDK keeps it, so a block that starts with its input takes no input delta. A frame named ``error``
+    may carry any data, since the SDKs raise on it and other clients read its type. A leading byte order mark
+    stays part of the first field name, as the Python SDK reads it, so these rules refuse it wherever it
+    changes what that SDK reads. No client dispatches a frame the stream never ended, and a client splitting
+    lines with ``str.splitlines`` also breaks a line at a form feed or U+2028, so a stream with either reads
+    differently too.
     """
     sse_stream: Final = _joined_sse_stream(all_chunks) or ""
     client_frames: Final = _client_frames(_frames_a_client_dispatches(sse_stream))
-    if client_frames != _client_frames(_sse_frames(sse_stream)):
+    sse_frames: Final = _sse_frames(sse_stream)
+    widest_frames: Final = _frames_of_the_widest_reader(sse_stream)
+    other_readings: Final = (sse_frames,) if widest_frames == sse_frames else (sse_frames, widest_frames)
+    if any(_client_frames(frames) != client_frames for frames in other_readings):
         return False
     named_data: Final = _named_data(client_frames)
     if not all(_names_its_own_type(name, data) for name, data in named_data):
         return False
     events: Final = tuple(event for event in _client_events(named_data) if event.get("type") != "ping")
-    return _opens_with_an_empty_message(events) and reduce(_after_block_event, events, (0, False)) is not None
+    return _opens_with_an_empty_message(events) and reduce(_after_block_event, events, (0, False, False)) is not None
 
 
 def _is_error_payload(payload: str) -> bool:

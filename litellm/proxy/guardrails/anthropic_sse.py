@@ -25,6 +25,9 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_unfinished_blocks,
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_frames_as_read as anthropic_sse_frames_as_read,  # noqa: PLC0414  # public re-export
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_reads_alike as anthropic_sse_reads_alike,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
