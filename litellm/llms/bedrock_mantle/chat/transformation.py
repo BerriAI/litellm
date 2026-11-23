@@ -22,6 +22,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
 )
+from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
@@ -157,6 +158,21 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             for param, value in (("max_completion_tokens", mapped_params["max_tokens"]), *mapped_params.items())
             if param != "max_tokens"
         }
+
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        optional_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        litellm_params: dict[str, object],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        headers: dict[str, str],  # mutable-ok: OpenAIGPTConfig.transform_request signature
+    ) -> dict[str, object]:  # mutable-ok: OpenAIGPTConfig.transform_request signature
+        sent_messages: Final = (
+            [with_mistral_tool_call_ids(message) for message in messages]
+            if BaseAWSLLM.get_bedrock_invoke_provider(model) == "mistral"
+            else messages
+        )
+        return super().transform_request(model, sent_messages, optional_params, litellm_params, headers)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # OpenAILikeChatConfig types its params and result as bare dicts
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

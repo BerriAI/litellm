@@ -32,6 +32,7 @@ Terminal notifications share the selected response or exception. An ordinary not
 - Use standard PyO3 ownership and conversion APIs
   - Prefer `Bound<'py, T>` for attached operations/results, `Py<T>` for retention. Binding/unbinding does not copy payloads
   - Use `pythonize` for selected Serde data, never a JSON-text round trip. Share conversion with `Pythonized<T>`
+  - Read Python input through `from_py` or `from_py_argument`, never `pythonize::depythonize`, so a `dict` subclass converts by its items as `json.dumps` sends it, never as a dataclass
   - Preserve `PythonizeError`'s standard conversion into `PyErr`. Do not stringify original Python exceptions into new `ValueError`s
   - Keep serializer-panic containment in `Pythonized<T>`: async output conversion can run in an unjoined blocking task and otherwise strand delivery
 - Use `Python::detach` for Rust-only work. Python operations require attachment

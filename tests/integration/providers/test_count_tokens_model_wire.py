@@ -499,7 +499,13 @@ def test_token_count_model_counts_the_anthropic_body_converted_like_the_provider
             (_OPENAI_COUNT_TARGET, _OPENAI_COUNT_MODEL),
         ), counts
         primary: Final = counts[0][2]
-        assert primary["instructions"] == _SYSTEM, primary
+        assert "instructions" not in primary, primary
+        assert isinstance(primary["input"], list), primary
+        assert primary["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": _SYSTEM}],
+        }, primary
         text: Final = primary.get("text")
         assert isinstance(text, dict) and isinstance(text.get("format"), dict), primary
         input_items: Final = primary["input"]
