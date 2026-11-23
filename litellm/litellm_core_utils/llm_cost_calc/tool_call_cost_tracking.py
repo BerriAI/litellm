@@ -39,10 +39,10 @@ def _output_item_field(output_item: object, field: str) -> object:
 
 
 _IMAGE_TOKEN_COST_FIELDS: Final = (
-        "input_cost_per_token",
-        "input_cost_per_image_token",
-        "output_cost_per_image_token",
-        "output_cost_per_token",
+    "input_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+    "output_cost_per_token",
 )
 
 
@@ -294,63 +294,63 @@ class StandardBuiltInToolCostTracking:
             verbose_logger.debug("Could not price Responses API image_generation_call item: %s", e)
             return 0.0
 
-        @staticmethod
-            def _agreed_deployment_model_info(tool_model: str) -> ModelInfo | None:
-                        try:
-                                        from litellm.router_rust.surface.replay import live_registries
-                            
-                            registries: Final = live_registries()
-except Exception:  # noqa: BLE001  # router surface unavailable; caller falls back to the cost map
+    @staticmethod
+    def _agreed_deployment_model_info(tool_model: str) -> ModelInfo | None:
+        try:
+            from litellm.router_rust.surface.replay import live_registries
+
+            registries: Final = live_registries()
+        except Exception:  # noqa: BLE001  # router surface unavailable; caller falls back to the cost map
             return None
         agreed: ModelInfo | None = None
         agreed_rates: tuple[object, ...] | None = None
         for registry in registries:
-                        indices: Final = getattr(registry, "_core_model_name_to_deployment_indices", None)
-                        model_list: Final = getattr(registry, "_core_model_list", None)
-                        if indices is None or model_list is None:
-                                            continue
-                                        try:
-                                                            positions: Final = indices.get(tool_model)
-except Exception:  # noqa: BLE001  # a registry mid-teardown must not break cost calculation
+            indices: Final = getattr(registry, "_core_model_name_to_deployment_indices", None)
+            model_list: Final = getattr(registry, "_core_model_list", None)
+            if indices is None or model_list is None:
+                continue
+            try:
+                positions: Final = indices.get(tool_model)
+            except Exception:  # noqa: BLE001  # a registry mid-teardown must not break cost calculation
                 continue
             if not isinstance(positions, Sequence) or isinstance(positions, str):
-                                continue
-                            for position in positions:
-                                                if not isinstance(position, int) or position >= len(model_list):
-                                                                        continue
-                                                                    deployment_id: Final = _output_item_field(
-                                                                                            _output_item_field(model_list[position], "model_info"), "id"
-                                                                    )
-                if not isinstance(deployment_id, str) or not deployment_id:
-                                        return None
-                deployment_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=deployment_id)
-                if deployment_info is None:
-                                        return None
-                rates: Final = tuple(deployment_info.get(field) for field in _IMAGE_TOKEN_COST_FIELDS)
-                if agreed_rates is None:
-                                        agreed, agreed_rates = deployment_info, rates
-elif rates != agreed_rates:
-                    return None
+                continue
+            for position in positions:
+                if not isinstance(position, int) or position >= len(model_list):
+                    continue
+                    deployment_id: Final = _output_item_field(
+                        _output_item_field(model_list[position], "model_info"), "id"
+                    )
+                    if not isinstance(deployment_id, str) or not deployment_id:
+                        return None
+                    deployment_info: Final = StandardBuiltInToolCostTracking._safe_get_model_info(model=deployment_id)
+                    if deployment_info is None:
+                        return None
+                    rates: Final = tuple(deployment_info.get(field) for field in _IMAGE_TOKEN_COST_FIELDS)
+                    if agreed_rates is None:
+                        agreed, agreed_rates = deployment_info, rates
+                    elif rates != agreed_rates:
+                        return None
         return agreed
 
-@staticmethod
+    @staticmethod
     def _image_generation_token_cost(
         response_object: ResponsesAPIResponse, tool_model: str, custom_llm_provider: str | None
     ) -> float | None:
         tool_usage: Final = _responses_tool_usage(response_object)
         if tool_usage is None or tool_usage.image_gen is None or tool_usage.image_gen.total_tokens <= 0:
             return None
-                model_info: ModelInfo
+        model_info: ModelInfo
         deployment_model_info: Final = StandardBuiltInToolCostTracking._agreed_deployment_model_info(tool_model)
         if deployment_model_info is not None:
-                        model_info = deployment_model_info
-else:
+            model_info = deployment_model_info
+        else:
             try:
-                                model_info = litellm.get_model_info(model=tool_model, custom_llm_provider=custom_llm_provider)
-except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
+                model_info = litellm.get_model_info(model=tool_model, custom_llm_provider=custom_llm_provider)
+            except Exception as e:  # noqa: BLE001  # get_model_info raises bare Exception for unmapped models
                 verbose_logger.debug("Could not resolve pricing for image tool model %s: %s", tool_model, e)
                 return None
-        image_gen: Final = tool_usage.image_gen
+                image_gen: Final = tool_usage.image_gen
         input_details: Final = image_gen.input_tokens_details
         output_details: Final = image_gen.output_tokens_details
         token_cost: Final = (
