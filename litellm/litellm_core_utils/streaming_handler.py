@@ -1389,6 +1389,15 @@ class CustomStreamWrapper:
         for attribute in special_attributes:
             if self._has_special_delta_attribute(delta, attribute):
                 self._copy_delta_attribute(delta, model_response.choices[0].delta, attribute)
+        provider_fields: Final = stored_attribute(delta, "provider_specific_fields")
+        if isinstance(provider_fields, Mapping) and provider_fields:
+            target_delta: Final = model_response.choices[0].delta
+            existing_fields: Final = stored_attribute(target_delta, "provider_specific_fields")
+            target_delta.provider_specific_fields = (
+                {**existing_fields, **provider_fields}
+                if isinstance(existing_fields, Mapping)
+                else dict(provider_fields)
+            )
 
     def return_processed_chunk_logic(  # noqa: C901
         self,
