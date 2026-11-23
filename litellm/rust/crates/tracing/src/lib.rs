@@ -16,10 +16,9 @@ mod layer;
 mod processing;
 mod scrubbed;
 
-pub use layer::sink_layer;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use scrubbed::{KeyLength, Scrubbed};
-pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
+pub use tracing::{Level, Metadata};
 
 pub struct ByteChunk<'a>(&'a [u8]);
 

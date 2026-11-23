@@ -4637,6 +4637,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "tracing",
  "url",
 ]
 
@@ -4668,7 +4669,6 @@ dependencies = [
  "litellm-cost",
  "litellm-error",
  "litellm-python-compat",
- "litellm-tracing",
  "macro_rules_attribute",
  "rstest",
  "schemars 1.2.2",
@@ -4679,6 +4679,7 @@ dependencies = [
  "strum",
  "thiserror 2.0.21",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -4694,12 +4695,12 @@ dependencies = [
  "litellm-http",
  "litellm-s3",
  "litellm-secret-value",
- "litellm-tracing",
  "percent-encoding",
  "reqwest",
  "rstest",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -5079,12 +5080,12 @@ dependencies = [
  "litellm-env",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "rstest",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "veil",
  "wiremock",
 ]
@@ -5122,7 +5123,6 @@ dependencies = [
  "litellm-python-compat",
  "litellm-secret-value",
  "litellm-secrets-types",
- "litellm-tracing",
  "moka",
  "percent-encoding",
  "rcgen",
@@ -5133,6 +5133,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tracing",
  "url",
  "veil",
  "wiremock",

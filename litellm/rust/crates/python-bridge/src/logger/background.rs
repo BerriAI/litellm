@@ -205,7 +205,7 @@ mod tests {
             Arc::new(Background::new(probe, 8, usize::MAX)),
             runtime.handle().clone(),
         ));
-        drop(runtime.spawn(async move { logger.scope(|| litellm_tracing::warn!("first")) }));
+        drop(runtime.spawn(async move { logger.scope(|| tracing::warn!("first")) }));
         let release = probed.release.clone();
         drop(runtime.spawn(async move { release.send(()).unwrap() }));
 
@@ -224,12 +224,12 @@ mod tests {
             runtime.handle().clone(),
         ));
         let wait = Duration::from_secs(5);
-        logger.scope(|| litellm_tracing::warn!("delivering"));
+        logger.scope(|| tracing::warn!("delivering"));
         probed.started.recv_timeout(wait).unwrap();
         logger.scope(|| {
-            litellm_tracing::warn!("queued");
-            litellm_tracing::warn!("dropped");
-            litellm_tracing::warn!("dropped too");
+            tracing::warn!("queued");
+            tracing::warn!("dropped");
+            tracing::warn!("dropped too");
         });
         probed.release.send(()).unwrap();
         probed.release.send(()).unwrap();
@@ -258,11 +258,11 @@ mod tests {
             runtime.handle().clone(),
         ));
         let wait = Duration::from_secs(5);
-        logger.scope(|| litellm_tracing::warn!("delivering"));
+        logger.scope(|| tracing::warn!("delivering"));
         probed.started.recv_timeout(wait).unwrap();
         logger.scope(|| {
-            litellm_tracing::warn!("queued");
-            litellm_tracing::warn!("x");
+            tracing::warn!("queued");
+            tracing::warn!("x");
         });
         probed.release.send(()).unwrap();
         probed.release.send(()).unwrap();
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(probed.records.recv_timeout(wait).unwrap(), "queued");
         assert_eq!(probed.lost.recv_timeout(wait).unwrap(), 1);
 
-        logger.scope(|| litellm_tracing::warn!("next"));
+        logger.scope(|| tracing::warn!("next"));
         probed.release.send(()).unwrap();
         assert_eq!(probed.records.recv_timeout(wait).unwrap(), "next");
     }
