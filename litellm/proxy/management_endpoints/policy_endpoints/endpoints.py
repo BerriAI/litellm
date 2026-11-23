@@ -813,6 +813,7 @@ async def _stream_llm_competitor_names(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=COMPETITOR_LLM_TEMPERATURE,
+        drop_params=True,
         stream=True,
     )
     buffer = ""
@@ -957,6 +958,7 @@ async def _generate_competitor_variations(competitors: list, model: str = DEFAUL
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         return parse_variations_response(raw, capped)
@@ -1000,6 +1002,7 @@ async def _discover_competitors_via_llm(prompt: str, model: str = DEFAULT_COMPET
             model=model,
             messages=[{"role": "user", "content": prompt}],
             temperature=COMPETITOR_LLM_TEMPERATURE,
+            drop_params=True,
         )
         raw: Final = response.choices[0].message.content or ""
         competitors: Final = [

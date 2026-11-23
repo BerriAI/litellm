@@ -11,6 +11,7 @@ from litellm.proxy.db.budget_window_spend_writer import (
     commit_window_spend_updates,
     open_window_spend_row,
     roll_window_spend_row,
+    roll_window_spend_rows,
     spend_logs_seed_totals,
 )
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
@@ -468,6 +469,25 @@ async def test_roll_window_spend_row_is_conditional_on_the_stored_window_being_o
     assert "WHERE entity_type = $1 AND entity_id = $2 AND window_duration = $3" in normalized
     assert "AND window_start < ($4::timestamptz AT TIME ZONE 'UTC')" in normalized
     assert params[:4] == ("team", "t1", "30d", datetime(2026, 8, 31))
+
+
+@pytest.mark.asyncio
+async def test_many_window_rolls_deduplicate_at_the_newest_start_in_one_guarded_update() -> None:
+    transaction: Final = _FakeDB()
+    shifted: Final = WINDOW_B.astimezone(timezone(timedelta(hours=-7)))
+
+    await roll_window_spend_rows(
+        transaction, "team", "t1",
+        (("30d", shifted), ("1d", WINDOW_A), ("30d", WINDOW_A), ("30d", WINDOW_B.replace(tzinfo=None))),
+    )
+
+    ((query, params),) = transaction.execute_raw_calls
+    assert params[:4] == ("team", "t1", ("1d", "30d"), ("2026-08-01T00:00:00+00:00", "2026-08-31T00:00:00+00:00"))
+    assert "stored.window_start < pending.window_start" in query
+    assert "stored.window_duration = pending.duration" in query
+    assert "stored.entity_type = $1 AND stored.entity_id = $2" in query
+    await roll_window_spend_rows(transaction, "team", "t1", ())
+    assert len(transaction.execute_raw_calls) == 1
 
 
 @pytest.mark.asyncio

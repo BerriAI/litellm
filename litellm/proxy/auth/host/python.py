@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -97,6 +98,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     get_management_object_ttl,
 )
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
@@ -108,6 +110,7 @@ from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
+    from litellm.proxy.common_utils.state_cache import StateCache
     from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
     from litellm.router import Router
@@ -115,6 +118,7 @@ if TYPE_CHECKING:
 JWKS_FETCH_ATTEMPTS: Final = 3
 JWKS_FETCH_RETRY_BACKOFF_SECONDS: Final = 0.25
 OIDC_DISCOVERY_PATH: Final = ".well-known/openid-configuration"
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class AgentLookup(Protocol):
@@ -194,6 +198,7 @@ class PythonAuthHost:
     http: HttpCall | None
     prisma_client: PrismaClient | None
     user_api_key_cache: UserApiKeyCache
+    jwks_cache: StateCache
     proxy_logging_obj: ProxyLogging
     llm_router: Router | None
     llm_model_list: Sequence[object] | None
@@ -337,6 +342,7 @@ class PythonAuthHost:
                             **key.model_dump(exclude_none=True),
                             **team_grants(team, membership, user.user_id),
                             "user_role": get_user_role(user),
+                            "user_email": user.user_email,
                             "models": () if team is not None else user_models(user),
                         }
                     )
@@ -513,7 +519,7 @@ class PythonAuthHost:
             what: Final = "OIDC discovery endpoint" if discovery else "JWKS endpoint"
             raise Exception(f"JWT Auth: {what} {url} returned status {response.status_code}: {response.text}")
         try:
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             if discovery:
                 raise Exception(f"JWT Auth: Failed to parse OIDC discovery document at {url}: {e}")
@@ -529,21 +535,37 @@ class PythonAuthHost:
             )
             if response.status_code != 200:
                 raise Exception(f"OIDC UserInfo endpoint returned status {response.status_code}: {response.text}")
-            return response.json()
+            return _DECODED_JSON.validate_python(response.json())
         except Exception as e:
             verbose_proxy_logger.error("Error fetching OIDC UserInfo: %s", e)
             raise Exception(f"Failed to fetch OIDC UserInfo: {e}")
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cached_json(self, key: str) -> object:
-        return await self.user_api_key_cache.async_get_cache(key)
+    async def cached_document(self, key: str) -> object:
+        return _DECODED_JSON.validate_python(await self.jwks_cache.async_get_cache(key))
 
     @with_service_target(AUTH_OBJECTS_TARGET)
-    async def cache_json(self, key: str, value: object, ttl_seconds: float) -> None:
-        await self.user_api_key_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
+    async def cache_document(self, key: str, value: object, ttl_seconds: float) -> None:
+        await self.jwks_cache.async_set_cache(key=key, value=value, ttl=ttl_seconds)
 
-    async def forget_json(self, key: str) -> None:
-        await self.user_api_key_cache.async_delete_cache(key)
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
+        return await self.user_api_key_cache.async_get_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer)
+        )
+
+    @with_service_target(AUTH_OBJECTS_TARGET)
+    async def cache_key_mapping(
+        self, claim_field: str, claim_value: str, issuer: str | None, value: object, ttl_seconds: float
+    ) -> None:
+        await self.user_api_key_cache.async_set_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer), value, ttl=ttl_seconds
+        )
+
+    async def forget_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> None:
+        await self.user_api_key_cache.async_delete_cache(
+            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer).key
+        )
 
     async def _team(
         self, team_id: str, *, upsert: bool = False, check_db_only: bool = False
@@ -657,7 +679,7 @@ class PythonAuthHost:
 
     async def _recache_user(self, user: LiteLLM_UserTable) -> LiteLLM_UserTable:
         await self.user_api_key_cache.async_set_cache(
-            key=user.user_id,
+            key=AuthObject.user(user.user_id),
             value=user,
             model_type=LiteLLM_UserTable,
             ttl=get_management_object_ttl(self.user_api_key_cache),
@@ -830,6 +852,7 @@ def proxy_host(
         global_agent_registry,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # runtime globals, rebound on every config load
+        jwks_cache,
         jwt_http_handler,
         litellm_jwtauth,
         litellm_proxy_admin_name,
@@ -847,6 +870,7 @@ def proxy_host(
         http=http,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        jwks_cache=jwks_cache,
         proxy_logging_obj=proxy_logging_obj,
         llm_router=llm_router,
         llm_model_list=llm_model_list,

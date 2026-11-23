@@ -18,10 +18,10 @@ import re
 import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
+from urllib.parse import quote, unquote
 
 import httpx
 import openai
@@ -57,7 +57,13 @@ from litellm.constants import (
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import guardrail_request_data_with_streaming, is_guardrail_intervention
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
-from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_or_none
+from litellm.litellm_core_utils.core_helpers import (
+    SupportsGet,
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_get,
+)
 from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -210,7 +216,7 @@ from litellm.types.passthrough_endpoints.tinyfish import (
     is_allowed_tinyfish_endpoint,
 )
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
-from litellm.types.router import LiteLLMParamsTypedDict
+from litellm.types.router import LiteLLMParamsTypedDict, RouterRateLimitError
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_PRICING_FIELDS,
     SERVER_DERIVED_PRICING_FIELDS,
@@ -359,8 +365,12 @@ def _string_keyed_mapping(value: object) -> Mapping[str, object] | None:
     return None
 
 
-async def _json_request_body(request: Request) -> Mapping[str, object]:
-    return await request.json()
+async def _json_request_value(request: Request) -> object:
+    return _DECODED_JSON.validate_python(await request.json())
+
+
+async def _json_request_body(request: Request) -> SupportsGet:
+    return require_get(await _json_request_value(request))
 
 
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
@@ -488,6 +498,53 @@ async def llm_passthrough_factory_proxy_route(
     return received_value
 
 
+_GEMINI_SINGLE_FILE_PATH: Final = re.compile(r"(?:^|/)files/([^/:]+)(?::download)?/?$")
+
+
+@runtime_checkable
+class _ProviderFileAccessGuard(Protocol):
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
+
+
+_METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
+
+
+_MAX_PATH_DECODE_ROUNDS: Final = 8
+
+
+def _fully_decoded_path(path: str) -> str | None:
+    decoded: Final = reduce(lambda current, _: unquote(current), range(_MAX_PATH_DECODE_ROUNDS), path)
+    return decoded if unquote(decoded) == decoded else None
+
+
+def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
+    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
+    return not methods.isdisjoint(("GET", "DELETE"))
+
+
+def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
+    single_file: Final = _GEMINI_SINGLE_FILE_PATH.search(posixpath.normpath(f"/{decoded_path}".replace("\\", "/")))
+    return single_file.group(1) if single_file is not None else None
+
+
+async def _enforce_gemini_passthrough_file_ownership(
+    request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
+) -> None:
+    if not _is_gemini_get_or_delete(request.method, request.headers):
+        return
+    decoded_path: Final = _fully_decoded_path(path)
+    if decoded_path is None:
+        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+    file_id: Final = _gemini_passthrough_file_id(decoded_path)
+    if file_id is None:
+        return
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
+    if isinstance(hook, _ProviderFileAccessGuard):
+        await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+
+
 @router.api_route(
     "/gemini/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -519,6 +576,7 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
+    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
@@ -1683,6 +1741,9 @@ async def handle_bedrock_passthrough_router_model(
         )
 
 
+_ROUTING_CAPACITY_MISSES: Final = (RouterRateLimitError, litellm.RateLimitError)
+
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -1699,7 +1760,7 @@ async def handle_bedrock_count_tokens(
     """
     litellm_call_id: Final = resolve_litellm_call_id(request.headers.get(LITELLM_CALL_ID_HEADER))
     return await answered_with_litellm_call_id(
-        _bedrock_count_tokens(user_api_key_dict, request_body, litellm_call_id),
+        _bedrock_count_tokens(request, user_api_key_dict, request_body, litellm_call_id),
         litellm_call_id,
         request,
         fastapi_response,
@@ -1707,7 +1768,7 @@ async def handle_bedrock_count_tokens(
 
 
 async def _bedrock_count_tokens(
-    user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
+    request: Request, user_api_key_dict: UserAPIKeyAuth, request_body: dict[str, object], litellm_call_id: str
 ) -> Mapping[str, object]:
     from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import (
@@ -1715,7 +1776,8 @@ async def _bedrock_count_tokens(
         BedrockCountTokensRequestError,
         is_caller_refusal,
     )
-    from litellm.proxy.proxy_server import llm_router
+    from litellm.proxy.litellm_pre_call_utils import request_routing_metadata
+    from litellm.proxy.proxy_server import route_count
 
     try:
         # Initialize the handler
@@ -1730,25 +1792,32 @@ async def _bedrock_count_tokens(
                 None,
             )
 
-        # Get model parameters from router
+        route: Final = await route_count(
+            model, None, user_api_key_dict, request_routing_metadata(request, request_body, user_api_key_dict)
+        )
+        deployment: Final = route.usable_deployment()
+        if route.miss is not None and (deployment is None or not isinstance(route.miss, _ROUTING_CAPACITY_MISSES)):
+            raise rejected_token_count(
+                HTTPException(
+                    status_code=int(proxy_exception_status_code(str(route.miss), "400")),
+                    detail={"error": str(route.miss)},
+                ),
+                litellm_call_id,
+                model,
+            )
+        model_litellm_params: Final = as_str_mapping(None if deployment is None else deployment.get("litellm_params"))
+        deployment_model: Final = None if model_litellm_params is None else model_litellm_params.get("model")
+        resolved_model: Final = deployment_model if isinstance(deployment_model, str) else model
+        # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
         litellm_params: Final = {
+            **{
+                key: value
+                for key, value in (model_litellm_params or {}).items()
+                if key not in ("user_api_key_dict", "metadata", "litellm_metadata")
+            },
             "user_api_key_dict": user_api_key_dict,
             "litellm_metadata": get_passthrough_router_request_metadata(user_api_key_dict),
         }
-        resolved_model = model  # Default fallback
-
-        deployments: Final = llm_router.registry().deployments(model) if llm_router else None
-        deployment: Final = deployments[0] if deployments else None
-        if deployment is not None:
-            model_litellm_params: Final = deployment.get("litellm_params", {})
-
-            if "model" in model_litellm_params:
-                resolved_model = model_litellm_params["model"]
-
-            # Copy all litellm_params - BaseAWSLLM will handle AWS credential discovery
-            for key, value in model_litellm_params.items():
-                if key not in ("user_api_key_dict", "metadata", "litellm_metadata"):
-                    litellm_params[key] = value
 
         verbose_proxy_logger.debug("Count tokens litellm_params: %s", litellm_params)
         verbose_proxy_logger.debug("Resolved model: %s", resolved_model)
@@ -1786,6 +1855,8 @@ async def _bedrock_count_tokens(
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
+    except ProxyException as e:
+        raise rejected_token_count(e, litellm_call_id, _optional_str(request_body.get("model")))
     except Exception as e:
         verbose_proxy_logger.error("Error in handle_bedrock_count_tokens: %s", e)
         raise HTTPException(status_code=500, detail={"error": f"CountTokens processing error: {e}"})
@@ -1967,7 +2038,7 @@ async def bedrock_proxy_route(
     agent_runtime_aws: Final = BedrockAgentRuntimeAWS()
     # Assuming the body contains JSON data, parse it
     try:
-        data: Final = await _json_request_body(request)
+        data: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
     prepped: Final = await run_aws_signing(
@@ -2066,11 +2137,12 @@ async def comprehend_medical_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not a Comprehend Medical request member")
@@ -2334,11 +2406,12 @@ async def transcribe_proxy_route(
         )
 
     try:
-        data: Final = await _json_request_body(request)
+        payload: Final = await _json_request_value(request)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"Request body must be valid JSON: {e}")
 
-    if not isinstance(data, dict):
+    data: Final = as_str_mapping(payload)
+    if data is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     if "stream" in data:
         raise HTTPException(status_code=400, detail="'stream' is not an Amazon Transcribe request member")

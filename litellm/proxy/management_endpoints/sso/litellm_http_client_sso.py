@@ -208,7 +208,7 @@ def create_generic_sso_provider(
     name: str,
     discovery_document: DiscoveryDocument,
     response_convertor: Callable[[Mapping[str, object], httpx.AsyncClient | None], OpenID],
-) -> type[SSOBase]:
+) -> type[LiteLLMHttpClientSSO]:
     provider: Final = create_provider(
         name=name,
         discovery_document=discovery_document,
