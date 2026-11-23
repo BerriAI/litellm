@@ -2,6 +2,7 @@
 Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
@@ -31,14 +32,14 @@ class _ProxyModelList(BaseModel):
 
 
 class LiteLLMProxyChatConfig(OpenAIGPTConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         params_list: Final = super().get_supported_openai_params(model)
         params_list.extend(OPENAI_CHAT_COMPLETION_PARAMS)
         return params_list
 
     def _map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -143,10 +144,10 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # don't transform the request
         return {
             "model": model,
@@ -158,10 +159,10 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         # don't transform the request
         return {
             "model": model,

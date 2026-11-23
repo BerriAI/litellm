@@ -318,7 +318,7 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
             return False
         return cls.is_reasoning_effort_level_explicitly_disabled(model, level)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         if self.is_model_gpt_5_search_model(model):
             return [
                 "max_tokens",
