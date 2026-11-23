@@ -2603,6 +2603,32 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
     ]
 
 
+def test_a_cache_mark_on_the_last_reminder_makes_no_gemini_cache_and_keeps_the_reminder_in_place(
+    local_model_cost_map,
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    reminder: Final = "remaining budget " * 3000
+
+    litellm.completion(
+        model="gemini/gemini-flash-latest",
+        messages=[
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "question 1"},
+            {"role": "system", "content": reminder},
+        ],
+        cache_control_injection_points=[{"location": "message", "index": -1}],
+        api_key="test-key",
+        client=_recording_gemini_client(calls),
+    )
+
+    generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert [call for call in calls if call.url.path.endswith("/cachedContents")] == []
+    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": reminder}]}
+    ]
+
+
 def test_an_uncached_leading_system_message_stays_a_system_message_beside_the_converted_reminder():
     from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
 

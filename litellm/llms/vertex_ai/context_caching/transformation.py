@@ -117,6 +117,15 @@ _TOOL_RESULT_ROLES: Final = frozenset({"tool", "function"})
 _MODEL_TURN_ROLES: Final = frozenset({"assistant", *_TOOL_RESULT_ROLES})
 
 
+def _cached_block_start(
+    messages: Sequence[AllMessageValues], leading_run_end: int, block_start: int, block_end: int
+) -> int:
+    return next(
+        (idx for idx in range(block_start, block_end) if idx < leading_run_end or not is_system_message(messages[idx])),
+        block_end,
+    )
+
+
 def _cached_block_end(messages: Sequence[AllMessageValues], block_start: int, block_end: int) -> int:
     next_turn: Final = next(
         (idx for idx in range(block_end, len(messages)) if not is_system_message(messages[idx])), None
@@ -140,9 +149,10 @@ def separate_cached_messages(
     becomes the system_instruction. Every later system message comes back already converted to a user turn in
     place, so a reminder added each turn is never hoisted into a system_instruction beside the cachedContent. A
     system run that ends the cached block with only system messages between it and a tool result stays out of
-    the cached block, since its user turn goes after that tool result. A model without system message support
-    gets its later system messages back as they are, so the request renders them the way it does without a
-    cache.
+    the cached block, since its user turn goes after that tool result, and so does a later system run that
+    starts the cached block, since the cache would put it ahead of the turns it follows. A model without system
+    message support gets its later system messages back as they are, so the request renders them the way it
+    does without a cache.
     """
     filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
     if not filtered_messages:
@@ -150,11 +160,9 @@ def separate_cached_messages(
 
     leading_system_run, _ = split_leading_system_run(messages)
     last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    block_start: Final = filtered_messages[0][0]
-    cached_block: Final = range(
-        block_start,
-        _cached_block_end(messages, block_start, filtered_messages[last_continuous_block_idx][0] + 1),
-    )
+    marked_end: Final = filtered_messages[last_continuous_block_idx][0] + 1
+    block_start: Final = _cached_block_start(messages, len(leading_system_run), filtered_messages[0][0], marked_end)
+    cached_block: Final = range(block_start, _cached_block_end(messages, block_start, marked_end))
     uncached: Final = tuple((idx, message) for idx, message in enumerate(messages) if idx not in cached_block)
     later_messages: Final = tuple(message for idx, message in uncached if idx >= len(leading_system_run))
     return (
