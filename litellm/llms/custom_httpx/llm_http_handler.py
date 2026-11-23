@@ -3463,13 +3463,7 @@ class BaseLLMHTTPHandler:
             )
             result: Final = final_response if final_response is not None else initial_response
             if converted_stream_requested(agentic_kwargs) and not agentic_kwargs.get("_agentic_loop_depth"):
-                return self._wrap_responses_response_as_fake_stream(
-                    result=result,
-                    model=model,
-                    responses_api_provider_config=responses_api_provider_config,
-                    logging_obj=logging_obj,
-                    custom_llm_provider=custom_llm_provider,
-                )
+                return replay_as_stream(response=self._completed_result_as_raw_response(result))
             return result
 
         return initial_response
@@ -3684,13 +3678,7 @@ class BaseLLMHTTPHandler:
             and converted_stream_requested(agentic_kwargs)
             and not agentic_kwargs.get("_agentic_loop_depth")
         ):
-            return self._wrap_responses_response_as_fake_stream(
-                result=result,
-                model=model,
-                responses_api_provider_config=responses_api_provider_config,
-                logging_obj=logging_obj,
-                custom_llm_provider=custom_llm_provider,
-            )
+            return replay_as_stream(response=self._completed_result_as_raw_response(result))
         return result
 
     async def async_delete_response_api_handler(
@@ -6438,35 +6426,10 @@ class BaseLLMHTTPHandler:
                 str(e),
             )
 
-    def _wrap_responses_response_as_fake_stream(
-        self,
-        result: ResponsesAPIResponse,
-        model: str,
-        responses_api_provider_config: BaseResponsesAPIConfig,
-        logging_obj: "LiteLLMLoggingObj",
-        custom_llm_provider: str,
-    ) -> MockResponsesAPIStreamingIterator:
-        """
-        Wrap a completed responses result as a synthetic stream.
-
-        Used when an interceptor forced stream=False to run the agentic loop on
-        the non-streaming path, but the caller originally asked for streaming.
-        """
-        import httpx
-
-        from litellm.responses.streaming_iterator import (
-            MockResponsesAPIStreamingIterator,
-        )
-
+    @staticmethod
+    def _completed_result_as_raw_response(result: ResponsesAPIResponse) -> httpx.Response:
         payload: Final = result.model_dump() if hasattr(result, "model_dump") else result
-        raw_response: Final = httpx.Response(status_code=200, json=payload)
-        return MockResponsesAPIStreamingIterator(
-            response=raw_response,
-            model=model,
-            responses_api_provider_config=responses_api_provider_config,
-            logging_obj=logging_obj,
-            custom_llm_provider=custom_llm_provider,
-        )
+        return httpx.Response(status_code=200, json=payload)
 
     def _maybe_wrap_in_fake_stream(
         self,
