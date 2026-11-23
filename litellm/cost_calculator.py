@@ -2606,7 +2606,7 @@ def completion_cost(
                     and (
                         ai21_catalog_cost := _cost_or_none(
                             lambda: completion_cost(
-                                completion_response=completion_response,
+                                completion_response=priced_response,
                                 model=requested_model,
                                 prompt=prompt,
                                 messages=messages,
