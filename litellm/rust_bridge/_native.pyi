@@ -289,13 +289,13 @@ class NativeDeploymentHealth:
     def set_sync(self, states: Mapping[str, object], ttl_seconds: float) -> None: ...
 
 @final
-@final
 class ActiveMember:
     @property
     def member(self) -> str: ...
     @property
     def priority_class(self) -> str: ...
 
+@final
 class NativeActiveTeams:
     def __new__(
         cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
@@ -307,6 +307,7 @@ class NativeActiveTeams:
     ) -> Future[list[ActiveMember]]: ...
     def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
 
+@final
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -2512,6 +2513,7 @@ __all__ = [
     "NativeAdmission",
     "NativeAuthCache",
     "NativeBudgets",
+    "NativeCacheInvalidation",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
