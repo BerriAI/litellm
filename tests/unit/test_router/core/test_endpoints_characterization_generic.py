@@ -573,6 +573,38 @@ async def test_llm_passthrough_rewrites_the_group_name_in_the_endpoint_to_the_pr
     )
 
 
+@pytest.mark.parametrize(
+    "model, endpoint, expected",
+    [
+        (
+            "bedrock/invoke/us.anthropic.claude-sonnet-5-5",
+            "/model/g/invoke-with-response-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/invoke-with-response-stream",
+        ),
+        (
+            "bedrock/converse/us.anthropic.claude-sonnet-5-5",
+            "/model/g/converse-stream",
+            "/model/us.anthropic.claude-sonnet-5-5/converse-stream",
+        ),
+        ("hosted_vllm/openai/gpt-oss-20b", "/v1/models/g", "/v1/models/openai/gpt-oss-20b"),
+    ],
+)
+async def test_llm_passthrough_sends_the_provider_model_id_without_a_bedrock_route_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, endpoint: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint=endpoint)
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
+async def test_llm_passthrough_sends_a_callback_routed_model_with_no_provider_as_written(
+    make_core: MakeCore, host: EndpointHost
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model="arize/my-prompt")])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == "/model/arize/my-prompt/invoke"
+
+
 async def test_llm_passthrough_forwards_the_request_client(make_core: MakeCore, host: EndpointHost):
     client: Final = object()
     core: Final = make_core(model_list=[deployment("g", "d1")])
