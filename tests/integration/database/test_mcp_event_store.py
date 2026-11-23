@@ -360,3 +360,20 @@ async def test_late_activation_and_cleanup_leave_the_new_reservation_intact() ->
             assert current is not None and (current.status, current.generation) == ("pending", replacement.generation)
         finally:
             await second.delete(old.id)
+
+
+@pytest.mark.asyncio
+async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_subscription() -> None:
+    async with _connected() as receiver, _connected() as admin:
+        row: Final = await _active(receiver)
+        active: Final = await receiver.get(row.id)
+        assert active is not None
+        try:
+            event: Final = _delivery(row.id)
+            assert await receiver.enqueue_current(active, event)
+            assert await receiver.enqueue_current(active, event)
+            await admin.terminate(row.id)
+            assert await admin.reserve(_row().model_copy(update={"id": row.id}))
+            assert not await receiver.enqueue_current(active, _delivery(row.id))
+        finally:
+            await admin.delete(row.id)

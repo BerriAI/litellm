@@ -133,8 +133,7 @@ class DeliveryWorker:
     async def expire(self) -> None:
         now: Final = self._clock()
         for row in await self._store.expired(now):
-            if await self._store.end_if_expired(row.id, now):
-                await self._store.drop_deliveries(row.id)
+            await self._store.end_if_expired(row.id, now)
         await self._store.purge_delivered(now - DELIVERED_RETENTION)
         for status in LIVE_STATUSES:
             EventMetrics.set_subscriptions(status, await self._store.count_status(status))
