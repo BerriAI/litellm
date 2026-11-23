@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -304,6 +305,9 @@ class ResponsesSessionHandler:
             RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS,
             RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL,
         )
+
+        if "litellm.proxy.proxy_server" not in sys.modules:
+            return []
         from litellm.proxy.proxy_server import disable_spend_logs, prisma_client
 
         verbose_proxy_logger.debug("decoding response id=%s", previous_response_id)
