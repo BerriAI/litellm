@@ -5,6 +5,7 @@ mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -54,6 +55,10 @@ mod _native {
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
+    #[pymodule_export]
+    use crate::cost::{
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeTokenUsage,
+    };
     #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
@@ -271,6 +276,11 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",

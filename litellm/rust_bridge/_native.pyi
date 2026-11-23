@@ -124,6 +124,84 @@ class NativeProvenance:
     def etag(self) -> str | None: ...
 
 @final
+class NativePrices:
+    def __new__(cls, row: Mapping[str, object], provider: str | None) -> NativePrices: ...
+    def calculate(self, usage: NativeTokenUsage, call: NativeCallContext) -> NativePriced: ...
+    def quote(self, prompt_tokens: int, call: NativeCallContext) -> NativeQuote: ...
+
+@final
+class NativeTokenUsage:
+    def __new__(
+        cls,
+        *,
+        prompt_tokens: int,
+        input_text_tokens: int,
+        input_audio_tokens: int,
+        input_image_tokens: int,
+        input_video_tokens: int,
+        cached_text_tokens: int,
+        cached_audio_tokens: int,
+        cached_image_tokens: int,
+        explicit_cache_read: bool,
+        cache_write_tokens: int,
+        cache_write_1h_tokens: int,
+        cache_write_12h_tokens: int,
+        input_characters: int,
+        input_images: int,
+        input_audio_seconds: float,
+        input_video_seconds: float,
+        queries: int,
+        output_text_tokens: int,
+        output_audio_tokens: int,
+        output_image_tokens: int,
+        output_video_tokens: int,
+        reasoning_tokens: int,
+    ) -> NativeTokenUsage: ...
+
+@final
+class NativeCallContext:
+    def __new__(
+        cls,
+        *,
+        service_tier: str | None,
+        data_residency: str | None,
+        vertex_location: str | None,
+        at: datetime,
+    ) -> NativeCallContext: ...
+
+@final
+class NativePriced:
+    @property
+    def prompt_cost(self) -> float: ...
+    @property
+    def completion_cost(self) -> float: ...
+
+@final
+class NativeQuote:
+    @property
+    def input(self) -> float: ...
+    @property
+    def output(self) -> float: ...
+    @property
+    def reasoning(self) -> float: ...
+    @property
+    def cache_read(self) -> float: ...
+    @property
+    def explicit_cache_read(self) -> float: ...
+    @property
+    def cache_read_audio(self) -> float | None: ...
+    @property
+    def cache_read_image(self) -> float | None: ...
+    @property
+    def cache_write(self) -> float: ...
+    @property
+    def cache_write_1h(self) -> float: ...
+    @property
+    def cache_write_12h(self) -> float: ...
+    @property
+    def uplift(self) -> float: ...
+
+@final
 class NativeModelCostMap:
     @staticmethod
     def bundled(min_model_count: int, max_shrink_ratio: float) -> NativeModelCostMap: ...
@@ -2541,6 +2619,7 @@ __all__ = [
     "NativeAdmission",
     "NativeAuthCache",
     "NativeBudgets",
+    "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
     "NativeCostMapSource",
@@ -2559,7 +2638,10 @@ __all__ = [
     "NativeParallelRequestLimiter",
     "NativeParallelRequestLimiterState",
     "NativePending",
+    "NativePriced",
+    "NativePrices",
     "NativeProvenance",
+    "NativeQuote",
     "NativeRateLimits",
     "NativeRedisBreaker",
     "NativeRedisClient",
@@ -2576,6 +2658,7 @@ __all__ = [
     "NativeSpendCounters",
     "NativeTableSwapped",
     "NativeTokenRedactor",
+    "NativeTokenUsage",
     "NativeUsageRead",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
