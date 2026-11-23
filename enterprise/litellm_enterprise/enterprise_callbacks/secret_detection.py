@@ -14,11 +14,14 @@ sys.path.insert(
 import configparser
 import contextlib
 import itertools
+import json
 import re
 import tempfile
 from collections.abc import Generator, Iterator, Sequence
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -27,7 +30,12 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.guardrails._content_utils import walk_user_text
+from litellm.proxy.guardrails._content_utils import (
+    iter_json_fields,
+    iter_json_keys,
+    map_json_text,
+    walk_user_text,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -40,7 +48,7 @@ GUARDRAIL_PROVIDER = "hide-secrets"
 
 # Per-invocation tally of redacted secrets by detect-secrets plugin type; None
 # means the guardrail did not run, so _process_response records nothing.
-_masked_entity_count: ContextVar[Optional[dict]] = ContextVar(
+_masked_entity_count: ContextVar[Optional[dict[str, int]]] = ContextVar(
     "hide_secrets_masked_entity_count", default=None
 )
 
@@ -532,6 +540,29 @@ def _quoted_assignments(text: str) -> tuple[str, ...]:
     )
 
 
+def _keyed_line(key: str | None, text: str) -> str:
+    value: Final = json.dumps(text, ensure_ascii=False)
+    return value if key is None else f"{json.dumps(key, ensure_ascii=False)}: {value}"
+
+
+_JSON_STRING: Final[TypeAdapter[str]] = TypeAdapter(str)
+
+
+def _json_decoded(value: str) -> str | None:
+    try:
+        return _JSON_STRING.validate_json(f'"{value}"')
+    except ValueError:
+        return None
+
+
+def _value_in_texts(value: str, texts: Sequence[str]) -> str | None:
+    candidates: Final = (value, _json_decoded(value))
+    return next(
+        (candidate for candidate in candidates if candidate and any(candidate in text for text in texts)),
+        None,
+    )
+
+
 class _ENTERPRISE_SecretDetection(CustomGuardrail):
     # Keeps proxied traffic on async_pre_call_hook (the unified apply_guardrail
     # path skips should_run_check and never sees data["prompt"]).
@@ -579,6 +610,29 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
             "|".join(re.escape(secret["value"]) for secret in detected_secrets)
         )
         return pattern.sub("[REDACTED]", text)
+
+    def redact_json_payload(self, payload: object) -> object:
+        fields: Final = tuple(iter_json_fields(payload))
+        texts: Final = (*(text for _, text in fields), *iter_json_keys(payload))
+        keyed: Final = tuple(_keyed_line(key, text) for key, text in fields)
+        detected: Final = tuple(
+            {**secret, "value": value}
+            for secret in self.scan_message_for_secrets("\n".join((*texts, *keyed)))
+            if (value := _value_in_texts(secret["value"], texts)) is not None
+        )
+        if not detected:
+            return payload
+        counts: Final = _masked_entity_count.get()
+        if counts is not None:
+            for secret in detected:
+                counts[secret["type"]] = counts.get(secret["type"], 0) + 1
+        verbose_proxy_logger.warning(
+            "Detected and redacted secrets in JSON input: %s",
+            sorted(dict.fromkeys(secret["type"] for secret in detected)),
+        )
+        values: Final = sorted({secret["value"] for secret in detected}, key=len, reverse=True)
+        pattern: Final = re.compile("|".join(re.escape(value) for value in values))
+        return map_json_text(payload, lambda text: pattern.sub("[REDACTED]", text), rewrite_keys=True)
 
     async def should_run_check(self, user_api_key_dict: UserAPIKeyAuth) -> bool:
         if user_api_key_dict.permissions is not None:
@@ -641,7 +695,7 @@ class _ENTERPRISE_SecretDetection(CustomGuardrail):
         _masked_entity_count.set({})
 
         # Covers multimodal list content + Responses-API input.
-        inspected = walk_user_text(data, self.redact_text) + self._redact_prompt(data)
+        inspected = walk_user_text(data, self.redact_text, self.redact_json_payload) + self._redact_prompt(data)
 
         if inspected == 0:
             # Image-only, empty-text, and unsupported payloads inspected

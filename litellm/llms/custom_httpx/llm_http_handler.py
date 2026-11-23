@@ -25,6 +25,7 @@ from typing import (
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx
+import openai
 from httpx import USE_CLIENT_DEFAULT
 from httpx._types import FileContent
 from openai.types.file_deleted import FileDeleted
@@ -38,6 +39,7 @@ import litellm.types.utils
 from litellm._logging import redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, update_headers_with_filtered_beta
 from litellm.constants import MAX_FILE_LIST_LIMIT, REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.exceptions import with_provider_reply
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.agentic_followup_kwargs import build_agentic_followup_kwargs
 from litellm.litellm_core_utils.agentic_loop_settings import (
@@ -2056,7 +2058,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -2160,7 +2162,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         except httpx.HTTPStatusError as e:
-            raise provider_config.get_http_error_class(e)
+            raise with_provider_reply(provider_config.get_http_error_class(e), e.response)
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
@@ -5364,12 +5366,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5410,12 +5407,7 @@ class BaseLLMHTTPHandler:
         except Exception as e:
             raise self._handle_error(e=e, provider_config=provider_config)
 
-        if response.status_code >= 400:
-            raise provider_config.get_error_class(
-                error_message=response.text,
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+        self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return provider_config.transform_file_content_response(
             raw_response=response,
@@ -5462,14 +5454,10 @@ class BaseLLMHTTPHandler:
             raise self._handle_error(e=e, provider_config=provider_config)
 
         anchor_handler_to(response, async_httpx_client)
-        if response.status_code >= 400:
-            error_body: Final = await response.aread()
+        if httpx.codes.is_error(response.status_code):
+            await response.aread()
             await response.aclose()
-            raise provider_config.get_error_class(
-                error_message=error_body.decode("utf-8", errors="replace"),
-                status_code=response.status_code,
-                headers=response.headers,
-            )
+            self._raise_for_provider_error_status(response=response, provider_config=provider_config)
 
         return await provider_config.transform_file_content_stream(
             stream_iterator=aiter_bytes_then_close(response, chunk_size=chunk_size),
@@ -6422,11 +6410,15 @@ class BaseLLMHTTPHandler:
     ) -> None:
         if not httpx.codes.is_error(response.status_code):
             return
-        raise provider_config.get_error_class(
-            error_message=response.text,
-            status_code=response.status_code,
-            headers=response.headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=response.text,
+                status_code=response.status_code,
+                headers=response.headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, response)
+        raise with_provider_reply(provider_error, response)
 
     def _handle_error(
         self,
@@ -6476,21 +6468,27 @@ class BaseLLMHTTPHandler:
             error_headers = {}
 
         if provider_config is None:
-            raise BaseLLMException(
-                status_code=status_code,
-                message=error_text,
-                headers=error_headers,
-                status_code_is_synthesized=not isinstance(received_status_code, int),
+            raise with_provider_reply(
+                BaseLLMException(
+                    status_code=status_code,
+                    message=error_text,
+                    headers=error_headers,
+                    status_code_is_synthesized=not isinstance(received_status_code, int),
+                ),
+                error_response,
             )
 
-        provider_error: Final = provider_config.get_error_class(
-            error_message=error_text,
-            status_code=status_code,
-            headers=error_headers,
-        )
+        try:
+            provider_error: Final = provider_config.get_error_class(
+                error_message=error_text,
+                status_code=status_code,
+                headers=error_headers,
+            )
+        except (BaseLLMException, openai.APIError) as raised_by_config:
+            raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise provider_error
+        raise with_provider_reply(provider_error, error_response)
 
     def handle_error(
         self,
