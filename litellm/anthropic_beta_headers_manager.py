@@ -26,11 +26,11 @@ import asyncio
 import json
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -51,6 +51,7 @@ _DECODED_JSON: Final = TypeAdapter(object)
 
 BetaPlacement: TypeAlias = Literal["header", "body"]
 _HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
+_HeadersT = TypeVar("_HeadersT", bound=MutableMapping[str, str])
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -433,11 +434,11 @@ def resolve_beta_provider(provider: str, api_base: str | None = None) -> str:
 
 
 def update_headers_with_filtered_beta(
-    headers: dict,
+    headers: _HeadersT,
     provider: str,
     api_base: str | None = None,
     keep: frozenset[str] = frozenset(),
-) -> dict:
+) -> _HeadersT:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
     Modifies the headers dict in place and returns it.
@@ -482,7 +483,7 @@ def update_headers_with_filtered_beta(
 
 
 def update_request_with_filtered_beta(
-    headers: dict,
+    headers: dict[str, str],
     request_data: dict,
     provider: str,
     api_base: str | None = None,
