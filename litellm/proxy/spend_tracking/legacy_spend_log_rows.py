@@ -65,6 +65,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _CUSTOMER_METADATA_ADAPTER,
     _OBJECT_LIST,
     _OBJECT_MAPPING,
+    _REPLAYED_RESPONSE_CALL_TYPES,
     _REQUEST_BODY_ADAPTER,
     _REQUEST_METADATA_KEYS,
     _RESPONSES_CALL_TYPES,
@@ -677,7 +678,9 @@ def _get_response_for_spend_logs_payload(
             response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper: Final = _sanitize_request_body_for_spend_logs_payload(
-            {"response": response_obj}, keep_replayed_provider_state=not redacted
+            {"response": response_obj},
+            keep_compaction_blocks=True,
+            keep_provider_signed_fields=not redacted and payload.get("call_type") in _REPLAYED_RESPONSE_CALL_TYPES,
         )
 
         sanitized_response: Final = sanitized_wrapper.get("response", response_obj)

@@ -8,7 +8,7 @@ use litellm_python_compat::{Value, truthy::truthy};
 use crate::compaction::{compaction_summary, summary_only_compaction_content};
 use crate::consts::{CLASSIFIER_AUDIT_FIELDS, CLIENT_IP_HEADERS, TOOL_OUTPUT_BLOCK_TYPES};
 use crate::input::{LoggingPayload, RowInput};
-use crate::privacy::error_information_without_ip_addresses;
+use crate::privacy::{Keep, error_information_without_ip_addresses};
 use crate::py::{Dict, as_str, entries, get, get_or_none, has, safe_dumps, text};
 use crate::redaction::{redacted_request_body, redacted_response, should_redact};
 use crate::stamps::classifier_audit;
@@ -16,6 +16,8 @@ use crate::text::masked_ip_text;
 use crate::{RowError, SpendLogRowBuilder};
 
 const RESPONSES_CALL_TYPES: [&str; 2] = ["responses", "aresponses"];
+const REPLAYED_RESPONSE_CALL_TYPES: [&str; 3] =
+    ["responses", "aresponses", "_aresponses_websocket"];
 const STATEFUL_REQUEST_KEYS: [&str; 2] = ["previous_response_id", "conversation"];
 const TURNS_KEYS: [&str; 2] = ["messages", "input"];
 const TEXT_BLOCK_TYPES: [&str; 2] = ["text", "input_text"];
@@ -267,7 +269,12 @@ impl SpendLogRowBuilder {
         } else {
             response
         };
-        let wrapper = self.sanitize_body(&[(text("response"), response)], true, !redacted);
+        let keep = Keep {
+            compaction_blocks: true,
+            provider_signed_fields: !redacted
+                && matches!(payload.get("call_type"), Value::Str(kind) if REPLAYED_RESPONSE_CALL_TYPES.contains(&kind.as_str())),
+        };
+        let wrapper = self.sanitize_body(&[(text("response"), response)], true, keep);
         match get_or_none(&wrapper, "response") {
             Value::None => Ok("{}".to_owned()),
             Value::Str(content) => Ok(content.replace('\0', "")),
@@ -329,7 +336,7 @@ impl SpendLogRowBuilder {
     /// `_sanitize_proxy_server_request_body(body)`: the sanitized body, with each Responses API
     /// `compaction` input item reduced to its bounded summary.
     fn sanitized_request_body(&self, body: &Value) -> Value {
-        let sanitized = self.sanitize_body(entries(body).unwrap_or_default(), true, false);
+        let sanitized = self.sanitize_body(entries(body).unwrap_or_default(), true, Keep::NOTHING);
         let (Value::List(items), Some(Value::List(stored_items))) =
             (get_or_none(body, "input"), get(&sanitized, "input"))
         else {

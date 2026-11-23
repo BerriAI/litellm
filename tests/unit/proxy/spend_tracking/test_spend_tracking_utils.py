@@ -34,6 +34,8 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    MAX_STRING_LENGTH_PROMPT_IN_DB,
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
@@ -1863,6 +1865,13 @@ def _responses_reasoning_row() -> dict[str, object]:
     return {"object": "response", "output": [reasoning, message, call]}
 
 
+_SIGNED_ROW_TIME: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def _responses_row_payload(response: object) -> StandardLoggingPayload:
+    return cast(StandardLoggingPayload, {"response": response, "call_type": "aresponses"})
+
+
 def _at(row: object, path: tuple[str | int, ...]) -> object:
     return functools.reduce(
         lambda node, step: node[step],  # pyright: ignore[reportIndexIssue, reportUnknownLambdaType]  # known JSON
@@ -1916,9 +1925,7 @@ def test_spend_row_keeps_provider_signed_reasoning_whole_for_previous_response_i
 ):
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
 
-    stored: Final = json.loads(
-        _get_response_for_spend_logs_payload(cast(StandardLoggingPayload, {"response": response}))
-    )
+    stored: Final = json.loads(_get_response_for_spend_logs_payload(_responses_row_payload(response)))
 
     assert [_at(stored, path) for path in signed_paths] == [_at(response, path) for path in signed_paths]
     assert all(LITELLM_TRUNCATED_PAYLOAD_FIELD in str(_at(stored, path)) for path in cut_paths)
@@ -1939,9 +1946,7 @@ def test_spend_row_masks_tokens_inside_the_signed_reasoning_it_keeps_whole(monke
     }
 
     stored: Final = json.loads(
-        _get_response_for_spend_logs_payload(
-            cast(StandardLoggingPayload, {"response": {"choices": [{"message": message}]}})
-        )
+        _get_response_for_spend_logs_payload(_responses_row_payload({"choices": [{"message": message}]}))
     )["choices"][0]["message"]
 
     assert stored == {
@@ -1957,9 +1962,7 @@ def test_spend_row_still_bounds_and_masks_an_object_under_a_signature_key(
     monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
     response: Final = {"thought_signatures": wrapped({"note": _text_past_the_db_cap(), "api_key": "sk-in-a-signature"})}
 
-    stored: Final = json.loads(
-        _get_response_for_spend_logs_payload(cast(StandardLoggingPayload, {"response": response}))
-    )
+    stored: Final = json.loads(_get_response_for_spend_logs_payload(_responses_row_payload(response)))
 
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in json.dumps(stored["thought_signatures"])
     assert "sk-in-a-signature" not in json.dumps(stored["thought_signatures"])
@@ -1998,23 +2001,99 @@ def test_spend_row_still_bounds_signed_reasoning_when_message_logging_is_off(
     monkeypatch.setattr(
         proxy_server, "general_settings", {"store_prompts_in_spend_logs": True, "use_spend_logs_ledger": ledger}
     )
-    now: Final = datetime.datetime.now(datetime.timezone.utc)
     row: Final = get_logging_payload(
         kwargs={
             "model": "gemini-3.8-flash",
             "call_type": "aresponses",
             "litellm_params": {"metadata": {}},
-            "standard_logging_object": {"response": response, "metadata": {}, "model_map_information": None},
+            "standard_logging_object": {
+                "response": response,
+                "call_type": "aresponses",
+                "metadata": {},
+                "model_map_information": None,
+            },
             "standard_callback_dynamic_params": {"turn_off_message_logging": True},
         },
         response_obj=litellm.ModelResponse(id="chatcmpl-signed", choices=[]),
-        start_time=now,
-        end_time=now,
+        start_time=_SIGNED_ROW_TIME,
+        end_time=_SIGNED_ROW_TIME,
     )
 
     stored: Final = json.loads(row["response"])
 
     assert [path for path in cut_paths if LITELLM_TRUNCATED_PAYLOAD_FIELD not in str(_at(stored, path))] == []
+
+
+@pytest.mark.parametrize(
+    "call_type, kept_whole",
+    [
+        ("responses", True),
+        ("aresponses", True),
+        ("_aresponses_websocket", True),
+        ("acompletion", False),
+        ("aanthropic_messages", False),
+    ],
+)
+def test_spend_row_keeps_signed_reasoning_whole_only_on_routes_previous_response_id_replays(
+    monkeypatch: pytest.MonkeyPatch, call_type: str, kept_whole: bool
+):
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    response: Final = _claude_thinking_row()
+    row: Final = get_logging_payload(
+        kwargs={
+            "model": "claude-sonnet-5-5",
+            "call_type": call_type,
+            "litellm_params": {"metadata": {}},
+            "standard_logging_object": {
+                "response": response,
+                "call_type": call_type,
+                "metadata": {},
+                "model_map_information": None,
+            },
+        },
+        response_obj=litellm.ModelResponse(id="chatcmpl-signed", choices=[]),
+        start_time=_SIGNED_ROW_TIME,
+        end_time=_SIGNED_ROW_TIME,
+    )
+    signature_path: Final = ("choices", 0, "message", "thinking_blocks", 0, "signature")
+
+    stored_signature: Final = _at(json.loads(row["response"]), signature_path)
+
+    assert (stored_signature == _at(response, signature_path)) is kept_whole
+    assert (LITELLM_TRUNCATED_PAYLOAD_FIELD in str(stored_signature)) is not kept_whole
+
+
+@pytest.mark.parametrize(
+    "extra, prompt_limit, cut",
+    [
+        pytest.param(0, MAX_STRING_LENGTH_PROMPT_IN_DB, False, id="at-the-cap"),
+        pytest.param(1, MAX_STRING_LENGTH_PROMPT_IN_DB, True, id="past-the-cap"),
+        pytest.param(
+            1, 2 * MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, False, id="past-the-cap-under-a-larger-prompt-limit"
+        ),
+    ],
+)
+def test_spend_row_cuts_signed_reasoning_only_past_the_signed_field_cap(
+    monkeypatch: pytest.MonkeyPatch, extra: int, prompt_limit: int, cut: bool
+):
+    monkeypatch.setenv("STORE_PROMPTS_IN_SPEND_LOGS", "true")
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", str(prompt_limit))
+    signature: Final = "s" * (MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB + extra)
+    message: Final = {
+        "thinking_blocks": [{"type": "thinking", "thinking": "Count", "signature": signature}],
+        "provider_specific_fields": {"thought_signatures": [signature]},
+    }
+
+    stored: Final = json.loads(
+        _get_response_for_spend_logs_payload(_responses_row_payload({"choices": [{"message": message}]}))
+    )["choices"][0]["message"]
+
+    assert [
+        LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["thinking_blocks"][0]["signature"],
+        LITELLM_TRUNCATED_PAYLOAD_FIELD in stored["provider_specific_fields"]["thought_signatures"][0],
+    ] == [cut, cut]
 
 
 def test_stored_request_still_bounds_signed_reasoning_a_client_sends_back(monkeypatch: pytest.MonkeyPatch):

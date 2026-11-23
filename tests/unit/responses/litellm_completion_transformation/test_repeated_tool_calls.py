@@ -70,11 +70,11 @@ def _arguments(message: dict[str, object] | Message) -> list[str]:
 
 
 def _replayed(messages: Sequence[object]) -> list[object]:
-    return list(without_repeated_tool_calls(messages, keep_stored_arguments=lambda: False))
+    return list(without_repeated_tool_calls(messages, keep_stored_arguments=lambda _: False))
 
 
-def _target_is_not_looked_up() -> bool:
-    pytest.fail("the target was looked up with no arguments to give back")
+def _keeping_is_not_asked(_: object) -> bool:
+    pytest.fail("asked whether to keep stored arguments with no arguments to give back")
 
 
 _AS_STORED: Final[tuple[Callable[[dict[str, object]], dict[str, object] | Message], ...]] = (dict, _stored)
@@ -116,7 +116,7 @@ def test_a_call_remembered_from_another_conversation_neither_is_made_nor_changes
     asked: Final = as_stored(_asks("c1", "c2", arguments=stored))
 
     replayed: Final = without_repeated_tool_calls(
-        [asked, _remembers("c1", remembered, name), _output("c1")], keep_stored_arguments=_target_is_not_looked_up
+        [asked, _remembers("c1", remembered, name), _output("c1")], keep_stored_arguments=_keeping_is_not_asked
     )
 
     assert list(replayed) == [asked, _output("c1")]
@@ -163,7 +163,7 @@ def test_a_resent_call_whose_arguments_storage_cut_leaves_the_stored_ones(stored
 
     replayed: Final = without_repeated_tool_calls(
         [asked, _asks("c1", "c2", arguments=resent), _output("c1"), _output("c2")],
-        keep_stored_arguments=_target_is_not_looked_up,
+        keep_stored_arguments=_keeping_is_not_asked,
     )
 
     assert list(replayed) == [asked, _output("c1"), _output("c2")]
@@ -364,9 +364,24 @@ def test_the_stored_arguments_stay_when_asked_to_keep_them(stored: str) -> None:
     asked: Final = _asks("c1", "c2", arguments=stored)
     repeated: Final = _resent_one_by_one("c1", "c2", arguments=_WHOLE)
 
-    replayed: Final = without_repeated_tool_calls([asked, *repeated], keep_stored_arguments=lambda: True)
+    replayed: Final = without_repeated_tool_calls([asked, *repeated], keep_stored_arguments=lambda _: True)
 
     assert list(replayed) == [asked, _output("c1"), _output("c2")]
+
+
+def test_only_the_turn_asked_to_keep_its_stored_arguments_keeps_them() -> None:
+    kept_turn: Final = _asks("c1", arguments=_CUT)
+    other_turn: Final = _asks("c2", arguments=_OTHER_CUT)
+    first_step: Final = (kept_turn, _asks("c1", arguments=_WHOLE), _output("c1"))
+    next_step: Final = (other_turn, _asks("c2", arguments=_OTHER_WHOLE), _output("c2"))
+
+    replayed: Final = without_repeated_tool_calls(
+        [*first_step, *next_step], keep_stored_arguments=lambda turn: turn is kept_turn
+    )
+
+    turn, output, next_turn, next_output = replayed
+    assert (turn, output, next_output) == (kept_turn, _output("c1"), _output("c2"))
+    assert _arguments(next_turn) == [_OTHER_WHOLE]
 
 
 @pytest.mark.parametrize(
@@ -386,7 +401,7 @@ def test_the_same_arguments_spelled_otherwise_are_the_same_call(stored: str | No
     asked: Final = _asks("c1", "c2", arguments=stored)
 
     replayed: Final = without_repeated_tool_calls(
-        [asked, _asks("c1", arguments=repeated), _output("c1")], keep_stored_arguments=_target_is_not_looked_up
+        [asked, _asks("c1", arguments=repeated), _output("c1")], keep_stored_arguments=_keeping_is_not_asked
     )
 
     assert list(replayed) == [asked, _output("c1")]
@@ -400,7 +415,7 @@ def test_a_stored_call_that_names_no_arguments_stays_as_stored(resent: object) -
     }
 
     replayed: Final = without_repeated_tool_calls(
-        [asked, _asks("c1", arguments=resent), _output("c1")], keep_stored_arguments=_target_is_not_looked_up
+        [asked, _asks("c1", arguments=resent), _output("c1")], keep_stored_arguments=_keeping_is_not_asked
     )
 
     assert list(replayed) == [asked, _output("c1")]

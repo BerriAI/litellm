@@ -190,7 +190,12 @@ from .custom_tools import (
     validated_tool_search_execution,
     without_malformed_tool_flags,
 )
-from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
+from .reasoning_items import (
+    decode_thinking_blocks,
+    encode_thinking_blocks,
+    is_verifiable_thinking_block,
+    mint_reasoning_item_id,
+)
 from .tool_search import (
     CompletionRoute,
     ToolSearchRouting,
@@ -674,13 +679,13 @@ SessionMessage: TypeAlias = (
 )
 
 
-def _with_each_call_made_once(
-    messages: Sequence[SessionMessage], model: str, custom_llm_provider: str | None
-) -> Sequence[SessionMessage]:
-    return without_repeated_tool_calls(
-        messages,
-        keep_stored_arguments=partial(_target_may_bind_reasoning_to_earlier_turns, model, custom_llm_provider),
-    )
+def _made_with_signed_thinking(message: SessionMessage) -> bool:
+    blocks: Final = filter(None, map(as_str_mapping, parts_of(message_field(message, "thinking_blocks"))))
+    return any(map(is_verifiable_thinking_block, blocks))
+
+
+def _with_each_call_made_once(messages: Sequence[SessionMessage]) -> Sequence[SessionMessage]:
+    return without_repeated_tool_calls(messages, keep_stored_arguments=_made_with_signed_thinking)
 
 
 def _replayed_assistant_without_tool_search_uses(message: Mapping[str, object]) -> SessionMessage | None:
@@ -1011,10 +1016,6 @@ def target_refuses_blank_text(model: str, custom_llm_provider: str | None) -> bo
 
     chat_config: Final = _resolved_chat_config(model, custom_llm_provider)
     return isinstance(chat_config, AmazonConverseConfig) or chat_config_builds_anthropic_request(chat_config)
-
-
-def _target_may_bind_reasoning_to_earlier_turns(model: str, custom_llm_provider: str | None) -> bool:
-    return "claude" in model.lower() or target_refuses_blank_text(model, custom_llm_provider)
 
 
 def _replays_compaction_block(input: str | ResponseInputParam, context_management: object) -> bool:
@@ -1845,7 +1846,7 @@ class LiteLLMCompletionResponsesConfig:
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
         combined_messages = LiteLLMCompletionResponsesConfig._ensure_tool_results_have_corresponding_tool_calls(
-            messages=_with_each_call_made_once(combined_messages, model, provider),
+            messages=_with_each_call_made_once(combined_messages),
             tools=request_tools,
         )
 

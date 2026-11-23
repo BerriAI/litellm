@@ -22,6 +22,7 @@ FIXED_NOW = 1763337600.123456
 FIXED_SESSION = "7d1c9f9e-1d61-4cf4-9a43-c1b5e5d6c0f1"
 GOLDEN_DELIVERY_ID = "golden-delivery-id"
 MINIMUM_CUSTOM_KEY_LENGTH = 16
+MAXIMUM_RECORD_LENGTH = 1024 * 1024
 
 HELPERS = (
     "_redact_prompt_leaks_in_error_string",
@@ -65,6 +66,8 @@ def _row_text(row: Mapping[str, object]) -> str:
 
 
 def _add(kind: str, record: dict) -> None:
+    if len(json.dumps(record)) > MAXIMUM_RECORD_LENGTH:
+        return
     digest = hashlib.sha256(json.dumps({**record, "case": None}, sort_keys=True).encode()).hexdigest()
     if (kind, digest) in _seen:
         return

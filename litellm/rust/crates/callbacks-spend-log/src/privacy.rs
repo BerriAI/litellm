@@ -27,6 +27,21 @@ pub(crate) const TRUNCATED_FIELD: &str = "litellm_truncated";
 pub(crate) const TRUNCATION_NOTE: &str = "Truncation is a DB storage safeguard. Full, untruncated data is logged to logging callbacks (OTEL, Datadog, etc.). To increase the truncation limit, set `MAX_STRING_LENGTH_PROMPT_IN_DB` in your env.";
 const MINIMUM_TOKEN_LENGTH: usize = 15;
 const MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB: i64 = 64 * 1024;
+const MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB: i64 = 1024 * 1024;
+
+/// Which replayed state a stored body keeps past the usual string cut.
+#[derive(Clone, Copy)]
+pub(crate) struct Keep {
+    pub(crate) compaction_blocks: bool,
+    pub(crate) provider_signed_fields: bool,
+}
+
+impl Keep {
+    pub(crate) const NOTHING: Self = Self {
+        compaction_blocks: false,
+        provider_signed_fields: false,
+    };
+}
 
 impl SpendLogRowBuilder {
     /// `stores_full_prompts_in_spend_logs(metadata)`: prompts are stored for this request, and not
@@ -60,7 +75,17 @@ impl SpendLogRowBuilder {
         )
     }
 
-    /// `_bounded_compaction_summary(parent, key, value, keep_replayed_provider_state)`.
+    /// `_provider_signed_for_db(value, max_string_length_prompt_in_db)`.
+    fn provider_signed_for_db(&self, value: &str) -> String {
+        truncated(
+            &self.without_tokens(value),
+            self.config
+                .max_string_length_prompt_in_db
+                .max(MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB),
+        )
+    }
+
+    /// `_bounded_compaction_summary(parent, key, value, keep_compaction_blocks)`.
     fn bounded_compaction_summary(
         &self,
         parent: &[(Value, Value)],
@@ -80,15 +105,16 @@ impl SpendLogRowBuilder {
     }
 
     /// `_sanitize_request_body_for_spend_logs_payload(body, mask_credentials=...,
-    /// keep_replayed_provider_state=...)`: drops `secret_fields`, masks credential-named string values
-    /// outside tool payloads, redacts tokens and truncates every string.
+    /// keep_compaction_blocks=..., keep_provider_signed_fields=...)`: drops `secret_fields`, masks
+    /// credential-named string values outside tool payloads, redacts tokens and truncates every
+    /// string.
     pub(crate) fn sanitize_body(
         &self,
         body: &[(Value, Value)],
         mask_credentials: bool,
-        keep_replayed_provider_state: bool,
+        keep: Keep,
     ) -> Value {
-        let compaction = keep_replayed_provider_state && is_compaction_item(body);
+        let compaction = keep.compaction_blocks && is_compaction_item(body);
         let content = ContentParent::of(body);
         let signed = SignedParent::of(body);
         let mut result = Vec::with_capacity(body.len());
@@ -100,59 +126,48 @@ impl SpendLogRowBuilder {
             let stored =
                 if mask_credentials && matches!(value, Value::Str(_)) && is_sensitive_key(name) {
                     text(REDACTED)
-                } else if keep_replayed_provider_state && signed.signs(name, value) {
-                    self.stored_whole(value, mask_credentials)
+                } else if keep.provider_signed_fields && signed.signs(name, value) {
+                    self.stored_whole(value, mask_credentials, keep)
                 } else if let Some(bounded) = compaction
                     .then(|| self.bounded_compaction_summary(body, name, value))
                     .flatten()
                 {
                     Value::Str(bounded)
                 } else {
-                    self.sanitize_value(
-                        value,
-                        mask_credentials && !content.holds(name),
-                        keep_replayed_provider_state,
-                    )
+                    self.sanitize_value(value, mask_credentials && !content.holds(name), keep)
                 };
             result.push((key.clone(), stored));
         }
         Value::Dict(result)
     }
 
-    /// A provider-signed value: its tokens redacted, its strings never truncated.
-    fn stored_whole(&self, value: &Value, mask_credentials: bool) -> Value {
+    /// A provider-signed value: its tokens redacted, its strings cut only past the signed-field cap.
+    fn stored_whole(&self, value: &Value, mask_credentials: bool, keep: Keep) -> Value {
         match value {
-            Value::Str(content) => Value::Str(self.without_tokens(content)),
+            Value::Str(content) => Value::Str(self.provider_signed_for_db(content)),
             Value::List(items) => Value::List(
                 items
                     .iter()
                     .map(|item| match item {
-                        Value::Str(content) => Value::Str(self.without_tokens(content)),
-                        other => self.sanitize_value(other, mask_credentials, true),
+                        Value::Str(content) => Value::Str(self.provider_signed_for_db(content)),
+                        other => self.sanitize_value(other, mask_credentials, keep),
                     })
                     .collect(),
             ),
-            other => self.sanitize_value(other, mask_credentials, true),
+            other => self.sanitize_value(other, mask_credentials, keep),
         }
     }
 
-    fn sanitize_value(
-        &self,
-        value: &Value,
-        mask_credentials: bool,
-        keep_replayed_provider_state: bool,
-    ) -> Value {
+    fn sanitize_value(&self, value: &Value, mask_credentials: bool, keep: Keep) -> Value {
         match value {
             Value::Dict(items) => match items.as_slice() {
                 [(Value::Str(key), object)] if key == PYTHON_OBJECT_KEY => object.clone(),
-                _ => self.sanitize_body(items, mask_credentials, keep_replayed_provider_state),
+                _ => self.sanitize_body(items, mask_credentials, keep),
             },
             Value::List(items) => Value::List(
                 items
                     .iter()
-                    .map(|item| {
-                        self.sanitize_value(item, mask_credentials, keep_replayed_provider_state)
-                    })
+                    .map(|item| self.sanitize_value(item, mask_credentials, keep))
                     .collect(),
             ),
             Value::Str(content) => Value::Str(self.truncated_for_db(&self.without_tokens(content))),
@@ -223,7 +238,8 @@ impl SpendLogRowBuilder {
                 }
             }
         }
-        let sanitized = self.sanitize_body(&dict_entries(sanitized.into_value()), true, false);
+        let sanitized =
+            self.sanitize_body(&dict_entries(sanitized.into_value()), true, Keep::NOTHING);
         if self.config.drop_requester_ip_address {
             error_information_without_ip_addresses(&sanitized)
         } else {
@@ -293,7 +309,7 @@ pub(crate) fn truncated(value: &str, max_length: i64) -> String {
     format!(
         "{}... ({TRUNCATED_FIELD} skipped {} chars. {TRUNCATION_NOTE}) ...{}",
         slice(value, None, Some(start_chars)),
-        length - start_chars - end_chars,
+        length - start_chars - tail,
         slice(value, Some(-tail), None),
     )
 }
@@ -439,8 +455,10 @@ pub(crate) fn error_information_without_ip_addresses(information: &Value) -> Val
 #[cfg(test)]
 mod tests {
     use litellm_python_compat::Value;
+    use rstest::rstest;
 
-    use crate::py::{entries, get};
+    use super::{Keep, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, TRUNCATED_FIELD};
+    use crate::py::{entries, get, get_or_none, text};
     use crate::test_support::{argument, case, field, helper_records, token_redactor};
     use crate::{RowConfig, SpendLogRowBuilder};
 
@@ -480,12 +498,72 @@ mod tests {
                 &builder.sanitize_body(
                     body,
                     flag(&record, "mask_credentials", true),
-                    flag(&record, "keep_replayed_provider_state", false),
+                    Keep {
+                        compaction_blocks: flag(&record, "keep_compaction_blocks", false),
+                        provider_signed_fields: flag(&record, "keep_provider_signed_fields", false),
+                    },
                 ),
                 field(&record, "output"),
                 "{}",
                 case(&record)
             );
         }
+    }
+
+    fn first(value: &Value) -> &Value {
+        match value {
+            Value::List(items) => &items[0],
+            other => panic!("{other:?} is not a list"),
+        }
+    }
+
+    fn is_cut(value: &Value) -> bool {
+        matches!(value, Value::Str(content) if content.contains(TRUNCATED_FIELD))
+    }
+
+    #[rstest]
+    #[case::at_the_cap(0, 2048, false)]
+    #[case::past_the_cap(1, 2048, true)]
+    #[case::past_the_cap_under_a_larger_prompt_limit(1, 2 * MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB, false)]
+    fn sanitize_body_cuts_a_signed_value_only_past_the_signed_field_cap(
+        #[case] extra: usize,
+        #[case] prompt_limit: i64,
+        #[case] cut: bool,
+    ) {
+        let cap = usize::try_from(MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB).expect("the cap fits");
+        let signature = text(&"s".repeat(cap + extra));
+        let block = Value::Dict(vec![
+            (text("type"), text("thinking")),
+            (text("thinking"), text("Count")),
+            (text("signature"), signature.clone()),
+        ]);
+        let body = [
+            (text("thinking_blocks"), Value::List(vec![block])),
+            (text("thought_signatures"), Value::List(vec![signature])),
+        ];
+        let builder = SpendLogRowBuilder::new(
+            RowConfig {
+                max_string_length_prompt_in_db: prompt_limit,
+                ..RowConfig::default()
+            },
+            token_redactor(),
+        );
+
+        let stored = builder.sanitize_body(
+            &body,
+            true,
+            Keep {
+                compaction_blocks: false,
+                provider_signed_fields: true,
+            },
+        );
+
+        let block_signature =
+            get_or_none(first(get_or_none(&stored, "thinking_blocks")), "signature");
+        let listed_signature = first(get_or_none(&stored, "thought_signatures"));
+        assert_eq!(
+            (is_cut(block_signature), is_cut(listed_signature)),
+            (cut, cut)
+        );
     }
 }

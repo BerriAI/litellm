@@ -26,6 +26,7 @@ from litellm.constants import (
     LITTELM_CLI_SERVICE_ACCOUNT_NAME,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
     MAX_STRING_LENGTH_COMPACTION_SUMMARY_IN_DB,
+    MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB,
     REDACTED_BY_LITELM_STRING,
     ROUTE_CALL_TYPE_METADATA_KEY,
 )
@@ -871,6 +872,7 @@ _TOOL_INPUT_BLOCK_TYPES: Final = frozenset({"tool_use", "server_tool_use", "mcp_
 _TOOL_OUTPUT_BLOCK_TYPES: Final = frozenset({"tool_result", "mcp_tool_result", "function_call_output"})
 _LATEST_TURN_STORAGE: Final = "latest_turn"
 _RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses"})
+_REPLAYED_RESPONSE_CALL_TYPES: Final = _RESPONSES_CALL_TYPES | {"_aresponses_websocket"}
 _REQUEST_BODY_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _TEXT_BLOCK_TYPES: Final = frozenset({"text", "input_text"})
 _OMITTED_BLOCK_PLACEHOLDERS: Final = MappingProxyType(
@@ -945,10 +947,16 @@ def _compaction_summary_for_db(summary: str) -> str:
     )
 
 
+def _provider_signed_for_db(value: str, max_string_length_prompt_in_db: int) -> str:
+    return truncated_for_db(
+        _without_tokens(value), max(max_string_length_prompt_in_db, MAX_STRING_LENGTH_PROVIDER_SIGNED_IN_DB)
+    )
+
+
 def _bounded_compaction_summary(
-    parent: Mapping[str, object], key: str, value: object, keep_replayed_provider_state: bool
+    parent: Mapping[str, object], key: str, value: object, keep_compaction_blocks: bool
 ) -> str | None:
-    if not keep_replayed_provider_state or not isinstance(value, str) or parent.get("type") != "compaction":
+    if not keep_compaction_blocks or not isinstance(value, str) or parent.get("type") != "compaction":
         return None
     if key == "content":
         return _compaction_summary_for_db(value)
@@ -961,7 +969,8 @@ def _sanitize_request_body_for_spend_logs_payload(
     visited: set | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
-    keep_replayed_provider_state: bool = False,
+    keep_compaction_blocks: bool = False,
+    keep_provider_signed_fields: bool = False,
 ) -> dict:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
@@ -986,7 +995,12 @@ def _sanitize_request_body_for_spend_logs_payload(
     def _sanitize_value(value: object, mask_credentials: bool) -> object:
         if isinstance(value, Mapping):
             return _sanitize_request_body_for_spend_logs_payload(
-                value, visited, max_string_length_prompt_in_db, mask_credentials, keep_replayed_provider_state
+                value,
+                visited,
+                max_string_length_prompt_in_db,
+                mask_credentials,
+                keep_compaction_blocks,
+                keep_provider_signed_fields,
             )
         elif isinstance(value, list):
             return [_sanitize_value(item, mask_credentials) for item in value]
@@ -996,21 +1010,23 @@ def _sanitize_request_body_for_spend_logs_payload(
 
     def _stored_whole(value: object) -> object:
         if isinstance(value, str):
-            return _without_tokens(value)
+            return _provider_signed_for_db(value, max_string_length_prompt_in_db)
         items: Final = as_object_list(value)
         if items is None:
             return _sanitize_value(value, mask_credentials)
         return [
-            _without_tokens(item) if isinstance(item, str) else _sanitize_value(item, mask_credentials)
+            _provider_signed_for_db(item, max_string_length_prompt_in_db)
+            if isinstance(item, str)
+            else _sanitize_value(item, mask_credentials)
             for item in items
         ]
 
     def _stored_value(key: str, value: object) -> object:
         if mask_credentials and _is_request_body_credential(key, value):
             return REDACTED_BY_LITELM_STRING
-        if keep_replayed_provider_state and is_provider_signed(request_body, key, value):
+        if keep_provider_signed_fields and is_provider_signed(request_body, key, value):
             return _stored_whole(value)
-        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_replayed_provider_state)
+        bounded_summary: Final = _bounded_compaction_summary(request_body, key, value, keep_compaction_blocks)
         if bounded_summary is not None:
             return bounded_summary
         return _sanitize_value(value, mask_credentials and not _is_spend_log_content(request_body, key))
