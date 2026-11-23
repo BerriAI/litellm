@@ -7,14 +7,15 @@ import json
 import re
 import urllib.parse
 from collections.abc import Mapping, Sequence
-from typing import Final
 from types import MappingProxyType
+from typing import Final
+from unittest.mock import MagicMock
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
+from openai.types.file_deleted import FileDeleted
 from pydantic import TypeAdapter
-from unittest.mock import MagicMock
 
 import litellm
 from litellm.llms.base_llm.files.transformation import BaseFileUploadStream
@@ -24,8 +25,7 @@ from litellm.llms.vertex_ai.files.transformation import (
     _openai_batch_jsonl_entry_to_vertex_rows,
     _sanitize_gcp_label_value,
 )
-from litellm.types.llms.openai import OpenAIFileObject, HttpxBinaryResponseContent
-from openai.types.file_deleted import FileDeleted
+from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIFileObject
 
 
 @pytest.fixture
@@ -184,9 +184,7 @@ class TestBatchObjectNaming:
     def test_should_store_fine_tuned_endpoint_under_endpoints_path(self, config):
         """A numeric endpoint id must not be filed under publishers/google/models/gemini/<id>,
         which the batch transformation later mangles into a nonexistent publisher model (LIT-6899)."""
-        object_name = config._get_gcs_object_name_from_batch_jsonl(
-            [{"body": {"model": "gemini/7768560373388541952"}}]
-        )
+        object_name = config._get_gcs_object_name_from_batch_jsonl([{"body": {"model": "gemini/7768560373388541952"}}])
         assert object_name.startswith("litellm-vertex-files/endpoints/7768560373388541952/")
         assert "publishers" not in object_name
 
@@ -876,7 +874,6 @@ class TestVertexBatchOutputTransformation:
         batch output and must never line-parse or corrupt binary content."""
         binary = b"%PDF-1.4\n%\xc4\xe5\xf2\xe5\xeb\xa7\n" + b"\x00\x01\x02\xff\xfe" * 64
         assert config._try_transform_vertex_batch_output_to_openai(binary) == binary
-
 
 
 class TestTryTransformDoesNotMutateCallerLoggingObj:
@@ -2394,7 +2391,9 @@ class TestVertexClaudeBatch:
 
         with pytest.raises(VertexAIError, match=r"line 2 .*custom_id") as exc_info:
             _uploaded_rows(
-                config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10), _claude_chat_entry(None, "hi")]
+                config,
+                CLAUDE_DEPLOYMENT,
+                [_claude_chat_entry("r1", "hi", max_tokens=10), _claude_chat_entry(None, "hi")],
             )
 
         assert exc_info.value.status_code == 400
@@ -2647,9 +2646,7 @@ def _uploaded_json_schema(
     (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(
         _uploaded_rows(config, deployment, [_schema_entry(schema, **body)])
     )
-    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])[
-        "response_json_schema"
-    ]
+    return TypeAdapter(dict[str, object]).validate_python(_request_of(row)["generation_config"])["response_json_schema"]
 
 
 def test_a_json_schema_annotation_bigquery_refuses_answers_400_without_drop_params(config, monkeypatch) -> None:
@@ -2705,7 +2702,10 @@ def test_a_responses_row_drop_params_drops_json_schema_annotations_bigquery_refu
             {
                 "$ref": "#/$defs/Node",
                 "$defs": {
-                    "Node": {"type": "object", "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}}}
+                    "Node": {
+                        "type": "object",
+                        "properties": {"children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+                    }
                 },
             },
             r"\$ref",
@@ -2847,6 +2847,78 @@ def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations
         "type": "object",
         "properties": {"answer": answer},
     }
+
+
+_DEEPWIKI_SERVER: Final = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
+_RESPONSES_WEATHER_TOOL: Final = {"type": "function", "name": "get_weather", "parameters": {"type": "object"}}
+
+
+@pytest.mark.parametrize("model", ["gemini-3.8-flash", "claude-sonnet-4-6"])
+@pytest.mark.parametrize(
+    ("url", "body", "unsent_server"),
+    [
+        pytest.param(
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "max_tokens": 10,
+                "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object"}}}],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            "deepwiki",
+            id="chat-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "deepwiki"},
+            },
+            "deepwiki",
+            id="responses-no-mcp-tool",
+        ),
+        pytest.param(
+            "/v1/responses",
+            {
+                "input": "hi",
+                "max_output_tokens": 10,
+                "tools": [_DEEPWIKI_SERVER, _RESPONSES_WEATHER_TOOL],
+                "tool_choice": {"type": "mcp", "server_label": "docs"},
+            },
+            "docs",
+            id="responses-another-server",
+        ),
+    ],
+)
+def test_batch_row_is_refused_like_a_real_time_call_when_its_mcp_tool_choice_names_a_server_it_does_not_send(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    url: str,
+    body: Mapping[str, object],
+    unsent_server: str,
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = {"custom_id": "r1", "method": "POST", "url": url, "body": {"model": model, **body}}
+
+    with pytest.raises(VertexAIError) as exc_info:
+        _uploaded_rows(
+            config, {"gcs_bucket_name": "my-bucket", "model": f"vertex_ai/{model}", "drop_params": True}, [entry]
+        )
+
+    assert exc_info.value.status_code == 400
+    assert (
+        "tool_choice type 'mcp' forces an OpenAI hosted tool and is only supported for azure, litellm_proxy, openai"
+        in exc_info.value.message
+    )
+    assert exc_info.value.message.endswith(
+        f"This request sends no hosted MCP tool with server_label `{unsent_server}`. "
+        "Send that tool or remove the tool_choice."
+    )
 
 
 _SYSTEM_VIDEO_MESSAGES: Final = (

@@ -236,8 +236,8 @@ class _StoredTurns:
     def __init__(self, rows: tuple[Mapping[str, object], ...]) -> None:
         self.rows: Final = rows
 
-    async def query_raw(self, query: str, request_id: str) -> list[dict[str, object]]:
-        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] == request_id}
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[dict[str, object]]:
+        sessions: Final = {row["session_id"] for row in self.rows if row["request_id"] in request_ids}
         return [dict(row) for row in self.rows if row["session_id"] in sessions]
 
 

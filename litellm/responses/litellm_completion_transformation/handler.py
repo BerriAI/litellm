@@ -76,7 +76,7 @@ def _sync_follow_up_refusal(client_response_id: str, model: str, provider: str |
 class LiteLLMCompletionTransformationHandler:
     def response_api_handler(
         self,
-        client_previous_response_id: str | None = None,
+        previous_response_client_ids: tuple[str, ...] = (),
         /,
         *,
         model: str,
@@ -115,17 +115,19 @@ class LiteLLMCompletionTransformationHandler:
 
         if _is_async:
             return self.async_response_api_handler(
+                previous_response_client_ids,
                 litellm_completion_request=litellm_completion_request,
                 request_input=bridged_input,
                 responses_api_request=echoed_request,
                 previous_response_id=previous_response_id,
-                client_previous_response_id=client_previous_response_id,
                 **kwargs,
             )
 
         if previous_response_id:
             raise _sync_follow_up_refusal(
-                client_previous_response_id or previous_response_id, model, custom_llm_provider
+                previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
+                model,
+                custom_llm_provider,
             )
         completion_args: Final = {}
         completion_args.update(kwargs)
@@ -160,11 +162,13 @@ class LiteLLMCompletionTransformationHandler:
 
     async def async_response_api_handler(
         self,
+        previous_response_client_ids: tuple[str, ...] = (),
+        /,
+        *,
         litellm_completion_request: dict,
         request_input: str | ResponseInputParam,
         responses_api_request: ResponsesAPIOptionalRequestParams,
         previous_response_id: str | None,
-        client_previous_response_id: str | None,
         **kwargs,
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         request_fields: Final = _REQUEST_KWARGS_ADAPTER.validate_python(litellm_completion_request)
@@ -175,7 +179,7 @@ class LiteLLMCompletionTransformationHandler:
                     litellm_completion_request=dict(request_fields),
                     instructions=responses_api_request.get("instructions"),
                     request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-                    client_previous_response_id=client_previous_response_id,
+                    previous_response_client_ids=previous_response_client_ids,
                 )
             )
             if previous_response_id

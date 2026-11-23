@@ -1302,7 +1302,14 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data=request_data,
             call_type=call_type,
         )
-        self._set_events_from_response(transformed=transformed, logging_obj=logging_obj)
+        self._set_events_from_response(
+            transformed=ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+                responses_api_response=transformed,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=litellm_metadata,
+            ),
+            logging_obj=logging_obj,
+        )
 
     def _set_events_from_response(
         self,

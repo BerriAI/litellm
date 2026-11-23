@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
     is_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.bridged_audio_output import (
@@ -234,6 +235,7 @@ async def aresponses_api_with_mcp(
         mcp_tools_with_litellm_proxy,
         other_tools,
     ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
+    raise_if_mcp_tool_choice_forces_a_gateway_server(tool_choice, mcp_tools_with_litellm_proxy, model)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -528,9 +530,15 @@ _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
 _REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
 
 
-def _client_previous_response_id(previous_response_id: str | None, kwargs: Mapping[str, object]) -> str | None:
+def _previous_response_client_ids(previous_response_id: str | None, kwargs: Mapping[str, object]) -> tuple[str, ...]:
+    if not previous_response_id:
+        return ()
     addressed_id: Final = kwargs.get(ADDRESSED_RESPONSE_ID_FIELD)
-    return addressed_id if isinstance(addressed_id, str) and addressed_id else previous_response_id
+    return (
+        (previous_response_id, addressed_id)
+        if isinstance(addressed_id, str) and addressed_id
+        else (previous_response_id,)
+    )
 
 
 def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:
@@ -1639,7 +1647,7 @@ def responses(
                 kwargs, responses_api_provider_config, allowed_openai_params, model, custom_llm_provider
             )
             return litellm_completion_transformation_handler.response_api_handler(
-                _client_previous_response_id(previous_response_id, _REQUEST_KWARGS.validate_python(kwargs)),
+                _previous_response_client_ids(previous_response_id, _REQUEST_KWARGS.validate_python(kwargs)),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
