@@ -247,7 +247,12 @@ INPUT_HOOKS: Final = MappingProxyType(
             (GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.logging_only)
         ),
         "response": frozenset(
-            (GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call, GuardrailEventHooks.logging_only)
+            (
+                GuardrailEventHooks.post_call,
+                GuardrailEventHooks.post_mcp_call,
+                GuardrailEventHooks.mcp_event,
+                GuardrailEventHooks.logging_only,
+            )
         ),
     }
 )
@@ -269,6 +274,7 @@ class AktoGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.pre_mcp_call,
             GuardrailEventHooks.post_mcp_call,
+            GuardrailEventHooks.mcp_event,
             GuardrailEventHooks.logging_only,
         ]
 

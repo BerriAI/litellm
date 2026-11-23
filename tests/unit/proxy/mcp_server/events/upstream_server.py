@@ -31,6 +31,8 @@ class _Note(BaseModel):
 @dataclass
 class EventsUpstream:
     pages: tuple[tuple[str, ...], ...] = (("build.failed",),)
+    advertises_events: bool = True
+    second_page_cursor: str = "1"
     hang: bool = False
     seen: list[tuple[str, Mapping[str, str], dict[str, object]]] = field(
         default_factory=list
@@ -45,10 +47,15 @@ class EventsUpstream:
 
     async def list_events(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
-        cursor: Final = int((params.model_extra or {}).get("cursor") or 0)
+        token: Final = (params.model_extra or {}).get("cursor")
+        cursor: Final = 1 if token == self.second_page_cursor else int(str(token or 0))
         names: Final = self.pages[cursor]
         page: Final = {"events": [{"name": name, "delivery": ["poll", "push"]} for name in names]}
-        return {**page, "nextCursor": str(cursor + 1)} if cursor + 1 < len(self.pages) else page
+        return (
+            {**page, "nextCursor": self.second_page_cursor if cursor == 0 else str(cursor + 1)}
+            if cursor + 1 < len(self.pages)
+            else page
+        )
 
     async def poll(self, ctx: ServerRequestContext[object, object], params: _Params) -> dict[str, object]:
         self.record(ctx, params)
@@ -78,6 +85,8 @@ class EventsUpstream:
 @asynccontextmanager
 async def events_client(upstream: EventsUpstream, timeout: float = 5.0) -> AsyncGenerator[MCPClient, None]:
     server = Server[object]("events-upstream")
+    if upstream.advertises_events:
+        server.extensions["io.modelcontextprotocol/events"] = {}
     server.add_request_handler("events/list", _Params, upstream.list_events)
     server.add_request_handler("events/poll", _Params, upstream.poll)
     server.add_request_handler("events/stream", _Params, upstream.stream)
