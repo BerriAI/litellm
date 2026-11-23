@@ -3508,6 +3508,16 @@ class _CredentialsTable:
         self.rows[name] = {**self.rows[name], **self._as_read(data)}
         return self.rows[name]
 
+    async def update_many(self, where: dict, data: dict) -> int:
+        name: Final = where["credential_name"]
+        row: Final = self.rows.get(name)
+        expected_columns: Final = {key: where[key]["equals"].data for key in where.keys() - {"credential_name"}}
+        if row is None or any(row.get(key) != expected for key, expected in expected_columns.items()):
+            return 0
+        self.writes.append("update")
+        self.rows[name] = {**row, **self._as_read(data)}
+        return 1
+
 
 @pytest.fixture
 def chatgpt_sign_in(monkeypatch):

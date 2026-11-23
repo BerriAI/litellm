@@ -2,7 +2,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -16,17 +16,16 @@ from litellm.llms.chatgpt.common_utils import CHATGPT_OAUTH_TOKEN_URL, OPENAI_AU
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
     ChatGPTLoginRefresher,
+    CoordinatedRefresh,
+    LockedRefresh,
     blocks_chatgpt_login,
     fresh_chatgpt_subscription_logins,
     owned_chatgpt_subscription_access_token,
     owned_chatgpt_subscription_logins,
     save_chatgpt_login,
 )
+from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import InProcessRefreshCoordinator, OAuthToken
-from litellm.proxy.mcp_server.outbound_credentials.postgres_refresh_coordinator import (
-    AdvisoryLockRefreshCoordinator,
-    AdvisoryLockUnavailable,
-)
 from litellm.types.utils import CredentialItem
 
 NOW: Final = 1_900_000_000.0
@@ -110,8 +109,15 @@ def _row_after_write(row: CredentialItem, data: Mapping[str, object]) -> Credent
 
 
 class _CredentialRows:
-    def __init__(self, *rows: CredentialItem, failing_writes: int = 0, reads_fail: bool = False) -> None:
+    def __init__(
+        self,
+        *rows: CredentialItem,
+        failing_writes: int = 0,
+        reads_fail: bool = False,
+        rewritten_after_reads: Sequence[CredentialItem] = (),
+    ) -> None:
         self.rows: dict[str, CredentialItem] = {row.credential_name: row for row in rows}
+        self.rewritten_after_reads = list(rewritten_after_reads)
         self.updates: list[tuple[str, Mapping[str, object]]] = []
         self.compared: list[tuple[tuple[str, str], tuple[str, str] | None]] = []
         self.reads: list[str] = []
@@ -134,7 +140,10 @@ class _CredentialRows:
         self.reads.append(credential_name)
         if self.reads_fail:
             raise ConnectionError("the database is unreachable")
-        return self.rows.get(credential_name)
+        found: Final = self.rows.get(credential_name)
+        if self.rewritten_after_reads:
+            self.put(self.rewritten_after_reads.pop(0))
+        return found
 
     async def update_if_value_unchanged(
         self,
@@ -157,10 +166,24 @@ class _CredentialRows:
         self.rows[credential_name] = _row_after_write(current, data)
         return True
 
-    async def update_by_name(self, credential_name: str, data: Mapping[str, object]) -> None:
+    async def update_if_unchanged(
+        self,
+        credential_name: str,
+        expected_values: Mapping[str, object],
+        expected_info: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> bool:
         self.updates.append((credential_name, data))
         self._attempt_write()
-        self.rows[credential_name] = _row_after_write(self.rows[credential_name], data)
+        current: Final = self.rows.get(credential_name)
+        if (
+            current is None
+            or current.credential_values != expected_values
+            or (expected_info and current.credential_info != expected_info)
+        ):
+            return False
+        self.rows[credential_name] = _row_after_write(current, data)
+        return True
 
     async def create(self, data: Mapping[str, object]) -> None:
         self.creates.append(data)
@@ -247,22 +270,38 @@ class _SharedCoordinatorWithoutLock:
         return await refresh()
 
 
+class _LockTransaction:
+    async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
+        return [{"locked": 1}]
+
+
 class _DatabaseLock:
     def __init__(self) -> None:
         self.held: dict[str, asyncio.Lock] = {}
+        self.transaction = _LockTransaction()
 
     async def while_held(
-        self, key: str, action: Callable[[], Awaitable[OAuthToken | None]]
+        self, key: str, action: Callable[[AdvisoryLockTransaction], Awaitable[OAuthToken | None]]
     ) -> OAuthToken | None | AdvisoryLockUnavailable:
         async with self.held.setdefault(key, asyncio.Lock()):
-            return await action()
+            return await action(self.transaction)
 
 
 class _UnreachableDatabaseLock:
     async def while_held(
-        self, key: str, action: Callable[[], Awaitable[OAuthToken | None]]
+        self, key: str, action: Callable[[AdvisoryLockTransaction], Awaitable[OAuthToken | None]]
     ) -> OAuthToken | None | AdvisoryLockUnavailable:
         return AdvisoryLockUnavailable()
+
+
+def _rows_in_lock_transaction(
+    lock: _DatabaseLock, rows: _CredentialRows
+) -> Callable[[AdvisoryLockTransaction], _CredentialRows]:
+    def rows_in(transaction: AdvisoryLockTransaction) -> _CredentialRows:
+        assert transaction is lock.transaction
+        return rows
+
+    return rows_in
 
 
 def _recording_sleep(waits: list[float]) -> Callable[[float], Awaitable[None]]:
@@ -276,14 +315,14 @@ def _refresher(
     rows: _CredentialRows,
     oauth_client: _TokenEndpoint,
     coordinator: InProcessRefreshCoordinator | _LosingCoordinator | None = None,
-    shared_coordinator: _SharedCoordinatorWithoutLock | AdvisoryLockRefreshCoordinator | None = None,
+    shared_refresh: CoordinatedRefresh | LockedRefresh | None = None,
     waits: list[float] | None = None,
 ) -> ChatGPTLoginRefresher:
     return ChatGPTLoginRefresher(
         rows=rows,
         oauth_client=oauth_client,
         coordinator=coordinator or InProcessRefreshCoordinator(),
-        shared_coordinator=shared_coordinator,
+        shared_refresh=shared_refresh,
         clock=_now,
         sleep=_recording_sleep(waits if waits is not None else []),
     )
@@ -543,7 +582,7 @@ async def test_concurrent_calls_redeem_once_when_the_shared_lock_refreshes_witho
     rows: Final = _CredentialRows(_stored(held))
     oauth, new_access_token = _refreshed("new")
     shared: Final = _SharedCoordinatorWithoutLock()
-    refresher: Final = _refresher(rows, oauth, shared_coordinator=shared)
+    refresher: Final = _refresher(rows, oauth, shared_refresh=CoordinatedRefresh(shared, rows))
 
     tokens: Final = await asyncio.gather(*(refresher.access_token(held) for _ in range(5)))
 
@@ -859,6 +898,43 @@ async def test_saving_again_on_the_same_name_replaces_the_owner_and_keeps_the_re
     assert await _resolve(None, "hash-k") == {"login-a": new_access_token}
 
 
+async def test_a_sign_in_never_replaces_another_providers_credential_written_after_its_check(monkeypatch):
+    empty_login: Final = CredentialItem(
+        credential_name="login-a", credential_values={}, credential_info={"custom_llm_provider": "chatgpt"}
+    )
+    other_provider: Final = CredentialItem(
+        credential_name="login-a",
+        credential_values={"api_key": encrypt_value_helper("sk-written-meanwhile")},
+        credential_info={"custom_llm_provider": "openai"},
+    )
+    _serve(monkeypatch)
+    rows: Final = _CredentialRows(empty_login, rewritten_after_reads=(other_provider,))
+    values: Final = _login_values(_access_token("signed-in"), "rt-signed-in", FRESH_EXPIRES_AT)
+
+    saved: Final = await save_chatgpt_login(rows, "login-a", None, values, ("team-a", None), "admin-user")
+
+    assert saved is None
+    assert rows.rows == {"login-a": other_provider}
+    assert await _resolve("team-a", None) == {}
+
+
+async def test_a_sign_in_saves_over_its_login_refreshed_after_its_check(monkeypatch):
+    before_refresh: Final = _login("login-a", _login_values(_access_token("old"), "rt-old", STALE_EXPIRES_AT), "team-a")
+    refreshed: Final = _login(
+        "login-a", _login_values(_access_token("refreshed"), "rt-refreshed", FRESH_EXPIRES_AT), "team-a"
+    )
+    _serve(monkeypatch)
+    rows: Final = _CredentialRows(_stored(before_refresh), rewritten_after_reads=(_stored(refreshed),))
+    signed_in_access_token: Final = _access_token("signed-in")
+    values: Final = _login_values(signed_in_access_token, "rt-signed-in", FRESH_EXPIRES_AT)
+
+    saved: Final = await save_chatgpt_login(rows, "login-a", None, values, ("team-a", None), "admin-user")
+
+    assert saved is not None
+    assert _decrypted(rows.rows["login-a"].credential_values) == values
+    assert await _resolve("team-a", None) == {"login-a": signed_in_access_token}
+
+
 @pytest.mark.parametrize("coordinator", [InProcessRefreshCoordinator, _LosingCoordinator], ids=["refresh", "reread"])
 async def test_a_login_rebound_to_another_owner_is_not_served_to_the_old_owner(monkeypatch, coordinator):
     memory_values: Final = _login_values(_access_token("team-a-seat"), "rt-team-a", STALE_EXPIRES_AT)
@@ -992,22 +1068,25 @@ async def test_a_refresh_that_fails_unexpectedly_serves_no_token(monkeypatch, pr
     assert "login-a" in _logged_text(proxy_log)
 
 
-async def test_two_replicas_sharing_the_database_lock_redeem_a_stale_login_once(monkeypatch):
+async def test_two_replicas_sharing_the_database_lock_redeem_a_stale_login_once_on_the_lock_transaction(monkeypatch):
     values: Final = _login_values(_access_token("old"), "rt-single-use", STALE_EXPIRES_AT)
     held: Final = _login("login-a", values, team_id="team-a")
     _serve(monkeypatch, held)
-    rows: Final = _CredentialRows(_stored(held))
+    pooled_rows: Final = _CredentialRows(reads_fail=True, failing_writes=99)
+    transaction_rows: Final = _CredentialRows(_stored(held))
     oauth, new_access_token = _refreshed("new")
     database_lock: Final = _DatabaseLock()
-    replicas: Final = tuple(
-        _refresher(rows, oauth, shared_coordinator=AdvisoryLockRefreshCoordinator(database_lock)) for _ in range(2)
+    locked_refresh: Final = LockedRefresh(
+        database_lock, rows_in=_rows_in_lock_transaction(database_lock, transaction_rows)
     )
+    replicas: Final = tuple(_refresher(pooled_rows, oauth, shared_refresh=locked_refresh) for _ in range(2))
 
     tokens: Final = await asyncio.gather(*(replica.access_token(held) for replica in replicas))
 
     assert tokens == [new_access_token, new_access_token]
     assert len(oauth.posts) == 1
-    assert _decrypted(rows.rows["login-a"].credential_values)["chatgpt_access_token"] == new_access_token
+    assert (pooled_rows.reads, pooled_rows.updates) == ([], [])
+    assert _decrypted(transaction_rows.rows["login-a"].credential_values)["chatgpt_access_token"] == new_access_token
 
 
 @pytest.mark.parametrize(
@@ -1025,7 +1104,9 @@ async def test_a_replica_that_cannot_take_the_database_lock_only_reads_the_row(
     rows: Final = _CredentialRows(_stored(_login("login-a", row_values, team_id="team-a")))
     oauth, _ = _refreshed("new")
     refresher: Final = _refresher(
-        rows, oauth, shared_coordinator=AdvisoryLockRefreshCoordinator(_UnreachableDatabaseLock())
+        rows,
+        oauth,
+        shared_refresh=LockedRefresh(_UnreachableDatabaseLock(), rows_in=lambda _: _CredentialRows(reads_fail=True)),
     )
 
     token: Final = await refresher.access_token(held)

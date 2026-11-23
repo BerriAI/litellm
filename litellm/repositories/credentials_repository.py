@@ -105,6 +105,26 @@ class CredentialsRepository:
         )
         return updated_rows > 0
 
+    async def update_if_unchanged(
+        self,
+        credential_name: str,
+        expected_values: Mapping[str, object],
+        expected_info: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> bool:
+        from prisma import Json
+
+        info_condition: Final = {"credential_info": {"equals": Json(dict(expected_info))}} if expected_info else {}
+        updated_rows: Final = await self.table.update_many(
+            where={
+                "credential_name": credential_name,
+                "credential_values": {"equals": Json(dict(expected_values))},
+                **info_condition,
+            },
+            data=data,
+        )
+        return updated_rows > 0
+
     async def repoint_info_value(self, info_key: str, previous_value: str, new_value: str) -> int:
         return await self.prisma_client.db.execute_raw(
             'UPDATE "LiteLLM_CredentialsTable" '
