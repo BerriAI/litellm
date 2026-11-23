@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
@@ -6,6 +7,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
@@ -655,10 +657,10 @@ async def test_message_history_looks_up_the_decoded_chat_completion_id():
 
 
 class _SpendLogTable:
-    def __init__(self, rows: tuple[dict, ...]):
+    def __init__(self, rows: tuple[Mapping[str, object], ...]):
         self.rows: Final = rows
 
-    async def query_raw(self, query: str, request_ids: list[str]) -> list[dict]:
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[Mapping[str, object]]:
         sessions: Final = frozenset(row["session_id"] for row in self.rows if row["request_id"] in request_ids)
         return [row for row in self.rows if row["session_id"] in sessions]
 
@@ -668,12 +670,32 @@ class _PrismaClientWith:
         self.db: Final = db
 
 
+class _TextBlock(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    text: str
+
+
+class _ChatTurn(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    role: str
+    content: tuple[_TextBlock, ...]
+
+
+class _AnthropicRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    messages: tuple[_ChatTurn, ...]
+
+
+def _turn(role: str, text: str) -> _ChatTurn:
+    return _ChatTurn(role=role, content=(_TextBlock(text=text),))
+
+
 class _RecordingAnthropic:
     def __init__(self) -> None:
-        self.request_bodies: Final[list[dict]] = []
+        self.requests: Final[list[_AnthropicRequest]] = []
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.request_bodies.append(json.loads(request.content))
+        self.requests.append(_AnthropicRequest.model_validate_json(request.content))
         return httpx.Response(
             200,
             json={
@@ -719,14 +741,11 @@ async def test_bridged_turn_replays_a_turn_stored_under_its_model_encoded_id(
             client=client,
         )
 
-    assert [
-        (message["role"], [block["text"] for block in message["content"]])
-        for message in provider.request_bodies[0]["messages"]
-    ] == [
-        ("user", ["Remember this code word: marmalade."]),
-        ("assistant", ["noted"]),
-        ("user", ["What code word did I give you earlier?"]),
-    ]
+    assert provider.requests[0].messages == (
+        _turn("user", "Remember this code word: marmalade."),
+        _turn("assistant", "noted"),
+        _turn("user", "What code word did I give you earlier?"),
+    )
 
 
 @pytest.mark.asyncio
