@@ -152,7 +152,7 @@ _SERVER_CALL_FIELD_KEYS: Final = ("server_tool_calls", "web_search_calls")
 _WEB_SEARCH_CALL_ADAPTER: Final = TypeAdapter(ResponseFunctionWebSearch)
 _TOOL_CALL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
-_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
@@ -2181,7 +2181,7 @@ def strip_thinking_blocks_from_anthropic_messages(messages: Sequence[object]) ->
     return out
 
 
-def _replayable_message(message: dict) -> dict | None:  # mutable-ok: Anthropic message payload shape
+def _replayable_message(message: dict) -> dict[str, object] | None:  # mutable-ok: Anthropic message payload shape
     if not isinstance(message, Mapping):
         return message
     content: Final = message.get("content")
@@ -2209,7 +2209,7 @@ def _with_native_redacted_data(block: object) -> object:
 
 
 def strip_encrypted_reasoning_blocks_from_anthropic_messages(
-    messages: Sequence[dict],  # mutable-ok: Anthropic message payload shape
+    messages: Sequence[dict[str, object]],  # mutable-ok: Anthropic message payload shape
 ) -> list[dict[str, object]]:  # mutable-ok: AnthropicMessagesRequest.messages is typed list[dict]
     """
     Drop thinking / redacted_thinking blocks that carry another provider's encrypted
@@ -2948,8 +2948,8 @@ def normalize_cache_control_in_anthropic_payload(
     return {key: _with_portable_cache_control_in_scoped_value(key, value) for key, value in portable.items()}
 
 
-def process_anthropic_headers(headers: httpx.Headers | dict) -> dict:
-    openai_headers: Final = {}
+def process_anthropic_headers(headers: httpx.Headers | Mapping[str, object]) -> dict[str, object]:
+    openai_headers: Final[dict[str, object]] = {}
     if "anthropic-ratelimit-requests-limit" in headers:
         openai_headers["x-ratelimit-limit-requests"] = headers["anthropic-ratelimit-requests-limit"]
     if "anthropic-ratelimit-requests-remaining" in headers:
