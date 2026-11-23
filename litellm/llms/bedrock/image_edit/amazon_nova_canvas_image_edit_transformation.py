@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import base64
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import httpx
@@ -57,11 +57,11 @@ def _nova_canvas_task_body(
     image_b64: str,
     mask_b64: str | None,
     text: str,
-    negative_text: object,
-    similarity_strength: object,
-    task_type: object,
-    mask_prompt: object,
-    out_painting_mode: object,
+    negative_text: str | None,
+    similarity_strength: float | None,
+    task_type: str | None,
+    mask_prompt: str | None,
+    out_painting_mode: str | None,
 ) -> dict[str, object]:
     """Build InvokeModel body task section (without imageGenerationConfig)."""
     if task_type == "BACKGROUND_REMOVAL":
@@ -143,7 +143,7 @@ def _nova_canvas_task_body(
     }
 
 
-def _file_types_to_b64(image: object) -> str:
+def _file_types_to_b64(image: FileTypes | Sequence[FileTypes | None] | None) -> str:
     """Encode OpenAI image input to base64 string for Nova Canvas."""
     if image is None:
         raise ValueError("Nova Canvas image edit requires an image input")
@@ -258,7 +258,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         return [
             "n",
             "size",
@@ -330,10 +330,10 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: Mapping[str, object],
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: Mapping[str, object],
-    ) -> tuple[dict[str, object], RequestFiles]:
+        headers: dict,
+    ) -> tuple[dict, RequestFiles]:
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
@@ -495,7 +495,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> str:
         raise NotImplementedError(
             "Nova Canvas image edit URLs are built in BedrockImageEdit._prepare_request "
@@ -508,7 +508,7 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
         if headers is None:
