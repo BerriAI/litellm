@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Final
 
+from litellm.proxy.mcp_server.events.webhooks.settlement import SUSPEND_AFTER_FAILURES, SettlementOutcome
 from litellm.proxy.mcp_server.events.webhooks.store import (
     LIVE_STATUSES,
     PENDING_TTL,
@@ -75,6 +76,7 @@ class MemoryStore:
         self._update_live(
             subscription_id,
             status="active",
+            generation=uuid.uuid4().hex,
             consecutive_failures=0,
             cursor=watermark.cursor,
             **activation.model_dump(exclude={"expected_generation", "reactivation_gap_id", "cursor"}),
@@ -265,3 +267,37 @@ class MemoryStore:
         for key in [key for key, item in self.queue.items() if item.subscription_id == subscription_id]:
             self.queue.pop(key)
             self.leases.pop(key, None)
+
+    async def settle(
+        self, delivery: QueuedDelivery, generation: str, at: datetime, outcome: SettlementOutcome, *, gap: bool = False
+    ) -> bool:
+        row: Final = self.rows.get(delivery.subscription_id)
+        if (
+            row is None
+            or row.generation != generation
+            or ((outcome != "discarded" or gap) and row.status not in ("active", "suspended"))
+            or delivery.claim_id is None
+            or not self._holds(delivery)
+        ):
+            return False
+        if gap and outcome not in ("delivered", "terminated"):
+            gap_id: Final = f"msg_gap_{delivery.delivery_id}"
+            await self.enqueue(
+                QueuedDelivery(
+                    delivery_id=gap_id,
+                    subscription_id=row.id,
+                    body=GapEnvelope(cursor=row.cursor).model_dump_json(),
+                    webhook_id=gap_id,
+                    prepared=True,
+                    next_attempt_at=at,
+                )
+            )
+        await self.finish(delivery, at)
+        if outcome == "delivered":
+            await self.mark_delivered(row.id, at)
+        elif outcome == "terminated":
+            await self.terminate(row.id)
+            await self.drop_deliveries(row.id)
+        elif outcome != "discarded":
+            await self.mark_failed(row.id, outcome, at, SUSPEND_AFTER_FAILURES)
+        return True
