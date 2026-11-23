@@ -299,8 +299,6 @@ async def prepare_subscription(
     prepared: Final = await admit(context, params.name, params.arguments, "webhook", headers, settings, runtime)
     if isinstance(prepared, Error):
         return Error(prepared.error)
-    if not prepared.ok.resolved.target.server.available_on_public_internet:
-        return Error(forbidden("Webhook subscriptions cannot retain client network authority"))
     sid: Final = subscription_id(request.principal, params.delivery.url, params.name, params.arguments)
     binding: Final = binding_for(context, prepared.ok, params.arguments)
     opened: Final = open_cursor(params.cursor, binding, runtime.now())
