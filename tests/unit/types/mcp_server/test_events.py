@@ -58,19 +58,19 @@ def test_control_envelopes_carry_their_type_discriminator() -> None:
 
 
 def test_refresh_before_preserves_the_requested_key_style() -> None:
-    result = SubscribeEventsResult(id="sub_1", refresh_before=None)
+    result: Final = SubscribeEventsResult(id="sub_1", refresh_before=None)
     assert result.model_dump(exclude_none=True) == {"id": "sub_1", "refresh_before": None, "truncated": False}
 
 
 @pytest.mark.parametrize("field", ["events", "truncated", "hasMore", "nextPollMs"])
 def test_a_poll_without_replay_still_carries_progress_and_timing(field: str) -> None:
-    wire = {"events": [], "cursor": None, "truncated": False, "hasMore": False, "nextPollMs": 1000}
+    wire: Final = {"events": [], "cursor": None, "truncated": False, "hasMore": False, "nextPollMs": 1000}
     assert PollEventsResult.model_validate(wire).model_dump(by_alias=True, mode="json") == wire
-    del wire[field]
+    incomplete: Final = {key: value for key, value in wire.items() if key != field}
     with pytest.raises(ValidationError):
-        PollEventsResult.model_validate(wire)
+        PollEventsResult.model_validate(incomplete)
 
 
 def test_a_poll_result_without_a_cursor_means_replay_is_unavailable() -> None:
-    wire = {"events": [], "truncated": False, "hasMore": False, "nextPollMs": 1000}
+    wire: Final = {"events": [], "truncated": False, "hasMore": False, "nextPollMs": 1000}
     assert PollEventsResult.model_validate(wire) == PollEventsResult.model_validate({**wire, "cursor": None})
