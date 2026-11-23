@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from unittest.mock import AsyncMock
 
+from litellm.caching.caching import Cache
 from litellm.caching.in_memory_cache import InMemoryCache
 
 
@@ -392,3 +393,65 @@ async def test_async_increment_pipeline_keeps_each_key_for_its_own_ttl() -> None
 
     assert cache.get_cache("minute") is None
     assert cache.get_cache("day") == 1
+
+
+def test_in_memory_cache_response_write_can_refresh_an_active_ttl() -> None:
+    class Clock:
+        now = 1_000.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+    backend = InMemoryCache(default_ttl=600, clock=clock)
+    response_cache = Cache(_backend=backend)
+
+    request_kwargs = {
+        "cache_key": "response:ttl-refresh",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "refresh ttl"}],
+    }
+    response_cache.add_cache("first", **request_kwargs, cache={"ttl": 600})
+    initial_expiry = backend.ttl_dict["response:ttl-refresh"]
+    assert initial_expiry == 1_600.0
+
+    clock.now += 60
+    response_cache.add_cache(
+        "refreshed",
+        **request_kwargs,
+        cache={"no-cache": True, "ttl": 10},
+    )
+
+    assert backend.ttl_dict["response:ttl-refresh"] == 1_070.0
+    clock.now += 11
+    assert backend.get_cache("response:ttl-refresh") is None
+
+
+@pytest.mark.asyncio
+async def test_async_in_memory_cache_response_write_can_refresh_an_active_ttl() -> None:
+    class Clock:
+        now = 2_000.0
+
+        def __call__(self) -> float:
+            return self.now
+
+    clock = Clock()
+    backend = InMemoryCache(default_ttl=600, clock=clock)
+    response_cache = Cache(_backend=backend)
+    request_kwargs = {
+        "cache_key": "response:async-ttl-refresh",
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "refresh ttl"}],
+    }
+
+    await response_cache.async_add_cache("first", **request_kwargs, cache={"ttl": 600})
+    clock.now += 60
+    await response_cache.async_add_cache(
+        "refreshed",
+        **request_kwargs,
+        cache={"no-cache": True, "ttl": 10},
+    )
+
+    assert backend.ttl_dict["response:async-ttl-refresh"] == 2_070.0
+    clock.now += 11
+    assert backend.get_cache("response:async-ttl-refresh") is None
