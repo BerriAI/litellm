@@ -57,7 +57,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def set_model_info(cls, values):
+    def set_model_info(cls, values: dict[str, object]) -> dict[str, object]:
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:

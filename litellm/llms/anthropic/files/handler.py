@@ -5,7 +5,8 @@ from collections.abc import Coroutine, Mapping
 from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,7 +26,40 @@ from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 from ..chat.transformation import AnthropicConfig
 from ..common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP, AnthropicModelInfo
 
-_DECODED_JSON: Final = TypeAdapter(object)
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BatchMessageFields(TypedDict, total=False):
+    id: ReadOnly[str]
+    model: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BatchErrorDetail(TypedDict, total=False):
+    message: ReadOnly[str]
+    type: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BatchError(TypedDict, total=False):
+    error: ReadOnly[_BatchErrorDetail]
+    request_id: ReadOnly[str]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BatchResultBody(TypedDict, total=False):
+    type: ReadOnly[object]
+    message: ReadOnly[dict[str, object] | None]
+    error: ReadOnly[_BatchError]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _BatchResultLine(TypedDict, total=False):
+    custom_id: ReadOnly[str]
+    result: ReadOnly[_BatchResultBody]
+
+
+_BATCH_MESSAGE_FIELDS: Final = TypeAdapter(_BatchMessageFields)
+_BATCH_RESULT_LINE: Final = TypeAdapter(_BatchResultLine)
 
 
 class AnthropicFilesHandler:
@@ -189,7 +223,7 @@ class AnthropicFilesHandler:
         """
         try:
             anthropic_config: Final = AnthropicConfig()
-            transformed_lines: Final = []
+            transformed_lines: Final[list[str]] = []
 
             # Parse JSONL content
             content_str: Final = anthropic_content.decode("utf-8")
@@ -197,11 +231,7 @@ class AnthropicFilesHandler:
                 if not line.strip():
                     continue
 
-                anthropic_result: object = _DECODED_JSON.validate_python(json.loads(line))
-                if not isinstance(anthropic_result, dict):
-                    raise TypeError(
-                        f"Anthropic batch result line is not a JSON object: {type(anthropic_result).__name__}"
-                    )
+                anthropic_result = _BATCH_RESULT_LINE.validate_python(json.loads(line))
                 custom_id = anthropic_result.get("custom_id", "")
                 result = anthropic_result.get("result", {})
                 result_type = result.get("type", "")
@@ -221,7 +251,7 @@ class AnthropicFilesHandler:
                             "custom_id": custom_id,
                             "response": {
                                 "status_code": 200,
-                                "request_id": anthropic_message.get("id", ""),
+                                "request_id": _BATCH_MESSAGE_FIELDS.validate_python(anthropic_message).get("id", ""),
                                 "body": openai_response_body,
                             },
                         }
@@ -279,11 +309,12 @@ class AnthropicFilesHandler:
             return anthropic_content
 
     def _transform_anthropic_message_to_openai_format(
-        self, anthropic_message: dict, anthropic_config: AnthropicConfig
+        self, anthropic_message: dict[str, object], anthropic_config: AnthropicConfig
     ) -> OpenAIChatCompletionResponse:
         """
         Transform a single Anthropic message to OpenAI chat completion format.
         """
+        message_fields: Final = _BATCH_MESSAGE_FIELDS.validate_python(anthropic_message)
         try:
             # Create a mock httpx.Response for transformation
             mock_response: Final = httpx.Response(
@@ -304,7 +335,7 @@ class AnthropicFilesHandler:
 
             # Create a logging object for transformation
             logging_obj: Final = Logging(
-                model=anthropic_message.get("model", "claude-3-5-sonnet-20241022"),
+                model=message_fields.get("model", "claude-3-5-sonnet-20241022"),
                 messages=[{"role": "user", "content": "batch_request"}],
                 stream=False,
                 call_type=CallTypes.aretrieve_batch,
@@ -330,17 +361,17 @@ class AnthropicFilesHandler:
 
             # Ensure id comes from anthropic_message if not set
             if not openai_body.get("id"):
-                openai_body["id"] = anthropic_message.get("id", "")
+                openai_body["id"] = message_fields.get("id", "")
 
             return openai_body
         except Exception as e:
             verbose_logger.error("Error transforming Anthropic message to OpenAI format: %s", e)
             # Return a basic error response if transformation fails
             error_response: Final[OpenAIChatCompletionResponse] = {
-                "id": anthropic_message.get("id", ""),
+                "id": message_fields.get("id", ""),
                 "object": "chat.completion",
                 "created": int(time.time()),
-                "model": anthropic_message.get("model", ""),
+                "model": message_fields.get("model", ""),
                 "choices": [
                     {
                         "index": 0,
