@@ -37,7 +37,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
                 continue
             try:
                 parsed = _DECODED_JSON.validate_python(json.loads(payload))
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(parsed, dict):
                 events.append(parsed)

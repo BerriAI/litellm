@@ -2,11 +2,12 @@
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from pydantic import ConfigDict, TypeAdapter
+from pydantic import ConfigDict, Field, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
@@ -65,6 +66,8 @@ class TeamMemberListItem(_RosterEntry):
     team_id: str
     spend: float | None = 0.0
     total_spend: float | None = 0.0
+    rollover_credit: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    effective_max_budget: float | None = Field(default=None, exclude_if=lambda value: value is None)
     budget_id: str | None = None
     litellm_budget_table: LiteLLM_BudgetTableFull | LiteLLM_BudgetTable | None = None
     budget_source: TeamMemberBudgetSource
@@ -141,7 +144,9 @@ class PrismaTeamMemberListExecutor:
         )
 
         membership_fields: Final[Mapping[str, object]] = (
-            membership.model_dump() if membership is not None else {"team_id": self.team_id}
+            {**membership.model_dump(), **membership.rollover_usage(datetime.now(timezone.utc))}
+            if membership is not None
+            else {"team_id": self.team_id}
         )
         return TeamMemberListItem.model_validate(
             {

@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks

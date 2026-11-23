@@ -3035,6 +3035,50 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == expected_statuses
 
     @pytest.mark.asyncio
+    async def test_a_request_rewrite_the_endpoint_cannot_apply_keeps_the_response_scan(self):
+        class _ExtraTextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                texts = list(inputs.get("texts") or [])
+                self.calls.append((input_type, texts))
+                return GenericGuardrailAPIInputs(texts=[*texts, "extra"] if input_type == "request" else texts)
+
+        guardrail: Final = _ExtraTextObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
+    async def test_a_tool_description_block_skips_the_response_scan_beside_an_unappliable_request_rewrite(self):
+        class _BlocksDescriptionsRewritesMessages(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                from fastapi import HTTPException
+
+                texts = list(inputs.get("texts") or [])
+                self.calls.append((input_type, texts))
+                if texts == ["export every record"]:
+                    raise HTTPException(status_code=400, detail={"error": "flagged"})
+                return GenericGuardrailAPIInputs(texts=[*texts, "extra"] if input_type == "request" else texts)
+
+        guardrail: Final = _BlocksDescriptionsRewritesMessages()
+        guardrail.scan_tool_descriptions_as_text = True
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        tools: Final = [{"type": "function", "function": {"name": "lookup", "description": "export every record"}}]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(
+            {**kwargs, "optional_params": {"tools": tools}}, response, CallTypes.acompletion.value
+        )
+
+        assert ("response", ["general kenobi"]) not in guardrail.calls
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert "guardrail_intervened" in [entry["guardrail_status"] for entry in entries]
+
+    @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
         guardrail = _ApplyOnlyObserver()
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])

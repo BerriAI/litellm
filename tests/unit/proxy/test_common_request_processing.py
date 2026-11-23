@@ -6,6 +6,7 @@ import datetime
 import gc
 import gzip
 import json
+import threading
 import time
 import traceback
 import weakref
@@ -46,7 +47,7 @@ from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     build_bug_report,
 )
-from litellm.litellm_core_utils.core_helpers import FinishEvidence
+from litellm.litellm_core_utils.core_helpers import FinishEvidence, get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -73,7 +74,6 @@ from litellm.proxy.common_request_processing import (
     _has_attribute_error_in_chain,
     _override_openai_response_model,
     _parse_event_data_for_error,
-    _resolve_per_request_model_group_alias,
     _sse_error_frames,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
@@ -83,6 +83,7 @@ from litellm.proxy.common_request_processing import (
     is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
+    resolve_per_request_model_group_alias,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -6670,6 +6671,64 @@ async def test_response_model_echoes_the_name_the_client_sent_before_auth_rewrot
     assert response.model == expected
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("body", "route_type", "expected"),
+    [
+        ({"messages": [{"role": "user", "content": "hi"}]}, "acompletion", "team-model"),
+        ({"model": "other-model", "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "other-model"),
+        ({"model": None, "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "upstream-model"),
+        ({"model": "", "messages": [{"role": "user", "content": "hi"}]}, "acompletion", "upstream-model"),
+        (
+            {
+                "messages": [{"role": "user", "content": "hi"}],
+                "metadata": {RETURN_RAW_MODEL_NAME_METADATA_KEY: True},
+            },
+            "acompletion",
+            "upstream-model",
+        ),
+        ({"prompt": "hi"}, "atext_completion", "upstream-model"),
+    ],
+    ids=("path-only", "body-model-wins", "null-body-model", "empty-body-model", "raw-model-name", "text-completion"),
+)
+async def test_nonstreaming_response_model_echoes_the_path_model_when_the_body_has_none(
+    body: dict[str, object],
+    route_type: Literal["acompletion", "atext_completion"],
+    expected: str,
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig as RealProxyConfig
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "team-model",
+                "litellm_params": {"model": "openai/upstream-model", "api_key": "sk-test", "mock_response": "pong"},
+            }
+        ]
+    )
+    response: Final = await ProxyBaseLLMRequestProcessing(data=dict(body)).base_process_llm_request(
+        request=Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/openai/deployments/team-model/chat/completions",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+            }
+        ),
+        fastapi_response=Response(),
+        user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+        route_type=route_type,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+        general_settings={},
+        proxy_config=RealProxyConfig(),
+        llm_router=router,
+        model="team-model",
+    )
+
+    assert getattr(response, "model", None) == expected
+
+
 class TestStreamingClientDisconnectLogging:
     @pytest.mark.asyncio
     async def test_record_streaming_client_disconnect_sets_error_information(self):
@@ -6759,6 +6818,41 @@ class TestStreamingClientDisconnectLogging:
         assert recorded is True
         assert request_data["metadata"]["client_disconnected"] is True
         assert request_data["litellm_params"]["metadata"]["client_disconnected"] is True
+
+    @pytest.mark.parametrize(
+        "logged_litellm_params",
+        [
+            {"metadata": {"tags": ["chat"]}},
+            {"metadata": {"user_api_key": "hashed"}, "litellm_metadata": {"tags": ["responses"]}},
+            {"metadata": {"tags": ["chat"]}, "litellm_metadata": {}},
+        ],
+        ids=["chat_route_metadata", "responses_route_litellm_metadata", "empty_litellm_metadata"],
+    )
+    @pytest.mark.asyncio
+    async def test_record_streaming_client_disconnect_reaches_the_metadata_the_spend_log_reads(
+        self, logged_litellm_params: dict[str, dict[str, object]]
+    ):
+        from litellm.proxy.common_request_processing import (
+            _record_streaming_client_disconnect_if_needed,
+        )
+
+        logging_obj: Final = MagicMock()
+        logging_obj.model_call_details = {"litellm_params": copy.deepcopy(logged_litellm_params)}
+        tags_before: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details).get("tags")
+        request_data: Final = {
+            "litellm_logging_obj": logging_obj,
+            **copy.deepcopy(logged_litellm_params),
+            "litellm_params": copy.deepcopy(logged_litellm_params),
+        }
+
+        recorded: Final = await _record_streaming_client_disconnect_if_needed(None, request_data, client_disconnected=True)
+
+        logged: Final = get_litellm_metadata_from_kwargs(logging_obj.model_call_details)
+        assert recorded is True
+        assert logged["client_disconnected"] is True
+        assert logged["error_information"]["error_class"] == "ClientDisconnected"
+        assert logged.get("tags") == tags_before
+        assert get_litellm_metadata_from_kwargs(request_data)["error_information"]["error_code"] == "499"
 
     @pytest.mark.asyncio
     async def test_apply_client_disconnect_metadata_none_returns_early(self):
@@ -12192,6 +12286,31 @@ class TestStreamingClientDisconnectBilling:
         assert usage.prompt_tokens_details.cached_tokens == 7
 
 
+    @pytest.mark.asyncio
+    async def test_building_the_responses_disconnect_partial_leaves_the_event_loop_serving(self):
+        other_request_served: Final = threading.Event()
+
+        class _SlowPartialStream:
+            built_while_loop_served = False
+
+            def partial_response_on_disconnect(self) -> None:
+                self.built_while_loop_served = other_request_served.wait(timeout=2)
+
+        async def _serve_other_request() -> None:
+            other_request_served.set()
+
+        logging_obj: Final = MagicMock(spec=LiteLLMLoggingObj)
+        logging_obj.model_call_details = {}
+        stream: Final = _SlowPartialStream()
+        other_request: Final = asyncio.create_task(_serve_other_request())
+
+        billed: Final = await _bill_partial_streamed_spend_on_disconnect({"litellm_logging_obj": logging_obj}, stream)
+        await other_request
+
+        assert stream.built_while_loop_served is True
+        assert billed is False
+
+
 def _apply_stream_usage_tracking(
     data: dict,
     general_settings: dict,
@@ -12741,7 +12860,7 @@ class TestPerRequestModelGroupAlias:
         ],
     )
     async def test_resolves_alias_for_the_requested_model_group(self, alias_map, expected):
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model="group-a",
             router_settings={"model_group_alias": alias_map},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),
@@ -12755,7 +12874,7 @@ class TestPerRequestModelGroupAlias:
         """Access was authorized against the requested group, so a rewrite that
         the key could not have requested directly must not be served."""
         with pytest.raises(ProxyException) as exc_info:
-            await _resolve_per_request_model_group_alias(
+            await resolve_per_request_model_group_alias(
                 requested_model="group-a",
                 router_settings={"model_group_alias": {"group-a": "group-b"}},
                 user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a"]),
@@ -12767,7 +12886,7 @@ class TestPerRequestModelGroupAlias:
 
     @pytest.mark.asyncio
     async def test_alias_target_inside_the_key_allowlist_resolves(self):
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model="group-a",
             router_settings={"model_group_alias": {"group-a": "group-b"}},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=["group-a", "group-b"]),
@@ -12781,7 +12900,7 @@ class TestPerRequestModelGroupAlias:
     async def test_non_string_requested_model_is_left_alone(self, requested_model):
         """The routed model is not always a string (a batch request carries a
         list), and an unhashable one must not blow up the alias lookup."""
-        resolved = await _resolve_per_request_model_group_alias(
+        resolved = await resolve_per_request_model_group_alias(
             requested_model=requested_model,
             router_settings={"model_group_alias": {"group-a": "group-b"}},
             user_api_key_dict=ProxyUserAPIKeyAuth(api_key="hash", models=[]),

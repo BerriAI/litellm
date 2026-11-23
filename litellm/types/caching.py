@@ -1,6 +1,6 @@
 from collections.abc import Sequence
 from enum import Enum
-from typing import Any, Final, Literal, Optional, Union
+from typing import Final, Literal, Optional, Union
 
 from typing_extensions import ReadOnly, TypedDict
 
@@ -84,7 +84,7 @@ class RedisPipelineRpushOperation(TypedDict):
     """
 
     key: str
-    values: Sequence[Any]
+    values: ReadOnly[Sequence[str]]
 
 
 class RedisPipelineLpopOperation(TypedDict):

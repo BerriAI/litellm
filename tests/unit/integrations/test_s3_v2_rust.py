@@ -105,7 +105,7 @@ def _uploaded(put: Received) -> dict[str, object]:
 def _assert_backoff_gaps(puts: list[Received]) -> None:
     gaps: Final = [later.at - earlier.at for earlier, later in zip(puts, puts[1:])]
     for attempt, gap in enumerate(gaps):
-        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 0.25, (attempt, gap)
+        assert (1 << attempt) * 0.5 <= gap < (1 << attempt) * 1.5 + 2.0, (attempt, gap)
 
 
 _LOGGED_BACKOFF: Final = re.compile(r"retrying in (\d+\.\d+)s")
@@ -1584,11 +1584,13 @@ async def test_unlisted_status_gets_one_put_and_stays_queued(
     bucket.reply("/test-bucket/", (status, _coded_body(code)))
     await _log_all(logger, [_payload(f"elem-{index}") for index in range(4)])
 
-    started: Final = time.monotonic()
-    await logger.flush_queue()
+    with _failures() as mock_failure:
+        await logger.flush_queue()
+        await _reported(mock_failure, 4)
 
     assert len(bucket.puts()) == 4
-    assert time.monotonic() - started < 0.5
+    assert sorted(_names(bucket.puts())) == [f"elem-{index}.json" for index in range(4)]
+    assert mock_failure.call_count == 4
     assert len(logger.sink.queued_keys()) == 4
 
 

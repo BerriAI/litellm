@@ -470,8 +470,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
@@ -591,7 +591,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = (
             tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
             if "claude" in model
@@ -678,7 +678,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         return mapped_params
 
-    def _should_fake_stream(self, optional_params: dict) -> bool:
+    def _should_fake_stream(self, optional_params: Mapping[str, object]) -> bool:
         """
         Databricks doesn't support 'response_format' while streaming
         """
@@ -964,7 +964,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response: Final = DatabricksResponse(**raw_response.json())
+            decoded_response: Final[DatabricksResponse] = raw_response.json()
+            completion_response: Final = DatabricksResponse(**decoded_response)
         except Exception as e:
             response_headers: Final = getattr(raw_response, "headers", None)
             raise DatabricksException(

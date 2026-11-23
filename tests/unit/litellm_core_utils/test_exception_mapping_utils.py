@@ -12,6 +12,7 @@ from openai import AsyncOpenAI, OpenAI
 
 import litellm
 from litellm import completion
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.exception_mapping_utils import (
     ExceptionCheckers,
@@ -1366,6 +1367,7 @@ def test_azure_404_with_invalid_request_error_type_maps_to_not_found():
     [
         (400, "Invalid 'temperature'", litellm.BadRequestError),
         (401, "Invalid API key", litellm.AuthenticationError),
+        (403, "Project does not have access to this endpoint", litellm.PermissionDeniedError),
         (404, "The model does not exist", litellm.NotFoundError),
     ],
 )
@@ -1404,8 +1406,8 @@ def test_openai_invalid_request_error_without_a_status_code_maps_to_bad_request(
 
 
 @pytest.mark.parametrize("provider", ["openai", "groq", "deepseek"])
-@pytest.mark.parametrize("status_code", [403, 409, 422, 429, 500, 503])
-def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_and_404(
+@pytest.mark.parametrize("status_code", [409, 422, 429, 500, 503])
+def test_openai_invalid_request_error_keeps_bad_request_for_statuses_other_than_401_403_and_404(
     provider: str, status_code: int
 ) -> None:
     message: Final = "Cannot cancel a batch that is already completed."
@@ -1438,10 +1440,11 @@ def _openai_sdk_error(
     "sdk_error, status_code, expected_exception, param, code",
     [
         (openai.AuthenticationError, 401, litellm.AuthenticationError, "organization", "mismatched_organization"),
+        (openai.PermissionDeniedError, 403, litellm.PermissionDeniedError, "model", "model_access_denied"),
         (openai.NotFoundError, 404, litellm.NotFoundError, "id", None),
     ],
 )
-def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields(
+def test_openai_invalid_request_error_401_403_and_404_keep_the_provider_error_fields(
     sdk_error: type[openai.APIStatusError],
     status_code: int,
     expected_exception: type[openai.APIStatusError],
@@ -1472,6 +1475,31 @@ def test_openai_invalid_request_error_401_and_404_keep_the_provider_error_fields
     assert excinfo.value.body == provider_error
     assert openai_error_type(excinfo.value, status_code) == "invalid_request_error"
     assert excinfo.value.message.count(expected_exception.__name__) == 1
+
+
+@pytest.mark.parametrize(
+    "error_detail, expected_exception",
+    [
+        ("model_not_found", litellm.NotFoundError),
+        ("content_policy_violation", litellm.ContentPolicyViolationError),
+    ],
+)
+def test_openai_invalid_request_error_403_keeps_specialized_mappings(
+    error_detail: str, expected_exception: type[openai.APIStatusError]
+) -> None:
+    error_message: Final = json.dumps(
+        {"error": {"message": "Rejected.", "type": "invalid_request_error", "code": error_detail}}
+    )
+    original_exception: Final = OpenAIError(status_code=403, message=error_message, headers={})
+
+    with pytest.raises(openai.APIError) as excinfo:
+        exception_type(
+            model="some-model",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert type(excinfo.value) is expected_exception
 
 
 def test_openai_incorrect_api_key_keeps_the_proxy_authentication_error_type() -> None:
@@ -3528,6 +3556,76 @@ def test_openai_error_matched_by_its_message_keeps_the_upstream_body(
     assert error_response.headers["x-request-id"] == "req-openai"
     assert "sk-openai-secret" not in str(error_response.request.headers)
     assert error_response.request.content == b""
+
+
+def test_openai_compatible_error_relayed_as_json_text_keeps_its_param_and_plain_message(
+    quiet_exception_mapping: None,
+) -> None:
+    upstream_message: Final = "max_tokens must be at least 1, got -5. (parameter=max_tokens, value=-5)"
+    relayed_text: Final = json.dumps(
+        {"error": {"message": upstream_message, "type": "BadRequestError", "param": "max_tokens", "code": 400}}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=relayed_text),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param == "max_tokens"
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {upstream_message}"
+
+
+@pytest.mark.parametrize("message", ("plain text failure", '{"error": "plain text failure"}', "[1, 2]"))
+def test_openai_compatible_error_without_a_relayed_error_object_keeps_its_message(
+    message: str, quiet_exception_mapping: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=message),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param is None
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {message}"
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+@pytest.mark.parametrize(
+    ("status", "error_type", "error_code", "mapped_error"),
+    [
+        (404, "not_found_error", "thread_not_found", litellm.NotFoundError),
+        (400, "invalid_request_error", "thread_unsupported_request", litellm.BadRequestError),
+    ],
+)
+def test_anthropic_thread_refusals_keep_their_details_on_openai_compatible_legs(
+    provider: str,
+    status: int,
+    error_type: str,
+    error_code: str,
+    mapped_error: type[litellm.NotFoundError] | type[litellm.BadRequestError],
+    quiet_exception_mapping: None,
+) -> None:
+    message: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "message": "Threads are not supported.",
+                "details": {"error_code": error_code},
+            },
+        }
+    )
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=AnthropicError(status_code=status, message=message),
+            custom_llm_provider=provider,
+        )
+
+    assert AnthropicExceptionMapping.embedded_error_details(raised.value.message) == {"error_code": error_code}
 
 
 _PER_USER_SESSION: Final = GithubCopilotUserSession(token="ghu-session", api_base="https://api.githubcopilot.com")
