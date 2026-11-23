@@ -14,11 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 
-interface User {
-  user_id: string;
-  user_email: string;
-  role?: string;
-}
+type User = Awaited<ReturnType<typeof userFilterUICall>>[number];
 
 interface UserOption {
   label: string;
@@ -100,12 +96,12 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       const response = await userFilterUICall(accessToken, params);
       if (!isLatestSearch()) return;
 
-      const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
-        label: fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
-        value: fieldName === "user_email" ? user.user_email : user.user_id,
-        user,
-      }));
+      const options = response.flatMap((user): UserOption[] => {
+        const value = user[fieldName];
+        if (!value) return [];
+        const alias = fieldName === "user_id" ? user.user_alias?.trim() : null;
+        return [{ label: alias ? `${alias} (${value})` : value, value, user }];
+      });
       setUserOptions(options);
     } catch (error) {
       console.error("Error fetching users:", error);

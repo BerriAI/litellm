@@ -32,8 +32,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import ProxyLogging
 
 
-
-from litellm.caching.caching import DualCache
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
     LiteLLM_ProjectTable,
     NewProjectRequest,
@@ -49,8 +48,9 @@ from litellm.proxy._types import (
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management.users.service import PrismaOrgRoles
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
-proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+proxy_logging_obj = ProxyLogging(user_api_key_cache=UserApiKeyCache())
 
 
 ### VALIDATION TESTS ###
@@ -509,12 +509,11 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
-    stale_row = MagicMock()
-    stale_row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": []}
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=[]))
 
     mock_prisma = MagicMock()
     mock_prisma.jsonify_object = lambda data: data
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=stale_row)
 
     seeded = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -547,7 +546,7 @@ async def test_update_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=updated_row)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=updated_models))
     refreshed = await get_project_object(
         project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
     )
@@ -569,6 +568,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
     project_id = f"project-{uuid.uuid4()}"
     cache = UserApiKeyCache()
 
+    stores = install_rust_auth_stores(monkeypatch)
+    stores.project.seed(project_id, LiteLLM_ProjectTable(project_id=project_id, team_id=None, models=["gpt-5.5"]))
     row = MagicMock()
     row.model_dump = lambda: {"project_id": project_id, "team_id": None, "models": ["gpt-5.5"]}
 
@@ -597,7 +598,8 @@ async def test_delete_project_invalidates_cached_project_object(monkeypatch):
         ),
     )
 
-    mock_prisma.db.litellm_projecttable.find_unique = AsyncMock(return_value=None)
+    stores.project.reader.pop(project_id)
+    stores.project.writer.pop(project_id)
     assert (
         await get_project_object(
             project_id=project_id, prisma_client=mock_prisma, user_api_key_cache=cache
@@ -642,7 +644,10 @@ async def test_update_project_succeeds_when_cache_eviction_fails(monkeypatch):
     )
 
     assert response is updated_row
-    failing_cache.async_delete_cache.assert_awaited_once()
+    assert failing_cache.async_delete_cache.await_args_list == [
+        mock.call(key=f"project_id:{project_id}"),
+        mock.call(key=f'customer_app:["project", "{project_id}"]'),
+    ]
 
 
 @pytest.mark.asyncio
@@ -659,14 +664,17 @@ async def test_project_eviction_publishes_cross_worker_invalidation(monkeypatch)
 
     project_id = f"project-{uuid.uuid4()}"
     with patch(
-        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+        "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
         new=AsyncMock(),
     ) as mock_publish:
         await delete_cached_project_object(
             project_id=project_id, user_api_key_cache=UserApiKeyCache()
         )
 
-    mock_publish.assert_awaited_once_with(cache_key=f"project_id:{project_id}")
+    assert mock_publish.await_args_list == [
+        mock.call(cache_key=AuthObject.project(project_id).key),
+        mock.call(cache_key=AuthObject.customer_app("project", project_id).key),
+    ]
 
 
 def test_enforce_project_model_quota_missing_both_raises():
@@ -1883,7 +1891,7 @@ def project_access_db(monkeypatch):
 async def _team_access_over_cached_users() -> TeamAccess:
     cache = UserApiKeyCache()
     for user in _USERS.values():
-        await cache.async_set_cache(key=user.user_id, value=user)
+        await cache.async_set_cache(key=AuthObject.user(user.user_id), value=user)
     return TeamAccess(org_roles=PrismaOrgRoles(None, cache, proxy_logging_obj))
 
 

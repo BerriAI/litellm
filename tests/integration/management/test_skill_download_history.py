@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import io
 import os
@@ -15,6 +16,7 @@ import pytest
 from pydantic import TypeAdapter
 
 from litellm.models.plugin_upload import PluginDownloadsResponse
+from litellm.repositories.plugin_upload_repository import DOWNLOAD_EXPORT_BATCH_SIZE
 from litellm.types.proxy.skill_hub import SkillHubList
 from tests.integration._support.actors import GatewayClient, owned_settings_client
 from tests.integration._support.client import Gateway, Scenario, object_value, string_value
@@ -139,6 +141,43 @@ def test_concurrent_counts_and_keyset_pages_preserve_scope_and_deleted_cursors(g
         assert _history(gateway, other, cursor=first.next_cursor) == PluginDownloadsResponse(1, 0, (), None)
         catalog: Final = SkillHubList.model_validate(gateway.get(SKILLS, {"query": name}))
         assert {skill.name: skill.download_count for skill in catalog.skills} == {name: 23, other: 1}
+
+
+def test_csv_export_preserves_every_record_and_requires_admin_access(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        name: Final = f"export-{uuid.uuid4().hex}"
+        url: Final = _upload(scenario, name)
+        path: Final = f"{SKILLS}/{name}/downloads/export"
+        empty: Final = gateway.request("GET", path)
+        assert empty.status_code == 200, empty.text
+        assert empty.text == "download_id,downloaded_at,user_email,user_id,team,key,version\r\n"
+        key: Final = scenario.key(key_alias='clé, "quoted"')
+        assert gateway.client.get(path).status_code == 401
+        assert gateway.request("GET", path, key=key).status_code == 403
+        assert gateway.request("GET", f"{SKILLS}/missing-{uuid.uuid4().hex}/downloads/export").status_code == 404
+        _download(gateway, key, url)
+        first: Final = _history(gateway, name).downloads[0]
+        write_rows(
+            'INSERT INTO "LiteLLM_ClaudeCodePluginDownload" '
+            '(plugin_id, downloaded_at, digest, authenticated, key_alias, version) '
+            'SELECT plugin_id, downloaded_at, digest, authenticated, key_alias, version '
+            'FROM "LiteLLM_ClaudeCodePluginDownload" CROSS JOIN generate_series(1, %s::int) '
+            'WHERE id = %s::bigint',
+            (str(DOWNLOAD_EXPORT_BATCH_SIZE + 1), first.id),
+            database_url=gateway.database_url,
+        )
+        other: Final = f"other-{uuid.uuid4().hex}"
+        _download(gateway, key, _upload(scenario, other))
+        exported: Final = gateway.request("GET", path)
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["content-type"].startswith("text/csv")
+        rows: Final = tuple(csv.DictReader(io.StringIO(exported.text)))
+        ids: Final = tuple(int(row["download_id"]) for row in rows)
+        assert len(ids) == DOWNLOAD_EXPORT_BATCH_SIZE + 2
+        assert ids == tuple(sorted(set(ids), reverse=True))
+        assert ids[-1] == int(first.id)
+        assert {row["key"] for row in rows} == {first.key_alias}
+        assert {row["version"] for row in rows} == {first.version}
 
 
 def test_repeat_migration_is_catalog_only_while_download_tables_are_locked(gateway: Gateway) -> None:

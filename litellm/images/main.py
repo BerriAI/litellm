@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
 
 import httpx
+import openai
 
 import litellm
 
@@ -26,6 +27,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_request_utils import flatten_form_field_values
 from litellm.litellm_core_utils.mock_functions import mock_image_generation
+from litellm.llms.azure.common_utils import AZURE_V1_API_VERSION, is_azure_openai_v1_base
 from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -39,6 +41,7 @@ from openai.types.audio.transcription_create_params import FileTypes
 from litellm.llms.black_forest_labs.image_edit.handler import bfl_image_edit
 from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_generation
 from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
+from litellm.llms.openai_like.common_utils import missing_json_provider_key_error, with_canonical_authorization
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -56,6 +59,7 @@ from litellm.types.llms.openai import ImageGenerationRequestQuality
 from litellm.types.router import CustomPricingLiteLLMParams, GenericLiteLLMParams
 from litellm.types.utils import (
     LITELLM_IMAGE_VARIATION_PROVIDERS,
+    DynamicPromptManagementParamLiteral,
     LlmProviders,
     ProviderRoutingHints,
 )
@@ -336,7 +340,11 @@ def image_generation(
         ]
         non_default_params: Final = filter_out_litellm_params(
             kwargs,
-            excluding=[*openai_params, "extra_headers", "headers"] if chatgpt_params is not None else openai_params,
+            excluding=(
+                *openai_params,
+                *(("extra_headers", "headers") if chatgpt_params is not None else ()),
+                *DynamicPromptManagementParamLiteral.list_all_params(),
+            ),
         )
 
         image_generation_config: BaseImageGenerationConfig | None = None
@@ -390,7 +398,11 @@ def image_generation(
 
             api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
-            api_version = api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION")
+            api_version = (
+                api_version
+                or litellm.api_version
+                or (AZURE_V1_API_VERSION if is_azure_openai_v1_base(api_base) else get_secret_str("AZURE_API_VERSION"))
+            )
 
             api_key = (
                 api_key
@@ -565,8 +577,18 @@ def image_generation(
             or custom_llm_provider == LlmProviders.LITELLM_PROXY.value
             or custom_llm_provider in litellm.openai_compatible_providers
         ):
+            if (
+                missing_key_error := missing_json_provider_key_error(
+                    custom_llm_provider,
+                    model,
+                    api_key or dynamic_api_key,
+                    isinstance(client, openai.OpenAI | openai.AsyncOpenAI),
+                    _OBJECT_DICT_ADAPTER.validate_python(headers),
+                )
+            ) is not None:
+                raise missing_key_error
             if extra_headers is not None and chatgpt_params is None:
-                optional_params["extra_headers"] = extra_headers
+                optional_params["extra_headers"] = with_canonical_authorization(custom_llm_provider, extra_headers)
             # Forward OpenAI organization if present (set by proxy pre-call utils)
             organization: Final[str | None] = kwargs.get("organization", None)
             sdk_max_retries: Final = 0 if is_router_call else max_retries
@@ -593,7 +615,7 @@ def image_generation(
                         )
                     )
                     if chatgpt_params is not None
-                    else headers
+                    else with_canonical_authorization(custom_llm_provider, headers)
                 ),
                 litellm_params=litellm_params_dict,
             )
@@ -829,12 +851,14 @@ def image_variation(
 
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
-_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[object, ...]](tuple[object, ...])
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
     try:
-        return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
+        return tuple(
+            item for item in _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params) if isinstance(item, str)
+        )
     except ValidationError:
         return ()
 
@@ -905,7 +929,9 @@ def image_edit(
             "style",
             "async_call",
         ]
-        non_default_params: Final = filter_out_litellm_params(kwargs, excluding=openai_params)
+        non_default_params: Final = filter_out_litellm_params(
+            kwargs, excluding=(*openai_params, *DynamicPromptManagementParamLiteral.list_all_params())
+        )
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         model_info: Final = kwargs.get("model_info", None)

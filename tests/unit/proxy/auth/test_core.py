@@ -1,25 +1,26 @@
-import base64
-import json
+import dataclasses
 from collections.abc import Callable
 from typing import Final
 
 import pytest
+from fastapi import Request
+from starlette.datastructures import URL
 
-import litellm
 from litellm.proxy import proxy_server
-from litellm.proxy._types import JWTRoutingOverride, LiteLLM_JWTAuth
+from litellm.proxy._types import (
+    LiteLLM_JWTAuth,
+    LitellmUserRoles,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth import core
+from litellm.proxy.auth.host.python import PythonAuthHost
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.caching.dual_cache import DualCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustDenial, RustPlan
 
 JWT: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
-ISSUER: Final = "oauth-issuer.example.com"
-
-
-def _unsigned_jwt(claims: dict[str, object]) -> str:
-    def segment(value: dict[str, object]) -> str:
-        return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
-
-    return f"{segment({'alg': 'RS256'})}.{segment(claims)}.c2ln"
 
 
 def _accept(claims: dict[str, object]) -> bool:
@@ -37,10 +38,23 @@ def test_a_jwt_is_planned_for_operator_code_only_when_custom_validate_is_set(
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
         LiteLLM_JWTAuth().model_copy(update={"custom_validate": custom_validate}),
-        core.HostFacts(premium=True),
+        core.HostFacts(master_key=None, premium=True, has_db=False),
+    )
+    request: Final = core.AuthRequest(
+        route="/chat/completions",
+        method="POST",
+        token=JWT,
+        model=None,
+        team_header=None,
+        is_llm_api_route=True,
+        runs_inference_checks=True,
+        auth_enforced_pass_through=False,
+        forwarded_routes=(),
+        is_info_route=False,
+        now=0.0,
     )
 
-    assert RustAuth.plan(core.request(JWT, "/chat/completions"), settings) == expected
+    assert RustAuth.plan(request, settings) == expected
 
 
 @pytest.mark.parametrize(
@@ -50,27 +64,34 @@ def test_a_jwt_is_planned_for_operator_code_only_when_custom_validate_is_set(
 )
 def test_jwt_auth_is_on_only_for_the_boolean_true(enable_jwt_auth: object, expected: RustPlan) -> None:
     settings: Final = RustAuthSettings(
-        {"enable_jwt_auth": enable_jwt_auth}, LiteLLM_JWTAuth(), core.HostFacts(premium=True)
+        {"enable_jwt_auth": enable_jwt_auth},
+        LiteLLM_JWTAuth(),
+        core.HostFacts(master_key=None, premium=True, has_db=False),
     )
 
-    assert RustAuth.plan(core.request(JWT, "/chat/completions"), settings) == expected
+    assert RustAuth.plan(core.request(JWT, "/chat/completions", "POST"), settings) == expected
 
 
-@pytest.mark.parametrize(
-    ("iss", "expected"),
-    [(ISSUER, True), ("other-issuer.example.com", False)],
-    ids=["routed_issuer", "other_issuer"],
-)
-def test_a_routing_override_sends_its_jwts_to_introspection(iss: str, expected: bool) -> None:
+@pytest.mark.asyncio
+async def test_a_host_failure_the_core_cannot_skip_propagates_unchanged(
+    monkeypatch: pytest.MonkeyPatch, auth_host: Callable[..., PythonAuthHost]
+) -> None:
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://idp.example/jwks")
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
-        LiteLLM_JWTAuth(routing_overrides=[JWTRoutingOverride(iss=ISSUER)]),
-        core.HostFacts(premium=True),
+        LiteLLM_JWTAuth(),
+        core.HostFacts(master_key=None, premium=True, has_db=False),
     )
-    request: Final = core.request(_unsigned_jwt({"iss": iss}), "/chat/completions")
 
-    assert RustAuth.oauth2_introspection_applies(request, settings) is expected
-    assert RustAuth.plan(request, settings) == (RustPlan.OAuth2Introspection if expected else RustPlan.Jwt)
+    class _Unreadable(DualCache):
+        async def async_get_cache(self, *args: object, **kwargs: object) -> object:
+            raise ConnectionError("cache down")
+
+    failing: Final = dataclasses.replace(auth_host(), jwks_cache=_Unreadable())
+    token: Final = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsifQ.eyJzdWIiOiJ1In0.c2ln"
+
+    with pytest.raises(ConnectionError, match="cache down"):
+        await core.drive(RustAuth.verify_jwt(token, 0.0, settings), failing)
 
 
 @pytest.mark.parametrize(
@@ -99,19 +120,19 @@ def test_a_routing_override_sends_its_jwts_to_introspection(iss: str, expected: 
 def test_a_malformed_public_routes_setting_never_fails_the_request(
     public_routes: object, route: str, expected: RustPlan
 ) -> None:
-    settings: Final = RustAuthSettings({"public_routes": public_routes}, None, core.HostFacts(premium=True))
+    settings: Final = RustAuthSettings(
+        {"public_routes": public_routes}, None, core.HostFacts(master_key=None, premium=True, has_db=False)
+    )
 
-    assert RustAuth.plan(core.request(None, route), settings) == expected
+    assert RustAuth.plan(core.request(None, route, "POST"), settings) == expected
 
 
 def _planned(route: str, token: str | None) -> RustPlan | RustDenial:
-    return RustAuth.plan(core.request(token, route), core.proxy_settings())
+    return RustAuth.plan(core.request(token, route, "POST"), core.proxy_settings())
 
 
 def _write_general_settings_in_place(monkeypatch: pytest.MonkeyPatch) -> None:
-    settings: Final = proxy_server.current_general_settings()
-    assert isinstance(settings, dict)
-    monkeypatch.setitem(settings, "enable_jwt_auth", True)
+    monkeypatch.setitem(proxy_server.general_settings, "enable_jwt_auth", True)
 
 
 def _rebind_general_settings(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,10 +141,6 @@ def _rebind_general_settings(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _switch_to_a_premium_license(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(proxy_server, "premium_user", True)
-
-
-def _make_metrics_public(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", False)
 
 
 @pytest.mark.parametrize(
@@ -139,9 +156,8 @@ def _make_metrics_public(monkeypatch: pytest.MonkeyPatch) -> None:
             _switch_to_a_premium_license,
             RustPlan.Public,
         ),
-        (True, {"public_routes": ["/metrics"]}, "/metrics", None, _make_metrics_public, RustPlan.Public),
     ],
-    ids=["general_settings_written_in_place", "general_settings_rebound", "license_switched", "metrics_made_public"],
+    ids=["general_settings_written_in_place", "general_settings_rebound", "license_switched"],
 )
 def test_a_config_change_while_serving_decides_the_next_request(
     monkeypatch: pytest.MonkeyPatch,
@@ -154,11 +170,61 @@ def test_a_config_change_while_serving_decides_the_next_request(
 ) -> None:
     monkeypatch.setattr(proxy_server, "general_settings", dict(general_settings))
     monkeypatch.setattr(proxy_server, "premium_user", premium)
-    monkeypatch.setattr(proxy_server.jwt_handler, "litellm_jwtauth", LiteLLM_JWTAuth(), raising=False)
-    monkeypatch.setattr(litellm, "require_auth_for_metrics_endpoint", True)
+    monkeypatch.setattr(proxy_server, "master_key", None)
     before: Final = _planned(route, token)
 
     change(monkeypatch)
 
     assert before == RustPlan.Key
     assert _planned(route, token) == expected
+
+
+async def _authenticate(api_key: str) -> UserAPIKeyAuth:
+    request: Final = Request(scope={"type": "http", "headers": [], "method": "POST", "path": "/chat/completions"})
+    request._url = URL(url="/chat/completions")
+    return await user_api_key_auth(
+        request=request,
+        api_key=api_key,
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        custom_litellm_key_header=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_master_key_loaded_while_serving_admits_the_next_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-before-reload")
+    with pytest.raises(ProxyException):
+        _ = await _authenticate("Bearer sk-after-reload")
+
+    monkeypatch.setattr(proxy_server, "master_key", "sk-after-reload")
+
+    assert (await _authenticate("Bearer sk-after-reload")).user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.parametrize(
+    ("database_url_configured", "code", "error_type"),
+    [
+        pytest.param(False, "401", ProxyErrorTypes.auth_error, id="no_database_configured"),
+        pytest.param(True, "400", ProxyErrorTypes.no_db_connection, id="configured_database_not_connected"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_wrong_key_without_a_database_is_an_outage_only_when_one_is_configured(
+    monkeypatch: pytest.MonkeyPatch, database_url_configured: bool, code: str, error_type: ProxyErrorTypes
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "database_url_configured", database_url_configured)
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "master_key", "sk-the-master-key")
+
+    assert (await _authenticate("Bearer sk-the-master-key")).user_role == LitellmUserRoles.PROXY_ADMIN
+    with pytest.raises(ProxyException) as denied:
+        _ = await _authenticate("Bearer sk-not-the-master-key")
+    assert (denied.value.code, denied.value.type) == (code, error_type), denied.value.message

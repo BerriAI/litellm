@@ -499,6 +499,37 @@ def test_is_batch_retrieve_call_type_matches_only_batch_retrieves():
     assert is_batch_retrieve_call_type(None) is False
 
 
+@pytest.mark.parametrize(
+    ("call_type", "expected"),
+    [
+        ("aretrieve_batch", True),
+        ("acreate_batch", True),
+        ("acancel_batch", True),
+        ("acreate_file", True),
+        ("afile_content", True),
+        ("afile_delete", True),
+        ("file_list", True),
+        ("acreate_fine_tuning_job", True),
+        ("alist_fine_tuning_jobs", True),
+        ("vector_store_file_content", True),
+        ("avector_store_create", True),
+        ("acreate_container", True),
+        ("aretrieve_container_file_content", True),
+        ("acompletion", False),
+        ("aembedding", False),
+        ("aresponses", False),
+        ("anthropic_messages", False),
+        ("aimage_generation", False),
+        (None, False),
+        (["acreate_file"], False),
+    ],
+)
+def test_is_batch_api_call_type_matches_calls_azure_scopes_to_the_resource(call_type, expected):
+    from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
+
+    assert is_batch_api_call_type(call_type) is expected
+
+
 @pytest.fixture(autouse=True)
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)

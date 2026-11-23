@@ -5,8 +5,10 @@ from typing import TYPE_CHECKING, Final, cast, get_type_hints
 
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
+from litellm._logging import verbose_logger
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.llms.anthropic.common_utils import (
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
@@ -314,6 +316,21 @@ def message_thread_not_found_body(message: str) -> str:
 
 def message_thread_unsupported_body(message: str) -> str:
     return _message_thread_error_body("invalid_request_error", MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE, message)
+
+
+def diagnostics_refusal(provider: str, model: str, drop_params: object) -> UnsupportedParamsError | None:
+    """Refuses ``diagnostics`` for a provider that rejects the field, or logs its drop under drop_params."""
+    if not drops_unsupported_params(drop_params):
+        return UnsupportedParamsError(
+            message=(
+                f"diagnostics is not supported for provider {provider}. "
+                "Send the request without diagnostics, or set drop_params to drop it"
+            ),
+            llm_provider=provider,
+            model=model,
+        )
+    verbose_logger.warning("Dropping diagnostics for provider %s: it rejects the field", provider)
+    return None
 
 
 @lru_cache(maxsize=1)

@@ -14,6 +14,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
     ManagedObjectCreatorAttribution,
     ManagedObjectRow,
+    creator_billing_started_at,
     row_metadata,
 )
 
@@ -882,7 +883,7 @@ class CheckBatchCost:
             messages=[{"role": "user", "content": "<retrieve_batch>"}],
             stream=False,
             call_type="aretrieve_batch",
-            start_time=datetime.now(),
+            start_time=creator_billing_started_at(job) or datetime.now(),
             litellm_call_id=str(uuid.uuid4()),
             function_id=str(uuid.uuid4()),
         )

@@ -14,7 +14,7 @@ description: >-
 
 inputs:
   category:
-    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only or mcp-dependencies"
+    description: "Which classification to apply: backend, client, ui, provider-harness, cost-map-only, mcp-dependencies, windows-release, redis-compat or tests-only"
     required: false
     default: backend
   github-token:

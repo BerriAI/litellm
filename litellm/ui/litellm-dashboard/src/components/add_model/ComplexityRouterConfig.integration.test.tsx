@@ -488,6 +488,70 @@ describe("ComplexityRouterConfig", () => {
     expect(onChange).toHaveBeenLastCalledWith({ ...llmValue, ...expected });
   });
 
+  it("edits and clears the classifier output cap without changing other settings", () => {
+    const initialValue: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "llm",
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 750, reasoning_effort: "high", max_output_tokens: 128 },
+    };
+    const onChange = vi.fn();
+    function Editor() {
+      const [value, setValue] = React.useState(initialValue);
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            onChange(next);
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Editor />);
+    openAutoRouterAdvanced("Classification Method");
+    const input = screen.getByLabelText("Classifier max output tokens");
+    expect(input).toHaveValue("128");
+    fireEvent.change(input, { target: { value: "64" } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue("64");
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...initialValue,
+      classifier_llm_config: { ...initialValue.classifier_llm_config, max_output_tokens: 64 },
+    });
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(input).toHaveValue("");
+    expect(onChange).toHaveBeenLastCalledWith({
+      ...initialValue,
+      classifier_llm_config: { model: "gpt-4", timeout_ms: 750, reasoning_effort: "high" },
+    });
+  });
+
+  it.each(["0", "-1", "1.5", "abc", "Infinity", "9007199254740992"])(
+    "does not save invalid classifier output cap %s",
+    (raw) => {
+      const onChange = vi.fn();
+      renderWithProviders(
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={{
+            ...defaultValue,
+            classifier_type: "llm",
+            classifier_llm_config: { model: "gpt-4", timeout_ms: 750, max_output_tokens: 64 },
+          }}
+          onChange={onChange}
+        />,
+      );
+      openAutoRouterAdvanced("Classification Method");
+      const input = screen.getByLabelText("Classifier max output tokens");
+      fireEvent.change(input, { target: { value: raw } });
+      fireEvent.blur(input);
+      expect(input).toHaveValue("64");
+      expect(onChange).not.toHaveBeenCalled();
+    },
+  );
+
   it("restores the committed context window size after an empty field loses focus", async () => {
     const llmValue: ComplexityRouterConfigValue = {
       ...defaultValue,
@@ -1922,5 +1986,45 @@ describe("classifier vision settings", () => {
     openAutoRouterAdvanced("Classification Method");
 
     expect(screen.queryByText("Use images for classification")).not.toBeInTheDocument();
+  });
+});
+
+describe("heuristic-first conversation limit", () => {
+  it("shows saved limits and carries edits, invalid drafts, and clearing into form state", () => {
+    const initial: ComplexityRouterConfigValue = {
+      ...defaultValue,
+      classifier_type: "heuristic_first",
+      heuristic_first_max_tier: "SIMPLE",
+      classifier_llm_config: { model: "gpt-4" },
+      heuristic_first_max_context_tokens: 8000,
+    };
+    const onChange = vi.fn();
+    function Editor() {
+      const [value, setValue] = React.useState(initial);
+      return (
+        <ComplexityRouterConfig
+          {...baseProps}
+          value={value}
+          onChange={(next) => {
+            setValue(next);
+            onChange(next);
+          }}
+        />
+      );
+    }
+    renderWithProviders(<Editor />);
+    fireEvent.click(screen.getByRole("button", { name: /^Advanced settings/ }));
+    const input = screen.getByRole("textbox", { name: "Max conversation tokens before judge" });
+    expect(input).toHaveValue("8000");
+    fireEvent.change(input, { target: { value: "12000" } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ heuristic_first_max_context_tokens: 12000 }));
+    fireEvent.change(input, { target: { value: "invalid" } });
+    expect(screen.getByText("Conversation limit must be a positive whole number")).toBeInTheDocument();
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ heuristic_first_max_context_tokens: NaN }));
+    fireEvent.change(input, { target: { value: "" } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ heuristic_first_max_context_tokens: undefined }),
+    );
+    expect(screen.queryByText("Conversation limit must be a positive whole number")).not.toBeInTheDocument();
   });
 });
