@@ -1830,7 +1830,10 @@ async def _cached_team_fields_for_key(
         return MappingProxyType({})
     try:
         team: Final = await get_team_object_from_cache(
-            key=AuthObject.team(key.team_id), user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+            key=AuthObject.team(key.team_id),
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            for_auth=True,
         )
         return None if team is None else _team_fields_newer_than_key(key, team)
     except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
@@ -2641,6 +2644,8 @@ async def run_centralized_common_checks(
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
+                    auth_user_id=user_api_key_auth_obj.user_id,
                 ),
             )
         )
