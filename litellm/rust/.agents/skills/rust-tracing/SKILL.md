@@ -21,6 +21,8 @@ Hosts configure subscribers. The Python bridge installs one process-wide subscri
 
 In core, instrument execution shared by native calls and hosted machines. Use consistent route, model, provider, streaming, and outcome fields. Put status recording at shared provider boundaries instead of scattering basic logging through handlers. Keep upstream HTTP status separate from route success
 
+Put what a reader needs to act on, such as the reason a call failed, in the message or in a field. Both hosts print every field. The gateway prints them as JSON, and Python prints them after the message as `[name=value ...]` in plain logs and as `rust_fields` in JSON logs
+
 Use `skip_all` and explicitly selected fields. Basic tracing excludes bodies, credentials, headers, and raw error strings. Avoid automatic `ret` or `err` capture of sensitive values. Keep payload diagnostics separate and subject to existing redaction
 
 A returned stream retains its route span until exhaustion, error, or drop, with exactly one terminal outcome. Builder construction does not start a trace. Never hold a span entry guard across an await. Diagnostic tracing remains separate from lifecycle callbacks and `CustomLogger` dispatch
