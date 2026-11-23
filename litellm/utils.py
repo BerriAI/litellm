@@ -4853,6 +4853,16 @@ def _map_params_with_provider_config(
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
+
+    if isinstance(provider_config, MapsAllowedOpenAIParams):
+        return provider_config.map_openai_params_allowing(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,
@@ -6429,11 +6439,13 @@ def get_provider_info(model: str, custom_llm_provider: str | None) -> ProviderSp
             model=model, provider=LlmProviders(custom_llm_provider)
         )
 
-    model_info: ProviderSpecificModelInfo | None = None
     if provider_config:
-        model_info = provider_config.get_provider_info(model=model)
+        return provider_config.get_provider_info(model=model)
 
-    return model_info
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(custom_llm_provider) if custom_llm_provider else None
+    return json_provider.provider_info if json_provider is not None and json_provider.provider_info else None
 
 
 def _is_potential_model_name_in_model_cost(
@@ -8328,6 +8340,14 @@ class AvailableModelsCache(InMemoryCache):
 _model_cache: Final = AvailableModelsCache()
 
 
+def _provider_api_key_env_vars(provider: str) -> tuple[str, ...]:
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    json_provider: Final = JSONProviderRegistry.get(provider)
+    derived: Final = (f"{provider.replace('_', '').upper()}_API_KEY", f"{provider.upper()}_API_KEY")
+    return derived if json_provider is None else (*derived, *json_provider.api_key_envs)
+
+
 def _infer_valid_provider_from_env_vars(
     custom_llm_provider: str | None = None,
 ) -> list[str]:
@@ -8337,16 +8357,7 @@ def _infer_valid_provider_from_env_vars(
         if custom_llm_provider and provider != custom_llm_provider:
             continue
 
-        # edge case litellm has together_ai as a provider, it should be togetherai
-        env_provider_1 = provider.replace("_", "")
-        env_provider_2 = provider
-
-        # litellm standardizes expected provider keys to
-        # PROVIDER_API_KEY. Example: OPENAI_API_KEY, COHERE_API_KEY
-        expected_provider_key_1 = f"{env_provider_1.upper()}_API_KEY"
-        expected_provider_key_2 = f"{env_provider_2.upper()}_API_KEY"
-        if expected_provider_key_1 in environ_keys or expected_provider_key_2 in environ_keys:
-            # key is set
+        if any(key in environ_keys for key in _provider_api_key_env_vars(provider)):
             valid_providers.append(provider)
 
     return valid_providers
