@@ -346,12 +346,16 @@ def _is_token_redaction_enabled() -> bool:
 def _apply_configured_token_redaction(value: str) -> str:
     if not value or not _is_token_redaction_enabled():
         return value
-    try:
-        from litellm.litellm_core_utils.secret_redaction import redact_tokens, strip_null_bytes
+    from litellm.litellm_core_utils import secret_redaction
 
-        return redact_tokens(strip_null_bytes(value), MASKED_VALUE)
-    except Exception:
-        return value
+    cleaned_value = value.replace("\x00", "")
+    redact_tokens_function = getattr(secret_redaction, "redact_tokens", None)
+    if callable(redact_tokens_function):
+        return redact_tokens_function(cleaned_value, MASKED_VALUE)
+    redact_string_function = getattr(secret_redaction, "redact_string", None)
+    if callable(redact_string_function):
+        return redact_string_function(cleaned_value)
+    return cleaned_value
 
 
 def _scrub_text(
