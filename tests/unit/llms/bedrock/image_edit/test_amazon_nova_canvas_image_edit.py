@@ -627,3 +627,18 @@ def test_prepare_request_bearer_token_never_runs_the_sigv4_credential_chain(monk
     )
 
     assert request.prepped.headers["Authorization"] == "Bearer env-bearer-token-12345"
+
+
+def test_transform_request_without_image_raises_bad_request_error():
+    """Missing image raises BadRequestError with 400 status, not bare ValueError."""
+    config = BedrockAmazonNovaCanvasImageEditConfig()
+    with pytest.raises(litellm.BadRequestError, match="requires an image") as exc_info:
+        config.transform_image_edit_request(
+            model="amazon.nova-canvas-v1:0",
+            prompt="edit this",
+            image=None,
+            image_edit_optional_request_params={},
+            litellm_params=Mock(),
+            headers={},
+        )
+    assert exc_info.value.status_code == 400

@@ -334,6 +334,14 @@ class BedrockAmazonNovaCanvasImageEditConfig(BaseImageEditConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict, RequestFiles]:
+        import litellm
+
+        if image is None:
+            raise litellm.BadRequestError(
+                message="Nova Canvas image edit requires an image input",
+                model=model,
+                llm_provider="bedrock",
+            )
         op: Final = dict(image_edit_optional_request_params)
         image_b64: Final = _file_types_to_b64(image)
 
