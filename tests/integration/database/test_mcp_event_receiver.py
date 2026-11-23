@@ -1,7 +1,7 @@
 import base64
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Final
@@ -27,7 +27,7 @@ from litellm.proxy.mcp_server.events.webhooks.store import (
 from tests.integration._support.database import read_rows
 from tests.integration._support.prisma_clients import connected_proxy_prisma
 
-pytestmark = pytest.mark.asyncio
+pytestmark: Final = pytest.mark.asyncio
 RECEIVED_AT: Final = datetime(2026, 11, 20, tzinfo=timezone.utc)
 TIMESTAMP: Final = int(RECEIVED_AT.timestamp())
 KEY: Final = bytes(range(32))
@@ -99,7 +99,7 @@ async def _post(
             return await client.post(f"/hooks/{sid}", content=body, headers=headers)
 
 
-def _outbox(sid: str) -> list[dict[str, JsonValue]]:
+def _outbox(sid: str) -> Sequence[Mapping[str, JsonValue]]:
     return read_rows(
         'SELECT delivery_id, webhook_id, body FROM "LiteLLM_MCPEventDelivery" WHERE subscription_id = %s', (sid,)
     )
