@@ -1871,8 +1871,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
         )
 
-        if len(choices) == 0 and raw_response.status == "completed" and _holds_only_reasoning_items(output_items):
-            choices.append(self._build_empty_choice(output_items, "stop"))
+        if len(choices) == 0 and raw_response.status == "completed":
+            completed_items: Final = cast(
+                "Sequence[object]", output_items
+            )  # cast-ok: ResponsesAPIResponse.output is partially untyped
+            if _holds_only_reasoning_items(completed_items):
+                choices.append(self._build_empty_choice(completed_items, "stop"))
 
         if len(choices) == 0 and not response_is_incomplete:
             raise ValueError(f"Unknown items in responses API response: {output_items}")
