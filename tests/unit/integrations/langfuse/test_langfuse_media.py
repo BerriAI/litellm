@@ -5,14 +5,17 @@ import json
 import logging
 import threading
 from base64 import b64encode
+from collections.abc import Callable, Sequence
 from time import monotonic, sleep
+from typing import Final
 
 import httpx
 import pytest
 from langfuse.api import LangfuseAPI
 
-from litellm.integrations.langfuse.langfuse_media import MediaUpload, MediaUploader, extract_media
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.integrations.langfuse.langfuse_media import MediaField, MediaUpload, MediaUploader, extract_media
+
+Transport = Callable[[httpx.Request], httpx.Response]
 
 HELLO_BASE64 = b64encode(b"hello").decode()
 HELLO_SHA256 = "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ="
@@ -137,31 +140,43 @@ def test_nesting_too_deep_to_parse_is_returned_untouched():
     assert extract_media(serialized) == (serialized, ())
 
 
-def _upload(field="input") -> MediaUpload:
+def test_a_data_uri_followed_by_prose_is_left_inline_with_its_text():
+    serialized: Final = json.dumps({"content": HELLO_PNG_URI + " and this is what I see in it"})
+
+    assert extract_media(serialized) == (serialized, ())
+
+
+def _upload(field: MediaField = "input", observation_id: str | None = OBSERVATION_ID) -> MediaUpload:
     return MediaUpload(
-        media=extract_media(HELLO_PNG_URI)[1][0], trace_id=TRACE_ID, observation_id=OBSERVATION_ID, field=field
+        media=extract_media(HELLO_PNG_URI)[1][0], trace_id=TRACE_ID, observation_id=observation_id, field=field
     )
 
 
-def _uploader(transport, *, delays=()) -> MediaUploader:
-    client = httpx.Client(transport=httpx.MockTransport(transport))
+def _uploader(transport: Transport, *, delays: Sequence[float] = (), max_queued_bytes: int = 1_000) -> MediaUploader:
+    client: Final = httpx.Client(transport=httpx.MockTransport(transport))
     return MediaUploader(
         api=LangfuseAPI(base_url="https://langfuse.example", username="pk", password="sk", httpx_client=client),
-        handler=HTTPHandler(client=client),
+        client=client,
         timeout=5.0,
         delays=delays,
+        max_queued_bytes=max_queued_bytes,
     )
 
 
-def _langfuse(requests: list[httpx.Request], *, upload_url: str | None = STORAGE_URL, storage_statuses=(200,)):
-    statuses = iter(storage_statuses)
+def _langfuse(
+    requests: list[httpx.Request],
+    *,
+    upload_url: str | None = STORAGE_URL,
+    storage: Sequence[httpx.Response] = (httpx.Response(200, text="stored"),),
+) -> Transport:
+    responses: Final = iter(storage)
 
     def transport(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.method == "POST" and request.url.path == "/api/public/media":
             return httpx.Response(201, json={"mediaId": "LPJNul-wow4m6Dsqxbninh", "uploadUrl": upload_url})
         if request.method == "PUT":
-            return httpx.Response(next(statuses), text="stored")
+            return next(responses)
         return httpx.Response(200, json={})
 
     return transport
@@ -171,9 +186,10 @@ def test_new_media_is_registered_with_its_trace_put_to_storage_and_confirmed():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests))
 
-    uploader.submit(_upload())
+    assert uploader.submit(_upload()) is True
 
     assert uploader.drain(5_000) is True
+    assert uploader.failed_uploads == 0
     register, put, confirm = requests
     assert (register.method, register.url.path) == ("POST", "/api/public/media")
     assert json.loads(register.content) == {
@@ -190,7 +206,7 @@ def test_new_media_is_registered_with_its_trace_put_to_storage_and_confirmed():
     assert put.headers["x-ms-blob-type"] == "BlockBlob"
     assert (confirm.method, confirm.url.path) == ("PATCH", "/api/public/media/LPJNul-wow4m6Dsqxbninh")
     confirmed = json.loads(confirm.content)
-    assert (confirmed["uploadHttpStatus"], confirmed["uploadHttpError"]) == (200, "stored")
+    assert (confirmed["uploadHttpStatus"], confirmed.get("uploadHttpError")) == (200, None)
     assert confirmed["uploadTimeMs"] >= 0 and confirmed["uploadedAt"]
 
 
@@ -207,6 +223,18 @@ def test_media_langfuse_already_holds_is_linked_to_the_trace_without_a_second_up
     assert json.loads(requests[0].content)["field"] == "metadata"
 
 
+def test_trace_level_media_is_registered_without_an_observation():
+    requests: list[httpx.Request] = []
+    uploader = _uploader(_langfuse(requests, upload_url=None))
+
+    uploader.submit(_upload(observation_id=None))
+
+    assert uploader.drain(5_000) is True
+    registered = json.loads(requests[0].content)
+    assert registered["traceId"] == TRACE_ID
+    assert registered.get("observationId") is None
+
+
 def test_google_cloud_storage_upload_leaves_out_the_s3_and_azure_headers():
     requests: list[httpx.Request] = []
     uploader = _uploader(_langfuse(requests, upload_url="https://storage.googleapis.com/bucket/hello?sig=1"))
@@ -221,26 +249,49 @@ def test_google_cloud_storage_upload_leaves_out_the_s3_and_azure_headers():
 
 def test_a_storage_outage_is_retried_and_the_final_status_is_what_langfuse_is_told():
     requests: list[httpx.Request] = []
-    uploader = _uploader(_langfuse(requests, storage_statuses=(503, 200)), delays=(0.0,))
+    uploader = _uploader(_langfuse(requests, storage=(httpx.Response(503), httpx.Response(200))), delays=(0.0,))
 
     uploader.submit(_upload())
 
     assert uploader.drain(5_000) is True
     assert [request.method for request in requests] == ["POST", "PUT", "PUT", "PATCH"]
     assert json.loads(requests[-1].content)["uploadHttpStatus"] == 200
+    assert uploader.failed_uploads == 0
 
 
-def test_a_refused_upload_is_reported_to_langfuse_and_logged(caplog):
+def test_a_refused_upload_is_reported_to_langfuse_by_status_only_and_logged(caplog):
+    """The storage URL comes from the Langfuse host, so what the storage answers is never sent back to that host."""
     requests: list[httpx.Request] = []
-    uploader = _uploader(_langfuse(requests, storage_statuses=(403,)), delays=(0.0,))
+    refusal = httpx.Response(403, text="internal-service-body")
+    uploader = _uploader(_langfuse(requests, storage=(refusal,)), delays=(0.0,))
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         uploader.submit(_upload())
         assert uploader.drain(5_000) is True
 
     assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
-    assert json.loads(requests[-1].content)["uploadHttpStatus"] == 403
-    assert "refused by the media storage with HTTP 403" in caplog.text
+    confirmed = json.loads(requests[-1].content)
+    assert (confirmed["uploadHttpStatus"], confirmed["uploadHttpError"]) == (403, "Forbidden")
+    assert b"internal-service-body" not in requests[-1].content
+    assert "the media storage refused it with HTTP 403" in caplog.text
+    assert uploader.failed_uploads == 1
+
+
+def test_a_storage_redirect_is_not_followed():
+    requests: list[httpx.Request] = []
+    redirect = httpx.Response(307, headers={"location": "http://169.254.169.254/latest/meta-data"})
+    uploader = _uploader(_langfuse(requests, storage=(redirect,)))
+
+    uploader.submit(_upload())
+
+    assert uploader.drain(5_000) is True
+    assert [(request.method, request.url.host) for request in requests] == [
+        ("POST", "langfuse.example"),
+        ("PUT", "bucket.s3.amazonaws.com"),
+        ("PATCH", "langfuse.example"),
+    ]
+    assert json.loads(requests[-1].content)["uploadHttpStatus"] == 307
+    assert uploader.failed_uploads == 1
 
 
 def test_storage_that_is_never_reached_is_not_reported_as_uploaded(caplog):
@@ -261,6 +312,7 @@ def test_storage_that_is_never_reached_is_not_reported_as_uploaded(caplog):
 
     assert [request.method for request in requests] == ["POST", "PUT", "PUT"]
     assert "storage unreachable" in caplog.text
+    assert uploader.failed_uploads == 1
 
 
 def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload_still_runs(caplog):
@@ -283,15 +335,16 @@ def test_a_failed_registration_is_logged_without_its_headers_and_the_next_upload
     assert [request.method for request in requests] == ["POST", "PUT", "PATCH"]
     assert "HTTP 400 from the media API" in caplog.text
     assert "do-not-log" not in caplog.text
+    assert uploader.failed_uploads == 1
 
 
-def _blocked_uploader(release: threading.Event, started: threading.Event) -> MediaUploader:
+def _blocked_uploader(release: threading.Event, started: threading.Event, **limits: int) -> MediaUploader:
     def transport(request: httpx.Request) -> httpx.Response:
         started.set()
         release.wait(10)
         return httpx.Response(201, json={"mediaId": "LPJNul-wow4m6Dsqxbninh", "uploadUrl": None})
 
-    return _uploader(transport)
+    return _uploader(transport, **limits)
 
 
 def test_drain_reports_uploads_still_running_at_the_deadline():
@@ -305,21 +358,18 @@ def test_drain_reports_uploads_still_running_at_the_deadline():
     assert uploader.drain(5_000) is True
 
 
-def test_a_full_queue_drops_the_upload_with_a_warning_instead_of_blocking(monkeypatch, caplog):
-    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_media._MAX_QUEUED_UPLOADS", 1)
+def test_media_that_does_not_fit_next_to_the_waiting_uploads_is_turned_away_until_they_finish():
+    """Each waiting upload holds its decoded payload, so the bytes are what is capped."""
     release, started = threading.Event(), threading.Event()
-    uploader = _blocked_uploader(release, started)
-    uploader.submit(_upload())
+    uploader = _blocked_uploader(release, started, max_queued_bytes=5)
+    assert uploader.submit(_upload()) is True
     assert started.wait(5)
-    uploader.submit(_upload())
 
-    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
-        began = monotonic()
-        uploader.submit(_upload())
+    assert uploader.submit(_upload()) is False
 
-    assert monotonic() - began < 1
-    assert f"queue is full, media LPJNul-wow4m6Dsqxbninh of trace {TRACE_ID} is not uploaded" in caplog.text
     release.set()
+    assert uploader.drain(5_000) is True
+    assert uploader.submit(_upload()) is True
     assert uploader.drain(5_000) is True
 
 

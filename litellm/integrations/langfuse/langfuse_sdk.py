@@ -88,6 +88,12 @@ _TRUNCATION_GROUPS: Final = (
     _METADATA_PREFIXES,
 )
 _MEDIA_FIELDS: Final[tuple[MediaField, ...]] = ("input", "output", "metadata")
+_TRACE_LEVEL_KEYS: Final = (
+    LangfuseOtelSpanAttributes.TRACE_INPUT,
+    LangfuseOtelSpanAttributes.TRACE_OUTPUT,
+    LangfuseOtelSpanAttributes.TRACE_METADATA,
+)
+_SHUTDOWN_UPLOAD_MILLIS: Final = 5_000
 _SERVER_FLOOR_HINT: Final = (
     "; the OTLP traces route needs a self-hosted Langfuse server on 3.63.0 or newer "
     "(https://langfuse.com/self-hosting/upgrade/versioning#sdk-server)"
@@ -874,25 +880,40 @@ class _MediaExtractingExporter(SpanExporter):
             return span
 
     def _extracted(self, span: ReadableSpan) -> ReadableSpan:
-        attributes: Final = span.attributes or MappingProxyType({})
-        fields: Final[Mapping[str, MediaField]] = {
-            key: field for key in attributes if (field := _media_field(key)) is not None
-        }
-        extracted: Final = {key: extract_media(value) for key in fields if isinstance(value := attributes[key], str)}
-        replaced: Final = {key: value for key, (value, found) in extracted.items() if found}
-        if not replaced or span.context is None:
+        if span.context is None:
             return span
+        attributes: Final = span.attributes or MappingProxyType({})
         trace_id: Final = format(span.context.trace_id, "032x")
         observation_id: Final = format(span.context.span_id, "016x")
-        for key, (_, found) in extracted.items():
-            for media in found:
-                self.uploader.submit(
-                    MediaUpload(media=media, trace_id=trace_id, observation_id=observation_id, field=fields[key])
+        replaced: Final = {
+            key: reference
+            for key, value in attributes.items()
+            if (reference := self._with_references(key, value, trace_id, observation_id)) is not None
+        }
+        return _with_attributes(span, {**attributes, **replaced}) if replaced else span
+
+    def _with_references(self, key: str, value: AttributeValue, trace_id: str, observation_id: str) -> str | None:
+        """``None`` leaves the attribute as it is: it holds no media, or the uploader had no room for all of it."""
+        field: Final = _media_field(key)
+        if field is None or not isinstance(value, str):
+            return None
+        serialized, found = extract_media(value)
+        accepted: Final = tuple(
+            self.uploader.submit(
+                MediaUpload(
+                    media=media,
+                    trace_id=trace_id,
+                    observation_id=None if _in_group(key, _TRACE_LEVEL_KEYS) else observation_id,
+                    field=field,
                 )
-        return _with_attributes(span, {**attributes, **replaced})
+            )
+            for media in found
+        )
+        return serialized if accepted and all(accepted) else None
 
     def shutdown(self) -> None:
         self.exporter.shutdown()
+        self.uploader.drain(_SHUTDOWN_UPLOAD_MILLIS)
         self.uploader.shutdown()
 
     def force_flush(self, timeout_millis: int = 30_000) -> bool:
@@ -904,7 +925,7 @@ def _build_media_uploader(*, public_key: str, secret_key: str, base_url: str) ->
     handler: Final = get_httpx_client()
     return MediaUploader(
         api=_rest_api(public_key=public_key, secret_key=secret_key, base_url=base_url, httpx_client=handler.client),
-        handler=handler,
+        client=handler.client,
         timeout=configured_timeout(),
         delays=tuple(2.0 ** min(attempt, _MAX_BACKOFF_EXPONENT) for attempt in range(configured_max_retries())),
     )
@@ -928,8 +949,12 @@ class LangfuseTracing:
         the media those batches referenced was uploaded."""
         deadline: Final = monotonic() + timeout_millis / 1000
         failed_before: Final = self.ledger.failed_batches
+        failed_uploads_before: Final = 0 if self.uploader is None else self.uploader.failed_uploads
         exported: Final = self.provider.force_flush(timeout_millis)
-        uploaded: Final = self.uploader is None or self.uploader.drain(max(0, int((deadline - monotonic()) * 1000)))
+        uploaded: Final = self.uploader is None or (
+            self.uploader.drain(max(0, int((deadline - monotonic()) * 1000)))
+            and self.uploader.failed_uploads == failed_uploads_before
+        )
         return exported and uploaded and self.ledger.failed_batches == failed_before
 
     def shutdown(self) -> None:

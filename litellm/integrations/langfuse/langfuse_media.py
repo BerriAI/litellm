@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
 from itertools import chain
-from queue import Empty, Full, Queue
+from queue import Empty, Queue
 from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
@@ -20,9 +20,7 @@ from langfuse.api import LangfuseAPI, MediaContentType
 from langfuse.api.core.api_error import ApiError
 from pydantic import JsonValue, TypeAdapter
 
-import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 __all__ = ("Media", "MediaField", "MediaUpload", "MediaUploader", "extract_media")
 
@@ -30,7 +28,7 @@ MediaField: TypeAlias = Literal["input", "output", "metadata"]
 
 _REFERENCE_PREFIX: Final = "@@@langfuseMedia:"
 _MAX_DEPTH: Final = 10
-_MAX_QUEUED_UPLOADS: Final = 100_000
+_MAX_QUEUED_BYTES: Final = 100 * 1024 * 1024
 _IDLE_POLL_SECONDS: Final = 1.0
 _DRAIN_POLL_SECONDS: Final = 0.01
 _URL_SAFE_TO_STANDARD: Final = str.maketrans("-_", "+/")
@@ -61,7 +59,7 @@ class Media:
 class MediaUpload:
     media: Media
     trace_id: str
-    observation_id: str
+    observation_id: str | None
     field: MediaField
 
 
@@ -71,7 +69,7 @@ def _media(content_type: object, encoded: object) -> Media | None:
         return None
     try:
         supported: Final = MediaContentType(content_type)
-        content: Final = b64decode(encoded.translate(_URL_SAFE_TO_STANDARD))
+        content: Final = b64decode(encoded.translate(_URL_SAFE_TO_STANDARD), validate=True)
     except ValueError:
         return None
     return Media(
@@ -99,20 +97,20 @@ def _from_typed_block(block: Mapping[str, JsonValue]) -> Media | None:
     return _media(block.get(content_type_key), data)
 
 
-def _extract(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[Media, ...]]:
+def _extract_media_nodes(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[Media, ...]]:
     if depth > _MAX_DEPTH:
         return node, ()
     if isinstance(node, str):
         inline: Final = _from_data_uri(node)
         return (node, ()) if inline is None else (inline.reference, (inline,))
     if isinstance(node, list):
-        items: Final = tuple(_extract(item, depth + 1) for item in node)
+        items: Final = tuple(_extract_media_nodes(item, depth + 1) for item in node)
         return [item for item, _ in items], tuple(chain.from_iterable(found for _, found in items))
     if isinstance(node, dict):
         block: Final = _from_typed_block(node)
         if block is not None:
             return {**node, "data": block.reference}, (block,)
-        entries: Final = {key: _extract(value, depth + 1) for key, value in node.items()}
+        entries: Final = {key: _extract_media_nodes(value, depth + 1) for key, value in node.items()}
         return (
             {key: value for key, (value, _) in entries.items()},
             tuple(chain.from_iterable(found for _, found in entries.values())),
@@ -135,7 +133,7 @@ def extract_media(serialized: str) -> tuple[str, tuple[Media, ...]]:
         parsed: Final = _JSON.validate_json(serialized)
     except ValueError:
         return serialized, ()
-    replaced, found = _extract(parsed, 0)
+    replaced, found = _extract_media_nodes(parsed, 0)
     return (json.dumps(replaced), found) if found else (serialized, ())
 
 
@@ -146,24 +144,36 @@ def _retryable_status(status: int) -> bool:
 class MediaUploader:
     """Uploads queued media to Langfuse on one daemon thread, so storage latency never holds up span export."""
 
-    def __init__(self, *, api: LangfuseAPI, handler: HTTPHandler, timeout: float, delays: Sequence[float]) -> None:
+    def __init__(
+        self,
+        *,
+        api: LangfuseAPI,
+        client: httpx.Client,
+        timeout: float,
+        delays: Sequence[float],
+        max_queued_bytes: int = _MAX_QUEUED_BYTES,
+    ) -> None:
         self._api: Final = api
-        self._handler: Final = handler
+        self._client: Final = client
         self._timeout: Final = timeout
         self._delays: Final = tuple(delays)
-        self._queue: Final[Queue[MediaUpload]] = Queue(_MAX_QUEUED_UPLOADS)
+        self._max_queued_bytes: Final = max_queued_bytes
+        self._queue: Final[Queue[MediaUpload]] = Queue()
+        self._lock: Final = threading.Lock()
+        self._queued_bytes = 0
         self._closed: Final = threading.Event()
+        self.failed_uploads = 0
         threading.Thread(target=self._run, name="langfuse-media-upload", daemon=True).start()
 
-    def submit(self, upload: MediaUpload) -> None:
-        try:
-            self._queue.put_nowait(upload)
-        except Full:
-            verbose_logger.warning(
-                "Langfuse media upload queue is full, media %s of trace %s is not uploaded",
-                upload.media.media_id,
-                upload.trace_id,
-            )
+    def submit(self, upload: MediaUpload) -> bool:
+        """``False`` when the payload does not fit next to the ones still waiting, so the caller keeps it inline."""
+        size: Final = len(upload.media.content)
+        with self._lock:
+            if self._queued_bytes + size > self._max_queued_bytes:
+                return False
+            self._queued_bytes += size
+        self._queue.put_nowait(upload)
+        return True
 
     def drain(self, timeout_millis: int) -> bool:
         """``True`` once every submitted upload has been attempted, ``False`` if ``timeout_millis`` passes first."""
@@ -179,27 +189,40 @@ class MediaUploader:
     def _run(self) -> None:
         while not (self._closed.is_set() and self._queue.empty()):
             try:
-                upload = self._queue.get(timeout=_IDLE_POLL_SECONDS)
+                self._attempt(self._queue.get(timeout=_IDLE_POLL_SECONDS))
             except Empty:
                 continue
-            try:
-                self._upload(upload)
-            except ApiError as error:
+
+    def _attempt(self, upload: MediaUpload) -> None:
+        try:
+            failure: Final = self._failure(upload)
+            if failure is not None:
+                self.failed_uploads += 1
                 verbose_logger.warning(
-                    "Langfuse media %s of trace %s was not uploaded: HTTP %s from the media API",
+                    "Langfuse media %s of trace %s was not uploaded: %s",
                     upload.media.media_id,
                     upload.trace_id,
-                    error.status_code,
+                    failure,
                 )
-            except Exception as error:  # noqa: BLE001  # one failed upload must not end the thread
-                verbose_logger.warning(
-                    "Langfuse media %s of trace %s was not uploaded: %s", upload.media.media_id, upload.trace_id, error
-                )
-            finally:
-                self._queue.task_done()
+        finally:
+            with self._lock:
+                self._queued_bytes -= len(upload.media.content)
+            self._queue.task_done()
 
-    def _upload(self, upload: MediaUpload) -> None:
-        """Registers the media with its trace; Langfuse returns an upload URL only for content it does not hold yet."""
+    def _failure(self, upload: MediaUpload) -> str | None:
+        try:
+            return self._upload(upload)
+        except ApiError as error:
+            return f"HTTP {error.status_code} from the media API"
+        except Exception as error:  # noqa: BLE001  # one failed upload must not end the thread
+            return str(error)
+
+    def _upload(self, upload: MediaUpload) -> str | None:
+        """Registers the media with its trace; Langfuse returns an upload URL only for content it does not hold yet.
+
+        Langfuse is told the storage status but never the storage response body, so a storage URL pointing
+        somewhere else cannot be read back through the Langfuse host.
+        """
         media: Final = upload.media
         registered: Final = self._api.media.get_upload_url(
             content_type=media.content_type,
@@ -210,25 +233,19 @@ class MediaUploader:
             observation_id=upload.observation_id,
         )
         if not registered.upload_url:
-            return
+            return None
         started: Final = monotonic()
         response: Final = self._put(registered.upload_url, media)
         if response is None:
-            return
+            return "the media storage was not reached"
         self._api.media.patch(
             registered.media_id,
             uploaded_at=datetime.now(timezone.utc),
             upload_http_status=response.status_code,
-            upload_http_error=response.text,
+            upload_http_error=None if response.is_success else response.reason_phrase,
             upload_time_ms=int((monotonic() - started) * 1000),
         )
-        if response.is_error:
-            verbose_logger.warning(
-                "Langfuse media %s of trace %s was refused by the media storage with HTTP %d",
-                media.media_id,
-                upload.trace_id,
-                response.status_code,
-            )
+        return None if response.is_success else f"the media storage refused it with HTTP {response.status_code}"
 
     def _put(self, url: str, media: Media) -> httpx.Response | None:
         """The storage response, re-sent after each delay on a transport failure or a retryable status; ``None``
@@ -248,9 +265,9 @@ class MediaUploader:
             else {"x-ms-blob-type": "BlockBlob", "x-amz-checksum-sha256": media.sha256_hash}
         )
         try:
-            return self._handler.put(  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.put takes bare dicts
-                url, content=media.content, headers=headers, timeout=self._timeout
+            return self._client.put(
+                url, content=media.content, headers=headers, timeout=self._timeout, follow_redirects=False
             )
-        except (httpx.TransportError, litellm.Timeout) as error:
+        except httpx.TransportError as error:
             verbose_logger.warning("Langfuse media %s upload raised %s", media.media_id, error)
             return None

@@ -879,9 +879,7 @@ def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
 def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):
     """The proxy shutdown hook flushes through this, so a span finished just before a
     graceful restart must reach the exporter without waiting for the batch interval."""
-    exporters: Final[
-        list[InMemorySpanExporter]
-    ] = []
+    exporters: Final[list[InMemorySpanExporter]] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())
@@ -1789,19 +1787,25 @@ IMAGE_REFERENCE = "@@@langfuseMedia:type=image/png|id=LPJNul-wow4m6Dsqxbninh|sou
 
 
 class _RecordingUploader:
-    def __init__(self, *, drains: bool = True) -> None:
+    def __init__(self, *, drains: bool = True, accepts: bool = True, fails_on_drain: int = 0) -> None:
         self.uploads: list[MediaUpload] = []
         self.drains = drains
-        self.shutdowns = 0
+        self.accepts = accepts
+        self.fails_on_drain = fails_on_drain
+        self.failed_uploads = 0
+        self.calls: list[str] = []
 
-    def submit(self, upload: MediaUpload) -> None:
+    def submit(self, upload: MediaUpload) -> bool:
         self.uploads.append(upload)
+        return self.accepts
 
     def drain(self, timeout_millis: int) -> bool:
+        self.calls.append("drain")
+        self.failed_uploads += self.fails_on_drain
         return self.drains
 
     def shutdown(self) -> None:
-        self.shutdowns += 1
+        self.calls.append("shutdown")
 
 
 def _media_channel(uploader: _RecordingUploader) -> tuple[LangfuseTracing, InMemorySpanExporter]:
@@ -1866,8 +1870,13 @@ def test_base64_images_leave_the_span_as_media_references_and_are_queued_for_upl
     assert attributes[A.OBSERVATION_METADATA + ".note"] == "kept"
     assert json.loads(attributes[A.TRACE_METADATA + ".thumbnail"]) == {"url": IMAGE_REFERENCE}
     assert not any("base64," in value for value in attributes.values() if isinstance(value, str))
-    assert sorted(upload.field for upload in uploader.uploads) == ["input", "input", "metadata", "metadata", "output"]
-    assert {(upload.trace_id, upload.observation_id) for upload in uploader.uploads} == {(TRACE_A, generation.id)}
+    assert sorted((upload.field, upload.trace_id, upload.observation_id or "trace") for upload in uploader.uploads) == [
+        ("input", TRACE_A, generation.id),
+        ("input", TRACE_A, "trace"),
+        ("metadata", TRACE_A, generation.id),
+        ("metadata", TRACE_A, "trace"),
+        ("output", TRACE_A, generation.id),
+    ]
     assert {upload.media.content for upload in uploader.uploads} == {b"hello"}
 
 
@@ -1905,13 +1914,30 @@ def test_a_span_whose_media_cannot_be_extracted_is_exported_unchanged(monkeypatc
     assert "exporting it unchanged: extraction bug" in caplog.text
 
 
+def test_media_the_uploader_has_no_room_for_stays_inline_in_the_span():
+    tracing, exporter = _media_channel(_RecordingUploader(accepts=False))
+
+    tracing.tracer.start_span("generation", attributes={A.OBSERVATION_INPUT: json.dumps(_image_messages())}).end()
+    assert tracing.flush() is True
+
+    exported = json.loads(_only_span(exporter, "generation").attributes[A.OBSERVATION_INPUT])
+    assert exported == _image_messages()
+
+
 def test_flush_is_false_while_media_is_still_uploading():
     tracing, _ = _media_channel(_RecordingUploader(drains=False))
 
     assert tracing.flush() is False
 
 
-def test_retiring_the_channel_shuts_the_exporter_and_the_uploader_down(monkeypatch: pytest.MonkeyPatch):
+def test_flush_is_false_when_an_upload_failed_during_it():
+    tracing, _ = _media_channel(_RecordingUploader(fails_on_drain=1))
+
+    assert tracing.flush() is False
+    assert _media_channel(_RecordingUploader())[0].flush() is True
+
+
+def test_retiring_the_channel_lets_queued_uploads_finish_before_the_uploader_stops(monkeypatch: pytest.MonkeyPatch):
     exporter, uploader = _RecordsShutdown(), _RecordingUploader()
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_span_exporter", lambda **_: exporter)
     monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk._build_media_uploader", lambda **_: uploader)
@@ -1919,7 +1945,8 @@ def test_retiring_the_channel_shuts_the_exporter_and_the_uploader_down(monkeypat
 
     release_langfuse_tracing(tracing, grace_seconds=0.0)
 
-    assert (exporter.shutdowns, uploader.shutdowns) == (1, 1)
+    assert exporter.shutdowns == 1
+    assert uploader.calls == ["drain", "shutdown"]
 
 
 def test_mock_mode_builds_no_media_uploader(monkeypatch: pytest.MonkeyPatch):
