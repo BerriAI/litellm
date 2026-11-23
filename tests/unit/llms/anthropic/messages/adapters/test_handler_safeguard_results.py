@@ -13,6 +13,7 @@ import litellm
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
 )
 from litellm.integrations.custom_logger import CustomLogger
@@ -181,6 +182,7 @@ async def test_non_stream_response_carries_a_verdict_for_the_tool_use_and_bills_
         "user_api_key": "hashed-key",
         "user_api_key_team_id": "team-1",
         "headers": {},
+        SESSION_ID_INHERITED_METADATA_KEY: True,
     }
     assert json.dumps({"command": "npm ci"}) in str(classifier_call["messages"][1]["content"])
 

@@ -21,6 +21,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, iter_items, require_attributes
+from litellm.litellm_core_utils.internal_call_metadata import inherits_parent_session
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
@@ -49,13 +50,22 @@ class _LoggedCallKwargs(TypedDict, total=False):
     messages: ReadOnly[Sequence[Mapping[str, object]] | None]
 
 
+def _explicit_session_id(litellm_params: Mapping[str, object]) -> str | None:
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    session: Final = (
+        litellm_params.get("litellm_session_id") or metadata.get("session_id") or metadata.get("litellm_session_id")
+    )
+    return str(session) if session else None
+
+
 def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
       1. Honor a client-supplied session id (`litellm_session_id` on either
          `litellm_params` or `litellm_params.metadata`, or `session_id` on
-         metadata) — backward compat for callers already wired up.
+         metadata) — backward compat for callers already wired up. A sub-call
+         that inherited its parent request's session skips this step.
       2. Otherwise derive a sha256 over (identity fields, first
          SIGNAL_GATE_MIN_MESSAGES messages) so the key is stable across turns
          and only materialises once there is enough context for the bandit to
@@ -64,14 +74,10 @@ def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     Returns None if the conversation is shorter than SIGNAL_GATE_MIN_MESSAGES.
     """
     litellm_params: Final = kwargs.get("litellm_params") or {}
-    sid = litellm_params.get("litellm_session_id")
-    if sid:
-        return str(sid)
+    explicit: Final = None if inherits_parent_session(litellm_params) else _explicit_session_id(litellm_params)
+    if explicit:
+        return explicit
     metadata: Final = litellm_params.get("metadata") or {}
-    if isinstance(metadata, dict):
-        sid = metadata.get("session_id") or metadata.get("litellm_session_id")
-        if sid:
-            return str(sid)
 
     messages: Final = kwargs.get("messages") or []
     if len(messages) < SIGNAL_GATE_MIN_MESSAGES:

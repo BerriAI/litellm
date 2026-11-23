@@ -12,6 +12,7 @@ import litellm
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     SESSION_ID_GENERATED_METADATA_KEY,
+    SESSION_ID_INHERITED_METADATA_KEY,
     X_LITELLM_DISABLE_CALLBACKS,
 )
 from litellm.litellm_core_utils.internal_call_metadata import sanitize_user_api_key_auth
@@ -167,12 +168,14 @@ def proxy_sub_call_metadata(
     user, the router filters deployments by the caller's access groups, and header-driven logging options
     such as message redaction apply to it, plus the marker of a session the proxy minted, so the sub-call never
     sends that session upstream as a provider affinity header, and the caller's session an ``x-litellm-trace-id``
-    header displaced, so the sub-call logs in the session the parent does. The caller's auth object goes without its
-    budget reservation, which belongs to the parent request."""
+    header displaced, so the sub-call logs in the session the parent does. The sub-call is marked as inheriting that
+    session, so session-keyed routers never count it as a turn of the parent's conversation. The caller's auth object
+    goes without its budget reservation, which belongs to the parent request."""
     if not parent_litellm_metadata:
-        return {}
+        return {SESSION_ID_INHERITED_METADATA_KEY: True}
     carried: Final = {
-        key: parent_litellm_metadata[key] for key in PROXY_SUB_CALL_METADATA_KEYS if key in parent_litellm_metadata
+        **{key: parent_litellm_metadata[key] for key in PROXY_SUB_CALL_METADATA_KEYS if key in parent_litellm_metadata},
+        SESSION_ID_INHERITED_METADATA_KEY: True,
     }
     caller: Final = parent_litellm_metadata.get(_USER_API_KEY_AUTH_METADATA_KEY)
     if caller is None:
