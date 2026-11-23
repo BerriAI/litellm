@@ -24,7 +24,6 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
-import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { Button as UIButton } from "@/components/ui/button";
 import { teamsTableKeys } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { parseAsString, useQueryState } from "nuqs";
@@ -710,25 +709,22 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
               {t("teams.page.header.title")}
             </PageHeaderTitle>
             <PageHeaderDescription>{t("teams.page.header.description")}</PageHeaderDescription>
-            <PageHeaderControls>
-              <PageTabsList>
-                {canCreateOrManageTeams(userRole, userID, organizations) && (
-                  <>
-                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                      <Plus className="size-4" />
-                      {t("teams.page.header.createTeam")}
-                    </UIButton>
-                    <ToolbarSeparator className="mx-0 h-6" />
-                  </>
-                )}
-                {tabItems.map((item) => (
-                  <PageTabsTrigger key={item.key} value={item.key}>
-                    {item.label}
-                  </PageTabsTrigger>
-                ))}
-              </PageTabsList>
-            </PageHeaderControls>
+            {canCreateOrManageTeams(userRole, userID, organizations) && (
+              <PageHeaderControls>
+                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                  <Plus className="size-4" />
+                  {t("teams.page.header.createTeam")}
+                </UIButton>
+              </PageHeaderControls>
+            )}
           </PageHeader>
+          <PageTabsList>
+            {tabItems.map((item) => (
+              <PageTabsTrigger key={item.key} value={item.key}>
+                {item.label}
+              </PageTabsTrigger>
+            ))}
+          </PageTabsList>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}

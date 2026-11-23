@@ -328,7 +328,8 @@ async fn issuer_key(
     key_from_jwks_url(host, &jwks_url_for_issuer(issuer), kid, settings, now).await
 }
 
-/// `get_public_key`: the first of the `JWT_PUBLIC_KEY_URL` endpoints that holds the kid.
+/// `get_public_key`: the first of the global JWKS endpoints (`litellm_jwtauth.public_key_url`, else
+/// `JWT_PUBLIC_KEY_URL`) that holds the kid.
 async fn global_key(
     host: &impl AuthHost,
     kid: Option<&str>,
@@ -427,7 +428,7 @@ async fn cached_with_stale_fallback(
     settings: &JwtSettings,
     now: Timestamp,
 ) -> Lookup<Value> {
-    if let Some(cached) = host.cached_json(cache_key).await? {
+    if let Some(cached) = host.cached_document(cache_key).await? {
         return Ok(Ok(cached));
     }
     let (ttl, stale_ttl) = (
@@ -444,10 +445,10 @@ async fn cached_with_stale_fallback(
         return Ok(Err(unreachable));
     }
     let stale = host
-        .cached_json(&format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"))
+        .cached_document(&format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"))
         .await?;
     let written_at = host
-        .cached_json(&format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"))
+        .cached_document(&format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"))
         .await?;
     let age = written_at
         .as_ref()
@@ -469,7 +470,7 @@ async fn refresh_or_record_outage(
     now: Timestamp,
 ) -> Lookup<Value> {
     let unreachable_key = format!("{UNREACHABLE_CACHE_KEY_PREFIX}{cache_key}");
-    if let Some(recent_failure) = host.cached_json(&unreachable_key).await? {
+    if let Some(recent_failure) = host.cached_document(&unreachable_key).await? {
         return Ok(Err(KeyFailure::Unreachable {
             error: value::display(&recent_failure),
         }));
@@ -477,7 +478,7 @@ async fn refresh_or_record_outage(
     let refreshed = match refresh(host, source).await? {
         Ok(refreshed) => refreshed,
         Err(KeyFailure::Unreachable { error }) => {
-            host.cache_json(
+            host.cache_document(
                 &unreachable_key,
                 &Value::String(error.clone()),
                 JWKS_UNREACHABLE_BACKOFF,
@@ -487,17 +488,17 @@ async fn refresh_or_record_outage(
         }
         Err(failure) => return Ok(Err(failure)),
     };
-    host.cache_json(cache_key, &refreshed, self::ttl(ttl))
+    host.cache_document(cache_key, &refreshed, self::ttl(ttl))
         .await?;
     if stale_ttl > 0.0 {
         let lifetime = self::ttl(ttl + stale_ttl);
-        host.cache_json(
+        host.cache_document(
             &format!("{STALE_CACHE_KEY_PREFIX}{cache_key}"),
             &refreshed,
             lifetime,
         )
         .await?;
-        host.cache_json(
+        host.cache_document(
             &format!("{STALE_WRITTEN_AT_CACHE_KEY_PREFIX}{cache_key}"),
             &json!(epoch_seconds(now)),
             lifetime,

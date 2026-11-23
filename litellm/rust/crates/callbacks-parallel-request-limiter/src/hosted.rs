@@ -104,7 +104,8 @@ fn typed_configured(configured: &EstimatedOutputTokens, model: Option<&str>) -> 
         .or(configured.team_default)
 }
 
-fn written(body: &mut Value, call_type: &str, cap: i64) {
+/// Writes `cap` into `body` where the route of `call_type` reads its output cap.
+pub fn write_output_cap(body: &mut Value, call_type: &str, cap: i64) {
     let Value::Object(request) = body else {
         return;
     };
@@ -181,7 +182,7 @@ impl Reservation<'_> {
         };
         let applied = self.host.call(WriteOutputCap { cap }).await?;
         if applied && let Some(body) = self.body.as_mut() {
-            written(body, self.call_type, cap);
+            write_output_cap(body, self.call_type, cap);
         }
         Ok(applied)
     }
@@ -360,7 +361,7 @@ mod tests {
         #[case] expected: Value,
     ) {
         let mut body = body;
-        written(&mut body, call_type, 25);
+        write_output_cap(&mut body, call_type, 25);
         assert_eq!(body, expected);
     }
 

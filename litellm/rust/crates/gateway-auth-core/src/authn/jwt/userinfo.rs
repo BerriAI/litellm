@@ -22,14 +22,14 @@ pub async fn oidc_userinfo(
         return Err(VerifyDenial::UserinfoNotConfigured.into());
     };
     let cache_key = format!("oidc_userinfo_{}", token.hash());
-    if let Some(cached) = host.cached_json(&cache_key).await? {
+    if let Some(cached) = host.cached_document(&cache_key).await? {
         return Ok(cached);
     }
     let userinfo = host
         .fetch_userinfo(endpoint, token)
         .await?
         .unwrap_or(Value::Null);
-    host.cache_json(
+    host.cache_document(
         &cache_key,
         &userinfo,
         ttl(settings.config.oidc_userinfo_cache_ttl),

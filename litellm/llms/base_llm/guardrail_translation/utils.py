@@ -37,7 +37,7 @@ def _anthropic_stream_chunk_events(item: object) -> list[dict]:
                 continue
             try:
                 parsed = _DECODED_JSON.validate_python(json.loads(payload))
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
                 continue
             if isinstance(parsed, dict):
                 events.append(parsed)
@@ -280,6 +280,10 @@ def filter_messages_by_skip_flags(
 
 def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_only_tool_results", None) is True
+
+
+def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
+    return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
 
 
 def role_out_of_guardrail_scope(

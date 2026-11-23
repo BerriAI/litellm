@@ -24,6 +24,7 @@ import litellm
 from litellm.proxy._types import LiteLLM_TeamTableCachedObj, UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.google_endpoints.endpoints import _google_count_tokens_request, google_count_tokens
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.llms.vertex_ai import TokenCountDetailsResponse
 from tests._master_key import MASTER_KEY
 from tests.unit.proxy._prisma import prisma_with_empty_config
@@ -115,6 +116,7 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
         ),
         model_name="volcengine/foo",
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert response.get("totalTokens") > 0
@@ -206,6 +208,13 @@ def test_google_count_tokens_keeps_counting_system_text_that_sits_beside_media()
     assert _google_count_tokens_request(
         "counted", {**_CONTENTS, "systemInstruction": {"parts": [text_with_media]}}
     ) == _google_count_tokens_request("counted", {**_CONTENTS, **_SYSTEM})
+
+
+@pytest.mark.parametrize(("url_model", "counted_model"), (("", "body-model"), ("url-model", "url-model")))
+def test_google_count_tokens_counts_the_body_model_only_when_the_url_names_none(
+    url_model: str, counted_model: str
+) -> None:
+    assert _google_count_tokens_request(url_model, {**_CONTENTS, "model": "body-model"}).model == counted_model
 
 
 _INTERACTION_ID: Final = "abc123"
@@ -328,10 +337,11 @@ def _cached_key(key: UserAPIKeyAuth, *teams: LiteLLM_TeamTableCachedObj) -> Iter
     user_key: Final = "sk-cached-test-key"
     user_api_key_cache: Final = UserApiKeyCache()
     user_api_key_cache.set_cache(
-        key=proxy_server.hash_token(user_key), value=key.model_copy(update={"token": proxy_server.hash_token(user_key)})
+        key=AuthObject.virtual_key(proxy_server.hash_token(user_key)),
+        value=key.model_copy(update={"token": proxy_server.hash_token(user_key)}),
     )
     for team in teams:
-        user_api_key_cache.set_cache(key=f"team_id:{team.team_id}", value=team)
+        user_api_key_cache.set_cache(key=AuthObject.team(team.team_id), value=team)
     with pytest.MonkeyPatch.context() as key_auth:
         key_auth.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
         key_auth.setattr(proxy_server, "master_key", MASTER_KEY)

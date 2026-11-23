@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import traceback
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -29,6 +29,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from starlette.datastructures import FormData
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
@@ -82,6 +83,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.litellm_params import RoutingStrategyName
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.utils import CallTypes, CallTypesLiteral
 from tests._master_key import MASTER_KEY as SHARED_MASTER_KEY
@@ -2119,7 +2121,7 @@ class TestBedrockPassthroughAwsErrors:
             ProxyBaseLLMRequestProcessing(data={}),
             error,
             UserAPIKeyAuth(api_key="test-key"),
-            ProxyLogging(user_api_key_cache=DualCache()),
+            ProxyLogging(user_api_key_cache=UserApiKeyCache()),
         )
 
     @pytest.mark.asyncio
@@ -7130,7 +7132,7 @@ class TestVertexAILiveWebsocketPassthrough:
         recorder: Final = _FailureRecorder()
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
         monkeypatch.setattr(
-            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache())
+            "litellm.proxy.proxy_server.proxy_logging_obj", ProxyLogging(user_api_key_cache=UserApiKeyCache())
         )
         monkeypatch.setattr(litellm, "callbacks", [recorder])
         monkeypatch.setattr(passthrough_module.passthrough_endpoint_router, "default_vertex_config", None)
@@ -8501,35 +8503,57 @@ _BEDROCK_COUNT_BODY: Final = MappingProxyType(
 )
 
 
+def _bedrock_count_deployment(
+    model_name: str, model: str, model_info: Mapping[str, object], tags: Sequence[str] = ()
+) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {
+            "model": model,
+            "aws_region_name": "us-east-1",
+            "aws_access_key_id": "AKIATESTACCESSKEY",
+            "aws_secret_access_key": "test-secret",
+            **({"tags": list(tags)} if tags else {}),
+        },
+        "model_info": dict(model_info),
+    }
+
+
 async def _bedrock_native_count(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     aws_reply: httpx.Response,
     fastapi_response: Response,
     request_body: Mapping[str, object] = _BEDROCK_COUNT_BODY,
+    model_list: Sequence[Mapping[str, object]] = (
+        _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "count-log-bedrock-deployment"}),
+    ),
+    caller: UserAPIKeyAuth | None = None,
+    cooled_down_ids: Sequence[str] = (),
+    enable_tag_filtering: bool = False,
+    routing_strategy: RoutingStrategyName = "simple-shuffle",
+    teams_served_first: Sequence[str] = (),
 ) -> dict[str, object]:
     from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
         handle_bedrock_count_tokens,
     )
 
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.llm_router",
-        litellm.Router(
-            model_list=[
-                {
-                    "model_name": _BEDROCK_COUNT_ALIAS,
-                    "litellm_params": {
-                        "model": _BEDROCK_COUNT_MODEL,
-                        "aws_region_name": "us-east-1",
-                        "aws_access_key_id": "AKIATESTACCESSKEY",
-                        "aws_secret_access_key": "test-secret",
-                    },
-                    "model_info": {"id": "count-log-bedrock-deployment"},
-                }
-            ]
-        ),
+    router: Final = litellm.Router(
+        model_list=[dict(deployment) for deployment in model_list],
+        enable_tag_filtering=enable_tag_filtering,
+        routing_strategy=routing_strategy,
     )
+    for deployment_id in cooled_down_ids:
+        router.health().cooldowns.add_deployment_to_cooldown(deployment_id, Exception("429 throttled"), 429, 60)
+    for team_id in teams_served_first:
+        await router.acompletion(
+            model=_BEDROCK_COUNT_ALIAS,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            metadata={"user_api_key_team_id": team_id},
+        )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", router)
     respx_mock.post(host="bedrock-runtime.us-east-1.amazonaws.com", path__regex=r"/count-tokens$").mock(
         return_value=aws_reply
     )
@@ -8545,7 +8569,7 @@ async def _bedrock_native_count(
         endpoint=f"model/{_BEDROCK_COUNT_ALIAS}/count-tokens",
         request=request,
         fastapi_response=fastapi_response,
-        user_api_key_dict=MagicMock(),
+        user_api_key_dict=caller or MagicMock(),
         request_body=dict(request_body),
     )
 
@@ -8577,6 +8601,329 @@ async def test_bedrock_native_count_tokens_logs_the_count_against_the_router_mod
             "status_code": 200,
         },
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_path"),
+    (
+        ("team-a", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+        ("team-b", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_the_deployment_the_callers_team_routes_to(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    team_id: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment"}),
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+            ),
+        ),
+        caller=UserAPIKeyAuth(team_id=team_id),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_keeps_the_deployments_region_and_keys_while_it_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        caller=UserAPIKeyAuth(api_key="sk-cooldown-caller"),
+        cooled_down_ids=("count-log-bedrock-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert respx_mock.calls.last.request.headers["authorization"].startswith(
+        "AWS4-HMAC-SHA256 Credential=AKIATESTACCESSKEY/"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_id", "expected_path"),
+    (
+        ("team-a", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+        ("team-b", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_when_every_one_is_at_its_rpm_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    team_id: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {
+                    "id": "team-a-deployment",
+                    "team_id": "team-a",
+                    "team_public_model_name": _BEDROCK_COUNT_ALIAS,
+                    "rpm": 1,
+                },
+            ),
+            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}),
+        ),
+        caller=UserAPIKeyAuth(api_key=f"sk-{team_id}-caller", team_id=team_id),
+        routing_strategy="usage-based-routing-v2",
+        teams_served_first=("team-a", "team-b"),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_counts_a_proxy_admins_call_on_a_cooling_down_team_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                "model_name_team-a_1",
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-admin-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        cooled_down_ids=("team-a-deployment",),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_keeps_a_proxy_admins_call_off_team_deployments_in_a_mixed_group(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        model_list=(
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS,
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "team-a-deployment", "team_id": "team-a"},
+            ),
+            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment"}),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-admin-caller", user_role=LitellmUserRoles.PROXY_ADMIN),
+        cooled_down_ids=("team-a-deployment", "global-deployment"),
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tag", "expected_path"),
+    (
+        ("account-a", "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"),
+        ("account-b", "/model/anthropic.claude-sonnet-4-5-20250929-v1:0/count-tokens"),
+    ),
+)
+async def test_bedrock_native_count_tokens_counts_on_a_deployment_the_callers_tags_allow_when_every_one_is_cooling_down(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    tag: str,
+    expected_path: str,
+) -> None:
+    result: Final = await _bedrock_native_count(
+        monkeypatch,
+        respx_mock,
+        httpx.Response(200, json={"inputTokens": 12}),
+        Response(),
+        request_body={**_BEDROCK_COUNT_BODY, "tags": [tag]},
+        model_list=(
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+            ),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS,
+                "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                {"id": "account-b-deployment"},
+                tags=("account-b",),
+            ),
+        ),
+        caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+        cooled_down_ids=("account-a-deployment", "account-b-deployment"),
+        enable_tag_filtering=True,
+    )
+
+    assert result == {"input_tokens": 12}
+    assert respx_mock.calls.last.request.url.path == expected_path
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_cooled_down_count_when_no_deployment_allows_the_callers_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["account-c"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "account-a-deployment"}, tags=("account-a",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            cooled_down_ids=("account-a-deployment",),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 429
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_caller_whose_tags_no_deployment_allows(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "tags": ["other-team"]},
+            model_list=(
+                _bedrock_count_deployment(
+                    _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "tagged-deployment"}, tags=("team-tag",)
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-tagged-caller"),
+            enable_tag_filtering=True,
+        )
+
+    assert refused.value.status_code == 401
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_never_counts_on_another_teams_deployment_named_by_id(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(HTTPException):
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "team-a-deployment"},
+            model_list=(
+                _bedrock_count_deployment(
+                    "model_name_team-a_1",
+                    "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    {"id": "team-a-deployment", "team_id": "team-a", "team_public_model_name": _BEDROCK_COUNT_ALIAS},
+                ),
+            ),
+            caller=UserAPIKeyAuth(api_key="sk-team-b-caller", team_id="team-b"),
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_refuses_a_saved_alias_target_the_key_may_not_call(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(ProxyException) as refused:
+        await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 12}),
+            Response(),
+            model_list=(
+                _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "public-deployment"}),
+                _bedrock_count_deployment("private-bedrock", _BEDROCK_COUNT_MODEL, {"id": "private-deployment"}),
+            ),
+            caller=UserAPIKeyAuth(
+                models=[_BEDROCK_COUNT_ALIAS],
+                router_settings={"model_group_alias": {_BEDROCK_COUNT_ALIAS: "private-bedrock"}},
+            ),
+        )
+
+    assert str(refused.value.code) == "403"
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_for_a_model_the_router_does_not_serve_logs_no_error(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAENVACCESSKEY")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "env-secret")
+    with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+        result: Final = await _bedrock_native_count(
+            monkeypatch,
+            respx_mock,
+            httpx.Response(200, json={"inputTokens": 7}),
+            Response(),
+            request_body={**_BEDROCK_COUNT_BODY, "model": "anthropic.claude-haiku-4-5-20251001-v1:0"},
+            caller=UserAPIKeyAuth(api_key="sk-direct-caller"),
+        )
+
+    assert result == {"input_tokens": 7}
+    assert respx_mock.calls.last.request.url.path == "/model/anthropic.claude-haiku-4-5-20251001-v1:0/count-tokens"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
 
 
 @pytest.mark.asyncio
@@ -9557,7 +9904,7 @@ def _azure_speech_real_auth_attrs(custom_auth: object | None = None) -> dict[str
     from litellm.caching.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
-    user_api_key_cache: Final = DualCache()
+    user_api_key_cache: Final = UserApiKeyCache()
     return {
         "prisma_client": None,
         "user_api_key_cache": user_api_key_cache,
@@ -11906,7 +12253,8 @@ class TestOpenSearchProxyRoute:
         grant: Final = {"allowed_vector_store_indexes": [{"index_name": "docs", "index_permissions": ["write"]}]}
         cache: Final = UserApiKeyCache()
         cache.set_cache(
-            key=hash_token(key), value=UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant)
+            AuthObject.virtual_key(hash_token(key)),
+            UserAPIKeyAuth(token=hash_token(key), models=["gpt-x"], metadata=grant),
         )
         monkeypatch.setattr(proxy_server, "master_key", SHARED_MASTER_KEY)
         monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())

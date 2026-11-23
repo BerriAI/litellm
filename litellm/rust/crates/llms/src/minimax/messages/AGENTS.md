@@ -5,5 +5,5 @@
 
 # references
 
-- Python counterpart `litellm/llms/minimax/messages/transformation.py`
+- Python counterpart `litellm/llms/minimax/messages/transformation.py` (`MinimaxMessagesConfig`)
 - Upstream contract in `llms-types/src/providers/minimax/AGENTS.md`

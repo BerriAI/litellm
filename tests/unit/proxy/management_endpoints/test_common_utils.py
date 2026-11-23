@@ -53,7 +53,8 @@ async def test_shared_default_clone_keeps_inheriting_updated_team_model_caps(
     budget_patch: dict[str, object],
 ) -> None:
     from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
-    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, team_membership_reservation_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.redis.stores.auth_cache import AuthObject
     from litellm.proxy._types import LiteLLM_TeamMembership
 
     source_caps = {"claude-sonnet-4-6": {"max_budget": 3.0, "budget_duration": "1d"}}
@@ -100,12 +101,12 @@ async def test_shared_default_clone_keeps_inheriting_updated_team_model_caps(
     )
     user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(
-        key=team_membership_reservation_cache_key(user_id="member-1", team_id="team-1"),
+        key=AuthObject.team_membership_reservation(user_id="member-1", team_id="team-1"),
         value=membership,
         model_type=LiteLLM_TeamMembership,
     )
     await user_api_key_cache.async_set_cache(
-        key="team_member_default_budget:default-budget",
+        key=AuthObject.team_member_default_budget("default-budget"),
         value=LiteLLM_BudgetTable(budget_id="default-budget", model_max_budget=default_caps),
         model_type=LiteLLM_BudgetTable,
     )
