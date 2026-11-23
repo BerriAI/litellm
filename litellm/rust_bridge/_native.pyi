@@ -433,6 +433,7 @@ class ActiveMember:
     @property
     def priority_class(self) -> str: ...
 
+@final
 class NativeActiveTeams:
     def __new__(
         cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
@@ -444,6 +445,7 @@ class NativeActiveTeams:
     ) -> Future[list[ActiveMember]]: ...
     def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
 
+@final
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -2055,6 +2057,7 @@ class AuthObject:
 class NativeTeamRoster:
     def member(self, user_id: str) -> object: ...
 
+@final
 class NativeAuthCache:
     def __new__(
         cls,
@@ -2680,6 +2683,7 @@ __all__ = [
     "NativeAuthCache",
     "NativeBilledRates",
     "NativeBudgets",
+    "NativeCacheInvalidation",
     "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
@@ -2720,6 +2724,7 @@ __all__ = [
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTeamRoster",
     "NativeTokenRedactor",
     "NativeTokenUsage",
     "NativeUsageRead",
