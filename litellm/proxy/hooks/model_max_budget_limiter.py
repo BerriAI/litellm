@@ -624,13 +624,14 @@ def _aliased_model_group(model: str) -> tuple[str, ...]:
 
 
 def _budgeted_models(model: str, team_id: str | None) -> tuple[str, ...]:
+    return (*expand_model_latest_alias(model), *_namesake_public_names(model, team_id))
+
+
+def _namesake_public_names(model: str, team_id: str | None) -> tuple[str, ...]:
     from litellm.proxy.auth.auth_checks import public_model_names_of_deployments_routed_by_litellm_model
 
     router: Final = _proxy_router()
-    return (
-        *expand_model_latest_alias(model),
-        *(() if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, team_id)),
-    )
+    return () if router is None else public_model_names_of_deployments_routed_by_litellm_model(model, router, team_id)
 
 
 def _bedrock_candidates(model: str) -> tuple[str, ...]:
@@ -960,6 +961,9 @@ def _requested_model_name(
 ) -> str | None:
     """The model name the request was gated on: a team-scoped deployment's public name, since the router renames
     its model group to a unique internal one, else the model group, else the deployment's model."""
+    model_group: Final = standard_logging_payload.get("model_group")
+    if model_group and _namesake_public_names(model_group, _metadata_string_value(metadata, "user_api_key_team_id")):
+        return model_group
     team_public_model_name: Final = _metadata_value(metadata.get("model_info"), "team_public_model_name")
     if (
         isinstance(team_public_model_name, str)
@@ -967,7 +971,7 @@ def _requested_model_name(
         and _GLOB_WILDCARD not in team_public_model_name
     ):
         return team_public_model_name
-    return standard_logging_payload.get("model_group") or standard_logging_payload.get("model")
+    return model_group or standard_logging_payload.get("model")
 
 
 def _metadata_value(metadata: object, key: str) -> object | None:

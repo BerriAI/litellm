@@ -725,6 +725,52 @@ async def test_every_public_name_entry_of_a_litellm_model_gates_and_charges_its_
 
 
 @pytest.mark.asyncio
+async def test_a_litellm_model_request_served_by_a_team_deployment_charges_every_public_name_budget(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "model_name_team-1_a",
+                    "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"},
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "chat-a"},
+                },
+                {"model_name": "chat-b", "litellm_params": {"model": NAMESAKE_MODEL, "api_key": "sk-test"}},
+            ]
+        ),
+    )
+    budget: Final = {"chat-a": ROOMY_CAP, "chat-b": FAMILY_CAP}
+    limiter: Final = _family_limiter(groups_by_model={})
+    key: Final = UserAPIKeyAuth(token=KEY_HASH, team_id="team-1", model_max_budget=budget)
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "acompletion",
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "response_cost": CHAT_COST,
+                "model": NAMESAKE_MODEL,
+                "model_group": NAMESAKE_MODEL,
+                "metadata": {"user_api_key_hash": KEY_HASH, "user_api_key_team_id": "team-1"},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": dict(budget),
+                    "user_api_key_team_id": "team-1",
+                    "model_info": {"team_id": "team-1", "team_public_model_name": "chat-a"},
+                }
+            },
+        },
+    )
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await limiter.is_key_within_model_budget(user_api_key_dict=key, model="chat-b")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("team_id", "governed"), [(None, True), ("team-1", False)])
 async def test_a_team_public_name_that_matches_another_deployments_litellm_model_keeps_its_own_budgets(
     monkeypatch: pytest.MonkeyPatch, team_id: str | None, governed: bool
