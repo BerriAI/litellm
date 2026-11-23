@@ -198,6 +198,28 @@ def test_image_edit_leaves_out_bracket_fields_whose_root_additional_drop_params_
     assert "imageConfig[aspectRatio]" not in fields
 
 
+def test_image_edit_leaves_out_a_bracket_field_additional_drop_params_lists_by_name() -> None:
+    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
+    client: Final = HTTPHandler(
+        client=httpx.Client(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
+    )
+
+    litellm.image_edit(
+        model="openai/gpt-image-1",
+        image=PNG_BYTES,
+        prompt="add a hat",
+        api_key="sk-test",
+        api_base="https://edit.example/v1",
+        client=client,
+        additional_drop_params=["imageConfig[aspectRatio]"],
+        **{"imageConfig[aspectRatio]": "9:16", "imageConfig[imageSize]": "2K"},
+    )
+
+    fields: Final = _multipart_text_fields(captured["content_type"], captured["body"])
+    assert fields["imageConfig[imageSize]"] == "2K"
+    assert "imageConfig[aspectRatio]" not in fields
+
+
 def test_image_edit_forwards_drop_controls_and_bracket_fields_to_a_litellm_proxy_hop() -> None:
     captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
     client: Final = HTTPHandler(
