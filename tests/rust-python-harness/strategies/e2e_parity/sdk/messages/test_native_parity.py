@@ -20,25 +20,79 @@ R request, S response, C callbacks, F covered by a fallback detector today)
 """
 
 import asyncio
+import base64
+import contextlib
 import copy
+import datetime
+import functools
+import gc
+import gzip
 import json
+import logging
+import math
 import os
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Iterable, Iterator, Mapping
+import tempfile
+import threading
+import time
+import uuid
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Generator,
+    Iterable,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, replace
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import MappingProxyType
-from typing import Final, cast
+from typing import ClassVar, Final, cast
 
+import httpx
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
+from litellm.caching.caching import Cache, CacheMode
+from litellm.caching.caching_handler import (
+    _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # a primed entry must land before the measured call reads it
+)
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
+from litellm.litellm_core_utils import logging_utils
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
+from litellm.litellm_core_utils.exception_mapping_utils import with_deployment_debug_info
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.rules import Rules
+from litellm.llms.anthropic.messages.native import interceptors as messages_interceptors
+from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
+from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor
+from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.messages import dispatch
+from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.hooks.message_thread_ownership import MessageThreadOwnership
+from litellm.proxy.utils import InternalUsageCache
+from litellm.router_utils.cooldown_handlers import is_message_thread_not_found
 from litellm.rust_bridge import catalog
-from litellm.rust_bridge.catalog import Route, RouteRule
 from litellm.rust_bridge.configuration import Rollout
+from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -51,8 +105,8 @@ OPUS_FAST: Final = "anthropic/claude-opus-5-5"
 API_KEY: Final = "sk-ant-parity-test"
 USER: Final[Mapping[str, JsonValue]] = MappingProxyType({"role": "user", "content": "What is the capital of France?"})
 
-_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _LOGGED: Final = TypeAdapter(dict[str, object])
+_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _TRANSPORT_HEADERS: Final = frozenset(
     {"accept", "accept-encoding", "connection", "content-length", "host", "user-agent"}
 )
@@ -82,6 +136,7 @@ _VOLATILE: Final = (
     (re.compile(r"Timeout passed=[0-9.]+"), "Timeout passed=<t>"),
     (re.compile(r"127\.0\.0\.1:[0-9]+"), "127.0.0.1:<port>"),
 )
+_SERVER_TOOL_ID: Final = re.compile(r"srvtoolu_[0-9a-f]{32}")
 
 TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
     {
@@ -161,6 +216,7 @@ THINKING_REPLAY: Final[tuple[JsonValue, ...]] = (
     {"role": "user", "content": "And Germany?"},
 )
 
+_MODIFY_PARAMS: Final[Mapping[str, object]] = MappingProxyType({"modify_params": True})
 NO_INPUT: Final[Mapping[str, JsonValue]] = MappingProxyType({})
 PNG_PIXEL: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -283,6 +339,60 @@ SLOW_STREAM: Final = _events(
 )
 
 
+WIDE_NUMBERS_REPLY: Final = (
+    b'{"id":"msg_01ParityWide","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    b'"content":[{"type":"tool_use","id":"toolu_01ParityWide","name":"get_ids","input":{"big":18446744073709551616,'
+    b'"huge":12345678901234567890123,"negative":-12345678901234567890123,"neg_zero":-0.0,"overflow":1e400,'
+    b'"underflow":-1E+400,"exp":1E2,"tiny":5e-324,"precise":0.30000000000000004,"text":"1e400 18446744073709551616"}}],'
+    b'"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+)
+WIDE_INTEGER_REPLY: Final = (
+    b'{"id":"msg_01ParityWideCached","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    b'"content":[{"type":"tool_use","id":"toolu_01ParityWideCached","name":"get_ids","input":{"huge":12345678901234567890123}}],'
+    b'"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+)
+
+MARKED_TEXTS_REPLY: Final = (
+    '{"id":"msg_01ParityMarked","type":"message","role":"assistant","model":"claude-sonnet-4-5-20250929",'
+    '"content":[{"type":"text","text":"\\uf8fflitellm-raw-json:42"},{"type":"tool_use","id":"toolu_01ParityMarked",'
+    '"name":"get_ids","input":{"n":"\uf8fflitellm-raw-json:NaN","s":"\\uF8FFlitellm-raw-json:\\"x\\"",'
+    '"\\uf8fflitellm-raw-json:1":true,"big":18446744073709551616}}],'
+    '"stop_reason":"tool_use","stop_sequence":null,"usage":{"input_tokens":12,"output_tokens":9}}'
+).encode()
+
+
+def _non_string_tool_result_texts(
+    *texts: object,
+) -> list[dict[str, object]]:  # mutable-ok: the messages kwarg is a list of dicts
+    return [
+        dict(USER),
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01Texts", "name": "get_ids", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01Texts",
+                    "content": [{"type": "text", "text": text} for text in texts],
+                },
+                {"type": "text", "text": "go on"},
+            ],
+        },
+    ]
+
+
+_BAD_TRAILER_GZIP: Final = gzip.compress(json.dumps(dict(TEXT_RESPONSE)).encode(), mtime=0)[:-8] + bytes(8)
+_NOT_GZIP: Final = b"\x1f\x8b\x08\x00not really gzip data at allnot really gzip data at all"
+
+
+def _framed_bytes(events: tuple[tuple[str, object], ...]) -> tuple[bytes, ...]:
+    return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in events)
+
+
+def _encoded(body: bytes, encoding: str) -> ResponseSpec:
+    return ResponseSpec(body=body, headers={"content-encoding": encoding})
+
+
 def _upstream_error(kind: str, message: str) -> Mapping[str, JsonValue]:
     return MappingProxyType({"type": "error", "error": {"type": kind, "message": message}})
 
@@ -295,6 +405,45 @@ def _stream(events: tuple[tuple[str, object], ...], chunk_delay: float = 0) -> R
     return ResponseSpec(body={}, events=events, chunk_delay=chunk_delay)
 
 
+def _burst(events: tuple[tuple[str, object], ...], chunked: bool = True) -> ResponseSpec:
+    return ResponseSpec(body={}, events=events, burst=True, chunked=chunked)
+
+
+def _chunked(events: tuple[tuple[str, object], ...], chunk_delay: float) -> ResponseSpec:
+    return ResponseSpec(body={}, events=events, chunk_delay=chunk_delay, chunked=True)
+
+
+_PING: Final[tuple[str, JsonValue]] = ("ping", {"type": "ping"})
+
+PINGED_STREAM: Final = _events(
+    _message_start("msg_01ParityPinged"),
+    *((_PING,) * 50),
+    *_text_block(0, "Pa", "ris"),
+    *_message_end("end_turn", 4),
+)
+
+HEAVILY_PINGED_STREAM: Final = _events(
+    _message_start("msg_01ParityHeavilyPinged"),
+    *((_PING,) * 1000),
+    *_text_block(0, "Pa", "ris"),
+    *_message_end("end_turn", 4),
+)
+
+LARGE_STREAM: Final = _events(
+    _message_start("msg_01ParityLarge"),
+    *_text_block(0, "a" * 15000, "b" * 15000, "c" * 15000),
+    *_message_end("end_turn", 4),
+)
+
+
+def _raw_stream(*frames: str) -> ResponseSpec:
+    return ResponseSpec(body="".join(f"{frame}\n\n" for frame in frames).encode())
+
+
+def _framed(events: tuple[tuple[str, object], ...], event_line: str = "event: ") -> tuple[str, ...]:
+    return tuple(f"{event_line}{event}\ndata: {json.dumps(data)}" for event, data in events)
+
+
 def _failure(status: int, kind: str, message: str, **headers: str) -> ResponseSpec:
     return ResponseSpec(body=dict(_upstream_error(kind, message)), status=status, headers=dict(headers))
 
@@ -305,6 +454,10 @@ CALLBACK_ASPECTS: Final = (
     "logged_response_headers",
     "logged_api_key",
     "logged_call",
+    "logged_request",
+    "logged_sent_request",
+    "logged_model_parameters",
+    "logged_error",
 )
 ASPECTS: Final = ("dispatch", "request", "outcome", "hidden_params", "logged", *CALLBACK_ASPECTS)
 
@@ -319,12 +472,39 @@ class Case:
     env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     settings: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
     private_keys: bool = False
+    cache: Callable[[], Cache] | None = None
+    callbacks: tuple[Callable[[], CustomLogger], ...] = ()
+    classifier: str | None = None
+    interceptor: Callable[[], MessagesInterceptor] | None = None
     gaps: Mapping[str, str | None] = field(default_factory=lambda: MappingProxyType({}))
+    loggers: Callable[[], Sequence[CustomLogger]] | None = None
+    gateway: bool = False
+    racy: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    partitioned: bool = False
+    nones: tuple[str, ...] = ()
+    busy_before_reading: float = 0
+    warned: bool = False
+
+    def aspects(self) -> tuple[str, ...]:
+        return (
+            *ASPECTS,
+            *(("cached",) if self.cache is not None else ()),
+            *(("warnings",) if self.warned else ()),
+            *(("hook_inputs",) if self.loggers else ()),
+            *(("classified",) if self.classifier is not None else ()),
+            *(("tool_runs",) if self.gateway else ()),
+            *(("stream_type",) if self.kwargs.get("stream") is True else ()),
+        )
 
     def params(self) -> Iterator[object]:
-        for aspect in ASPECTS:
+        for aspect in self.aspects():
             gap = {**KNOWN_GAPS.get(self.name, {}), **self.gaps}.get(aspect)
-            marks = () if not gap else (pytest.mark.xfail(reason=gap, strict=True),)
+            race = self.racy.get(aspect)
+            marks = (
+                (pytest.mark.skip(reason=race),)
+                if race
+                else (() if not gap else (pytest.mark.xfail(reason=gap, strict=True),))
+            )
             yield pytest.param(self, aspect, id=f"{self.name}-{aspect}", marks=marks)
 
 
@@ -336,54 +516,57 @@ def _kw(**kwargs: object) -> Mapping[str, object]:
     return MappingProxyType(kwargs)
 
 
+def _tls(**settings: object) -> Mapping[str, object]:
+    return MappingProxyType({**settings, "in_memory_llm_clients_cache": LLMClientCache()})
+
+
+CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO: Final = (
+    "The caller client's ReadTimeout from a stalled stream reaches the caller without litellm_debug_info, "
+    "which Python's stream mapping attaches from the deployment's litellm_params"
+)
+V_LOCATION_NEWLINE_REFUSED: Final = (
+    "V (owner ruling, review #2): a vertex_location with a trailing newline is refused at validation "
+    "with litellm's 'Invalid vertex_location format' ValueError; Python accepts it and fails later "
+    "with InvalidURL"
+)
+E04_HTTPX_CHUNK_READS: Final = "E04: httpx yields each HTTP chunk whole from a 64 KiB socket read; hyper hands a large chunk over in pieces of its smaller read buffer"
 A10_NO_MAX_TOKENS: Final = "A10: native admission hands a call without an int max_tokens to Python, whose signature raises the TypeError; only dispatch differs"
-S6_PRIVATE_KEYS: Final = "S6: native writes _hidden_params into the response dict"
-S15_COMPLETE_DEADLINE: Final = (
-    "S15: by design, native bounds a complete response by one overall deadline where Python bounds each read, "
-    "so a body trickling in slower than the timeout succeeds in Python and times out natively"
+C_UNSENT_CALL_FLAG: Final = (
+    "C: a call that fails natively before its provider request logs no aanthropic_messages flag, "
+    "which Python's handler sets before it shapes the request"
 )
-F_MOCK: Final = "F: mock_response is Python-only (detector mock_response)"
-F_THINKING_RETRY: Final = (
-    "F: retry without thinking after a rejected signature is Python-only (detector thinking_signature_retry)"
+
+F46_SEE_OTHER_CONTENT_TYPE: Final = (
+    "F46: httpx keeps content-type on the GET that follows a 303; reqwest's redirect follower drops it with the body"
 )
-F_CACHE_INJECTION: Final = "F: prompt cache_control injection is Python-only (detector cache_control_injection)"
-F_TOOL_CUSTOM: Final = "F: hoisting a tool's custom field is Python-only (detector tool_custom_field)"
-F_STREAM_COST: Final = "F: cost injection into streamed usage is Python-only (detector stream_cost_injection)"
+REDIRECTED_SENT_REQUEST: Final = (
+    "a followed provider redirect: Python logs the redirected request (its URL, its body already streamed) on the "
+    "logged response, the native call logs the request it sent"
+)
 
 KNOWN_GAPS: Final[Mapping[str, Mapping[str, str | None]]] = MappingProxyType(
     {
-        "response_private_keys": _gaps(outcome=S6_PRIVATE_KEYS),
         "missing_max_tokens": _gaps(dispatch=A10_NO_MAX_TOKENS),
-        "mock_response": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            hidden_params=F_MOCK,
-            logged=F_MOCK,
-            logged_metadata=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
-        "mock_response_rate_limit": _gaps(
-            logged_response_headers=F_MOCK,
-            request=F_MOCK,
-            outcome=F_MOCK,
-            logged=F_MOCK,
-            logged_api_key=F_MOCK,
-            logged_call=F_MOCK,
-        ),
-        "thinking_signature_rejected_then_retried": _gaps(
-            request=F_THINKING_RETRY,
-            outcome=F_THINKING_RETRY,
-            hidden_params=F_THINKING_RETRY,
-            logged=F_THINKING_RETRY,
-            logged_metadata=F_THINKING_RETRY,
-            logged_response_headers=F_THINKING_RETRY,
-        ),
-        "cache_control_injection_points": _gaps(request=F_CACHE_INJECTION),
-        "tool_custom_field": _gaps(request=F_TOOL_CUSTOM),
-        "stream_cost_injection": _gaps(outcome=F_STREAM_COST),
-        "enable_prompt_caching": _gaps(request=F_CACHE_INJECTION),
+        **{
+            name: _gaps(logged_call=C_UNSENT_CALL_FLAG)
+            for name in (
+                "speed_on_model_without_speed",
+                "temperature_on_adaptive_model",
+                "top_k_on_adaptive_model",
+                "legacy_thinking_non_numeric_budget_on_adaptive_model",
+                "legacy_thinking_null_budget_on_adaptive_model",
+                "missing_api_key",
+                "tls_security_level_python_cannot_apply",
+                "max_tokens_none",
+                "reasoning_effort_unknown",
+                "output_config_effort_unknown",
+                "reasoning_effort_unknown_on_adaptive_model",
+                "reasoning_effort_xhigh_on_model_without_xhigh",
+                "int_temperature_on_adaptive_model",
+                "int_top_p_on_adaptive_model",
+                "int_speed_on_model_without_speed",
+            )
+        },
     }
 )
 
@@ -440,6 +623,7 @@ REQUEST_CASES: Final = (
         "legacy_thinking_non_numeric_budget_dropped",
         _kw(thinking={"type": "enabled", "budget_tokens": [1]}, max_tokens=8192, drop_params=True),
         model=OPUS_ADAPTIVE,
+        warned=True,
     ),
     Case(
         "legacy_thinking_carries_extra_keys",
@@ -657,6 +841,192 @@ RESPONSE_CASES: Final = (
         ),
     ),
     Case("response_private_keys", private_keys=True),
+    Case(
+        "response_gzip_under_a_padded_mixed_case_alias",
+        upstream=(_encoded(gzip.compress(json.dumps(dict(TEXT_RESPONSE)).encode(), mtime=0), " X-Gzip "),),
+    ),
+    Case("response_deflate_body_that_is_not_deflate", upstream=(_encoded(b"not deflate at all", "deflate"),)),
+    Case("response_gzip_body_with_a_bad_trailer", upstream=(_encoded(_BAD_TRAILER_GZIP, "gzip"),)),
+    Case("response_gzip_body_that_is_not_gzip", upstream=(_encoded(_NOT_GZIP, "gzip"),)),
+    Case(
+        "stream_deflate_body_that_is_not_deflate",
+        _kw(stream=True),
+        upstream=(_encoded(b"not deflate at all", "deflate"),),
+    ),
+    Case(
+        "stream_gzip_listed_with_an_unknown_coding",
+        _kw(stream=True),
+        upstream=(_encoded(gzip.compress(b"".join(_framed_bytes(TEXT_STREAM)), mtime=0), "gzip, br"),),
+    ),
+)
+
+INPUT_VALUE_CASES: Final = (
+    Case("max_tokens_numeric_string", _kw(max_tokens="1024")),
+    Case("max_tokens_fraction", _kw(max_tokens=1.5)),
+    Case("max_tokens_whole_float", _kw(max_tokens=1024.0)),
+    Case("max_tokens_bool", _kw(max_tokens=True)),
+    Case("max_tokens_beyond_64_bits", _kw(max_tokens=2**64)),
+    Case("reasoning_effort_with_fractional_max_tokens", _kw(reasoning_effort="high", max_tokens=1500.5)),
+    Case("temperature_numeric_string", _kw(temperature="0.5")),
+    Case("temperature_integer_beyond_float_precision", _kw(temperature=2**60 + 1)),
+    Case("top_p_integer_beyond_float_precision", _kw(top_p=-9223372036854775807)),
+    Case(
+        "reasoning_effort_with_numeric_string_max_tokens",
+        _kw(reasoning_effort="high", max_tokens="8192"),
+        upstream=(),
+    ),
+    Case("top_k_beyond_64_bits", _kw(top_k=2**70)),
+    Case("messages_mapping", _kw(messages={"role": "user", "content": "hi"})),
+    Case("messages_string", _kw(messages="hi")),
+    Case("messages_with_non_object_entries", _kw(messages=[dict(USER), "stray", 7])),
+    Case("system_lone_surrogate", _kw(system="sys \ud800 lone")),
+    Case("metadata_user_id_lone_surrogate", _kw(metadata={"user_id": "user-\udc00"})),
+    Case("message_text_lone_surrogate", _kw(messages=[{"role": "user", "content": "a\ud800b \u00e9"}])),
+    Case("text_starting_with_the_raw_leaf_mark", _kw(system="\uf8fflitellm-raw-json:1")),
+    Case("thinking_budget_beyond_64_bits", _kw(thinking={"type": "enabled", "budget_tokens": 2**70}, max_tokens=2048)),
+    Case(
+        "tool_schema_integers_beyond_64_bits",
+        _kw(tools=[{**WEATHER_TOOL, "input_schema": {"type": "integer", "maximum": 2**70, "minimum": -(2**70)}}]),
+    ),
+    Case("temperature_nan", _kw(temperature=float("nan"))),
+    Case(
+        "tool_schema_infinities",
+        _kw(
+            tools=[
+                {**WEATHER_TOOL, "input_schema": {"type": "number", "maximum": float("inf"), "minimum": -float("inf")}}
+            ]
+        ),
+    ),
+)
+
+LOOSE_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"name": "lookup", "description": "lookup", "input_schema": {"type": "object", "properties": {}}}
+)
+
+
+class _StringStreamHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["stream"] = "true"
+        return kwargs
+
+
+class _IntegerStreamHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["stream"] = 1
+        return kwargs
+
+
+class _StringParamsHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["litellm_params"] = "not-a-mapping"
+        return kwargs
+
+
+class _IntegerProviderHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        params: Final = kwargs.setdefault("litellm_params", {})
+        assert isinstance(params, dict)
+        params["custom_llm_provider"] = 5
+        return kwargs
+
+
+ARGUMENT_TYPE_CASES: Final = (
+    Case("stream_string_true", _kw(stream="true"), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_string_false", _kw(stream="false"), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_zero", _kw(stream=0)),
+    Case("stream_one", _kw(stream=1), upstream=(_stream(TEXT_STREAM),)),
+    Case("stream_one_sync", _kw(stream=1), upstream=(_stream(TEXT_STREAM),), sync=True),
+    Case(
+        "pre_request_hook_streams_on_a_string",
+        _kw(stream=True),
+        callbacks=(_StringStreamHook,),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("pre_request_hook_streams_on_an_integer", callbacks=(_IntegerStreamHook,), upstream=(_stream(TEXT_STREAM),)),
+    Case("pre_request_hook_sets_string_litellm_params", callbacks=(_StringParamsHook,), model="claude-sonnet-4-5"),
+    Case("pre_request_hook_sets_integer_provider", callbacks=(_IntegerProviderHook,), model="claude-sonnet-4-5"),
+    Case("model_info_string", _kw(model_info="not-a-mapping")),
+    Case("tools_mapping", _kw(tools=dict(LOOSE_TOOL)), upstream=()),
+    Case("messages_none", _kw(messages=None), nones=("messages",), upstream=()),
+    Case("max_tokens_none", _kw(max_tokens=None), nones=("max_tokens",), upstream=()),
+    Case("reasoning_effort_unknown", _kw(reasoning_effort="ultra"), upstream=()),
+    Case("reasoning_effort_unknown_on_adaptive_model", _kw(reasoning_effort="ultra"), model=OPUS_ADAPTIVE, upstream=()),
+    Case(
+        "reasoning_effort_xhigh_on_model_without_xhigh",
+        _kw(reasoning_effort="xhigh", max_tokens=8192),
+        model="anthropic/claude-opus-4-6",
+        upstream=(),
+    ),
+    Case("int_temperature_on_adaptive_model", _kw(temperature=0), model=OPUS_ADAPTIVE, upstream=()),
+    Case("int_top_p_on_adaptive_model", _kw(top_p=1), model=OPUS_ADAPTIVE, upstream=()),
+    Case("int_speed_on_model_without_speed", _kw(speed=2), upstream=()),
+    Case("string_output_format_dropped", _kw(output_format="json", drop_params=True)),
+    Case("string_output_format_kept_without_drop_params", _kw(output_format="json")),
+    Case("non_string_reasoning_effort_warns", _kw(reasoning_effort=3), warned=True),
+    Case(
+        "reasoning_effort_that_cannot_fit_max_tokens_warns",
+        _kw(reasoning_effort="high", max_tokens=500),
+        warned=True,
+    ),
+    Case(
+        "adaptive_thinking_that_cannot_fit_max_tokens_warns",
+        _kw(thinking={"type": "adaptive"}, output_config={"effort": "high"}, max_tokens=1024),
+        warned=True,
+    ),
+    Case(
+        "adaptive_thinking_on_model_without_reasoning_warns",
+        _kw(thinking={"type": "adaptive"}),
+        model="anthropic/claude-3-haiku-20240307",
+        warned=True,
+    ),
+    Case("output_config_effort_unknown", _kw(output_config={"effort": "ultra"})),
+    Case(
+        "global_drop_params_string_true",
+        _kw(tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+        settings=_kw(drop_params="true"),
+    ),
+    Case(
+        "global_drop_params_string_false",
+        _kw(tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+        settings=_kw(drop_params="false"),
+    ),
+    Case(
+        "request_drop_params_string_true",
+        _kw(drop_params="true", tools=[{**LOOSE_TOOL, "custom": {"note": "opaque"}}]),
+    ),
+    Case(
+        "additional_drop_params_tool_custom",
+        _kw(
+            additional_drop_params=["tools[*].custom"],
+            tools=[{**LOOSE_TOOL, "custom": {"defer_loading": True, "note": "x"}}],
+        ),
+    ),
+    Case(
+        "additional_drop_params_tool_input_examples",
+        _kw(
+            additional_drop_params=["tools[*].input_examples", "metadata.user_id", "fz.nope"],
+            metadata={"user_id": "u1"},
+            tools=[{**LOOSE_TOOL, "input_examples": [{"q": "x"}]}],
+        ),
+    ),
+    Case(
+        "response_without_stop_reason",
+        upstream=(_ok({key: value for key, value in TEXT_RESPONSE.items() if key != "stop_reason"}),),
+    ),
+    Case(
+        "response_without_stop_fields",
+        upstream=(
+            _ok({key: value for key, value in TEXT_RESPONSE.items() if key not in ("stop_reason", "stop_sequence")}),
+        ),
+    ),
 )
 
 FAILURE_CASES: Final = (
@@ -684,16 +1054,122 @@ FAILURE_CASES: Final = (
         "response_trickles_slower_than_timeout",
         _kw(timeout=1),
         upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), chunk_delay=0.5, body_chunks=4),),
-        gaps=_gaps(
-            outcome=S15_COMPLETE_DEADLINE,
-            hidden_params=S15_COMPLETE_DEADLINE,
-            logged=S15_COMPLETE_DEADLINE,
-            logged_metadata=S15_COMPLETE_DEADLINE,
-            logged_response_headers=S15_COMPLETE_DEADLINE,
+    ),
+    Case(
+        "response_body_stalls_past_timeout",
+        _kw(timeout=0.5),
+        upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), chunk_delay=1.0, body_chunks=2),),
+    ),
+    Case(
+        "upstream_500_body_cut",
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "cut")), status=500, body_chunks=2, cut_after=1),
         ),
     ),
+    Case("response_body_cut", upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), body_chunks=2, cut_after=1),)),
+    Case("gzip_response", upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), gzip=True),)),
+    Case("upstream_500_gzip", upstream=(replace(_failure(500, "api_error", "internal"), gzip=True),)),
     Case("missing_max_tokens", _kw(max_tokens=None), upstream=()),
     Case("missing_api_key", _kw(api_key=None), upstream=()),
+    Case(
+        "api_key_with_a_trailing_newline",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"{API_KEY}\n"}),
+    ),
+    Case(
+        "api_key_with_a_trailing_crlf_streamed",
+        _kw(api_key=None, stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"{API_KEY}\r\n"}),
+    ),
+    Case(
+        "api_key_padded_with_whitespace",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"  {API_KEY}\t\n"}),
+    ),
+    Case(
+        "api_key_padded_with_separators",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": f"\x1f{API_KEY}\x1f"}),
+    ),
+    Case(
+        "api_key_of_separators_falls_to_the_auth_token",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_API_KEY": "\x1c\x1f\n", "ANTHROPIC_AUTH_TOKEN": "oauth-token"}),
+    ),
+    Case(
+        "auth_token_with_a_trailing_newline",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_AUTH_TOKEN": "oauth-token\n"}),
+    ),
+    Case("caller_api_key_padded_with_separators", _kw(api_key=f"\x1f{API_KEY}\x1f")),
+    Case("caller_api_key_with_a_trailing_newline", _kw(api_key=f"{API_KEY}\n")),
+    Case(
+        "auth_token_padded_with_whitespace",
+        _kw(api_key=None),
+        env=MappingProxyType({"ANTHROPIC_AUTH_TOKEN": "  fz-env-auth-token  "}),
+    ),
+    Case(
+        "provider_redirect_is_followed",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST),
+        upstream=(
+            ResponseSpec(body=b"moved", status=307, headers={"location": "/redirected/v1/messages"}),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
+    Case(
+        "provider_redirect_chain_of_eleven_hops",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST),
+        upstream=(
+            *(
+                ResponseSpec(body=b"moved", status=307, headers={"location": f"/hop{hop}/v1/messages"})
+                for hop in range(11)
+            ),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
+    Case(
+        "provider_redirect_chain_past_twenty_hops",
+        upstream=tuple(
+            ResponseSpec(body=b"moved", status=307, headers={"location": f"/hop{hop}/v1/messages"}) for hop in range(21)
+        ),
+    ),
+    Case(
+        "provider_see_other_redirect",
+        gaps=_gaps(logged_sent_request=REDIRECTED_SENT_REQUEST, request=F46_SEE_OTHER_CONTENT_TYPE),
+        upstream=(
+            ResponseSpec(body=b"see other", status=303, headers={"location": "/other/v1/messages"}),
+            ResponseSpec(body=dict(TEXT_RESPONSE)),
+        ),
+    ),
+    Case("extra_header_lone_surrogate", _kw(extra_headers={"x-fz-surrogate": "h\ud800"}), upstream=()),
+    Case(
+        "provider_specific_header_lone_surrogate",
+        _kw(
+            provider_specific_header={
+                "custom_llm_provider": "anthropic",
+                "extra_headers": {"x-fz-surrogate": "h\ud800"},
+            }
+        ),
+        upstream=(),
+    ),
+    Case("extra_header_non_ascii", _kw(extra_headers={"x-fz-unicode": "caf\u00e9"}), upstream=()),
+    Case("caller_api_key_non_ascii", _kw(api_key="sk-ant-\u200djoined"), upstream=()),
+    Case("caller_api_key_non_ascii_stream", _kw(api_key="sk-ant-\u200djoined", stream=True), upstream=()),
+    Case("api_base_with_a_space_and_no_scheme", _kw(api_base="event: message_stop"), upstream=()),
+    Case("api_base_with_a_space_and_no_scheme_stream", _kw(api_base="data: [DONE]", stream=True), upstream=()),
+    Case("api_base_with_a_nul", _kw(api_base="a\x00b"), upstream=()),
+    Case("api_base_non_ascii_without_a_scheme", _kw(api_base="h\u00e9llo"), upstream=()),
+    Case("api_base_with_an_unclosed_ipv6_bracket", _kw(api_base_suffix="data: [DONE]"), upstream=()),
+    Case("provider_specific_header_as_a_string", _kw(provider_specific_header="anthropic"), upstream=()),
+    Case("response_header_latin_1", upstream=(_ok(**{"x-fz-unicode": "caf\u00e9"}),)),
+    Case("response_header_utf_8", upstream=(_ok(**{"x-fz-unicode": "caf\u00c3\u00a9"}),)),
+    Case(
+        "response_header_utf_8_httpx_transport",
+        upstream=(_ok(**{"x-fz-unicode": "caf\u00c3\u00a9"}),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
 )
 
 STREAM_CASES: Final = (
@@ -705,6 +1181,75 @@ STREAM_CASES: Final = (
         upstream=(_stream(THINKING_STREAM),),
     ),
     Case("stream_error_event_mid_stream", _kw(stream=True), upstream=(_stream(ERROR_MID_STREAM),)),
+    Case("stream_events_in_one_write", _kw(stream=True), upstream=(_burst(TEXT_STREAM),), partitioned=True),
+    Case(
+        "stream_body_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(TEXT_STREAM, chunked=False),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_in_chunks_written_apart",
+        _kw(stream=True),
+        upstream=(_chunked(TEXT_STREAM, chunk_delay=0.05),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_written_apart",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM, chunk_delay=0.05),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_pings_after_message_start_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(PINGED_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_pings_after_message_start_written_apart",
+        _kw(stream=True),
+        upstream=(_stream(PINGED_STREAM, chunk_delay=0.01),),
+        partitioned=True,
+    ),
+    Case("stream_burst_past_one_read", _kw(stream=True), upstream=(_burst(LARGE_STREAM),), partitioned=True),
+    Case(
+        "stream_thousand_pings_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(HEAVILY_PINGED_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_error_event_in_one_write",
+        _kw(stream=True),
+        upstream=(_burst(ERROR_MID_STREAM),),
+        partitioned=True,
+    ),
+    Case(
+        "stream_events_in_one_write_httpx_transport",
+        _kw(stream=True),
+        upstream=(_burst(TEXT_STREAM),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+    ),
+    Case(
+        "stream_burst_past_one_read_httpx_transport",
+        _kw(stream=True),
+        upstream=(_burst(LARGE_STREAM),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+        gaps=_gaps(outcome=E04_HTTPX_CHUNK_READS),
+    ),
+    Case(
+        "stream_events_written_apart_httpx_transport",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM, chunk_delay=0.05),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+        partitioned=True,
+    ),
     Case(
         "stream_longer_than_timeout",
         _kw(stream=True, timeout=1),
@@ -721,6 +1266,81 @@ STREAM_CASES: Final = (
         upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "3"}),),
     ),
     Case("stream_false_explicit", _kw(stream=False)),
+    Case(
+        "stream_upstream_500_body_cut",
+        _kw(stream=True),
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "cut")), status=500, body_chunks=2, cut_after=1),
+        ),
+    ),
+    Case(
+        "stream_cut_after_four_events",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=4, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_after_message_start",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=1, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_after_events_written_apart",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM, chunk_delay=0.05), cut_after=6, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_chunked_cut_after_four_events",
+        _kw(stream=True),
+        upstream=(replace(_chunked(TEXT_STREAM, chunk_delay=0), cut_after=4, cut_delay=0.1),),
+    ),
+    Case(
+        "stream_cut_while_the_caller_is_busy",
+        _kw(stream=True),
+        upstream=(replace(_chunked(TEXT_STREAM, chunk_delay=0), cut_after=4, cut_delay=0.1),),
+        busy_before_reading=0.4,
+    ),
+    Case(
+        "stream_cut_after_message_start_while_the_caller_is_busy",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), cut_after=1, cut_delay=0.1),),
+        busy_before_reading=0.4,
+    ),
+    Case(
+        "stream_upstream_500_body_stalls",
+        _kw(stream=True, timeout=8),
+        upstream=(
+            ResponseSpec(body=dict(_upstream_error("api_error", "stalled")), status=500, chunk_delay=6, body_chunks=2),
+        ),
+    ),
+    Case(
+        "stream_upstream_429_body_stalls_past_timeout",
+        _kw(stream=True, timeout=1),
+        upstream=(
+            ResponseSpec(
+                body=dict(_upstream_error("rate_limit_error", "stalled")), status=429, chunk_delay=2, body_chunks=2
+            ),
+        ),
+    ),
+    Case("stream_gzip_response", _kw(stream=True), upstream=(replace(_stream(TEXT_STREAM), gzip=True),)),
+    Case(
+        "stream_read_stalls_past_timeout_httpx_transport",
+        _kw(stream=True, timeout=0.5),
+        upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
+    Case(
+        "stream_response_header_utf_8",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), headers={"x-fz-unicode": "caf\u00c3\u00a9"}),),
+    ),
+    Case(
+        "stream_response_header_utf_8_httpx_transport",
+        _kw(stream=True),
+        upstream=(replace(_stream(TEXT_STREAM), headers={"x-fz-unicode": "caf\u00c3\u00a9"}),),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
 )
 
 SYNC_CASES: Final = (
@@ -729,47 +1349,3546 @@ SYNC_CASES: Final = (
     Case("sync_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down"),), sync=True),
 )
 
-FALLBACK_CASES: Final = (
-    Case("mock_response", _kw(mock_response="Hi from the mock"), upstream=()),
-    Case("mock_response_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=()),
-    Case(
-        "thinking_replay",
-        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
-    ),
-    Case(
-        "thinking_signature_rejected_then_retried",
-        _kw(messages=list(THINKING_REPLAY), thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=4096),
-        upstream=(
-            _failure(400, "invalid_request_error", "messages.1.content.0: Invalid `signature` in `thinking` block"),
-            _ok(),
-        ),
-    ),
+SYSTEM_POINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"location": "message", "role": "system"})
+LAST_MESSAGE_POINT: Final[Mapping[str, JsonValue]] = MappingProxyType({"location": "message", "index": -1})
+SYSTEM_BLOCKS: Final[tuple[JsonValue, ...]] = (
+    {"type": "text", "text": "Answer in one word."},
+    {"type": "text", "text": "Be terse."},
+)
+MARKED_TURNS: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": [{"type": "text", "text": "One.", "cache_control": {"type": "ephemeral"}}]},
+    {"role": "assistant", "content": [{"type": "text", "text": "Two.", "cache_control": {"type": "ephemeral"}}]},
+    {"role": "user", "content": [{"type": "text", "text": "Three.", "cache_control": {"type": "ephemeral"}}]},
+)
+
+PROMPT_CACHING_CASES: Final = (
     Case(
         "cache_control_injection_points",
-        _kw(system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "system"}]),
+        _kw(system="Answer in one word.", cache_control_injection_points=[dict(SYSTEM_POINT)]),
     ),
-    Case("tool_custom_field", _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True}}])),
+    Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
     Case(
-        "strict_tools_rejected_then_retried",
-        _kw(tools=[{**WEATHER_TOOL, "strict": True}], drop_params=True),
-        upstream=(
-            _failure(400, "invalid_request_error", "tools.0.strict: too many strict tools"),
-            _ok(),
+        "enable_prompt_caching_without_system",
+        _kw(messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], enable_prompt_caching=True),
+    ),
+    Case(
+        "global_prompt_caching_with_ttl",
+        _kw(system=list(SYSTEM_BLOCKS)),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True, "anthropic_prompt_caching_ttl": "1h"}),
+    ),
+    Case(
+        "global_prompt_caching_stands_down_on_client_marks",
+        _kw(system=[{"type": "text", "text": "Answer in one word.", "cache_control": {"type": "ephemeral"}}]),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "global_prompt_caching_stands_down_on_marked_tools",
+        _kw(tools=[{**WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}]),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+    Case(
+        "enable_prompt_caching_false_overrides_nothing",
+        _kw(system="Answer in one word.", enable_prompt_caching=False),
+    ),
+    Case(
+        "injection_point_negative_index",
+        _kw(
+            messages=list(TOOL_TURNS),
+            cache_control_injection_points=[
+                {"location": "message", "index": -2, "control": {"type": "ephemeral", "ttl": "1h"}}
+            ],
         ),
     ),
-    Case("modify_params", _kw(max_tokens=1), settings=MappingProxyType({"modify_params": True})),
+    Case(
+        "injection_point_string_index",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "index": "1"}]),
+    ),
+    Case(
+        "injection_point_out_of_range_index",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "index": 7}]),
+    ),
+    Case(
+        "injection_point_by_role",
+        _kw(messages=list(TOOL_TURNS), cache_control_injection_points=[{"location": "message", "role": "user"}]),
+    ),
+    Case(
+        "injection_points_capped_by_client_marks",
+        _kw(
+            messages=list(MARKED_TURNS),
+            system=list(SYSTEM_BLOCKS),
+            tools=[{**WEATHER_TOOL, "cache_control": {"type": "ephemeral"}}],
+            cache_control_injection_points=[dict(SYSTEM_POINT), dict(LAST_MESSAGE_POINT)],
+        ),
+    ),
+    Case(
+        "injection_points_beside_client_marks",
+        _kw(
+            messages=[*MARKED_TURNS[:2], {"role": "user", "content": "Three."}],
+            cache_control_injection_points=[dict(SYSTEM_POINT), dict(LAST_MESSAGE_POINT)],
+            system="Answer in one word.",
+        ),
+    ),
+    Case(
+        "tool_config_point_marks_the_last_tool",
+        _kw(
+            tools=[dict(WEATHER_TOOL), {**WEATHER_TOOL, "name": "get_time"}],
+            cache_control_injection_points=[{"location": "tool_config"}, dict(LAST_MESSAGE_POINT)],
+        ),
+    ),
+    Case(
+        "tool_config_point_without_tools",
+        _kw(cache_control_injection_points=[{"location": "tool_config"}]),
+    ),
+    Case(
+        "injection_marks_the_gateway_deployment",
+        _kw(
+            system="Answer in one word.",
+            enable_prompt_caching=True,
+            litellm_metadata={"user_api_key": "hashed"},
+            model_info={"id": "deployment-1"},
+        ),
+    ),
+    Case(
+        "injection_into_whitespace_only_turn",
+        _kw(
+            messages=[dict(USER), {"role": "assistant", "content": "Paris"}, {"role": "user", "content": "  "}],
+            cache_control_injection_points=[dict(LAST_MESSAGE_POINT)],
+        ),
+        upstream=(_failure(400, "invalid_request_error", "messages: text content blocks must be non-empty"),),
+    ),
+    Case(
+        "injection_after_empty_blocks_are_stripped",
+        _kw(
+            messages=[
+                dict(USER),
+                {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+                {"role": "user", "content": "And Germany?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+        ),
+    ),
+    Case(
+        "stream_with_prompt_caching",
+        _kw(stream=True, system="Answer in one word.", enable_prompt_caching=True),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "global_prompt_caching_beside_an_unmatched_point",
+        _kw(
+            system="Answer in one word.", cache_control_injection_points=[{"location": "message", "role": "assistant"}]
+        ),
+        settings=MappingProxyType({"enable_anthropic_prompt_caching": True}),
+    ),
+)
+
+SYNC_PROMPT_CACHING_CASES: Final = tuple(
+    replace(case, name=f"sync_{case.name}", sync=True) for case in PROMPT_CACHING_CASES
+)
+
+LATEST_ALIAS: Final = "anthropic/claude-opus-latest"
+CUSTOM_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({**WEATHER_TOOL, "custom": {"defer_loading": True}})
+COST_HEADER: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"headers": {"x-litellm-include-cost-in-streaming-usage": "true"}}
+)
+
+SERVED_NATIVELY_CASES: Final = (
+    Case("mock_response", _kw(mock_response="Hi from the mock"), upstream=()),
+    Case("mock_response_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=()),
+    Case("mock_response_context_window", _kw(mock_response="litellm.ContextWindowExceededError"), upstream=()),
+    Case("mock_response_empty_calls_the_provider", _kw(mock_response="")),
+    Case("mock_response_bad_metadata", _kw(mock_response="Hi", metadata={"user_id": 123}), upstream=()),
+    Case("mock_response_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=()),
+    Case("mock_response_stream_rate_limit", _kw(mock_response="litellm.RateLimitError", stream=True), upstream=()),
+    Case(
+        "mock_response_stream_empty_calls_the_provider",
+        _kw(mock_response="", stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("mock_response_cached", _kw(mock_response="Hi from the mock"), upstream=(), cache=Cache),
+    Case("mock_response_stream_cached", _kw(mock_response="Hi from the mock", stream=True), upstream=(), cache=Cache),
+    Case("mock_response_sync", _kw(mock_response="Hi from the mock"), upstream=(), sync=True),
+    Case("mock_response_sync_stream", _kw(mock_response="Hi from the mock", stream=True), upstream=(), sync=True),
+    Case("mock_response_sync_rate_limit", _kw(mock_response="litellm.RateLimitError"), upstream=(), sync=True),
+    Case("mock_response_sync_internal_error", _kw(mock_response="litellm.InternalServerError"), upstream=(), sync=True),
+    Case("mock_response_sync_bad_metadata", _kw(mock_response="Hi", metadata={"user_id": 123}), upstream=(), sync=True),
+    Case("mock_response_sync_empty_calls_the_provider", _kw(mock_response=""), sync=True),
+    Case("latest_alias", model=LATEST_ALIAS),
+    Case("latest_alias_bare_with_provider", _kw(custom_llm_provider="anthropic"), model="claude-opus-latest"),
+    Case("latest_alias_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), model=LATEST_ALIAS),
+    Case(
+        "latest_alias_upstream_400",
+        upstream=(_failure(400, "invalid_request_error", "max_tokens: too large"),),
+        model=LATEST_ALIAS,
+    ),
+    Case("tool_custom_field", _kw(tools=[dict(CUSTOM_TOOL)])),
+    Case(
+        "tool_custom_field_keeps_other_custom_keys",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": False, "note": "kept"}}]),
+    ),
+    Case(
+        "tool_custom_field_dropped_with_drop_params",
+        _kw(tools=[{**WEATHER_TOOL, "custom": {"defer_loading": True, "note": "dropped"}}], drop_params=True),
+    ),
+    Case("tool_custom_field_not_an_object", _kw(tools=[{**WEATHER_TOOL, "custom": "opaque"}])),
+    Case(
+        "tool_custom_field_under_own_defer_loading",
+        _kw(tools=[{**WEATHER_TOOL, "defer_loading": False, "custom": {"defer_loading": True}}]),
+    ),
     Case(
         "stream_cost_injection",
         _kw(stream=True),
         upstream=(_stream(TEXT_STREAM),),
         settings=MappingProxyType({"include_cost_in_streaming_usage": True}),
     ),
-    Case("enable_prompt_caching", _kw(system="Answer in one word.", enable_prompt_caching=True)),
+    Case(
+        "stream_cost_injection_from_proxy_header",
+        _kw(stream=True, proxy_server_request=dict(COST_HEADER)),
+        upstream=(_stream(TOOL_STREAM, chunk_delay=0.01),),
+    ),
+    Case(
+        "cache_off_by_default",
+        settings=MappingProxyType({"cache": Cache(mode=CacheMode.default_off)}),
+    ),
+    Case(
+        "cache_skips_messages_call_type",
+        settings=MappingProxyType({"cache": Cache(supported_call_types=["acompletion"])}),
+    ),
+)
+
+FALLBACK_CASES: Final = (
+    Case("modify_params", _kw(max_tokens=1), settings=_MODIFY_PARAMS),
+    Case("modify_params_clamps_max_tokens", _kw(max_tokens=200_000), settings=_MODIFY_PARAMS),
+    Case(
+        "modify_params_clamps_streamed_max_tokens",
+        _kw(stream=True, max_tokens=200_000),
+        upstream=(_stream(TEXT_STREAM),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_tool_turns",
+        _kw(messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], max_tokens=200_000),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_clamps_thinking",
+        _kw(thinking={"type": "enabled", "budget_tokens": 2048}, max_tokens=200_000),
+        upstream=(_ok(THINKING_RESPONSE),),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_image_content",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_PIXEL}},
+                        {"type": "text", "text": "What is this?"},
+                    ],
+                }
+            ],
+            max_tokens=200_000,
+        ),
+        settings=_MODIFY_PARAMS,
+    ),
+    Case(
+        "modify_params_unknown_model",
+        _kw(max_tokens=200_000),
+        model="anthropic/claude-parity-unknown",
+        settings=_MODIFY_PARAMS,
+    ),
+    Case("modify_params_hf_model_name", _kw(max_tokens=200_000, hf_model_name="gpt2"), settings=_MODIFY_PARAMS),
+    Case(
+        "modify_params_cache_write_without_read",
+        _kw(max_tokens=200_000, cache={"no-cache": True}),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "modify_params_clamped_call_never_hits_the_cache",
+        _kw(max_tokens=200_000),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "modify_params_unclamped_call_hits_the_cache",
+        _kw(max_tokens=10),
+        upstream=(_ok(), _ok()),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case("cache_write_without_read", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("reply_with_wide_numbers", upstream=(ResponseSpec(body=WIDE_NUMBERS_REPLY),)),
+    Case("reply_with_a_wide_integer_cached", upstream=(ResponseSpec(body=WIDE_INTEGER_REPLY),), cache=Cache),
+    Case("reply_with_raw_leaf_marked_texts", upstream=(ResponseSpec(body=MARKED_TEXTS_REPLY),)),
+    Case("reply_with_raw_leaf_marked_texts_cached", upstream=(ResponseSpec(body=MARKED_TEXTS_REPLY),), cache=Cache),
+    Case(
+        "modify_params_clamped_stream_hits_the_cache",
+        _kw(max_tokens=200_000, stream=True),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        settings=_MODIFY_PARAMS,
+        cache=Cache,
+    ),
+    Case(
+        "drop_params_drops_non_string_tool_result_texts",
+        _kw(
+            messages=_non_string_tool_result_texts(5, None, {"a": 1}, 8.5, 2**70, float("nan"), "kept"),
+            drop_params=True,
+        ),
+    ),
+    Case(
+        "global_drop_params_drops_every_tool_result_text",
+        _kw(messages=_non_string_tool_result_texts(5, None)),
+        settings=MappingProxyType({"drop_params": True}),
+    ),
+    Case(
+        "drop_params_keeps_string_tool_result_texts",
+        _kw(messages=_non_string_tool_result_texts("\uf8fflitellm-raw-json:1", "kept"), drop_params=True),
+    ),
+    Case("modify_params_sync", _kw(max_tokens=200_000), sync=True, settings=_MODIFY_PARAMS),
     Case("request_timeout_kwarg", _kw(request_timeout=30)),
     Case("stream_timeout_kwarg", _kw(stream=True, stream_timeout=30), upstream=(_stream(TEXT_STREAM),)),
 )
 
-CASES: Final = (*REQUEST_CASES, *RESPONSE_CASES, *FAILURE_CASES, *STREAM_CASES, *SYNC_CASES, *FALLBACK_CASES)
+INVALID_SIGNATURE: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
+BOUND_ELSEWHERE: Final = f"{INVALID_SIGNATURE}. The block is bound to a different conversation."
+THINKING: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "enabled", "budget_tokens": 2048})
+BINDING_ERRORS: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "adaptive", "block_binding": {"prefix_mismatch_behavior": "error"}}
+)
+THINKING_ONLY_REPLAY: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "What is the capital of France?"},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "redacted_thinking", "data": "EmwKAhgBEgy"},
+            {"type": "thinking", "thinking": "Paris.", "signature": "EqQBCkYIARgCKkB"},
+        ],
+    },
+    {"role": "assistant", "content": []},
+    {"role": "user", "content": "And Germany?"},
+)
+
+
+def _replay(**kwargs: object) -> Mapping[str, object]:
+    return _kw(messages=list(THINKING_REPLAY), thinking=dict(THINKING), max_tokens=4096, **kwargs)
+
+
+def _rejected(message: str = INVALID_SIGNATURE, status: int = 400) -> ResponseSpec:
+    return _failure(status, "invalid_request_error", message)
+
+
+THINKING_RETRY_CASES: Final = (
+    Case("thinking_replay", _replay()),
+    Case("thinking_signature_rejected_then_retried", _replay(), upstream=(_rejected(), _ok())),
+    Case(
+        "thinking_signature_rejected_then_retried_stream",
+        _replay(stream=True),
+        upstream=(_rejected(), _stream(TEXT_STREAM)),
+    ),
+    Case(
+        "thinking_signature_missing_then_retried",
+        _replay(),
+        upstream=(_rejected("messages.1.content.0.thinking.signature.str: Input should be a valid string"), _ok()),
+    ),
+    Case(
+        "empty_thinking_rejected_then_retried_without_thinking_only_turns",
+        _kw(messages=list(THINKING_ONLY_REPLAY), thinking=dict(THINKING), max_tokens=4096),
+        upstream=(_rejected("messages.1.content.1.thinking: each thinking block must contain thinking"), _ok()),
+    ),
+    Case("thinking_signature_rejected_twice", _replay(), upstream=(_rejected(), _rejected())),
+    Case(
+        "thinking_signature_rejected_twice_stream",
+        _replay(stream=True),
+        upstream=(_rejected(), _rejected()),
+    ),
+    Case("thinking_signature_text_on_a_429_is_not_retried", _replay(), upstream=(_rejected(status=429),)),
+    Case(
+        "unrelated_400_is_not_retried",
+        _replay(),
+        upstream=(_rejected("max_tokens: 4096 > 64000, which is the maximum allowed"),),
+    ),
+    Case(
+        "binding_mismatch_retried_when_the_caller_did_not_pin_it",
+        _kw(messages=list(THINKING_REPLAY), thinking={"type": "adaptive"}, max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(BOUND_ELSEWHERE), _ok()),
+    ),
+    Case(
+        "binding_mismatch_raised_when_the_caller_pinned_it",
+        _kw(messages=list(THINKING_REPLAY), thinking=dict(BINDING_ERRORS), max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(BOUND_ELSEWHERE),),
+    ),
+    Case(
+        "invalid_signature_retried_even_when_the_caller_pinned_binding",
+        _kw(messages=list(THINKING_REPLAY), thinking=dict(BINDING_ERRORS), max_tokens=4096),
+        model=OPUS_ADAPTIVE,
+        upstream=(_rejected(), _ok()),
+    ),
+)
+
+
+def _default_off_cache() -> Cache:
+    return Cache(mode=CacheMode.default_off)
+
+
+def _completion_only_cache() -> Cache:
+    return Cache(supported_call_types=["acompletion"])
+
+
+CACHE_CASES: Final = (
+    Case("cache_hit", upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_hit_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache),
+    Case("cache_no_cache", _kw(cache={"no-cache": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_no_store", _kw(cache={"no-store": True}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_caching_false", _kw(caching=False), upstream=(_ok(), _ok()), cache=Cache),
+    Case(
+        "cache_ttl_and_namespace", _kw(cache={"ttl": 60, "namespace": "parity"}), upstream=(_ok(), _ok()), cache=Cache
+    ),
+    Case("cache_default_off", upstream=(_ok(), _ok()), cache=_default_off_cache),
+    Case(
+        "cache_default_off_use_cache",
+        _kw(cache={"use-cache": True}),
+        upstream=(_ok(), _ok()),
+        cache=_default_off_cache,
+    ),
+    Case("cache_unsupported_call_type", upstream=(_ok(), _ok()), cache=_completion_only_cache),
+    Case("cache_hit_with_metadata", _kw(metadata={"user_id": "user-123"}), upstream=(_ok(), _ok()), cache=Cache),
+    Case("cache_sync", sync=True, upstream=(_ok(), _ok()), cache=Cache),
+    *(
+        Case(name, _kw(stream=True), upstream=(_raw_stream(*frames), _raw_stream(*frames)), cache=Cache)
+        for name, frames in (
+            ("cache_stream_data_only_frames", tuple(f"data: {json.dumps(data)}" for _, data in TEXT_STREAM)),
+            ("cache_stream_event_without_space", _framed(TEXT_STREAM, "event:")),
+            ("cache_stream_done_sentinel", (*_framed(TEXT_STREAM), "data: [DONE]")),
+            (
+                "cache_stream_without_output",
+                _framed(
+                    _events(_message_start("msg_01ParityEmpty"), *_text_block(0, ""), *_message_end("end_turn", 1))
+                ),
+            ),
+            (
+                "cache_stream_error_after_stop",
+                (
+                    *_framed(TEXT_STREAM),
+                    *_framed((("error", dict(_upstream_error("overloaded_error", "Overloaded"))),)),
+                ),
+            ),
+        )
+    ),
+)
+
+STRICT_REJECTION: Final = "Too many strict tools (21). The maximum number of strict tools is 20."
+STRICT_TOOLS: Final[tuple[JsonValue, ...]] = (
+    {**WEATHER_TOOL, "strict": True},
+    {**WEATHER_TOOL, "name": "get_time", "strict": False},
+    dict(WEATHER_TOOL, name="get_tide"),
+)
+
+
+def _strict(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=list(STRICT_TOOLS), **kwargs)
+
+
+STRICT_TOOLS_RETRY_CASES: Final = (
+    Case(
+        "strict_tools_rejected_then_retried", _strict(drop_params=True), upstream=(_rejected(STRICT_REJECTION), _ok())
+    ),
+    Case(
+        "strict_tools_rejected_then_retried_stream",
+        _strict(drop_params=True, stream=True),
+        upstream=(_rejected(STRICT_REJECTION), _stream(TEXT_STREAM)),
+    ),
+    Case(
+        "strict_tools_rejected_then_retried_under_global_drop_params",
+        _strict(),
+        upstream=(_rejected("The compiled grammar is too large"), _ok()),
+        settings=MappingProxyType({"drop_params": True}),
+    ),
+    Case(
+        "strict_tools_custom_field_rejected_then_retried",
+        _strict(drop_params="true"),
+        upstream=(_rejected("tools.0.custom.strict: Extra inputs are not permitted"), _ok()),
+    ),
+    Case(
+        "strict_tools_rejected_without_drop_params",
+        _strict(),
+        upstream=(_rejected(STRICT_REJECTION),),
+        settings=MappingProxyType({"drop_params": False}),
+    ),
+    Case(
+        "strict_tools_rejected_under_a_truthy_global_drop_params_that_is_not_true",
+        _strict(),
+        upstream=(_rejected(STRICT_REJECTION),),
+        settings=MappingProxyType({"drop_params": 1}),
+    ),
+    Case(
+        "strict_rejection_without_a_strict_tool",
+        _kw(tools=[{**WEATHER_TOOL, "strict": False}], drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION),),
+    ),
+    Case(
+        "strict_rejection_text_on_a_429_is_not_retried",
+        _strict(drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION, status=429),),
+    ),
+    Case(
+        "strict_tools_rejected_twice",
+        _strict(drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected("Grammar compilation timed out")),
+    ),
+    Case(
+        "strict_tools_rejected_twice_stream",
+        _strict(drop_params=True, stream=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected(STRICT_REJECTION)),
+    ),
+    Case(
+        "strict_tools_and_thinking_strict_rejected_then_retried",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _ok()),
+    ),
+    Case(
+        "strict_tools_and_thinking_signature_rejected_then_retried",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(), _ok()),
+    ),
+    Case(
+        "strict_tools_and_thinking_each_rejected_spends_the_one_retry",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(STRICT_REJECTION), _rejected()),
+    ),
+    Case(
+        "strict_tools_and_thinking_signature_then_strict_rejected",
+        _replay(tools=list(STRICT_TOOLS), drop_params=True),
+        upstream=(_rejected(), _rejected(STRICT_REJECTION), _ok()),
+    ),
+    Case(
+        "one_error_naming_both_drops_thinking_and_strict_without_drop_params",
+        _replay(tools=list(STRICT_TOOLS)),
+        upstream=(_rejected(f"{INVALID_SIGNATURE}. {STRICT_REJECTION}"), _ok()),
+    ),
+)
+
+THREADS_BETA: Final = "message-threads-2026-08-12"
+ADVISOR_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "advisor_20260301", "name": "advisor", "model": "claude-opus-4-8"}
+)
+THREAD_CREATE: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "create"})
+THREAD_CONTINUE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "continue", "previous_message_id": "msg_01ParityText"}
+)
+ADVISOR_TURNS: Final[tuple[JsonValue, ...]] = (
+    {"role": "user", "content": "Build a worker pool."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "Let me consult the advisor."},
+            {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+            {
+                "type": "advisor_tool_result",
+                "tool_use_id": "srvtoolu_01Parity",
+                "content": {"type": "advisor_result", "text": "Use channels."},
+            },
+            {"type": "text", "text": "Here is the implementation."},
+        ],
+    },
+    {"role": "user", "content": "Now add a timeout.", "output_config": {"effort": "low"}},
+    {"role": "system", "content": [{"type": "tool_addition", "tool": {"type": "tool_reference", "name": "ping"}}]},
+    {"role": "user", "content": "Go on."},
+)
+THREAD_NOT_FOUND: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "error",
+        "error": {
+            "type": "not_found_error",
+            "message": "No thread state was found for the requested `previous_message_id`.",
+            "details": {"error_code": "thread_not_found"},
+        },
+        "request_id": "req_01Parity",
+    }
+)
+
+
+def _thread_not_found() -> ResponseSpec:
+    return ResponseSpec(body=dict(THREAD_NOT_FOUND), status=404)
+
+
+THREAD_CASES: Final = (
+    Case("thread_create", _kw(thread=dict(THREAD_CREATE), system="Answer in one word.")),
+    Case("thread_create_with_advisor_tool", _kw(thread=dict(THREAD_CREATE), tools=[dict(ADVISOR_TOOL)])),
+    Case("thread_create_scans_history", _kw(thread=dict(THREAD_CREATE), messages=list(ADVISOR_TURNS))),
+    Case("thread_continue", _kw(thread=dict(THREAD_CONTINUE))),
+    Case(
+        "thread_continue_keeps_history_and_skips_its_betas",
+        _kw(thread=dict(THREAD_CONTINUE), messages=list(ADVISOR_TURNS)),
+    ),
+    Case(
+        "thread_continue_keeps_param_betas",
+        _kw(
+            thread=dict(THREAD_CONTINUE),
+            messages=list(ADVISOR_TURNS),
+            compaction={},
+            context_management={"edits": [{"type": "compact_20260112"}]},
+        ),
+    ),
+    Case("thread_continue_without_previous_message_id", _kw(thread={"type": "continue"}, messages=list(ADVISOR_TURNS))),
+    Case(
+        "thread_continue_with_a_malformed_previous_message_id",
+        _kw(thread={"type": "continue", "previous_message_id": 7}, messages=list(ADVISOR_TURNS)),
+    ),
+    Case("thread_of_unknown_shape", _kw(thread="opaque", messages=list(ADVISOR_TURNS))),
+    Case("thread_none_is_left_out", _kw(thread=None)),
+    Case(
+        "thread_beside_a_client_beta",
+        _kw(thread=dict(THREAD_CONTINUE), extra_headers={"anthropic-beta": f"advisor-tool-2026-03-01,{THREADS_BETA}"}),
+    ),
+    Case(
+        "thread_dropped_by_additional_drop_params", _kw(thread=dict(THREAD_CREATE), additional_drop_params=["thread"])
+    ),
+    Case("thread_create_stream", _kw(thread=dict(THREAD_CREATE), stream=True), upstream=(_stream(TEXT_STREAM),)),
+    Case(
+        "thread_continue_stream",
+        _kw(thread=dict(THREAD_CONTINUE), stream=True, messages=list(ADVISOR_TURNS)),
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("thread_create_sync", _kw(thread=dict(THREAD_CREATE)), sync=True),
+    Case(
+        "thread_continue_sync_stream",
+        _kw(thread=dict(THREAD_CONTINUE), stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        sync=True,
+    ),
+    Case("thread_not_found", _kw(thread=dict(THREAD_CONTINUE)), upstream=(_thread_not_found(),)),
+    Case("thread_not_found_stream", _kw(thread=dict(THREAD_CONTINUE), stream=True), upstream=(_thread_not_found(),)),
+    Case("thread_not_found_sync", _kw(thread=dict(THREAD_CONTINUE)), upstream=(_thread_not_found(),), sync=True),
+    Case(
+        "thread_continue_retried_after_a_rejected_signature",
+        _replay(thread=dict(THREAD_CONTINUE)),
+        upstream=(_rejected(), _ok()),
+    ),
+)
+
+
+class _CallerHandler(AsyncHTTPHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerHandler":
+        return _CallerHandler()
+
+
+class _UncheckedHandler(_CallerHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_UncheckedHandler":
+        return _UncheckedHandler()
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the test double ignores the rest of the post
+        return httpx.Response(503, text="unavailable")
+
+
+class _UnreadHandler(_CallerHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_UnreadHandler":
+        return _UnreadHandler()
+
+    async def post(self, url: str, **kwargs: object) -> httpx.Response:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the test double ignores the rest of the post
+        return httpx.Response(500, stream=httpx.ByteStream(b"unread"), request=httpx.Request("POST", url))
+
+
+class _CallerHttpxClient(httpx.AsyncClient):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerHttpxClient":
+        return _CallerHttpxClient()
+
+
+class _CallerSyncHandler(HTTPHandler):
+    def __deepcopy__(self, memo: dict[int, object]) -> "_CallerSyncHandler":
+        return _CallerSyncHandler()
+
+
+def _caller(**kwargs: object) -> Mapping[str, object]:
+    return _kw(client=_CallerHandler(), **kwargs)
+
+
+_TLS_LEVEL: Final = _tls(ssl_security_level="DEFAULT@SECLEVEL=1")
+_TLS_CURVE: Final = _tls(ssl_ecdh_curve="secp521r1")
+
+TRANSPORT_CASES: Final = (
+    Case("caller_client", _caller()),
+    Case("caller_client_stream", _caller(stream=True), upstream=(_stream(TEXT_STREAM),)),
+    Case(
+        "caller_client_upstream_429",
+        _caller(),
+        upstream=(
+            _failure(429, "rate_limit_error", "slow down", **{"retry-after": "7", "request-id": "req_01Parity"}),
+        ),
+    ),
+    Case(
+        "caller_client_stream_upstream_429",
+        _caller(stream=True),
+        upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "3"}),),
+    ),
+    Case(
+        "caller_client_non_json_error",
+        _caller(),
+        upstream=(ResponseSpec(body=b"<html>bad gateway</html>", status=502),),
+    ),
+    Case("caller_client_invalid_json_success", _caller(), upstream=(ResponseSpec(body=b"not json", status=200),)),
+    Case("caller_client_timeout", _caller(timeout=0.5), upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), delay=1.5),)),
+    Case(
+        "caller_client_stream_read_stalls_past_timeout",
+        _caller(stream=True, timeout=0.5),
+        upstream=(_stream(SLOW_STREAM, chunk_delay=1.0),),
+        gaps=_gaps(outcome=CALLER_CLIENT_STREAM_TIMEOUT_DEBUG_INFO),
+    ),
+    Case(
+        "caller_client_thinking_signature_rejected_then_retried",
+        _kw(**_replay(), client=_CallerHandler()),
+        upstream=(_rejected(), _ok()),
+    ),
+    Case(
+        "caller_client_strict_tools_rejected_then_retried_stream",
+        _strict(drop_params=True, stream=True, client=_CallerHandler()),
+        upstream=(_rejected(STRICT_REJECTION), _stream(TEXT_STREAM)),
+    ),
+    Case("caller_client_sync", _caller(), sync=True),
+    Case("caller_client_post_returns_unchecked_failure", _kw(client=_UncheckedHandler()), upstream=()),
+    Case("caller_client_post_returns_unread_failure", _kw(client=_UnreadHandler(), stream=True), upstream=()),
+    Case("caller_httpx_client_is_ignored", _kw(client=_CallerHttpxClient())),
+    Case("caller_sync_handler_is_ignored", _kw(client=_CallerSyncHandler())),
+    Case("tls_security_level", settings=_TLS_LEVEL),
+    Case("tls_security_level_stream", _kw(stream=True), upstream=(_stream(TEXT_STREAM),), settings=_TLS_LEVEL),
+    Case("tls_ecdh_curve", settings=_TLS_CURVE),
+    Case("tls_ecdh_curve_x448", settings=_tls(ssl_ecdh_curve="X448")),
+    Case("tls_ecdh_curve_upstream_500", upstream=(_failure(500, "api_error", "internal"),), settings=_TLS_CURVE),
+    Case(
+        "tls_security_level_from_environment",
+        env=MappingProxyType({"SSL_SECURITY_LEVEL": "DEFAULT@SECLEVEL=1"}),
+        settings=_tls(),
+    ),
+    Case("tls_security_level_python_cannot_apply", upstream=(), settings=_tls(ssl_security_level="NOT-A-CIPHER")),
+    Case("tls_ecdh_curve_nist_name", settings=_tls(ssl_ecdh_curve="P-256")),
+    Case("tls_ecdh_curve_padded_lowercase", settings=_tls(ssl_ecdh_curve=" x25519 ")),
+    Case("negative_timeout", _kw(timeout=-1), upstream=(ResponseSpec(body=dict(TEXT_RESPONSE), delay=0.3),)),
+    Case(
+        "negative_timeout_stream",
+        _kw(stream=True, timeout=-0.5),
+        upstream=(replace(_stream(TEXT_STREAM), delay=0.3),),
+    ),
+    Case(
+        "zero_timeout_httpx_transport",
+        _kw(timeout=0),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
+    Case(
+        "negative_timeout_httpx_transport",
+        _kw(timeout=-1),
+        env=MappingProxyType({"DISABLE_AIOHTTP_TRANSPORT": "true"}),
+        settings=_tls(),
+    ),
+)
+
+
+class _RewritingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        kwargs["tools"] = [dict(WEATHER_TOOL)]
+        kwargs["tool_choice"] = {"type": "tool", "name": "get_weather"}
+        kwargs["temperature"] = 0.25
+        kwargs["top_k"] = 7
+        kwargs["system"] = "Answer as a forecaster."
+        kwargs["stop_sequences"] = ["STOP"]
+        kwargs["metadata"] = {"user_id": "hooked-user"}
+        kwargs["extra_headers"] = {"x-hooked": "1"}
+        return kwargs
+
+
+class _InPlaceHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        messages.append({"role": "assistant", "content": [{"type": "text", "text": ""}]})
+        messages.append({"role": "user", "content": "And Germany?"})
+        return None
+
+
+class _UnstreamingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "stream": not kwargs["stream"]}
+
+
+class _MockingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "mock_response": "Hi from the hook"}
+
+
+class _RaisingHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        raise ValueError("the hook refused the request")
+
+
+class _ModelHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "model": OPUS_ADAPTIVE}
+
+
+class _NonClaudeModelHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "model": "azure_ai/Phi-4"}
+
+
+class _CredentialHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "api_key": "sk-ant-hooked"}
+
+
+def _instance_hook() -> CustomLogger:
+    async def hook(model: str, messages: list[dict[str, object]], kwargs: dict[str, object]) -> dict[str, object]:
+        return {**kwargs, "temperature": 0.25, "metadata": {"user_id": "instance-hook"}}
+
+    logger: Final = CustomLogger()
+    logger.async_pre_request_hook = hook  # pyright: ignore[reportAttributeAccessIssue]  # rebind-ok: an instance-level override, as a caller may install one
+    return logger
+
+
+PRE_REQUEST_HOOK_CASES: Final = (
+    Case("pre_request_hook_rewrites_the_request", callbacks=(_RewritingHook,), upstream=(_ok(TOOL_USE_RESPONSE),)),
+    Case("pre_request_hook_edits_messages_in_place", callbacks=(_InPlaceHook,)),
+    Case(
+        "pre_request_hook_after_prompt_caching",
+        _kw(cache_control_injection_points=[{"location": "message", "role": "user"}]),
+        callbacks=(_InPlaceHook,),
+    ),
+    Case(
+        "pre_request_hook_unstreams",
+        _kw(stream=True),
+        callbacks=(_UnstreamingHook,),
+    ),
+    Case(
+        "pre_request_hook_unstreams_behind_a_cache",
+        _kw(stream=True),
+        callbacks=(_UnstreamingHook,),
+        upstream=(_ok(), _ok()),
+        cache=Cache,
+    ),
+    Case("pre_request_hook_streams", callbacks=(_UnstreamingHook,), upstream=(_stream(TEXT_STREAM),)),
+    Case("pre_request_hook_sets_a_mock", callbacks=(_MockingHook,), upstream=()),
+    Case("pre_request_hook_raises", callbacks=(_RaisingHook,), upstream=()),
+    Case("pre_request_hook_set_on_the_instance", callbacks=(_instance_hook,)),
+    Case("pre_request_hook_names_the_model", callbacks=(_ModelHook,), upstream=()),
+    Case("pre_request_hook_names_a_credential", callbacks=(_CredentialHook,), upstream=()),
+    Case(
+        "pre_request_hook_two_hooks_chain", callbacks=(_RewritingHook, _InPlaceHook), upstream=(_ok(TOOL_USE_RESPONSE),)
+    ),
+    Case(
+        "pre_request_hook_behind_a_cache_hit",
+        callbacks=(_RewritingHook,),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok(TOOL_USE_RESPONSE)),
+        cache=Cache,
+    ),
+)
+
+_OBJECTS: Final = TypeAdapter(list[dict[str, object]])
+_VOLATILE_HOOK_KWARGS: Final = frozenset({"litellm_call_id", "litellm_logging_obj"})
+
+
+def _content(response: object) -> list[dict[str, object]]:
+    if not isinstance(response, dict):
+        return []
+    return _OBJECTS.validate_python(_OBJECT.validate_python(response).get("content") or [])
+
+
+def _tool_calls(response: object) -> list[dict[str, object]]:
+    return [block for block in _content(response) if block.get("type") == "tool_use"]
+
+
+class _FollowUpOnToolUse(CustomLogger):
+    """Answers each tool call with a canned result in one follow-up turn, recording what the hooks were handed."""
+
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_should_run_agentic_loop(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        calls: Final = _tool_calls(response)
+        self.seen.append(
+            {
+                "hook": "should_run",
+                "response": _OBJECT.validate_python({**response, "id": "<id>"}) if isinstance(response, dict) else None,
+                "model": model,
+                "messages": _OBJECTS.validate_python(messages),
+                "tools": tools,
+                "stream": stream,
+                "custom_llm_provider": custom_llm_provider,
+                "kwargs": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+                "api_key": kwargs.get("api_key"),
+            }
+        )
+        return bool(calls), {"tool_calls": calls}
+
+    async def async_build_agentic_loop_plan(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> AgenticLoopPlan:
+        self.seen.append(
+            {
+                "hook": "build_plan",
+                "optional_params": anthropic_messages_optional_request_params,
+                "config": type(anthropic_messages_provider_config).__name__,
+                "agentic_loop_params": logging_obj.model_call_details.get("agentic_loop_params"),
+                "kwargs": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+            }
+        )
+        return self.plan(messages, response)
+
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        answers: Final = [
+            {"type": "tool_result", "tool_use_id": call["id"], "content": "18C, sunny"}
+            for call in _tool_calls(response)
+        ]
+        return AgenticLoopPlan(
+            run_agentic_loop=True,
+            request_patch=AgenticLoopRequestPatch(
+                messages=[
+                    *messages,
+                    {"role": "assistant", "content": _content(response)},
+                    {"role": "user", "content": answers},
+                ]
+            ),
+        )
+
+
+class _HeldBack(_FollowUpOnToolUse):
+    server_fulfilled_tool_names: ClassVar[frozenset[str]] = frozenset({"get_weather"})
+
+
+class _Terminates(_FollowUpOnToolUse):
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        return AgenticLoopPlan(terminate=True, stop_reason="answered")
+
+
+class _Overrides(_FollowUpOnToolUse):
+    def plan(self, messages: list[dict[str, object]], response: object) -> AgenticLoopPlan:
+        return AgenticLoopPlan(response_override={**TEXT_RESPONSE, "id": "msg_01Override"})
+
+
+class _Fails(_FollowUpOnToolUse):
+    async def async_build_agentic_loop_plan(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        tools: dict[str, object],
+        model: str,
+        messages: list[dict[str, object]],
+        response: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: dict[str, object],
+        logging_obj: Logging,
+        stream: bool,
+        kwargs: dict[str, object],
+    ) -> AgenticLoopPlan:
+        raise ValueError("the agentic plan failed")
+
+
+class _WebSearch(WebSearchInterceptionLogger):
+    """The stock web search interception, recording what its pre-request hook leaves for its agentic hook."""
+
+    def __init__(self, enabled_providers: list[str] | None = None, max_agentic_loops: int | None = None) -> None:
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # the logger annotates bare containers
+            enabled_providers=list(enabled_providers) if enabled_providers is not None else None,
+            max_agentic_loops=max_agentic_loops,
+        )
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_should_run_agentic_loop(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        response: object,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: dict[str, object],
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen.append(
+            {
+                "model": model,
+                "messages": _OBJECTS.validate_python(messages),
+                "tools": tools,
+                "stream": stream,
+                "custom_llm_provider": custom_llm_provider,
+                "kwargs": {
+                    name: kwargs[name]
+                    for name in sorted(kwargs)
+                    if name == "max_agentic_loops" or name.startswith("_websearch_interception")
+                },
+                "kwarg_names": sorted(name for name in kwargs if name not in _VOLATILE_HOOK_KWARGS),
+            }
+        )
+        return await super().async_should_run_agentic_loop(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the logger annotates bare containers
+            response=response,
+            model=model,
+            messages=messages,
+            tools=tools,
+            stream=stream,
+            custom_llm_provider=custom_llm_provider,
+            kwargs=kwargs,
+        )
+
+
+class _DeploymentHooks(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_post_call_success_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: dict[str, object], response: object, call_type: object
+    ) -> object:
+        self.seen.append({"hook": "success", "call_type": str(call_type)})
+        return None
+
+    async def async_post_call_failure_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: Mapping[str, object], exception: Exception, call_type: object
+    ) -> None:
+        self.seen.append({"hook": "failure", "error": type(exception).__name__, "call_type": str(call_type)})
+
+
+def _loggers(*kinds: Callable[[], CustomLogger]) -> Callable[[], Sequence[CustomLogger]]:
+    return lambda: tuple(kind() for kind in kinds)
+
+
+def _web_search() -> CustomLogger:
+    return _WebSearch(enabled_providers=["anthropic"], max_agentic_loops=2)
+
+
+async def _search(*args: object, **kwargs: object) -> SearchResponse:  # kwargs-ok: litellm.asearch's call shape
+    return SearchResponse.model_validate(
+        {"results": [{"title": "Paris", "url": "https://example.com/paris", "snippet": "Paris is the capital."}]}
+    )
+
+
+WEB_SEARCH_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "web_search_20250305", "name": "web_search", "max_uses": 2}
+)
+WEB_SEARCH_CALL_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "id": "msg_01ParitySearch",
+        "content": [
+            {"type": "tool_use", "id": "toolu_01Search", "name": "litellm_web_search", "input": {"query": "capital"}}
+        ],
+        "stop_reason": "tool_use",
+    }
+)
+_WEB_SEARCH_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({"asearch": _search})
+_WEATHER: Final = _kw(tools=[dict(WEATHER_TOOL)])
+
+AGENTIC_CASES: Final = (
+    Case("agentic_loop_without_tool_use", _WEATHER, loggers=_loggers(_FollowUpOnToolUse)),
+    Case(
+        "agentic_loop_follow_up",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_follow_up_with_request_params",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            system="Answer in one word.",
+            temperature=0.3,
+            metadata={"user_id": "user-123"},
+            thinking={"type": "enabled", "budget_tokens": 2048},
+            max_tokens=4096,
+            messages=[{"role": "user", "content": "Weather?", "provider_specific_fields": {"x": 1}}],
+        ),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    *(
+        Case(
+            f"agentic_loop_follow_up_keeps_{name}",
+            _kw(**{"tools": [dict(WEATHER_TOOL)], **params}),
+            upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+            model=model,
+            loggers=_loggers(_FollowUpOnToolUse),
+        )
+        for name, params, model in (
+            (
+                "output_format",
+                {
+                    "output_format": {
+                        "type": "json_schema",
+                        "schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                    }
+                },
+                SONNET,
+            ),
+            ("reasoning_effort", {"reasoning_effort": "high", "max_tokens": 8192}, SONNET),
+            ("output_config_effort", {"output_config": {"effort": "medium"}}, OPUS_ADAPTIVE),
+            (
+                "injected_cache_points",
+                {"cache_control_injection_points": [{"location": "message", "role": "user"}]},
+                SONNET,
+            ),
+            ("context_management", {"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}}, SONNET),
+            ("speed", {"speed": "fast"}, OPUS_FAST),
+            ("service_tier", {"service_tier": "auto"}, SONNET),
+            ("inference_geo", {"inference_geo": "us"}, SONNET),
+            (
+                "container",
+                {"container": {"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}},
+                SONNET,
+            ),
+            ("custom_tool", {"tools": [{**WEATHER_TOOL, "type": "custom"}]}, SONNET),
+            ("metadata_extras", {"metadata": {"user_id": "user-123", "session": "dropped"}}, SONNET),
+        )
+    ),
+    Case(
+        "agentic_loop_prices_the_final_round",
+        _kw(tools=[dict(WEATHER_TOOL)]),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok({**TEXT_RESPONSE, "usage": {"input_tokens": 900, "output_tokens": 300}})),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_prices_the_final_round_stream",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(
+            _stream(TOOL_STREAM),
+            _stream(
+                _events(_message_start("msg_01ParityLate"), *_text_block(0, "Paris"), *_message_end("end_turn", 300))
+            ),
+        ),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_follow_up_stream",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TOOL_STREAM), _stream(TEXT_STREAM)),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_follow_up_stream_in_one_write",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_burst(TOOL_STREAM), _burst(TEXT_STREAM)),
+        loggers=_loggers(_FollowUpOnToolUse),
+        partitioned=True,
+    ),
+    Case(
+        "agentic_loop_stream_without_tool_use_in_one_write",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_burst(TEXT_STREAM),),
+        loggers=_loggers(_FollowUpOnToolUse),
+        partitioned=True,
+    ),
+    Case(
+        "agentic_loop_stream_without_tool_use",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_holds_back_a_server_fulfilled_tool",
+        _kw(stream=True, tools=[dict(WEATHER_TOOL)]),
+        upstream=(_stream(TOOL_STREAM), _stream(TEXT_STREAM)),
+        loggers=_loggers(_HeldBack),
+    ),
+    Case(
+        "agentic_loop_terminates",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Terminates),
+    ),
+    Case(
+        "agentic_loop_response_override",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Overrides),
+    ),
+    Case(
+        "agentic_loop_plan_fails",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Fails),
+    ),
+    Case(
+        "agentic_loop_follow_up_fails",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _failure(529, "overloaded_error", "Overloaded")),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_plan_fails_runs_the_failure_deployment_hook_once",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        loggers=_loggers(_Fails, _DeploymentHooks),
+    ),
+    Case(
+        "agentic_loop_follow_up_fails_runs_the_failure_deployment_hook_per_round",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _failure(529, "overloaded_error", "Overloaded")),
+        loggers=_loggers(_FollowUpOnToolUse, _DeploymentHooks),
+    ),
+    Case(
+        "agentic_loop_follow_up_runs_the_success_deployment_hook_per_round",
+        _WEATHER,
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok()),
+        loggers=_loggers(_FollowUpOnToolUse, _DeploymentHooks),
+    ),
+    Case(
+        "pre_request_hook_raises_runs_the_failure_deployment_hook_once",
+        callbacks=(_RaisingHook,),
+        upstream=(),
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case(
+        "agentic_loop_refused_past_max_loops",
+        _kw(tools=[dict(WEATHER_TOOL)], max_agentic_loops=1),
+        upstream=(_ok(TOOL_USE_RESPONSE), _ok(TOOL_USE_RESPONSE)),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "agentic_loop_upstream_error_skips_the_hooks",
+        _WEATHER,
+        upstream=(_failure(400, "invalid_request_error", "bad"),),
+        loggers=_loggers(_FollowUpOnToolUse),
+    ),
+    Case(
+        "web_search_interception",
+        _kw(tools=[dict(WEB_SEARCH_TOOL)]),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_converted_stream",
+        _kw(stream=True, tools=[dict(WEB_SEARCH_TOOL)]),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_without_a_search_call",
+        _kw(stream=True, tools=[dict(WEB_SEARCH_TOOL)]),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+    Case(
+        "web_search_interception_for_a_provider_it_skips",
+        _kw(tools=[dict(WEB_SEARCH_TOOL)]),
+        loggers=_loggers(_WebSearch),
+    ),
+    Case(
+        "web_search_interception_rewrites_the_messages_it_hands_the_loop",
+        _kw(
+            stream=True,
+            tools=[dict(WEB_SEARCH_TOOL)],
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": "Capital?"}]}
+            ],
+        ),
+        upstream=(_ok(WEB_SEARCH_CALL_RESPONSE), _ok()),
+        settings=_WEB_SEARCH_SETTINGS,
+        loggers=_loggers(_web_search),
+    ),
+)
+
+CLASSIFIER_MODEL: Final = "openai/parity-classifier"
+CLASSIFIER_CALL_TYPE: Final = "acompletion"
+NON_CLAUDE: Final = "anthropic/parity-tool-model"
+DANGEROUS_TOOL_USE: Final[tuple[JsonValue, ...]] = (
+    {
+        "type": "dangerous_tool_use",
+        "classifier_context": {
+            "permission_mode": "auto",
+            "platform": "linux",
+            "trusted_directories": ["/repo"],
+            "git_state": {"cwd": "/repo", "branch": "main", "dirty": True},
+            "ignored": "not rendered",
+        },
+    },
+)
+FLAGGED: Final = json.dumps({"verdicts": {"toolu_01Parity": {"flagged": True, "explanation": "Sends the weather."}}})
+CLEARED: Final = json.dumps({"verdicts": {"toolu_01Parity": {"flagged": False}}})
+CUT_OFF_TOOL_STREAM: Final = (*TOOL_STREAM[:-2], *_message_end("max_tokens", 22))
+UPSTREAM_ANSWERED: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TOOL_USE_RESPONSE,
+        "safeguard_results": [{"type": "dangerous_tool_use", "status": {"type": "unsupported"}}],
+    }
+)
+
+
+def _safeguarded(**kwargs: object) -> Mapping[str, object]:
+    return _kw(safeguards=list(DANGEROUS_TOOL_USE), messages=list(TOOL_TURNS), tools=[dict(WEATHER_TOOL)], **kwargs)
+
+
+SAFEGUARDS_CASES: Final = (
+    Case(
+        "safeguards_classifier_flags_tool_use",
+        _safeguarded(litellm_metadata={"user_api_key_end_user_id": "end-user-1", "user_api_key": "hashed-key"}),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_clears_tool_use",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier=CLEARED,
+    ),
+    Case(
+        "safeguards_classifier_unparsable_reply",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier="I cannot tell.",
+    ),
+    Case(
+        "safeguards_classifier_rejects_long_input",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        model=NON_CLAUDE,
+        classifier="litellm.ContextWindowExceededError",
+    ),
+    Case("safeguards_classifier_without_tool_use", _safeguarded(), model=NON_CLAUDE, classifier=FLAGGED),
+    Case(
+        "safeguards_classifier_upstream_answered",
+        _safeguarded(),
+        upstream=(_ok(UPSTREAM_ANSWERED),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_tool_use",
+        _safeguarded(stream=True),
+        upstream=(_stream(TOOL_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_cut_off",
+        _safeguarded(stream=True),
+        upstream=(_stream(CUT_OFF_TOOL_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_stream_text",
+        _safeguarded(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_classifier_upstream_failure",
+        _safeguarded(),
+        upstream=(_failure(529, "overloaded_error", "Overloaded"),),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+    ),
+    Case(
+        "safeguards_claude_model_is_not_classified",
+        _safeguarded(),
+        upstream=(_ok(TOOL_USE_RESPONSE),),
+        classifier=FLAGGED,
+    ),
+    Case("safeguards_classifier_sync", _safeguarded(), model=NON_CLAUDE, sync=True, classifier=FLAGGED),
+)
+
+INTERCEPTED_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "parity_intercept", "name": "intercept"})
+_ECHOED_KWARGS: Final = (
+    "model",
+    "messages",
+    "tools",
+    "stream",
+    "max_tokens",
+    "custom_llm_provider",
+    "api_key",
+    "metadata",
+    "system",
+    "temperature",
+    "tool_choice",
+)
+
+
+class _Intercepting(MessagesInterceptor):
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        return custom_llm_provider == "anthropic" and any(
+            tool.get("type") == INTERCEPTED_TOOL["type"] for tool in tools or ()
+        )
+
+
+class _Answering(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        echoed: Final = {name: kwargs.get(name) for name in _ECHOED_KWARGS}
+        answer: Final = {
+            **TEXT_RESPONSE,
+            "id": "msg_01ParityIntercepted",
+            "content": [{"type": "text", "text": json.dumps(echoed, sort_keys=True, default=repr)}],
+            "extra_keys": sorted(name for name in kwargs if name not in _ECHOED_KWARGS),
+        }
+        if kwargs.get("stream"):
+            return FakeAnthropicMessagesStreamIterator(
+                cast(AnthropicMessagesResponse, answer)
+            )  # cast-ok: a synthetic Messages response
+        return answer
+
+
+class _Delegating(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        from litellm.messages import anthropic_messages
+
+        tools: Final = cast(list[Mapping[str, object]], kwargs["tools"])  # cast-ok: the caller's tools
+        return await anthropic_messages(
+            model=kwargs["model"],
+            messages=kwargs["messages"],
+            max_tokens=kwargs["max_tokens"],
+            tools=[tool for tool in tools if tool.get("type") != INTERCEPTED_TOOL["type"]],
+            api_key=kwargs["api_key"],
+            api_base=kwargs["api_base"],
+            stream=kwargs["stream"],
+        )
+
+
+class _Refusing(_Intercepting):
+    async def handle(self, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: the interceptor contract's keyword call
+        raise ValueError("the interceptor refused the call")
+
+
+def _intercepted(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=[dict(INTERCEPTED_TOOL), dict(WEATHER_TOOL)], **kwargs)
+
+
+class _InterceptedToolHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "tools": [dict(INTERCEPTED_TOOL), *cast(list[object], kwargs.get("tools") or [])]}
+
+
+class _UninterceptedToolHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "tools": [dict(WEATHER_TOOL)]}
+
+
+class _DeploymentHookRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_pre_call_deployment_hook(self, kwargs: dict[str, object], call_type: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self.seen.append({"logging_obj": type(kwargs.get("litellm_logging_obj")).__name__, "call_type": str(call_type)})
+
+
+class _DeploymentResponseRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_post_call_success_deployment_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self, request_data: dict[str, object], response: object, call_type: object
+    ) -> object:
+        self.seen.append({"response": type(response).__name__, "call_type": str(call_type)})
+        return None
+
+
+DEPLOYMENT_HOOK_CASES: Final = (
+    Case(
+        "deployment_hook_sees_the_stream_of_a_string_flag",
+        _kw(stream="true"),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_the_stream_of_an_integer_flag",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_the_stream_of_a_bool_flag",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_a_stream_a_hook_made",
+        upstream=(_stream(TEXT_STREAM),),
+        callbacks=(_UnstreamingHook,),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case(
+        "deployment_hook_sees_a_stream_a_hook_made_on_an_integer",
+        upstream=(_stream(TEXT_STREAM),),
+        callbacks=(_IntegerStreamHook,),
+        loggers=_loggers(_DeploymentResponseRecorder),
+    ),
+    Case("deployment_hook_sees_the_logging_object", loggers=_loggers(_DeploymentHookRecorder)),
+    Case(
+        "deployment_hook_sees_the_logging_object_stream",
+        _kw(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHookRecorder),
+    ),
+)
+
+INTERCEPTOR_CASES: Final = (
+    Case("interceptor_answers", _intercepted(), upstream=(), interceptor=_Answering),
+    Case(
+        "pre_request_hook_adds_a_tool_an_interceptor_owns",
+        _kw(tools=[dict(WEATHER_TOOL)]),
+        upstream=(),
+        callbacks=(_InterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_adds_a_tool_an_interceptor_owns_stream",
+        _kw(tools=[dict(WEATHER_TOOL)], stream=True),
+        upstream=(),
+        callbacks=(_InterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_unstreams_a_call_an_interceptor_owns",
+        _intercepted(stream=True),
+        upstream=(),
+        callbacks=(_UnstreamingHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "pre_request_hook_removes_the_tool_an_interceptor_owns",
+        _intercepted(),
+        callbacks=(_UninterceptedToolHook,),
+        interceptor=_Answering,
+    ),
+    Case(
+        "interceptor_answers_with_system_and_metadata",
+        _intercepted(system="Be brief.", metadata={"user_id": "user-123"}, temperature=0.5),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case("interceptor_answers_stream", _intercepted(stream=True), upstream=(), interceptor=_Answering),
+    Case(
+        "interceptor_wins_over_mock_response",
+        _intercepted(mock_response="Hi from the mock"),
+        upstream=(),
+        interceptor=_Answering,
+    ),
+    Case(
+        "interceptor_answers_bare_model",
+        _intercepted(custom_llm_provider="anthropic"),
+        upstream=(),
+        model="claude-sonnet-4-5",
+        interceptor=_Answering,
+    ),
+    Case("interceptor_delegates_to_the_public_api", _intercepted(), interceptor=_Delegating),
+    Case(
+        "interceptor_delegates_a_stream",
+        _intercepted(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        interceptor=_Delegating,
+    ),
+    Case("interceptor_raises", _intercepted(), upstream=(), interceptor=_Refusing),
+    Case("interceptor_is_not_consulted_on_a_sync_call", _intercepted(), upstream=(), sync=True, interceptor=_Answering),
+    Case(
+        "pre_request_hook_is_not_run_on_a_sync_call_an_interceptor_owns",
+        _intercepted(),
+        upstream=(),
+        sync=True,
+        callbacks=(_RaisingHook,),
+        interceptor=_Answering,
+    ),
+    Case("pre_request_hook_is_not_run_on_a_sync_call", upstream=(), sync=True, callbacks=(_RaisingHook,)),
+    Case(
+        "interceptor_raises_runs_the_failure_deployment_hook_once",
+        _intercepted(),
+        upstream=(),
+        interceptor=_Refusing,
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case("interceptor_answer_is_cached", _intercepted(), upstream=(), cache=Cache, interceptor=_Answering),
+    Case(
+        "interceptor_stream_answer_with_cache",
+        _intercepted(stream=True),
+        upstream=(),
+        cache=Cache,
+        interceptor=_Answering,
+    ),
+    Case("interceptor_ignores_other_calls", _kw(tools=[dict(WEATHER_TOOL)]), interceptor=_Answering),
+)
+
+SHORT_CIRCUITED: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "id": "msg_01ParityShortCircuit",
+        "content": [{"type": "text", "text": "Paris is the capital."}],
+    }
+)
+
+
+class _ShortCircuit(WebSearchInterceptionLogger):
+    """A web search interception whose replaced short-circuit records its inputs and answers every call."""
+
+    answer: Mapping[str, JsonValue] | None = SHORT_CIRCUITED
+
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # the logger annotates bare containers
+        self.seen: list[Mapping[str, object]] = []
+
+    async def try_short_circuit_search(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        custom_llm_provider: str | None,
+        kwargs: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        passed: Final = kwargs or {}
+        self.seen.append(
+            {
+                "model": model,
+                "messages": _OBJECTS.validate_python(messages),
+                "tools": tools,
+                "custom_llm_provider": custom_llm_provider,
+                "kwargs": sorted(name for name in passed if name not in _VOLATILE_HOOK_KWARGS),
+                "metadata": passed.get("metadata"),
+                "safeguards": passed.get("safeguards"),
+            }
+        )
+        return None if self.answer is None else _OBJECT.validate_python(copy.deepcopy(dict(self.answer)))
+
+
+class _ShortCircuitPassing(_ShortCircuit):
+    answer = None
+
+
+class _ShortCircuitToolUse(_ShortCircuit):
+    answer = TOOL_USE_RESPONSE
+
+
+class _ShortCircuitRefusing(_ShortCircuit):
+    async def try_short_circuit_search(  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        self,
+        model: str,
+        messages: list[dict[str, object]],
+        tools: list[dict[str, object]] | None,
+        custom_llm_provider: str | None,
+        kwargs: Mapping[str, object] | None = None,
+    ) -> dict[str, object] | None:
+        await super().try_short_circuit_search(model, messages, tools, custom_llm_provider, kwargs)
+        raise ValueError("the short-circuit search failed")
+
+
+def _searched(**kwargs: object) -> Mapping[str, object]:
+    return _kw(tools=[dict(WEB_SEARCH_TOOL)], metadata={"user_id": "parity-user"}, **kwargs)
+
+
+SHORT_CIRCUIT_CASES: Final = (
+    Case("short_circuit_answers", _searched(), upstream=(), loggers=_loggers(_ShortCircuit)),
+    Case("short_circuit_answers_stream", _searched(stream=True), upstream=(), loggers=_loggers(_ShortCircuit)),
+    Case("short_circuit_raises", _searched(), upstream=(), loggers=_loggers(_ShortCircuitRefusing)),
+    Case("short_circuit_raises_stream", _searched(stream=True), upstream=(), loggers=_loggers(_ShortCircuitRefusing)),
+    Case("short_circuit_passes_the_call_on", _searched(), loggers=_loggers(_ShortCircuitPassing)),
+    Case(
+        "short_circuit_passes_a_stream_on",
+        _searched(stream=True),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_ShortCircuitPassing),
+    ),
+    Case(
+        "short_circuit_first_answer_wins",
+        _searched(),
+        upstream=(),
+        loggers=_loggers(_ShortCircuitPassing, _ShortCircuit, _ShortCircuitRefusing),
+    ),
+    Case(
+        "short_circuit_answers_before_the_interceptor",
+        _intercepted(),
+        upstream=(),
+        loggers=_loggers(_ShortCircuit),
+        interceptor=_Answering,
+    ),
+    Case(
+        "short_circuit_passes_on_to_the_interceptor",
+        _intercepted(),
+        upstream=(),
+        loggers=_loggers(_ShortCircuitPassing),
+        interceptor=_Answering,
+    ),
+    Case(
+        "short_circuit_answer_with_cache",
+        _searched(),
+        upstream=(),
+        cache=Cache,
+        loggers=_loggers(_ShortCircuit),
+    ),
+    Case(
+        "short_circuit_answer_is_classified",
+        _safeguarded(),
+        upstream=(),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+        loggers=_loggers(_ShortCircuitToolUse),
+    ),
+    Case(
+        "short_circuit_stream_answer_is_classified",
+        _safeguarded(stream=True),
+        upstream=(),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+        loggers=_loggers(_ShortCircuitToolUse),
+    ),
+    Case("short_circuit_is_not_consulted_on_a_sync_call", _searched(), sync=True, loggers=_loggers(_ShortCircuit)),
+)
+
+MCP_REFERENCE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "litellm",
+        "server_url": "litellm_proxy/mcp/deepwiki",
+        "require_approval": "never",
+    }
+)
+MCP_NEEDS_APPROVAL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {key: value for key, value in MCP_REFERENCE.items() if key != "require_approval"}
+)
+WIKI_TOOL_CALL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "tool_use", "id": "toolu_01Wiki", "name": "read_wiki", "input": {"repo": "a/b"}}
+)
+WIKI_TOOL_USE_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        **TEXT_RESPONSE,
+        "id": "msg_01ParityWiki",
+        "content": [{"type": "text", "text": "Reading the wiki."}, dict(WIKI_TOOL_CALL)],
+        "stop_reason": "tool_use",
+    }
+)
+WIKI_TOOL_STREAM: Final = _events(
+    _message_start("msg_01ParityWikiStream"),
+    (
+        "content_block_start",
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_01Wiki", "name": "read_wiki", "input": {}},
+        },
+    ),
+    (
+        "content_block_delta",
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"repo": "a/b"}'},
+        },
+    ),
+    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+    *_message_end("tool_use", 9),
+)
+
+
+def _wiki(**kwargs: object) -> Mapping[str, object]:
+    return _kw(**{"tools": [dict(MCP_REFERENCE)], **kwargs})
+
+
+class _McpToolHook(CustomLogger):
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object] | None:
+        return {**kwargs, "tools": [dict(MCP_REFERENCE), *cast(list[object], kwargs.get("tools") or [])]}
+
+
+_SHARED_LOGGER: Final = (
+    "the gateway's follow-up call rewrites the shared Logging object while the first call's async success callback "
+    "is still queued, on Python and Rust alike, so the callback logs whichever call it saw"
+)
+SHARED_LOGGER_RACE: Final = MappingProxyType(
+    {
+        "logged_request": _SHARED_LOGGER,
+        "logged_metadata": _SHARED_LOGGER,
+        "logged_response_headers": _SHARED_LOGGER,
+        "logged_sent_request": _SHARED_LOGGER,
+    }
+)
+
+
+MCP_CASES: Final = (
+    Case(
+        "mcp_tool_runs_then_answers",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_tool_runs_then_answers_stream",
+        _wiki(stream=True),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case("mcp_answers_without_a_tool", _wiki(), gateway=True),
+    Case(
+        "mcp_tool_beside_a_native_tool",
+        _wiki(tools=[dict(MCP_REFERENCE), dict(WEATHER_TOOL)], system="Be terse.", temperature=0.2),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_whole_gateway",
+        _wiki(tools=[{**MCP_REFERENCE, "server_url": "litellm_proxy"}]),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_tool_needs_approval",
+        _wiki(tools=[dict(MCP_NEEDS_APPROVAL)]),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_tool_needs_approval_stream",
+        _wiki(tools=[dict(MCP_NEEDS_APPROVAL)], stream=True),
+        upstream=(_stream(WIKI_TOOL_STREAM),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_follow_up_fails",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _failure(429, "rate_limit_error", "slow down")),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_first_call_fails",
+        _wiki(),
+        upstream=(_failure(400, "invalid_request_error", "max_tokens: too large"),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_metadata_and_litellm_metadata",
+        _wiki(metadata={"user_id": "user-123"}, litellm_metadata={"user_api_key": "hashed", "tags": ["t1"]}),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "mcp_unserved_proxy_path_passes_through",
+        _wiki(tools=[{**MCP_REFERENCE, "server_url": "https://gateway.example/mcp/unknown"}]),
+        gateway=True,
+    ),
+    Case(
+        "mcp_skip_flag_passes_the_reference_through",
+        _wiki(_skip_mcp_handler=True),
+        gateway=True,
+    ),
+    Case(
+        "mcp_tool_execution_raises",
+        _wiki(),
+        upstream=(_ok({**WIKI_TOOL_USE_RESPONSE, "content": [{**WIKI_TOOL_CALL, "input": {"repo": "boom"}}]}),),
+        gateway=True,
+    ),
+    Case(
+        "mcp_cache_hit",
+        _wiki(),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok(), _ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        cache=Cache,
+        gateway=True,
+    ),
+    Case("mcp_sync", _wiki(), upstream=(), sync=True, gateway=True),
+    Case("mcp_mock_answers_first", _wiki(mock_response="Hi from the mock"), upstream=(), gateway=True),
+    Case("mcp_sync_mock_answers_first", _wiki(mock_response="Hi from the mock"), upstream=(), sync=True, gateway=True),
+    Case(
+        "pre_request_hook_adds_an_mcp_tool",
+        _kw(tools=[dict(WEATHER_TOOL)]),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        callbacks=(_McpToolHook,),
+        gateway=True,
+        racy=SHARED_LOGGER_RACE,
+    ),
+    Case(
+        "pre_request_hook_removes_the_mcp_tool",
+        _wiki(),
+        callbacks=(_UninterceptedToolHook,),
+        gateway=True,
+    ),
+    Case(
+        "interceptor_answers_before_the_mcp_gateway",
+        _kw(tools=[dict(INTERCEPTED_TOOL), dict(MCP_REFERENCE)]),
+        upstream=(),
+        interceptor=_Answering,
+        gateway=True,
+    ),
+)
+
+
+class _OrderedMemory(InMemoryCache):
+    def __init__(self) -> None:
+        super().__init__()
+        self.ops: list[str] = []
+
+    async def async_set_cache(self, key: str, value: object, **kwargs: object) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: records the backend writes in order
+        self.ops.append(f"set {key}")
+        await super().async_set_cache(key, value, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache leaves its signature untyped
+
+    async def async_get_cache(self, key: str, **kwargs: object) -> object:  # pyright: ignore[reportIncompatibleMethodOverride]  # kwargs-ok: records the backend reads in order
+        self.ops.append(f"get {key}")
+        return await super().async_get_cache(key, **kwargs)  # pyright: ignore[reportUnknownMemberType]  # InMemoryCache leaves its signature untyped
+
+
+def _ordered_cache() -> Cache:
+    cache: Final = Cache()
+    cache.cache = _OrderedMemory()
+    return cache
+
+
+EMPTY_CONTENT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType({**TEXT_RESPONSE, "content": []})
+EMPTY_TEXT_RESPONSE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {**TEXT_RESPONSE, "content": [{"type": "text", "text": ""}]}
+)
+
+HOOKED_STREAM_AND_CACHE_CASES: Final = (
+    Case(
+        "pre_request_hook_streams_runs_the_deployment_success_hook",
+        callbacks=(_UnstreamingHook,),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case(
+        "pre_request_hook_streams_behind_a_cache",
+        callbacks=(_UnstreamingHook,),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "stream_one_runs_the_deployment_success_hook",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM),),
+        loggers=_loggers(_DeploymentHooks),
+    ),
+    Case(
+        "stream_one_behind_a_cache", _kw(stream=1), upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)), cache=Cache
+    ),
+    Case(
+        "stream_one_sync_behind_a_cache",
+        _kw(stream=1),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+        sync=True,
+    ),
+    Case(
+        "stream_string_true_behind_a_cache",
+        _kw(stream="true"),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "pre_request_hook_streams_on_an_integer_behind_a_cache",
+        callbacks=(_IntegerStreamHook,),
+        upstream=(_stream(TEXT_STREAM), _stream(TEXT_STREAM)),
+        cache=Cache,
+    ),
+    Case(
+        "cache_empty_content_is_not_stored",
+        upstream=(_ok(EMPTY_CONTENT_RESPONSE), _ok(EMPTY_CONTENT_RESPONSE)),
+        cache=Cache,
+    ),
+    Case(
+        "cache_empty_text_block_is_not_stored",
+        upstream=(_ok(EMPTY_TEXT_RESPONSE), _ok(EMPTY_TEXT_RESPONSE)),
+        cache=Cache,
+    ),
+    Case(
+        "mcp_cache_hit_stream",
+        _wiki(stream=True),
+        upstream=(_ok(WIKI_TOOL_USE_RESPONSE), _ok(), _ok(WIKI_TOOL_USE_RESPONSE), _ok()),
+        cache=Cache,
+        gateway=True,
+    ),
+    Case(
+        "safeguards_classifier_stream_cached",
+        _safeguarded(stream=True),
+        upstream=(_stream(TOOL_STREAM), _stream(TOOL_STREAM)),
+        model=NON_CLAUDE,
+        classifier=FLAGGED,
+        cache=_ordered_cache,
+    ),
+)
+
+
+def _entra_token() -> str:
+    return "entra-from-provider"
+
+
+def _failing_entra_provider() -> str:
+    raise ValueError("token service unavailable")
+
+
+def _rejected_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS7000215: Invalid client secret provided. Ensure the secret for app "
+        "'00000000-0000-0000-0000-0000000000b1' is the value. Trace ID: 0b1f0000-0000-0000-0000-000000000001"
+    )
+
+
+def _unknown_application_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(
+        message="Authentication failed: AADSTS700016: Application with identifier "
+        "'11111111-2222-3333-4444-555555555555' was not found in the directory 'tenant'. Trace ID: x"
+    )
+
+
+def _unlisted_entra_provider() -> str:
+    from azure.core.exceptions import ClientAuthenticationError
+
+    raise ClientAuthenticationError(message="Authentication failed: AADSTS50058: A silent sign-in request was sent.")
+
+
+AZURE_CLAUDE: Final = "azure_ai/claude-sonnet-4-5"
+AZURE_AUTH_CASES: Final = (
+    Case("azure_ai_api_key", model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_module_api_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module"}),
+    ),
+    Case(
+        "azure_ai_module_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_api_key_before_azure_key",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"api_key": "sk-module", "azure_key": "sk-azure-module"}),
+    ),
+    Case(
+        "azure_ai_module_key_before_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"azure_key": "sk-azure-module"}),
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env"}),
+    ),
+    Case(
+        "azure_ai_openai_key_env_before_azure_key_env",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_OPENAI_API_KEY": "sk-openai-env", "AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_empty_api_key_falls_to_environment",
+        _kw(api_key=""),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case(
+        "azure_ai_blank_api_key",
+        _kw(api_key="  "),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_API_KEY": "sk-azure-env"}),
+    ),
+    Case("azure_ai_entra_token", _kw(api_key=None, azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_from_environment",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AD_TOKEN": "entra-env-token"}),
+    ),
+    Case("azure_ai_key_outranks_entra_token", _kw(azure_ad_token="entra-token"), model=AZURE_CLAUDE),
+    Case("azure_ai_entra_token_provider", _kw(api_key=None, azure_ad_token_provider=_entra_token), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_entra_token_provider_outranks_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider=_entra_token),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_entra_token_provider_raises",
+        _kw(api_key=None, azure_ad_token_provider=_failing_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_is_an_authentication_error",
+        _kw(api_key=None, azure_ad_token_provider=_rejected_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_rejection_redacts_guids",
+        _kw(api_key=None, azure_ad_token_provider=_unknown_application_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_entra_provider_unlisted_code_is_a_runtime_error",
+        _kw(api_key=None, azure_ad_token_provider=_unlisted_entra_provider),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_uncallable_token_provider_keeps_the_token",
+        _kw(api_key=None, azure_ad_token="entra-token", azure_ad_token_provider="not-callable"),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_oidc_reference_is_minted_by_python",
+        _kw(api_key=None, azure_ad_token="oidc/env/AZURE_PARITY_MISSING_ASSERTION", tenant_id="t", client_id="c"),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_token_refresh_outranks_a_static_token",
+        _kw(api_key=None, azure_ad_token="entra-token"),
+        model=AZURE_CLAUDE,
+        settings=MappingProxyType({"enable_azure_ad_token_refresh": True}),
+        env=MappingProxyType({"AZURE_CREDENTIAL": "ClientSecretCredential"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_username_and_password_are_minted_by_python",
+        _kw(api_key=None, azure_username="u", azure_password="p", client_id="c"),
+        model=AZURE_CLAUDE,
+        env=MappingProxyType({"AZURE_AUTHORITY_HOST": "http://127.0.0.1:9"}),
+        upstream=(),
+    ),
+    Case(
+        "azure_ai_caller_bearer_on_entra_deployment",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_lowercase_authorization_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_x_api_key_with_entra",
+        _kw(api_key=None, azure_ad_token="entra-token", extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_upper_case_api_key",
+        _kw(extra_headers={"API-KEY": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_basic_authorization",
+        _kw(extra_headers={"Authorization": "Basic Y2FsbGVyOnNlY3JldA=="}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_no_credential",
+        _kw(api_key=None),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(401, "authentication_error", "missing credentials"),),
+    ),
+    Case("azure_ai_caller_api_key", _kw(extra_headers={"api-key": "sk-caller"}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_caller_mixed_case_api_key",
+        _kw(extra_headers={"Api-Key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_x_api_key",
+        _kw(extra_headers={"x-api-key": "sk-caller"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_caller_bearer",
+        _kw(extra_headers={"Authorization": "Bearer caller-token"}),
+        model=AZURE_CLAUDE,
+    ),
+)
+
+AZURE_URL_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE)
+    for case in (
+        Case(
+            "azure_ai_base_userinfo_starting_with_anthropic",
+            _kw(api_base_userinfo="anthropic", api_base_suffix="/d/dep-u01/anthropic"),
+        ),
+        Case("azure_ai_base_slash_before_query", _kw(api_base_suffix="/d/dep-u02/?q=1")),
+        Case("azure_ai_base_trailing_spaces_without_anthropic", _kw(api_base_suffix="/d/dep-u04  ")),
+        Case("azure_ai_base_trailing_newline_without_anthropic", _kw(api_base_suffix="/d/dep-u04\n"), upstream=()),
+        Case("azure_ai_base_trailing_spaces_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic  ")),
+        Case("azure_ai_base_trailing_crlf_after_anthropic", _kw(api_base_suffix="/d/dep-u04/anthropic\r\n")),
+        Case("azure_ai_blank_base", _kw(api_base="   "), upstream=()),
+        Case(
+            "azure_ai_blank_base_with_environment_base",
+            _kw(api_base="   "),
+            env=MappingProxyType({"AZURE_API_BASE": "http://127.0.0.1:9/d/dep-env/anthropic"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_padded_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": " http://127.0.0.1:9/d/dep-env/anthropic "}),
+            upstream=(),
+        ),
+        Case("azure_ai_missing_base", _kw(api_base=None), upstream=()),
+        Case("azure_ai_missing_base_stream", _kw(api_base=None, stream=True), upstream=()),
+        Case("azure_ai_empty_base", _kw(api_base=""), upstream=()),
+        Case("azure_ai_base_without_scheme", _kw(api_base="fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_scheme_relative_base", _kw(api_base="//fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_ftp_base", _kw(api_base="ftp://fuzz.invalid/d/dep-e04/anthropic"), upstream=()),
+        Case("azure_ai_base_not_a_url", _kw(api_base="not a url"), upstream=()),
+    )
+)
+
+# An api_base the native URL parser reads otherwise than httpx and aiohttp goes through Python's client, which
+# refuses it before sending anything. Natively the three leaking shapes sent the operator key to a host the
+# configuration did not name or mean: `d` read from the path of an empty-host base, or the host after
+# credentials in the URL, including userinfo that reads like a trusted host. The port shapes fail locally on
+# both sides.
+_MALFORMED_BASES: Final = (
+    ("base_empty_host", _kw(api_base="http:///d/anthropic")),
+    ("base_credentials_in_url", _kw(api_base_userinfo="user:pass", api_base_suffix="/anthropic")),
+    ("base_userinfo_like_a_host", _kw(api_base_userinfo="api.anthropic.com", api_base_suffix="/anthropic")),
+    ("base_non_numeric_port", _kw(api_base="http://fuzz.invalid:abc/anthropic")),
+    ("base_out_of_range_port", _kw(api_base="http://fuzz.invalid:99999/anthropic")),
+)
+MALFORMED_BASE_CASES: Final = tuple(
+    Case(f"{provider}_{shape}", kwargs, model=model, upstream=())
+    for provider, model in (("anthropic", SONNET), ("azure_ai", AZURE_CLAUDE))
+    for shape, kwargs in _MALFORMED_BASES
+)
+
+AZURE_OPUS_4_8: Final = "azure_ai/claude-opus-4-8"
+E4_UNTRACED_VERSION_REFUSAL: Final = (
+    "E4: Python logs the attributed anthropic-version refusal with the traceback of its raise in the transform; the "
+    "Rust host hands the refusal back unraised, so its failure log has none"
+)
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+    }
+)
+
+
+def _mid_conversation_system(**fields: object) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": "assistant", "content": "Paris."},
+        {"role": "system", **fields},
+        {"role": "user", "content": "And of Spain?"},
+    ]
+
+
+# A block Python keeps as sent but Rust cannot type, so the message carrying it stays unparsed.
+UNPARSED_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": "Note.", "id": 5})
+UNCACHEABLE_SYSTEM_BLOCK: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "text", "text": "Be terse.", "cache_control": "ephemeral"}
+)
+TOOL_USE_TURN: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}}],
+    }
+)
+
+
+def _unparsed_turn(role: str, *blocks: Mapping[str, JsonValue]) -> list[Mapping[str, object]]:
+    return [
+        dict(USER),
+        {"role": role, "content": [dict(UNPARSED_BLOCK), *blocks]},
+        {"role": "user", "content": "Go on."},
+    ]
+
+
+def _beta(value: str) -> Mapping[str, object]:
+    return {"anthropic-beta": value}
+
+
+AZURE_SHAPING_CASES: Final = (
+    Case(
+        "azure_ai_beta_mixed_padded_list",
+        _kw(
+            extra_headers=_beta(
+                " web-search-2025-03-05 , bash_20250124,parity-unlisted-2030-01-01,context-1m-2025-08-07,,"
+                "web-search-2025-03-05"
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_all_dropped",
+        _kw(extra_headers=_beta("mcp-servers-2025-12-04,advisor-tool-2026-03-01,parity-unlisted-2030-01-01")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_title_case_header",
+        _kw(extra_headers={"Anthropic-Beta": "mcp-servers-2025-12-04,effort-2025-11-24"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_upper_case_header_null_beta",
+        _kw(extra_headers={"ANTHROPIC-BETA": "bash_20241022"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_two_casings",
+        _kw(
+            extra_headers={
+                "Anthropic-Beta": "interleaved-thinking-2025-05-14,text_editor_20250124",
+                "anthropic-beta": "fine-grained-tool-streaming-2025-05-14",
+            }
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_stream",
+        _kw(stream=True, extra_headers=_beta("mcp-servers-2025-12-04,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_beta_context_management",
+        _kw(context_management={"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_beta_native_compaction", _kw(compaction={}), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_beta_tool_search",
+        _kw(
+            tools=[
+                {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                {**WEATHER_TOOL, "defer_loading": True},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_output_config_with_a_null_caller_beta",
+        _kw(output_config={"format": dict(JSON_SCHEMA_FORMAT)}, extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_thinking_display_and_binding",
+        _kw(
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_per_turn_output_config",
+        _kw(messages=[{**USER, "output_config": {"effort": "low"}}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_with_an_unknown_caller_beta",
+        _kw(
+            max_tokens=2048,
+            output_format=dict(JSON_SCHEMA_FORMAT),
+            context_management={"edits": [{"type": "clear_tool_uses_20250919"}]},
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates"},
+            tools=[{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}],
+            extra_headers=_beta("parity-unlisted-2030-02-02"),
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_features_stream",
+        _kw(stream=True, output_format=dict(JSON_SCHEMA_FORMAT), extra_headers=_beta("mcp-servers-2025-12-04")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case("azure_ai_advisor_tool", _kw(tools=[dict(ADVISOR_TOOL)]), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_advisor_tool_with_a_caller_beta",
+        _kw(tools=[dict(ADVISOR_TOOL)], extra_headers=_beta("context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped",
+        _kw(extra_headers=_beta("ZWJ\u200djoined,context-1m-2025-08-07")),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_under_drop_params",
+        _kw(drop_params=True, extra_headers={"Anthropic-Beta": "ZWJ\u200djoined"}),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_not_ascii_dropped_stream",
+        _kw(stream=True, extra_headers=_beta("ZWJ\u200djoined")),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_advisor_tool_stream",
+        _kw(stream=True, tools=[dict(ADVISOR_TOOL)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_speed_refused", _kw(speed="fast"), model=AZURE_CLAUDE, upstream=()),
+    Case("azure_ai_speed_dropped", _kw(speed="fast", drop_params=True), model=AZURE_CLAUDE, warned=True),
+    Case(
+        "azure_ai_clear_at_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_with_its_beta",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_clear_at_kept_without_drop_params",
+        _kw(messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_clear_at_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2}),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_stripped_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                ]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[{"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_reference_addition_stripped_before_conversion",
+        _kw(
+            drop_params=True,
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
+            ),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_tool_addition_only_turn_dropped_before_conversion",
+        _kw(
+            drop_params=True,
+            messages=_mid_conversation_system(content=[{"type": "tool_addition", "tool": dict(WEATHER_TOOL)}]),
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_system_output_config_converted",
+        _kw(messages=_mid_conversation_system(content="Be brief.", output_config={"effort": "low"})),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_contentless_system_converted", _kw(messages=_mid_conversation_system()), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_null_content_system_with_clear_at_converted",
+        _kw(messages=_mid_conversation_system(content=None, clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_under_drop_params",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns", "value": 2})),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_contentless_system_output_config_adds_per_turn_control",
+        _kw(messages=_mid_conversation_system(output_config={"effort": "high"})),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_contentless_system_with_clear_at_dropped_where_the_role_is_accepted",
+        _kw(drop_params=True, messages=_mid_conversation_system(clear_at={"type": "turns"})),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_unparsed_system_tool_reference_addition_adds_its_beta",
+        _kw(
+            tools=[{**WEATHER_TOOL, "defer_loading": True}],
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "Note.", "id": 5},
+                    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}},
+                ]
+            ),
+        ),
+        model=AZURE_OPUS_4_8,
+    ),
+    Case(
+        "azure_ai_unparsed_message_cache_control_scope_dropped",
+        _kw(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "text", "text": "Hi.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                    ],
+                }
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_beta_signed_compaction_in_an_unparsed_message",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "Note.", "id": 5},
+                        {"type": "compaction", "content": "Summary.", "signature": "sig"},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_non_string_text_block_dropped",
+        _kw(messages=[{"role": "user", "content": [{"type": "text", "text": 5}, {"type": "text", "text": "Hi."}]}]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_emptied_by_the_sanitizer_dropped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": 5}, {"type": "thinking", "thinking": ""}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_tool_use_ids_sanitized",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        dict(UNPARSED_BLOCK),
+                        {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_web_search_result_flattened",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01Parity",
+                    "name": "web_search",
+                    "input": {"query": "paris"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com",
+                            "title": "Paris",
+                            "snippet": "Capital.",
+                        }
+                    ],
+                },
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_message_provider_specific_fields_dropped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant", {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}}
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_advisor_blocks_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "server_tool_use", "id": "srvtoolu_01Parity", "name": "advisor", "input": {}},
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_01Parity",
+                    "content": {"type": "advisor_result", "text": "Use channels."},
+                },
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_assistant_encrypted_reasoning_stripped",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "litellm_encrypted_reasoning:def"},
+            )
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "redacted_thinking", "data": "UVVKRA=="},
+                        {"type": "text", "text": "Paris."},
+                    ],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_unparsed_redacted_thinking_converse_wrapper_unwrapped",
+        _kw(messages=_unparsed_turn("assistant", {"type": "redacted_thinking", "data": "UVVKRA=="})),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_unparsed_block_hoisted",
+        _kw(messages=[{"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_non_list_content_hoisted",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": 5}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_list_with_an_unparsed_block_loses_its_billing_block",
+        _kw(
+            system=[
+                {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1.0"},
+                {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral", "scope": "global"}},
+                dict(UNPARSED_BLOCK),
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_unparsed_block_converted",
+        _kw(messages=_mid_conversation_system(content=[dict(UNCACHEABLE_SYSTEM_BLOCK)])),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_mid_system_moved_after_an_unparsed_tool_result",
+        _kw(
+            tools=[dict(WEATHER_TOOL)],
+            messages=[
+                dict(USER),
+                dict(TOOL_USE_TURN),
+                {"role": "system", "content": [dict(UNCACHEABLE_SYSTEM_BLOCK)]},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "functions.get_weather:0", "content": "Sunny."},
+                        dict(UNPARSED_BLOCK),
+                    ],
+                },
+            ],
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_contentless_leading_system_hoisted",
+        _kw(messages=[{"role": "system", "content": "Be terse."}, {"role": "system"}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_leading_system_tool_addition_under_drop_params",
+        _kw(
+            drop_params=True,
+            messages=[
+                {
+                    "role": "system",
+                    "content": [
+                        {"type": "text", "text": "Be terse."},
+                        {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                    ],
+                },
+                dict(USER),
+            ],
+        ),
+        model=AZURE_OPUS_4_8,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_thinking_gated_fields_kept_under_drop_params",
+        _kw(
+            drop_params=True,
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 1024, "display": "updates", "block_binding": "strict"},
+        ),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "azure_ai_non_object_output_format_under_drop_params",
+        _kw(drop_params=True, output_format="json"),
+        model=AZURE_CLAUDE,
+        warned=True,
+    ),
+    Case("azure_ai_system_string", _kw(system="Answer in one word."), model=AZURE_CLAUDE),
+    Case("azure_ai_system_empty_string", _kw(system=""), model=AZURE_CLAUDE),
+    Case(
+        "azure_ai_system_string_stream",
+        _kw(stream=True, system="Answer in one word."),
+        model=AZURE_CLAUDE,
+        upstream=(_stream(TEXT_STREAM),),
+    ),
+    Case(
+        "azure_ai_system_string_with_a_leading_system_turn",
+        _kw(system="Answer in one word.", messages=[{"role": "system", "content": "Be terse."}, dict(USER)]),
+        model=AZURE_CLAUDE,
+    ),
+    Case(
+        "azure_ai_system_blocks_with_cache_control",
+        _kw(
+            system=[
+                {
+                    "type": "text",
+                    "text": "Answer in one word.",
+                    "cache_control": {"type": "ephemeral", "scope": "global"},
+                }
+            ]
+        ),
+        model=AZURE_CLAUDE,
+    ),
+    Case("azure_ai_extra_body", _kw(extra_body={"parity_extra": 1}), model=AZURE_CLAUDE),
+    Case("azure_ai_unknown_top_level_param", _kw(parity_unknown_param="x"), model=AZURE_CLAUDE),
+    Case("azure_ai_latest_alias", model="azure_ai/claude-sonnet-latest"),
+    Case(
+        "azure_ai_pre_request_hook_names_a_non_claude_model",
+        callbacks=(_NonClaudeModelHook,),
+        model=AZURE_CLAUDE,
+        upstream=(),
+    ),
+)
+
+UNREACHABLE_AZURE_BASE: Final = "http://127.0.0.1:9/d/dep-e03/anthropic"
+
+AZURE_ERROR_CASES: Final = tuple(
+    replace(case, model=AZURE_CLAUDE)
+    for case in (
+        Case("azure_ai_upstream_404", upstream=(_failure(404, "not_found_error", "Resource not found"),)),
+        Case(
+            "azure_ai_upstream_429", upstream=(_failure(429, "rate_limit_error", "slow down", **{"retry-after": "7"}),)
+        ),
+        Case("azure_ai_unreachable_base", _kw(api_base=UNREACHABLE_AZURE_BASE), upstream=()),
+        Case(
+            "azure_ai_unreachable_environment_base",
+            _kw(api_base=None),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_unreachable_environment_base_stream",
+            _kw(api_base=None, stream=True),
+            env=MappingProxyType({"AZURE_API_BASE": UNREACHABLE_AZURE_BASE}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_stream_deflate_body_that_is_not_deflate",
+            _kw(stream=True),
+            upstream=(_encoded(b"not deflate at all", "deflate"),),
+        ),
+        Case("azure_ai_deployment_key_with_trailing_newline", _kw(api_key="sk-azure-key\n"), upstream=()),
+        Case(
+            "azure_ai_environment_key_with_trailing_newline",
+            _kw(api_key=None),
+            env=MappingProxyType({"AZURE_API_KEY": "sk-azure-key\n"}),
+            upstream=(),
+        ),
+        Case(
+            "azure_ai_caller_mixed_case_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"API-Key": "sk-caller-key"}),
+        ),
+        Case(
+            "azure_ai_caller_api_key_without_an_operator_key",
+            _kw(api_key=None, extra_headers={"api-key": "sk-caller-key"}),
+        ),
+    )
+)
+
+ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES: Final = (
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404",
+        _kw(custom_llm_provider="anthropic"),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+    Case(
+        "anthropic_provider_on_an_azure_ai_model_upstream_404_stream",
+        _kw(custom_llm_provider="anthropic", stream=True),
+        model=AZURE_CLAUDE,
+        upstream=(_failure(404, "not_found_error", "model not found"),),
+    ),
+)
+
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+VERTEX_DEPLOYMENT: Final = MappingProxyType({"api_base": None, "vertex_project": "proj", "vertex_location": "us-east5"})
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+def _vertex_service_account(private_key: str, token_uri: str) -> str:
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "proj",
+            "private_key_id": "key-1",
+            "private_key": private_key,
+            "client_email": "parity@proj.iam.gserviceaccount.com",
+            "client_id": "1",
+            "token_uri": token_uri,
+        }
+    )
+
+
+E2_GOOGLE_AUTH_TEXT: Final = (
+    "E2: approved difference, the exception class matches but its text is Google's SDK's own "
+    "(cryptography's PEM error), which Rust cannot rebuild"
+)
+
+R4_ODD_TYPED_CREDENTIAL_FIELD: Final = (
+    "R4: approved difference, Rust reads credentials into typed fields, so a project_id that is not text is refused "
+    "as a ValueError when the credentials are read, where Python raises TypeError after minting a token"
+)
+# R3: approved difference, Rust words these login failures and their logs in litellm's own terms where Python
+# raises google-auth's or its own text, so they compare by exception class, status and attribution only.
+VERTEX_LITELLM_WORDED_LOGIN: Final = frozenset(
+    {
+        "vertex_ai_application_default_credentials_file_that_does_not_exist",
+        "vertex_ai_no_project_after_the_login",
+        "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+        "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+        "vertex_ai_impersonated_credentials_are_refused",
+        "vertex_ai_service_account_without_a_private_key",
+        "vertex_ai_authorized_user_missing_a_field",
+        "vertex_ai_unsupported_region_is_overridden_with_a_warning",
+    }
+)
+_LOGIN_TEXT_FIELDS: Final = frozenset({"message", "details", "error_str", "error_message", "exception"})
+
+
+def _without_login_text(case: Case, aspect: str, value: object) -> object:
+    """A worded login failure or log with its text left out, for the cases in `VERTEX_LITELLM_WORDED_LOGIN`."""
+    if case.name not in VERTEX_LITELLM_WORDED_LOGIN:
+        return value
+    if aspect == "warnings" and isinstance(value, list | tuple):
+        return tuple("<log line>" for _ in cast(Sequence[object], value))
+    if aspect not in ("outcome", "logged_error") or not isinstance(value, Mapping):
+        return value
+    fields: Final = cast(Mapping[str, object], value)
+    return {name: "<login text>" if name in _LOGIN_TEXT_FIELDS else item for name, item in fields.items()}
+
+
+VERTEX_CREDENTIAL_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE, upstream=())
+    for case in (
+        Case(
+            "vertex_ai_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT, vertex_credentials="/nonexistent/vertex-key.json"),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_with_an_unloadable_key",
+            _kw(
+                **VERTEX_DEPLOYMENT,
+                vertex_credentials=_vertex_service_account(
+                    "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n",
+                    "https://oauth2.googleapis.com/token",
+                ),
+            ),
+            gaps=_gaps(outcome=E2_GOOGLE_AUTH_TEXT, logged_error=E2_GOOGLE_AUTH_TEXT),
+        ),
+        Case(
+            "vertex_ai_application_default_credentials_file_that_does_not_exist",
+            _kw(**VERTEX_DEPLOYMENT),
+            env=MappingProxyType({"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/adc.json"}),
+        ),
+    )
+)
+
+AZURE_STREAM_CACHE_CASES: Final = tuple(
+    replace(case, name=f"azure_ai_{case.name}", model=AZURE_CLAUDE)
+    for case in CACHE_CASES
+    if case.name in ("cache_hit_stream", "cache_stream_without_output")
+)
+
+AZURE_NON_CLAUDE: Final = "azure_ai/Phi-4"
+MESSAGES_PASSTHROUGH: Final = MappingProxyType({"supported_endpoints": ["/v1/messages"]})
+
+# H01: Python forwards a non-Claude deployment that opted into /v1/messages untranslated through its
+# OpenAI-compatible config, which Rust does not have, so the call stays on Python.
+AZURE_PASSTHROUGH_CASES: Final = tuple(
+    replace(case, model=AZURE_NON_CLAUDE)
+    for case in (
+        Case("azure_ai_non_claude_messages_passthrough", _kw(model_info=dict(MESSAGES_PASSTHROUGH))),
+        Case(
+            "azure_ai_non_claude_messages_passthrough_stream",
+            _kw(model_info=dict(MESSAGES_PASSTHROUGH), stream=True),
+            upstream=(_stream(TEXT_STREAM),),
+        ),
+    )
+)
+
+
+VERTEX_CLAUDE: Final = "vertex_ai/claude-sonnet-4-5"
+_VERTEX_KEY: Final = (
+    rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    .private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    .decode()
+)
+
+
+class _GoogleTokenEndpoint(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        body: Final = json.dumps({"access_token": "ya29.parity", "expires_in": 3600, "token_type": "Bearer"}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
+
+
+_GOOGLE_TOKENS: Final = ThreadingHTTPServer(("127.0.0.1", 0), _GoogleTokenEndpoint)
+threading.Thread(target=_GOOGLE_TOKENS.serve_forever, daemon=True).start()
+VERTEX_ACCOUNT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "type": "service_account",
+        "project_id": "parity-project",
+        "private_key_id": "parity-key",
+        "private_key": _VERTEX_KEY,
+        "client_email": "parity@parity-project.iam.gserviceaccount.com",
+        "client_id": "1",
+        "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+    }
+)
+
+
+def _vertex(**kwargs: object) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project", vertex_location="us-east5", vertex_credentials=dict(VERTEX_ACCOUNT), **kwargs
+    )
+
+
+def _vertex_stream(name: str, **kwargs: object) -> Case:
+    return Case(name, _vertex(stream=True, **kwargs), model=VERTEX_CLAUDE, upstream=(_stream(TEXT_STREAM),))
+
+
+JSON_SCHEMA_FORMAT: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "json_schema", "schema": {"type": "object", "properties": {"city": {"type": "string"}}}}
+)
+
+VERTEX_SHAPING_CASES: Final = (
+    Case("vertex_caller_authorization", _vertex(extra_headers={"Authorization": "Bearer caller"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_lowercase_authorization",
+        _vertex(extra_headers={"authorization": "Bearer caller"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_caller_content_type", _vertex(extra_headers={"content-type": "text/plain"}), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_caller_betas_filtered",
+        _vertex(extra_headers={"anthropic-beta": "files-api-2025-04-14,context-1m-2025-08-07,not-a-beta"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_beta_renamed",
+        _vertex(extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_caller_betas_all_dropped",
+        _vertex(extra_headers={"anthropic-beta": "mcp-client-2025-11-20"}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_output_format_folded", _vertex(output_format=dict(JSON_SCHEMA_FORMAT)), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_output_format_wins_over_output_config_format",
+        _vertex(output_format=dict(JSON_SCHEMA_FORMAT), output_config={"format": {"type": "json_schema"}}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case("vertex_string_output_format_refused", _vertex(output_format="json"), model=VERTEX_CLAUDE, upstream=()),
+    Case("vertex_string_output_format_dropped", _vertex(output_format="json", drop_params=True), model=VERTEX_CLAUDE),
+    Case(
+        "vertex_unsupported_version_refused",
+        _vertex(extra_headers={"anthropic-version": "latest"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_refused_before_output_format",
+        _vertex(extra_headers={"anthropic-version": "latest"}, output_format="json"),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+        gaps=_gaps(logged_error=E4_UNTRACED_VERSION_REFUSAL),
+    ),
+    Case(
+        "vertex_unsupported_version_dropped",
+        _vertex(extra_headers={"anthropic-version": "latest"}, drop_params=True),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_always_on_thinking_disabled_dropped",
+        _vertex(thinking={"type": "disabled"}),
+        model="vertex_ai/claude-sonnet-5-5@default",
+        warned=True,
+    ),
+    Case("vertex_base_version_doubled", _vertex(api_base_suffix="/v1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_beta_version_doubled", _vertex(api_base_suffix="/v1beta1/"), model=VERTEX_CLAUDE),
+    Case("vertex_base_query", _vertex(api_base_suffix="?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_version_with_query", _vertex(api_base_suffix="/v1?k=1"), model=VERTEX_CLAUDE),
+    Case("vertex_base_own_path", _vertex(api_base_suffix="/custom/path/"), model=VERTEX_CLAUDE),
+    _vertex_stream("vertex_base_stream"),
+    _vertex_stream("vertex_base_version_doubled_stream", api_base_suffix="/v1"),
+    _vertex_stream("vertex_base_slash_query_stream", api_base_suffix="/?k=1"),
+    _vertex_stream("vertex_base_own_path_query_stream", api_base_suffix="/custom/path?k=1"),
+)
+
+VERTEX_OPUS: Final = "vertex_ai/claude-opus-5-5"
+_VERTEX_IDENTITY: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+        "user_api_key_team_id": "Team A",
+        "user_api_key_org_id": "Org.1",
+        "spend_logs_metadata": {"Project": "Billing Q4", "user_api_key_alias": "forged", "9lives": "x"},
+    }
+)
+_CALLER_LABELS: Final = base64.b64encode(
+    json.dumps({"env": "Prod", "user_api_key_team_id": "forged", "project": "caller"}).encode()
+).decode()
+_LABEL_FIELDS: Final = _kw(
+    vertex_request_label_fields=(
+        "user_api_key_hash",
+        "user_api_key_team_id",
+        "user_api_key_org_id",
+        "spend_logs_metadata",
+    )
+)
+
+
+def _labelled(**kwargs: object) -> Mapping[str, object]:
+    return _vertex(litellm_metadata=dict(_VERTEX_IDENTITY), **kwargs)
+
+
+VERTEX_LABELS_CASES: Final = (
+    Case("vertex_labels_from_identity", _labelled(), model=VERTEX_CLAUDE, settings=_LABEL_FIELDS),
+    Case(
+        "vertex_labels_replace_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_drop_an_undecodable_header",
+        _labelled(extra_headers={"x-vertex-ai-labels": "not base64"}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields="user_api_key_team_id"),
+    ),
+    Case(
+        "vertex_labels_with_unreserved_fields_keep_the_callers_labels",
+        _vertex(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+        settings=_kw(vertex_request_label_fields=["team"]),
+    ),
+    Case(
+        "vertex_labels_unset_keep_the_callers_header",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": _CALLER_LABELS}),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_labels_replace_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        settings=_LABEL_FIELDS,
+    ),
+    Case(
+        "vertex_labels_unset_send_nothing_for_a_header_python_cannot_encode",
+        _labelled(extra_headers={"X-Vertex-AI-Labels": "ZWJ\u200djoined"}),
+        model=VERTEX_CLAUDE,
+        upstream=(),
+    ),
+    replace(_vertex_stream("vertex_labels_stream", litellm_metadata=dict(_VERTEX_IDENTITY)), settings=_LABEL_FIELDS),
+)
+
+_PROXY_CALL_ID: Final = "0b0c3d4e-proxy-call"
+
+
+class _ProxyLogger:
+    """Each leg gets a logging object built from the request alone, as the proxy builds it before the router adds
+    the deployment's params."""
+
+    def __deepcopy__(self, memo: dict[int, object]) -> object:
+        logging_obj, _ = litellm.utils.function_setup(
+            "anthropic_messages",
+            Rules(),
+            datetime.datetime.now(),
+            model=VERTEX_CLAUDE,
+            messages=[dict(USER)],
+            litellm_call_id=_PROXY_CALL_ID,
+        )
+        return logging_obj
+
+
+def _proxied(**location: str) -> Mapping[str, object]:
+    return _kw(
+        vertex_project="parity-project",
+        vertex_credentials=dict(VERTEX_ACCOUNT),
+        litellm_logging_obj=_ProxyLogger(),
+        litellm_call_id=_PROXY_CALL_ID,
+        **location,
+    )
+
+
+VERTEX_REGIONAL_COST_CASES: Final = (
+    Case(
+        "vertex_deployment_global_location_prices_without_the_regional_uplift",
+        _proxied(vertex_location="global"),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_deployment_legacy_global_location_prices_without_the_regional_uplift",
+        _proxied(vertex_ai_location="global"),
+        model=VERTEX_CLAUDE,
+    ),
+    Case(
+        "vertex_deployment_global_location_wins_over_the_environment",
+        _proxied(vertex_location="global"),
+        model=VERTEX_CLAUDE,
+        env=_kw(VERTEXAI_LOCATION="europe-west4"),
+    ),
+)
+
+_CLEAR_AT_TURNS: Final = _mid_conversation_system(content="Be brief.", clear_at={"type": "turns", "value": 2})
+
+VERTEX_BETA_GATED_CASES: Final = (
+    Case(
+        "vertex_clear_at_stripped_under_drop_params",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case(
+        "vertex_clear_at_kept_with_its_beta",
+        _vertex(
+            drop_params=True,
+            messages=_CLEAR_AT_TURNS,
+            extra_headers=_beta("mid-conversation-system-clear-at-2026-08-21"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+    Case("vertex_clear_at_kept_without_drop_params", _vertex(messages=_CLEAR_AT_TURNS), model=VERTEX_OPUS),
+    Case(
+        "vertex_clear_at_stripped_before_conversion",
+        _vertex(drop_params=True, messages=_CLEAR_AT_TURNS),
+        model=VERTEX_CLAUDE,
+        warned=True,
+    ),
+    Case(
+        "vertex_tool_addition_stripped_under_drop_params",
+        _vertex(
+            drop_params=True,
+            messages=_mid_conversation_system(
+                content=[
+                    {"type": "text", "text": "A new tool."},
+                    {"type": "tool_addition", "tool": dict(WEATHER_TOOL)},
+                ]
+            ),
+            extra_headers=_beta("context-1m-2025-08-07"),
+        ),
+        model=VERTEX_OPUS,
+        warned=True,
+    ),
+)
+
+
+def _service_account(name: str, **fields: JsonValue) -> Mapping[str, JsonValue]:
+    """A service account the parity token endpoint grants. Each case names its own account, so no case
+    reuses a login another case cached."""
+    return MappingProxyType(
+        {
+            "type": "service_account",
+            "client_email": f"{name}@parity.iam.gserviceaccount.com",
+            "private_key_id": name,
+            "private_key": _VERTEX_KEY,
+            "token_uri": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+            **fields,
+        }
+    )
+
+
+@functools.cache
+def _adc_directory() -> str:
+    return tempfile.mkdtemp(prefix="vertex-adc-")
+
+
+def _adc_file(name: str, info: Mapping[str, JsonValue]) -> str:
+    """A credentials file `GOOGLE_APPLICATION_CREDENTIALS` names for one case."""
+    path: Final = os.path.join(_adc_directory(), f"{name}.json")
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(dict(info), file)
+    return path
+
+
+def _vertex_login(**kwargs: object) -> Mapping[str, object]:
+    return MappingProxyType({"api_key": None, "vertex_location": "us-east5", **kwargs})
+
+
+VERTEX_AUTH_CASES: Final = tuple(
+    replace(case, model=VERTEX_CLAUDE)
+    for case in (
+        Case(
+            "vertex_ai_service_account_names_the_project",
+            _vertex_login(vertex_credentials=dict(_service_account("a3-project", project_id="credentials-project"))),
+        ),
+        Case(
+            "vertex_ai_configured_project_outranks_the_credentials",
+            _vertex_login(
+                vertex_project="configured-project",
+                vertex_credentials=dict(_service_account("p2-configured", project_id="credentials-project")),
+            ),
+        ),
+        Case(
+            "vertex_ai_no_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-no-project"))),
+            upstream=(),
+            warned=True,
+        ),
+        Case(
+            "vertex_ai_numeric_project_after_the_login",
+            _vertex_login(vertex_credentials=dict(_service_account("e1-numeric-project", project_id=7))),
+            upstream=(),
+            warned=True,
+            gaps=_gaps(
+                **dict.fromkeys(("outcome", "logged", "logged_error", "warnings"), R4_ODD_TYPED_CREDENTIAL_FIELD)
+            ),
+        ),
+        Case(
+            "vertex_ai_invalid_location_after_the_login",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="US EAST",
+                vertex_credentials=dict(_service_account("p3-location")),
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user",
+            _vertex_login(vertex_project="adc-workforce"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce",
+                        {
+                            "type": "external_account_authorized_user",
+                            "audience": "//iam.googleapis.com/locations/global/workforcePools/p/providers/q",
+                            "refresh_token": "workforce-refresh",
+                            "token_url": f"http://127.0.0.1:{_GOOGLE_TOKENS.server_address[1]}/token",
+                            "client_id": "workforce-client",
+                            "client_secret": "workforce-secret",
+                        },
+                    )
+                }
+            ),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_without_refresh_fields",
+            _vertex_login(vertex_project="adc-workforce-token"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-token",
+                        {"type": "external_account_authorized_user", "token": "file-token"},
+                    )
+                }
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_adc_external_account_authorized_user_that_cannot_load",
+            _vertex_login(vertex_project="adc-workforce-nothing"),
+            env=MappingProxyType(
+                {
+                    "GOOGLE_APPLICATION_CREDENTIALS": _adc_file(
+                        "workforce-nothing", {"type": "external_account_authorized_user"}
+                    )
+                }
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_location_with_one_trailing_newline",
+            _vertex_login(
+                api_base=None,
+                vertex_project="p",
+                vertex_location="us-east5\n",
+                vertex_credentials=dict(_service_account("p3-newline")),
+            ),
+            upstream=(),
+            gaps=_gaps(
+                **dict.fromkeys(
+                    (
+                        "outcome",
+                        "logged",
+                        "logged_error",
+                        "logged_api_key",
+                        "logged_call",
+                        "logged_request",
+                        "logged_model_parameters",
+                    ),
+                    V_LOCATION_NEWLINE_REFUSED,
+                )
+            ),
+        ),
+        Case(
+            "vertex_ai_impersonated_credentials_are_refused",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "impersonated_service_account",
+                    "client_email": "sa@p.iam.gserviceaccount.com",
+                    "source_credentials": {"type": "authorized_user"},
+                },
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_service_account_without_a_private_key",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"client_email": "sa@p.iam.gserviceaccount.com", "token_uri": "https://t"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_authorized_user_missing_a_field",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={"type": "authorized_user", "client_id": "c", "client_secret": "s"},
+            ),
+            upstream=(),
+        ),
+        Case(
+            "vertex_ai_inline_credentials_not_json",
+            _vertex_login(vertex_project="p", vertex_credentials="{oops"),
+            upstream=(),
+        ),
+        Case("vertex_ai_blank_credentials", _vertex_login(vertex_project="p", vertex_credentials="   "), upstream=()),
+        Case(
+            "vertex_ai_explicit_aws_without_a_region",
+            _vertex_login(
+                vertex_project="p",
+                vertex_credentials={
+                    "type": "external_account",
+                    "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/p/providers/aws",
+                    "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+                    "credential_source": {"environment_id": "aws1"},
+                    "aws_access_key_id": "AKIDPARITY",
+                },
+            ),
+            upstream=(),
+        ),
+    )
+)
+
+
+VERTEX_REGIONAL_CLAUDE: Final = "vertex_ai/claude-parity-regional"
+VERTEX_REGIONAL_CASES: Final = (
+    Case(
+        "vertex_ai_unsupported_region_is_overridden_with_a_warning",
+        _vertex_login(
+            vertex_project="p",
+            vertex_location="us-east5",
+            vertex_credentials=dict(_service_account("p1-regions-override", project_id="p")),
+        ),
+        model=VERTEX_REGIONAL_CLAUDE,
+        settings=MappingProxyType(
+            {
+                "model_cost": {
+                    **litellm.model_cost,
+                    VERTEX_REGIONAL_CLAUDE: {
+                        **litellm.model_cost[VERTEX_CLAUDE],
+                        "supported_regions": ["europe-west1", "asia-southeast1"],
+                    },
+                }
+            }
+        ),
+        warned=True,
+    ),
+    Case(
+        "vertex_ai_supported_regions_route_the_call",
+        _vertex_login(
+            vertex_project="p",
+            vertex_credentials=dict(_service_account("p1-regions", project_id="p")),
+        ),
+        model=VERTEX_REGIONAL_CLAUDE,
+        settings=MappingProxyType(
+            {
+                "model_cost": {
+                    **litellm.model_cost,
+                    VERTEX_REGIONAL_CLAUDE: {
+                        **litellm.model_cost[VERTEX_CLAUDE],
+                        "supported_regions": ["europe-west1", "us-east5-b"],
+                    },
+                }
+            }
+        ),
+    ),
+)
+
+
+CASES: Final = (
+    *REQUEST_CASES,
+    *INPUT_VALUE_CASES,
+    *ARGUMENT_TYPE_CASES,
+    *AGENTIC_CASES,
+    *PROMPT_CACHING_CASES,
+    *SYNC_PROMPT_CACHING_CASES,
+    *RESPONSE_CASES,
+    *FAILURE_CASES,
+    *STREAM_CASES,
+    *SYNC_CASES,
+    *SERVED_NATIVELY_CASES,
+    *THINKING_RETRY_CASES,
+    *STRICT_TOOLS_RETRY_CASES,
+    *FALLBACK_CASES,
+    *CACHE_CASES,
+    *THREAD_CASES,
+    *TRANSPORT_CASES,
+    *PRE_REQUEST_HOOK_CASES,
+    *SAFEGUARDS_CASES,
+    *INTERCEPTOR_CASES,
+    *SHORT_CIRCUIT_CASES,
+    *MCP_CASES,
+    *DEPLOYMENT_HOOK_CASES,
+    *HOOKED_STREAM_AND_CACHE_CASES,
+    *AZURE_AUTH_CASES,
+    *AZURE_URL_CASES,
+    *MALFORMED_BASE_CASES,
+    *AZURE_SHAPING_CASES,
+    *AZURE_ERROR_CASES,
+    *ANTHROPIC_ON_AZURE_CLAUDE_ERROR_CASES,
+    *VERTEX_CREDENTIAL_CASES,
+    *AZURE_STREAM_CACHE_CASES,
+    *VERTEX_SHAPING_CASES,
+    *VERTEX_LABELS_CASES,
+    *VERTEX_REGIONAL_COST_CASES,
+    *VERTEX_BETA_GATED_CASES,
+    *VERTEX_AUTH_CASES,
+    *VERTEX_REGIONAL_CASES,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -780,6 +4899,12 @@ class Leg:
     hidden_params: Mapping[str, object]
     logged: Mapping[str, object]
     callback_kwargs: Mapping[str, object]
+    cached: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    hook_inputs: tuple[object, ...] = ()
+    classified: tuple[Mapping[str, object], ...] = ()
+    tool_runs: tuple[Mapping[str, object], ...] = ()
+    stream_type: object = None
 
 
 @dataclass(slots=True)
@@ -806,7 +4931,6 @@ def native_messages() -> Iterator[FallbackProbe]:
         return _PYTHON_MESSAGES(*args, **kwargs)
 
     with (
-        rebound(catalog, "RULES", (RouteRule(Route.MESSAGES, Rollout.RUST_OPT_OUT), *catalog.RULES)),
         rebound(dispatch, "_PYTHON_AMESSAGES", python_afallback),
         rebound(dispatch, "_PYTHON_MESSAGES", python_fallback),
     ):
@@ -820,8 +4944,34 @@ def _environment(env: Mapping[str, str]) -> Generator[None]:
         *env,
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_FEDERATION_RULE_ID",
+        "ANTHROPIC_ORGANIZATION_ID",
+        "ANTHROPIC_IDENTITY_TOKEN",
+        "ANTHROPIC_IDENTITY_TOKEN_FILE",
+        "ANTHROPIC_IDENTITY_SOURCE",
+        "LITELLM_ANTHROPIC_WIF_ALLOWED_HOSTS",
         "LITELLM_REASONING_AUTO_SUMMARY",
         "LITELLM_RUST",
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_API_BASE",
+        "AZURE_AD_TOKEN",
+        "AZURE_TENANT_ID",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_SCOPE",
+        "AZURE_CREDENTIAL",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        "AZURE_AUTHORITY_HOST",
+        "VERTEXAI_CREDENTIALS",
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GCLOUD_PROJECT",
     )
     with pytest.MonkeyPatch.context() as patch:
         for name in names:
@@ -843,20 +4993,64 @@ def _settings(settings: Mapping[str, object]) -> Generator[None]:
             setattr(litellm, name, value)
 
 
+@contextmanager
+def _classifier(reply: str | None, calls: list[Mapping[str, object]]) -> Generator[None]:
+    if reply is None:
+        yield
+        return
+    acompletion: Final = litellm.acompletion
+
+    async def classify(**kwargs: object) -> object:  # kwargs-ok: stands in for litellm.acompletion
+        calls.append(
+            {
+                "names": sorted(kwargs),
+                **{name: kwargs.get(name) for name in ("model", "messages", "max_tokens", "num_retries", "user")},
+                "litellm_metadata": _mapping(kwargs.get("litellm_metadata")),
+            }
+        )
+        return await acompletion(**kwargs, mock_response=reply)
+
+    with (
+        rebound(proxy_server, "general_settings", {"safeguards_classifier_model": CLASSIFIER_MODEL}),
+        rebound(litellm, "acompletion", classify),
+    ):
+        yield
+
+
+@contextmanager
+def _interceptor(interceptor: Callable[[], MessagesInterceptor] | None) -> Generator[None]:
+    if interceptor is None:
+        yield
+        return
+    with rebound(messages_interceptors, "_interceptors", [interceptor(), *messages_interceptors._interceptors]):  # pyright: ignore[reportPrivateUsage]  # registers a test interceptor ahead of the shipped ones
+        yield
+
+
+@contextmanager
+def _cache(cache: Callable[[], Cache] | None) -> Generator[None]:
+    if cache is None:
+        yield
+        return
+    with rebound(litellm, "cache", cache()):
+        yield
+
+
 def _kwargs(case: Case, server: RecordingServer) -> dict[str, object]:
     # Deep: Python writes into the caller's own `litellm_metadata`, which must not leak into the
     # other leg.
     supplied: Final = copy.deepcopy(dict(case.kwargs))
     suffix: Final = supplied.pop("api_base_suffix", "")
+    userinfo: Final = supplied.pop("api_base_userinfo", "")
+    base: Final = server.base_url.replace("://", f"://{userinfo}@", 1) if userinfo else server.base_url
     kwargs: Final[dict[str, object]] = {
         "model": case.model,
         "max_tokens": 64,
         "messages": [dict(USER)],
         "api_key": API_KEY,
-        "api_base": f"{server.base_url}{suffix}",
+        "api_base": f"{base}{suffix}",
         **supplied,
     }
-    return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards",)}
+    return {name: value for name, value in kwargs.items() if value is not None or name in ("safeguards", *case.nones)}
 
 
 def _mapping(value: object) -> Mapping[str, object]:
@@ -881,13 +5075,59 @@ def _error(error: BaseException, phase: str, chunks: Iterable[object] = ()) -> M
         "llm_provider": getattr(error, "llm_provider", None),
         "model": getattr(error, "model", None),
         "message": _normalized(str(error)),
+        "debug_info": _normalized(str(getattr(error, "litellm_debug_info", None))),
+        "details": AnthropicExceptionMapping.embedded_error_details(str(error)),
+        "keeps_the_deployment_warm": is_message_thread_not_found(error),
         "headers": {name: header_items.get(name) for name in ("retry-after", "request-id") if name in header_items},
         "partial": _stream_text(chunks),
     }
 
 
+def _sent_request(response: object) -> Mapping[str, object] | None:
+    if not isinstance(response, httpx.Response):
+        return None
+    try:
+        sent: Final = response.request
+    except RuntimeError:
+        return {"status": response.status_code, "request": None}
+    return {
+        "status": response.status_code,
+        "request": {
+            "method": sent.method,
+            "path": sent.url.path,
+            "anthropic-beta": sent.headers.get("anthropic-beta"),
+            "body": _sent_body(sent),
+        },
+    }
+
+
+def _sent_body(sent: httpx.Request) -> object:
+    try:
+        sent_body: Final = sent.read()
+    except (httpx.RequestNotRead, httpx.StreamClosed):
+        return None
+    return json.loads(sent_body) if sent_body else None
+
+
+def _partition(chunks: Iterable[object]) -> tuple[int, ...]:
+    return tuple(len(chunk if isinstance(chunk, bytes) else str(chunk).encode()) for chunk in chunks)
+
+
 def _stream_text(chunks: Iterable[object]) -> str:
     return b"".join(chunk if isinstance(chunk, bytes) else str(chunk).encode() for chunk in chunks).decode()
+
+
+def _scrubbed(value: object) -> object:
+    """Masks the random server tool ids inside a response, leaving every other value as it was."""
+    match value:
+        case str():
+            return _SERVER_TOOL_ID.sub("srvtoolu_<id>", value)
+        case dict():
+            return {name: _scrubbed(item) for name, item in cast(dict[object, object], value).items()}
+        case list():
+            return [_scrubbed(item) for item in cast(list[object], value)]
+        case _:
+            return value
 
 
 def _response(result: object, private_keys: bool) -> Mapping[str, object]:
@@ -897,13 +5137,13 @@ def _response(result: object, private_keys: bool) -> Mapping[str, object]:
         for name, value in cast(dict[str, object], result).items()
         if private_keys or not name.startswith("_")
     }
-    return {"kind": "response", "body": _OBJECT.validate_python(body)}
+    return {"kind": "response", "body": _LOGGED.validate_python(_scrubbed(body))}
 
 
 def _hidden_params(result: object) -> Mapping[str, object]:
     hidden: Final = dict(_mapping(get_hidden_params_dict(result)))
     headers: Final = _mapping(hidden.pop("additional_headers", None))
-    header_names: Final = sorted(name for name in headers if name not in ("x-litellm-rust", "x-litellm-cache-key"))
+    header_names: Final = sorted(name for name in headers if name != "x-litellm-rust")
     return {"keys": sorted(hidden), "additional_headers": header_names}
 
 
@@ -949,32 +5189,46 @@ async def _invoke(
         if isinstance(result, dict):
             body = cast(Mapping[str, object], result)
             return _response(body, case.private_keys), _hidden_params(body)
+        time.sleep(
+            case.busy_before_reading
+        )  # holds the event loop, as a caller's own work between the call and its first read does
         chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
     hidden: Final = _hidden_params(result)
+    partition: Final = {"partition": _partition(chunks)} if case.partitioned else {}
+    stream_type: Final = {"stream_type": type(result).__name__}
     if failure is not None:
-        return _error(failure, "stream", chunks), hidden
+        return {**_error(failure, "stream", chunks), **partition, **stream_type}, hidden
     return {
+        **stream_type,
         "kind": "stream",
         "chunk_types": sorted({type(chunk).__name__ for chunk in chunks}),
-        "text": _stream_text(chunks),
+        "text": _SERVER_TOOL_ID.sub("srvtoolu_<id>", _stream_text(chunks)),
+        **partition,
     }, hidden
 
 
-async def _terminal_events(recorder: RecordingLogger) -> tuple[str, ...]:
+async def _terminal_events(recorder: RecordingLogger, since: int = 0) -> tuple[str, ...]:
     for _ in range(100):
         await drain_logging()
-        if any(name in _TERMINAL_EVENTS for name in recorder.names):
+        if any(name in _TERMINAL_EVENTS for name in recorder.names[since:]):
             break
         await asyncio.sleep(0.05)
     await asyncio.sleep(0.2)
     await drain_logging()
-    return tuple(name for name in recorder.names if name in _TERMINAL_EVENTS)
+    return tuple(name for name in recorder.names[since:] if name in _TERMINAL_EVENTS)
 
 
-def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping[str, object], Mapping[str, object]]:
-    terminal: Final = [event for event in recorder.events if event.name in _TERMINAL_EVENTS]
+def _logged(
+    recorder: RecordingLogger, events: tuple[str, ...], since: int = 0
+) -> tuple[Mapping[str, object], Mapping[str, object]]:
+    terminal: Final = [
+        event
+        for event in recorder.events[since:]
+        if event.name in _TERMINAL_EVENTS and event.call_type != CLASSIFIER_CALL_TYPE
+    ]
+    hooks: Final = tuple(sorted(set(recorder.names[since:])))
     if not terminal:
-        return {"events": events}, {}
+        return {"events": events, "hooks": hooks}, {}
     details: Final = _mapping(terminal[-1].kwargs)
     standard: Final = _mapping(details.get("standard_logging_object"))
     error_class: Final = _mapping(standard.get("error_information")).get("error_class")
@@ -983,35 +5237,140 @@ def _logged(recorder: RecordingLogger, events: tuple[str, ...]) -> tuple[Mapping
     metadata_keys: Final = _mapping(metadata).keys()
     logged: Final[Mapping[str, object]] = {
         "events": events,
+        "hooks": hooks,
         **{name: standard.get(name) for name in _COMPARED_LOG_FIELDS},
         "error_class": error_class,
     }
     callback_kwargs: Final[Mapping[str, object]] = {
         "logged_metadata": sorted(metadata_keys) if isinstance(metadata, dict) else metadata,
         "logged_model_info": litellm_params.get("model_info"),
-        "logged_response_headers": bool(details.get("response_headers")),
+        "logged_response_headers": {
+            name: value for name, value in _mapping(details.get("response_headers")).items() if name.lower() != "date"
+        },
         "logged_api_key": details.get("api_key"),
         "logged_call": {
             "custom_llm_provider": details.get("custom_llm_provider"),
             "model": details.get("model"),
             "stream": details.get("stream"),
+            "aanthropic_messages": litellm_params.get("aanthropic_messages"),
         },
+        "logged_request": {
+            "messages": details.get("messages"),
+            "thinking": details.get("thinking"),
+            "tools": details.get("tools"),
+            "complete_input_dict": _mapping(details.get("additional_args")).get("complete_input_dict"),
+        },
+        "logged_sent_request": _sent_request(details.get("httpx_response")),
+        "logged_model_parameters": standard.get("model_parameters"),
+        "logged_error": _logged_error(details, standard),
     }
     return logged, callback_kwargs
 
 
+def _logged_error(details: Mapping[str, object], standard: Mapping[str, object]) -> Mapping[str, object]:
+    exception: Final = details.get("exception")
+    information: Final = _mapping(standard.get("error_information"))
+    return {
+        "error_str": _normalized(str(standard.get("error_str"))),
+        "error_message": _normalized(str(information.get("error_message"))),
+        "error_code": information.get("error_code"),
+        "llm_provider": information.get("llm_provider"),
+        "traced": bool(information.get("traceback")),
+        "exception": None if exception is None else _normalized(str(exception)),
+        "exception_model": getattr(exception, "model", None),
+        "exception_provider": getattr(exception, "llm_provider", None),
+    }
+
+
+async def _prime(case: Case, server: RecordingServer, recorder: RecordingLogger, native: bool) -> int:
+    if case.cache is None:
+        return 0
+    outcome: Final = await _invoke(case, _kwargs(case, server), native=native)
+    assert case.sync or outcome[0]["kind"] != "error", outcome
+    await _terminal_events(recorder)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    return len(recorder.events)
+
+
+WIKI_MCP_TOOL: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "name": "read_wiki",
+        "description": "Read a repository wiki",
+        "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}, "required": ["repo"]},
+    }
+)
+
+
+@contextmanager
+def _gateway(case: Case, runs: list[Mapping[str, object]]) -> Generator[None]:  # mutable-ok: records the tool runs
+    if not case.gateway:
+        yield
+        return
+    from mcp.types import Tool as MCPTool
+
+    from litellm.responses.mcp import tool_precheck
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+
+    split_mcp_tools: Final = LiteLLM_Proxy_MCP_Handler.split_mcp_tools
+
+    async def served(names: Iterable[str]) -> frozenset[str]:
+        return frozenset({"deepwiki"}) & frozenset(names)
+
+    async def split(tools: Iterable[Mapping[str, object]] | None) -> object:
+        return await split_mcp_tools(tools, served)
+
+    async def listed(**_: object) -> tuple[list[MCPTool], list[str]]:
+        return [MCPTool.model_validate(dict(WIKI_MCP_TOOL))], ["deepwiki"]
+
+    async def executed(**kwargs: object) -> list[dict[str, object]]:
+        calls: Final = cast(list[Mapping[str, object]], kwargs["tool_calls"])
+        runs.append(
+            {
+                "tool_calls": [dict(call) for call in calls],
+                "tool_server_map": kwargs["tool_server_map"],
+                "request_tags": kwargs["request_tags"],
+                "guardrail_context": json.loads(json.dumps(kwargs["guardrail_context"], default=repr)),
+            }
+        )
+        if any(call.get("input") == {"repo": "boom"} for call in calls):
+            raise RuntimeError("the wiki server went away")
+        return [{"tool_call_id": call.get("id"), "result": "9 sections", "name": call.get("name")} for call in calls]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(tool_precheck, "_gateway_registry_loads", lambda: True)
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "split_mcp_tools", staticmethod(split))
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "_get_mcp_tools_from_manager", staticmethod(listed))
+        patch.setattr(LiteLLM_Proxy_MCP_Handler, "execute_tool_calls", staticmethod(executed))
+        yield
+
+
 async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None) -> Leg:
-    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
-        recorder: Final = RecordingLogger()
-        litellm.callbacks.append(recorder)
+    classified: Final[list[Mapping[str, object]]] = []
+    runs: Final[list[Mapping[str, object]]] = []
+    with (
+        isolated_callback_registries(),
+        _environment(case.env),
+        _settings(case.settings),
+        _cache(case.cache),
+        _classifier(case.classifier, classified),
+        _interceptor(case.interceptor),
+        _gateway(case, runs),
+    ):
         for spec in case.upstream:
             server.enqueue(replace(spec))
         request_count: Final = len(server.requests)
+        recorder: Final = RecordingLogger()
+        loggers: Final = () if case.loggers is None else case.loggers()
+        litellm.callbacks.extend(loggers)
+        litellm.callbacks.append(recorder)
+        litellm.callbacks.extend(callback() for callback in case.callbacks)
         fallbacks_before: Final = 0 if probe is None else probe.calls
-        outcome, hidden = await _invoke(case, _kwargs(case, server), native=probe is not None)
-        events: Final = await _terminal_events(recorder)
+        primed: Final = await _prime(case, server, recorder, native=probe is not None)
+        with _warnings() as warned:
+            outcome, hidden = await _invoke(case, _kwargs(case, server), native=probe is not None)
+        events: Final = await _terminal_events(recorder, primed)
         server.responses.clear()
-        logged, callback_kwargs = _logged(recorder, events)
+        logged, callback_kwargs = _logged(recorder, events, primed)
         return Leg(
             fell_back=probe is not None and probe.calls > fallbacks_before,
             requests=tuple(
@@ -1025,11 +5384,45 @@ async def _leg(case: Case, server: RecordingServer, probe: FallbackProbe | None)
                 }
                 for sent in server.requests[request_count:]
             ),
-            outcome=outcome,
+            outcome={name: value for name, value in outcome.items() if name != "stream_type"},
+            stream_type=outcome.get("stream_type"),
             hidden_params=hidden,
             logged=logged,
             callback_kwargs=callback_kwargs,
+            cached=() if litellm.cache is None else _cache_entries(litellm.cache),
+            warnings=tuple(warned),
+            hook_inputs=tuple(getattr(logger, "seen", ()) for logger in loggers),
+            classified=tuple(classified),
+            tool_runs=tuple(runs),
         )
+
+
+class _WarningLines(logging.Handler):
+    def __init__(self, lines: list[str]) -> None:  # mutable-ok: the handler appends each warning as it is logged
+        super().__init__(logging.WARNING)
+        self.lines: Final = lines
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+@contextmanager
+def _warnings(
+    logger: logging.Logger = verbose_logger,
+) -> Generator[list[str]]:  # mutable-ok: filled while the call runs
+    lines: Final[list[str]] = []
+    handler: Final = _WarningLines(lines)
+    logger.addHandler(handler)
+    try:
+        yield lines
+    finally:
+        logger.removeHandler(handler)
+
+
+def _cache_entries(cache: Cache) -> tuple[str, ...]:
+    backend: Final = cache.cache
+    keys: Final = tuple(sorted(backend.cache_dict)) if isinstance(backend, InMemoryCache) else ()
+    return (*keys, *backend.ops) if isinstance(backend, _OrderedMemory) else keys
 
 
 @pytest.fixture
@@ -1041,10 +5434,47 @@ def parity_server(recording_server: RecordingServer) -> RecordingServer:
 _LEGS: Final[dict[str, tuple[Leg, Leg]]] = {}
 
 
+# The Python Vertex AI Messages request path is gone, so these cases compare Rust against the Python leg captured
+# once from it, with ports and temporary directories that change between runs written as placeholders.
+VERTEX_PYTHON_FIXTURES: Final = Path(__file__).parent / "fixtures" / "vertex"
+VERTEX_FIXTURE_CASES: Final = frozenset(
+    case.name
+    for case in (
+        *VERTEX_CREDENTIAL_CASES,
+        *VERTEX_SHAPING_CASES,
+        *VERTEX_LABELS_CASES,
+        *VERTEX_REGIONAL_COST_CASES,
+        *VERTEX_BETA_GATED_CASES,
+        *VERTEX_AUTH_CASES,
+        *VERTEX_REGIONAL_CASES,
+    )
+)
+_RUN_SPECIFIC: Final = (
+    (re.compile(r"127\.0\.0\.1:\d+"), "127.0.0.1:<port>"),
+    (re.compile(r"/tmp/vertex-adc-[A-Za-z0-9_]+"), "/tmp/vertex-adc-<dir>"),
+)
+
+
+def _fixture_form(leg: Leg) -> Leg:
+    """A leg as its captured fixture holds it: a JSON round trip with run-specific values replaced."""
+    text: Final = functools.reduce(
+        lambda text, rule: rule[0].sub(rule[1], text), _RUN_SPECIFIC, json.dumps(asdict(leg), default=repr)
+    )
+    return Leg(**json.loads(text))
+
+
+def _python_fixture(name: str) -> Leg:
+    return Leg(**json.loads((VERTEX_PYTHON_FIXTURES / f"{name}.json").read_text()))
+
+
 async def _legs(case: Case, server: RecordingServer, probe: FallbackProbe) -> tuple[Leg, Leg]:
-    if case.name not in _LEGS:
-        _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
-        _dump(case.name, *_LEGS[case.name])
+    if case.name in _LEGS:
+        return _LEGS[case.name]
+    if case.name in VERTEX_FIXTURE_CASES:
+        _LEGS[case.name] = (_python_fixture(case.name), _fixture_form(await _leg(case, server, probe=probe)))
+        return _LEGS[case.name]
+    _LEGS[case.name] = (await _leg(case, server, probe=None), await _leg(case, server, probe=probe))
+    _dump(case.name, *_LEGS[case.name])
     return _LEGS[case.name]
 
 
@@ -1068,12 +5498,1039 @@ async def test_native_messages_match_python(
         case "dispatch":
             assert not native.fell_back
         case "request":
-            assert native.requests == python.requests
+            assert _comparable(_with_decoded_labels(_with_parity_token(native.requests))) == _comparable(
+                _with_decoded_labels(python.requests)
+            )
         case "outcome":
-            assert native.outcome == python.outcome
+            assert _without_login_text(case, aspect, native.outcome) == _without_login_text(
+                case, aspect, _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))
+            )
         case "hidden_params":
             assert native.hidden_params == python.hidden_params
         case "logged":
             assert native.logged == python.logged
+        case "cached":
+            assert native.cached == python.cached
+        case "warnings":
+            assert _without_login_text(case, aspect, native.warnings) == _without_login_text(
+                case, aspect, python.warnings
+            )
+        case "hook_inputs":
+            assert native.hook_inputs == python.hook_inputs
+        case "classified":
+            assert native.classified == python.classified
+        case "tool_runs":
+            assert native.tool_runs == python.tool_runs
+        case "stream_type":
+            assert native.stream_type == _stream_type_reference(case, python.stream_type)
+        case "logged_error":
+            assert _comparable(_without_login_text(case, aspect, native.callback_kwargs.get(aspect))) == _comparable(
+                _without_login_text(case, aspect, _logged_error_reference(case, python.callback_kwargs.get(aspect)))
+            )
         case _:
-            assert native.callback_kwargs.get(aspect) == python.callback_kwargs.get(aspect)
+            assert _comparable(native.callback_kwargs.get(aspect)) == _comparable(python.callback_kwargs.get(aspect))
+
+
+# Anthropic has no Python path, and by the owner's ruling keeps main's native route where Python differs: a
+# failure Python raises before the send is handed back unraised, so its failure log has no traceback, and a
+# stream's decoding failure is raised bare, without the deployment's debug info Python's stream iterator adds.
+ANTHROPIC_UNTRACED_FAILURES: Final = frozenset({"missing_api_key", "reasoning_effort_with_numeric_string_max_tokens"})
+ANTHROPIC_BARE_STREAM_FAILURES: Final = frozenset({"stream_deflate_body_that_is_not_deflate"})
+
+
+def _logged_error_reference(case: Case, logged: object) -> object:
+    if case.name not in ANTHROPIC_UNTRACED_FAILURES or not isinstance(logged, Mapping):
+        return logged
+    return {**cast(Mapping[str, object], logged), "traced": False}
+
+
+def _anthropic_reference(
+    case: Case, outcome: Mapping[str, object], kwargs: Mapping[str, object]
+) -> Mapping[str, object]:
+    """Anthropic has no Python path, and its native route names the caller's api_base in a failure's
+    debug info, which the legacy Python entry leaves out."""
+    if case.name in ANTHROPIC_BARE_STREAM_FAILURES:
+        return {**outcome, "debug_info": "None"}
+    model: Final = str(kwargs["model"])
+    if outcome.get("llm_provider") != "anthropic" or outcome.get("debug_info") != f"\nModel: {model}":
+        return outcome
+    named: Final = with_deployment_debug_info(Exception(), model, "anthropic", kwargs)
+    return {**outcome, "debug_info": _normalized(str(getattr(named, "litellm_debug_info", None)))}
+
+
+_PYTHON_HANDLER_STREAMS: Final = frozenset(
+    {
+        "AnthropicMessagesStreamingResponse",
+        "CachedAnthropicMessagesStreamIterator",
+        "AnthropicMessagesStreamCacheWriter",
+    }
+)
+
+
+def _stream_type_reference(case: Case, python: object) -> object:
+    """Anthropic has no Python path, and by the owner's ruling its native stream stays main's execution AsyncStream,
+    for a cache hit or miss too, where Python's handler returns its streaming response, cached replay or cache
+    writer. Main's agentic and short-circuit paths already hand back the stream Python returns."""
+    provider: Final = str(case.kwargs.get("custom_llm_provider") or case.model.partition("/")[0])
+    wrapped: Final = frozenset(wrapping.name for wrapping in (*AGENTIC_CASES, *SHORT_CIRCUIT_CASES))
+    if provider in ("azure_ai", "vertex_ai") or case.name in wrapped or python not in _PYTHON_HANDLER_STREAMS:
+        return python
+    return "AsyncStream"
+
+
+def _decoded_labels(value: str) -> object:
+    try:
+        return tuple(json.loads(base64.b64decode(value, validate=True)).items())
+    except ValueError:
+        return value
+
+
+def _with_decoded_labels(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a labels header read as its ordered labels: by owner ruling (2026-11-17) Rust writes the
+    header's JSON compactly, where Python's `json.dumps` puts a space after each separator."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _decoded_labels(value) if name == "x-vertex-ai-labels" and isinstance(value, str) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
+
+
+# Q1 (owner ruling 2026-11-19): approved difference, Rust signs a service account's token itself with Google's
+# Rust SDK, a self-signed JWT, where google-auth mints one at the account's token_uri. A request carrying the parity
+# service account's own JWT compares as the token Python's parity token endpoint granted.
+_PARITY_TOKEN: Final = "Bearer ya29.parity"
+_SERVICE_ACCOUNT_SCOPE: Final = "https://www.googleapis.com/auth/cloud-platform"
+
+
+def _is_service_account_jwt(value: object) -> bool:
+    if not isinstance(value, str) or not value.startswith("Bearer "):
+        return False
+    parts: Final = value.removeprefix("Bearer ").split(".")
+    if len(parts) != 3:
+        return False
+    try:
+        claims: Final = _OBJECT.validate_json(base64.urlsafe_b64decode(parts[1] + "=" * (-len(parts[1]) % 4)))
+    except ValueError:
+        return False
+    return (
+        str(claims.get("iss", "")).endswith(".iam.gserviceaccount.com")
+        and claims.get("scope") == _SERVICE_ACCOUNT_SCOPE
+    )
+
+
+def _with_parity_token(requests: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    """The requests with a service account's self-signed JWT read as the parity token Python sends."""
+    return tuple(
+        {
+            **request,
+            "headers": {
+                name: _PARITY_TOKEN if name == "authorization" and _is_service_account_jwt(value) else value
+                for name, value in cast(Mapping[str, object], request.get("headers", {})).items()
+            },
+        }
+        for request in requests
+    )
+
+
+def _comparable(value: object) -> object:
+    match value:
+        case float() if math.isnan(value):
+            return "<NaN>"
+        case Mapping():
+            return {name: _comparable(item) for name, item in cast(Mapping[object, object], value).items()}
+        case list() | tuple():
+            return [_comparable(item) for item in cast(Sequence[object], value)]
+        case _:
+            return value
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, id=case.name)
+        for case in (
+            *SERVED_NATIVELY_CASES,
+            *AGENTIC_CASES,
+            *SAFEGUARDS_CASES,
+            *SHORT_CIRCUIT_CASES,
+            *AZURE_AUTH_CASES,
+            *AZURE_URL_CASES,
+            *AZURE_SHAPING_CASES,
+            *AZURE_ERROR_CASES,
+        )
+    ],
+)
+def test_catalog_serves_the_case_natively(case: Case, parity_server: RecordingServer) -> None:
+    with (
+        isolated_callback_registries(),
+        _environment(case.env),
+        _settings(case.settings),
+        _classifier(case.classifier, []),
+    ):
+        litellm.callbacks.extend(() if case.loggers is None else case.loggers())
+        binding: Final = dispatch._MESSAGES if case.sync else dispatch._AMESSAGES  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
+        features: Final = dispatch._FEATURES  # pyright: ignore[reportPrivateUsage]  # the entry's own detectors
+        request: Final = dispatch._public_request(binding, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the entry routes by
+        assert request is not None
+        context: Final = dispatch._context(request, features)  # pyright: ignore[reportPrivateUsage]  # the entry's own route context
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
+
+
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in TRANSPORT_CASES])
+def test_catalog_serves_the_transport_case_natively(case: Case, parity_server: RecordingServer) -> None:
+    with isolated_callback_registries(), _environment(case.env), _settings(case.settings):
+        request: Final = dispatch._public_request(dispatch._AMESSAGES, (), _kwargs(case, parity_server))  # pyright: ignore[reportPrivateUsage]  # the public binding the async entry routes by
+        assert request is not None
+        context: Final = dispatch._context(request, dispatch._FEATURES)  # pyright: ignore[reportPrivateUsage]  # the async entry's own route context
+        assert catalog.rollout(context) is Rollout.RUST_REQUIRED, context.features
+
+
+@dataclass(slots=True)
+class _Exchanges:
+    posts: int = 0
+    windows: int = 0
+
+
+async def _exchanges(
+    case: Case, server: RecordingServer, probe: FallbackProbe | None, monkeypatch: pytest.MonkeyPatch
+) -> _Exchanges:
+    counted: Final = _Exchanges()
+    post: Final = AsyncHTTPHandler.post  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the handler's untyped dict params
+    record: Final = logging_utils._set_duration_in_model_call_details  # pyright: ignore[reportPrivateUsage]  # the one recorder of an exchange window
+
+    async def posted(
+        handler: AsyncHTTPHandler, *args: object, **kwargs: object
+    ) -> object:  # kwargs-ok: the handler's own post signature
+        counted.posts += 1
+        return await post(handler, *args, **kwargs)  # pyright: ignore[reportArgumentType]  # forwarded unchanged
+
+    def windowed(**kwargs: object) -> None:  # kwargs-ok: the recorder's own keywords
+        counted.windows += 1
+        record(**kwargs)  # pyright: ignore[reportArgumentType]  # forwarded unchanged
+
+    with monkeypatch.context() as patch:
+        patch.setattr(AsyncHTTPHandler, "post", posted)
+        patch.setattr(logging_utils, "_set_duration_in_model_call_details", windowed)
+        await _leg(case, server, probe)
+    return counted
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in TRANSPORT_CASES if not case.sync])
+async def test_transport_cases_post_through_the_handler_python_posts_through(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    python: Final = await _exchanges(case, parity_server, None, monkeypatch)
+    native: Final = await _exchanges(case, parity_server, native_messages, monkeypatch)
+    ignored: Final = case.name.endswith("_is_ignored")
+    assert python.posts == len(case.upstream)
+    assert native.posts == (0 if ignored else python.posts)
+    assert native.windows == python.windows
+    assert native_messages.calls == 0
+
+
+_COST_CASES: Final = tuple(
+    pytest.param(case, id=case.name) for case in SERVED_NATIVELY_CASES if case.name.startswith("stream_cost_injection")
+)
+
+
+def _proxy_relayed(text: str, request_headers: Mapping[str, object]) -> str:
+    return "".join(
+        str(
+            ProxyBaseLLMRequestProcessing.process_chunk_with_cost_injection(
+                frame + "\n\n", "proxy-model-alias", None, request_headers=request_headers
+            )
+        )
+        for frame in text.split("\n\n")
+        if frame
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _COST_CASES)
+async def test_both_lanes_carry_one_cost_per_usage_through_the_proxy_relay(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+    opted_in: Final = {"x-litellm-include-cost-in-streaming-usage": "true"}
+    python_text: Final = str(python.outcome["text"])
+    native_text: Final = str(native.outcome["text"])
+    assert '"cost"' in python_text
+    assert native_text == python_text
+    relayed: Final = _proxy_relayed(native_text, opted_in)
+    assert relayed == _proxy_relayed(python_text, opted_in)
+    assert all(frame.count('"cost"') <= 1 for frame in relayed.split("\n\n"))
+
+
+def _proxied(kwargs: Mapping[str, object]) -> dict[str, object]:
+    logging_obj, data = litellm.utils.function_setup(
+        original_function="anthropic_messages",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.datetime.now(),
+        is_async_call=True,
+        litellm_call_id=str(uuid.uuid4()),
+        **kwargs,
+    )
+    return {**data, "litellm_logging_obj": logging_obj}
+
+
+async def _through_the_ownership_hook(
+    hook: MessageThreadOwnership, owner: UserAPIKeyAuth, data: dict[str, object], native: bool
+) -> None:
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    result: Final = await acall(**data)
+    if isinstance(result, dict):
+        await hook.async_post_call_success_hook(data, owner, cast(AnthropicMessagesResponse, result))
+        return
+    async for _ in hook.async_post_call_streaming_iterator_hook(owner, cast(AsyncIterator[object], result), data):
+        pass
+
+
+async def _thread_betas(server: RecordingServer, stream: bool, native: bool) -> tuple[str | None, str | None]:
+    hook: Final = MessageThreadOwnership(InternalUsageCache(dual_cache=DualCache()))
+    owner: Final = UserAPIKeyAuth(token="hashed-owner")
+    base: Final[dict[str, object]] = {
+        "model": SONNET,
+        "max_tokens": 64,
+        "messages": [dict(USER)],
+        "api_key": API_KEY,
+        "api_base": server.base_url,
+    }
+    server.enqueue(_stream(TEXT_STREAM) if stream else _ok())
+    server.enqueue(_ok())
+    sent: Final = len(server.requests)
+    with isolated_callback_registries(), _environment({}):
+        await _through_the_ownership_hook(
+            hook,
+            owner,
+            _proxied({**base, "thread": dict(THREAD_CREATE), "tools": [dict(ADVISOR_TOOL)], "stream": stream}),
+            native,
+        )
+        replied: Final = "msg_01ParityStream" if stream else str(TEXT_RESPONSE["id"])
+        continued: Final = _proxied({**base, "thread": {"type": "continue", "previous_message_id": replied}})
+        hooked: Final = await hook.async_pre_call_hook(owner, DualCache(), continued, "anthropic_messages")
+        await _through_the_ownership_hook(hook, owner, continued if hooked is None else hooked, native)
+        await drain_logging()
+    server.responses.clear()
+    create, resumed = server.requests[sent:]
+    return create.headers.get("anthropic-beta"), resumed.headers.get("anthropic-beta")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "streamed"))
+async def test_both_lanes_resend_a_thread_s_create_betas_through_the_ownership_hook(
+    stream: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _thread_betas(parity_server, stream, native=False)
+    native: Final = await _thread_betas(parity_server, stream, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert python == ("advisor-tool-2026-03-01,message-threads-2026-08-12",) * 2
+
+
+_WEB_SEARCH_PRE_HOOK_CASES: Final = tuple(
+    pytest.param(case, id=case.name)
+    for case in AGENTIC_CASES
+    if case.name in {"web_search_interception", "web_search_interception_converted_stream"}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", _WEB_SEARCH_PRE_HOOK_CASES)
+async def test_both_lanes_hand_the_web_search_pre_hook_kwargs_to_the_agentic_loop(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+
+    assert native_messages.calls == 0
+    assert native.hook_inputs == python.hook_inputs
+    [seen] = python.hook_inputs
+    first: Final = cast(list[Mapping[str, object]], seen)[0]
+    converted: Final = case.name.endswith("_converted_stream")
+    assert first["kwargs"] == {
+        "max_agentic_loops": 2,
+        "_websearch_interception_emit_native_blocks": True,
+        **({"_websearch_interception_converted_stream": True} if converted else {}),
+    }
+    assert [tool.get("name") for tool in cast(list[Mapping[str, object]], first["tools"])] == ["litellm_web_search"]
+    assert first["stream"] is False
+
+
+class _CountingAnswering(_Answering):
+    def __init__(self) -> None:
+        self.asked = 0
+
+    def can_handle(self, tools: Sequence[Mapping[str, object]] | None, custom_llm_provider: str | None) -> bool:
+        self.asked += 1
+        return super().can_handle(tools, custom_llm_provider)
+
+
+async def _interceptor_asks(server: RecordingServer, hooked: bool, native: bool) -> tuple[int, tuple[object, ...]]:
+    counting: Final = _CountingAnswering()
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    kwargs: Final[dict[str, object]] = {
+        "model": SONNET,
+        "max_tokens": 64,
+        "messages": [dict(USER)],
+        "api_key": API_KEY,
+        "api_base": server.base_url,
+        "tools": [dict(WEATHER_TOOL)] if hooked else [dict(INTERCEPTED_TOOL), dict(WEATHER_TOOL)],
+    }
+    answers: Final[list[object]] = []
+    with (
+        isolated_callback_registries(),
+        _environment({}),
+        _cache(Cache),
+        _interceptor(lambda: counting),
+    ):
+        if hooked:
+            litellm.callbacks.append(_InterceptedToolHook())
+        for _ in range(2):
+            answers.append(_response(await acall(**copy.deepcopy(kwargs)), private_keys=False))
+            await drain_logging()
+            await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    return counting.asked, tuple(answers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hooked", (False, True), ids=("plain", "pre_request_hooked"))
+async def test_both_lanes_ask_the_interceptor_only_on_a_cache_miss(
+    hooked: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _interceptor_asks(parity_server, hooked, native=False)
+    native: Final = await _interceptor_asks(parity_server, hooked, native=True)
+
+    assert native_messages.calls == 0
+    assert not parity_server.requests
+    assert native == python
+    assert python[0] == 1
+
+
+class _ServiceRecorder:
+    def __init__(self) -> None:
+        self.events: list[Mapping[str, object]] = []  # mutable-ok: appended per service hook
+
+    async def async_service_success_hook(self, **kwargs: object) -> None:  # kwargs-ok: the service hook's keyword call
+        self.events.append(
+            {
+                "service": kwargs.get("service"),
+                "call_type": kwargs.get("call_type"),
+                "timed": isinstance(kwargs.get("duration"), float),
+                "parent_otel_span": kwargs.get("parent_otel_span"),
+            }
+        )
+
+
+async def _llm_api_timings(server: RecordingServer, stream: bool, native: bool) -> tuple[Mapping[str, object], ...]:
+    recorder: Final = _ServiceRecorder()
+    server.enqueue(_stream(TEXT_STREAM) if stream else _ok())
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with isolated_callback_registries(), _environment({}), rebound(logging_utils, "_service_logger", recorder):
+        result: Final = await acall(
+            model=SONNET,
+            max_tokens=64,
+            messages=[dict(USER)],
+            api_key=API_KEY,
+            api_base=server.base_url,
+            stream=stream,
+        )
+        if not isinstance(result, dict):
+            await _consume_async(cast(AsyncIterator[object], result))
+        await drain_logging()
+        await asyncio.sleep(0)
+    server.responses.clear()
+    return tuple(recorder.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", (False, True), ids=("json", "streamed"))
+async def test_both_lanes_time_the_provider_exchange_as_one_llm_service_event(
+    stream: bool, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _llm_api_timings(parity_server, stream, native=False)
+    native: Final = await _llm_api_timings(parity_server, stream, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
+
+
+_THROUGH_PYTHON_S_CLIENT: Final = frozenset(
+    {
+        "azure_ai_base_trailing_spaces_after_anthropic",
+        "azure_ai_padded_environment_base",
+        "azure_ai_base_empty_host",
+        "azure_ai_base_non_numeric_port",
+    }
+)
+
+
+async def _service_events(
+    case: Case, server: RecordingServer, probe: FallbackProbe | None
+) -> tuple[Mapping[str, object], ...]:
+    recorder: Final = _ServiceRecorder()
+    with rebound(logging_utils, "_service_logger", recorder):
+        await _leg(case, server, probe)
+        await asyncio.sleep(0)
+    return tuple(recorder.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(case, id=case.name)
+        for case in (*AZURE_URL_CASES, *MALFORMED_BASE_CASES)
+        if case.name in _THROUGH_PYTHON_S_CLIENT
+    ],
+)
+async def test_both_lanes_time_an_azure_ai_exchange_through_python_s_client_once(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _service_events(case, parity_server, None)
+    native: Final = await _service_events(case, parity_server, native_messages)
+
+    assert native == python
+    assert [event["call_type"] for event in python] == ["post <- track_llm_api_timing"]
+
+
+class _AttemptRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()  # pyright: ignore[reportUnknownMemberType]  # CustomLogger takes untyped kwargs
+        self.seen: list[Mapping[str, object]] = []
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        logged: Final = _LOGGED.validate_python(kwargs.get("standard_logging_object") or {})
+        self.seen.append(
+            {
+                "event": "success",
+                "model_id": logged.get("model_id"),
+                "completion_tokens": logged.get("completion_tokens"),
+            }
+        )
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]  # test double narrows the hook's types
+        logged: Final = _LOGGED.validate_python(kwargs.get("standard_logging_object") or {})
+        self.seen.append(
+            {
+                "event": "failure",
+                "model_id": logged.get("model_id"),
+                "exception": type(kwargs.get("exception")).__name__,
+            }
+        )
+
+
+async def _stream_fallback_attempts(
+    server: RecordingServer, native: bool
+) -> tuple[tuple[Mapping[str, object], ...], str]:
+    overloaded: Final = _events(
+        _message_start("msg_01ParityOverloaded"), ("error", dict(_upstream_error("overloaded_error", "Overloaded")))
+    )
+    server.enqueue(_stream(overloaded))
+    server.enqueue(_stream(TEXT_STREAM))
+    recorder: Final = _AttemptRecorder()
+    deployment: Final[Mapping[str, object]] = {"model": SONNET, "api_base": server.base_url, "api_key": API_KEY}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        litellm.callbacks.append(recorder)
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "primary", "litellm_params": dict(deployment), "model_info": {"id": "dep-primary"}},
+                {"model_name": "fallback", "litellm_params": dict(deployment), "model_info": {"id": "dep-fallback"}},
+            ],
+            fallbacks=[{"primary": ["fallback"]}],
+            num_retries=0,
+        )
+        result: Final = await router.aanthropic_messages(
+            model="primary", max_tokens=64, messages=[dict(USER)], stream=True
+        )
+        chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
+        assert failure is None
+        for _ in range(100):
+            await drain_logging()
+            if len(recorder.seen) >= 2:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(recorder.seen), _stream_text(chunks)
+
+
+@pytest.mark.asyncio
+async def test_both_lanes_log_a_stream_superseded_by_a_router_fallback_as_its_frame_s_failure(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _stream_fallback_attempts(parity_server, native=False)
+    native: Final = await _stream_fallback_attempts(parity_server, native=True)
+
+    assert native_messages.calls == 0
+    assert native == python
+    assert sorted(str(event["event"]) for event in python[0]) == ["failure", "success"]
+
+
+async def _router_stream(
+    server: RecordingServer, native: bool, upstream: tuple[ResponseSpec, ...]
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    for response in upstream:
+        server.enqueue(response)
+    recorder: Final = _AttemptRecorder()
+    deployment: Final[Mapping[str, object]] = {"model": SONNET, "api_base": server.base_url, "api_key": API_KEY}
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        litellm.callbacks.append(recorder)
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "primary", "litellm_params": dict(deployment), "model_info": {"id": "dep-primary"}},
+                {"model_name": "fallback", "litellm_params": dict(deployment), "model_info": {"id": "dep-fallback"}},
+            ],
+            fallbacks=[{"primary": ["fallback"]}],
+            num_retries=0,
+        )
+        result: Final = await router.aanthropic_messages(
+            model="primary", max_tokens=64, messages=[dict(USER)], stream=True
+        )
+        chunks, failure = await _consume_async(cast(AsyncIterator[object], result))
+        assert failure is None
+        for _ in range(100):
+            await drain_logging()
+            if recorder.seen:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(_stream_text((chunk,)) for chunk in chunks), tuple(recorder.seen)
+
+
+OVERLOADED_AFTER_PINGS: Final = _events(
+    _message_start("msg_01ParityPingedOverloaded"),
+    *((_PING,) * 50),
+    ("error", dict(_upstream_error("overloaded_error", "Overloaded"))),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        pytest.param((_burst(PINGED_STREAM),), id="pings_after_message_start"),
+        pytest.param((_burst(HEAVILY_PINGED_STREAM),), id="a_thousand_pings_after_message_start"),
+        pytest.param((_burst(OVERLOADED_AFTER_PINGS), _burst(TEXT_STREAM)), id="pings_then_overloaded_then_fallback"),
+    ],
+)
+async def test_both_lanes_stream_a_router_burst_in_the_same_chunks(
+    parity_server: RecordingServer, native_messages: FallbackProbe, upstream: tuple[ResponseSpec, ...]
+) -> None:
+    python: Final = await _router_stream(parity_server, native=False, upstream=upstream)
+    native: Final = await _router_stream(parity_server, native=True, upstream=upstream)
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+DEPLOYMENT_BETA: Final[Mapping[str, str]] = MappingProxyType(
+    {"anthropic-beta": "mcp-servers-2025-12-04,effort-2025-11-24"}
+)
+NO_CALLER_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
+
+
+async def _deployment_beta_sent(
+    server: RecordingServer, native: bool, caller: Mapping[str, str]
+) -> tuple[str | None, ...]:
+    server.enqueue(ResponseSpec(body=dict(TEXT_RESPONSE)))
+    sent_before: Final = len(server.requests)
+    deployment: Final[Mapping[str, object]] = {
+        "model": AZURE_CLAUDE,
+        "api_base": f"{server.base_url}/d/dep-hdr-beta/anthropic",
+        "api_key": API_KEY,
+        "extra_headers": dict(DEPLOYMENT_BETA),
+    }
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        if not native:
+            stack.enter_context(rebound(litellm, "anthropic_messages", _PYTHON_AMESSAGES))
+        router: Final = litellm.Router(
+            model_list=[
+                {"model_name": "hdr-beta", "litellm_params": dict(deployment), "model_info": {"id": "dep-hdr-beta"}}
+            ],
+            num_retries=0,
+        )
+        await router.aanthropic_messages(
+            model="hdr-beta",
+            max_tokens=32,
+            messages=[dict(USER)],
+            **({"extra_headers": dict(caller)} if caller else {}),
+        )
+        await drain_logging()
+    server.responses.clear()
+    return tuple(sent.headers.get("anthropic-beta") for sent in server.requests[sent_before:])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller", "sent"),
+    [
+        pytest.param(NO_CALLER_HEADERS, "effort-2025-11-24", id="deployment_beta_filtered"),
+        pytest.param(
+            MappingProxyType({"anthropic-beta": "context-1m-2025-08-07,advisor-tool-2026-03-01"}),
+            "context-1m-2025-08-07",
+            id="caller_beta_replaces_the_deployment_beta",
+        ),
+    ],
+)
+async def test_both_lanes_send_the_azure_ai_deployment_or_caller_beta_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe, caller: Mapping[str, str], sent: str
+) -> None:
+    python: Final = await _deployment_beta_sent(parity_server, native=False, caller=caller)
+    native: Final = await _deployment_beta_sent(parity_server, native=True, caller=caller)
+
+    assert native_messages.calls == 0
+    assert native == python == (sent,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in AZURE_PASSTHROUGH_CASES])
+async def test_both_lanes_send_a_non_claude_azure_ai_passthrough_through_python(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _leg(case, parity_server, probe=None)
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert native.fell_back
+    assert (_comparable(native.requests), native.outcome) == (_comparable(python.requests), python.outcome)
+
+
+async def _abandoned_stream(
+    server: RecordingServer, native: bool, upstream: ResponseSpec
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    server.enqueue(upstream)
+    recorder: Final = _AttemptRecorder()
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        litellm.callbacks.append(recorder)
+        stream: Final = cast(
+            AsyncGenerator[object],
+            await acall(
+                model=SONNET,
+                max_tokens=64,
+                messages=[dict(USER)],
+                api_key=API_KEY,
+                api_base=server.base_url,
+                stream=True,
+            ),
+        )
+        first: Final = await anext(stream)
+        await stream.aclose()
+        for _ in range(100):
+            await drain_logging()
+            if recorder.seen:
+                break
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return (_stream_text((first,)),), tuple(recorder.seen)
+
+
+@pytest.mark.asyncio
+async def test_both_lanes_bill_a_stream_abandoned_after_its_first_chunk_alike(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _abandoned_stream(parity_server, native=False, upstream=_burst(TEXT_STREAM))
+    native: Final = await _abandoned_stream(parity_server, native=True, upstream=_burst(TEXT_STREAM))
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+async def _leave_unread(server: RecordingServer, native: bool, closed: bool, model: str) -> None:
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    stream: Final = cast(
+        AsyncGenerator[object],
+        await acall(
+            model=model,
+            max_tokens=64,
+            messages=[dict(USER)],
+            api_key=API_KEY,
+            api_base=server.base_url,
+            stream=True,
+        ),
+    )
+    if closed:
+        await stream.aclose()
+
+
+async def _unread_stream(
+    server: RecordingServer, native: bool, closed: bool, model: str
+) -> tuple[tuple[str, ...], tuple[Mapping[str, object], ...]]:
+    server.enqueue(_burst(TEXT_STREAM))
+    recorder: Final = _AttemptRecorder()
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        errors: Final = stack.enter_context(_warnings(verbose_proxy_logger))
+        litellm.callbacks.append(recorder)
+        await _leave_unread(server, native, closed, model)
+        gc.collect()
+        for _ in range(5):
+            await drain_logging()
+            await asyncio.sleep(0.05)
+    server.responses.clear()
+    return tuple(errors), tuple(recorder.seen)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_both_lanes_log_nothing_for_an_azure_ai_stream_never_read(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    python: Final = await _unread_stream(parity_server, native=False, closed=closed, model=AZURE_CLAUDE)
+    native: Final = await _unread_stream(parity_server, native=True, closed=closed, model=AZURE_CLAUDE)
+
+    assert native_messages.calls == 0
+    assert native == python == ((), ())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("closed", (False, True), ids=("dropped", "closed"))
+async def test_an_anthropic_stream_never_read_is_billed_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe, closed: bool
+) -> None:
+    """Anthropic has no Python path, and by the owner's ruling keeps main's native route, which bills a stream
+    the caller never read when it is closed or dropped: billing it logs that it has no complete response to build,
+    and no success reaches the callbacks."""
+    errors, seen = await _unread_stream(parity_server, native=True, closed=closed, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert any("Unable to build complete streaming response" in error for error in errors), errors
+    assert seen == ()
+
+
+async def _entered_stream(server: RecordingServer, native: bool, model: str) -> str:
+    server.enqueue(_burst(TEXT_STREAM))
+    acall: Final = _PUBLIC_AMESSAGES if native else _PYTHON_AMESSAGES
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(isolated_callback_registries())
+        stack.enter_context(_environment({}))
+        stream: Final = cast(
+            AsyncGenerator[object],
+            await acall(
+                model=model,
+                max_tokens=64,
+                messages=[dict(USER)],
+                api_key=API_KEY,
+                api_base=server.base_url,
+                stream=True,
+            ),
+        )
+        try:
+            entered: Final = await _enter(stream)
+        finally:
+            await stream.aclose()
+            await drain_logging()
+    server.responses.clear()
+    return entered
+
+
+async def _enter(stream: object) -> str:
+    try:
+        async with cast(contextlib.AbstractAsyncContextManager[object], stream):
+            return "entered"
+    except (TypeError, AttributeError) as refused:
+        return f"{type(refused).__name__}: {refused}"
+
+
+@pytest.mark.asyncio
+async def test_an_azure_ai_stream_treats_async_with_as_python_s_does(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python: Final = await _entered_stream(parity_server, native=False, model=AZURE_CLAUDE)
+    native: Final = await _entered_stream(parity_server, native=True, model=AZURE_CLAUDE)
+
+    assert native_messages.calls == 0
+    assert native == python
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_stream_stays_main_s_execution_stream(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _entered_stream(parity_server, native=True, model=SONNET)
+
+    assert native_messages.calls == 0
+    assert native == "TypeError: 'AsyncStream' object does not support the asynchronous context manager protocol"
+
+
+# By the owner's ruling anthropic, which has no Python path, keeps main's native route where the azure_ai port
+# matched Python. Each case pairs an anthropic call with what main's route does for it; the azure_ai cases of
+# the same behaviour compare with Python in `CASES`.
+_UNPARSED_TEXT: Final[Mapping[str, JsonValue]] = MappingProxyType({"type": "text", "text": 5})
+_SIGNED_COMPACTION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "compaction", "content": "Summary.", "signature": "sig"}
+)
+_TOOL_REFERENCE_ADDITION: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"type": "tool_addition", "tool": {"type": "tool_reference", "tool_name": "get_weather"}}
+)
+
+ANTHROPIC_SENT_AS_IS_CASES: Final = (
+    Case(
+        "anthropic_unparsed_message_non_string_text_block_sent",
+        _kw(messages=[{"role": "user", "content": [dict(_UNPARSED_TEXT), {"type": "text", "text": "Hi."}]}]),
+    ),
+    Case(
+        "anthropic_unparsed_message_tool_use_id_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "tool_use", "id": "functions.get_weather:0", "name": "get_weather", "input": {}},
+                {"type": "text", "text": "Paris.", "provider_specific_fields": {"citations": None}},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_unparsed_assistant_encrypted_reasoning_sent",
+        _kw(
+            messages=_unparsed_turn(
+                "assistant",
+                {"type": "thinking", "thinking": "Hmm.", "signature": "litellm_encrypted_reasoning:abc"},
+                {"type": "redacted_thinking", "data": "UVVKRA=="},
+            )
+        ),
+    ),
+    Case(
+        "anthropic_redacted_thinking_converse_wrapper_sent",
+        _kw(
+            messages=[
+                dict(USER),
+                {
+                    "role": "assistant",
+                    "content": [{"type": "redacted_thinking", "data": "UVVKRA=="}, {"type": "text", "text": "Paris."}],
+                },
+                {"role": "user", "content": "Go on."},
+            ]
+        ),
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in ANTHROPIC_SENT_AS_IS_CASES])
+async def test_an_anthropic_message_python_would_rewrite_is_sent_as_on_main(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert not native.fell_back
+    assert [_mapping(sent["body"]).get("messages") for sent in native.requests] == [case.kwargs["messages"]]
+
+
+ANTHROPIC_UNREAD_BETA_CASES: Final = (
+    (
+        Case(
+            "anthropic_unparsed_message_output_config",
+            _kw(messages=[{"role": "user", "content": [dict(UNPARSED_BLOCK)], "output_config": {"effort": "low"}}]),
+        ),
+        "per-turn-control-2026-07-01",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_message_signed_compaction",
+            _kw(messages=_unparsed_turn("assistant", dict(_SIGNED_COMPACTION))),
+        ),
+        "compact-2026-09-04",
+    ),
+    (
+        Case(
+            "anthropic_unparsed_system_tool_reference_addition",
+            _kw(
+                tools=[{**WEATHER_TOOL, "defer_loading": True}],
+                messages=_mid_conversation_system(content=[dict(UNPARSED_BLOCK), dict(_TOOL_REFERENCE_ADDITION)]),
+            ),
+        ),
+        "mid-conversation-tool-changes-2026-07-01",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "beta"), [pytest.param(case, beta, id=case.name) for case, beta in ANTHROPIC_UNREAD_BETA_CASES]
+)
+async def test_an_anthropic_beta_trigger_in_an_unparsed_message_adds_no_beta_as_on_main(
+    case: Case, beta: str, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(case, parity_server, probe=native_messages)
+
+    assert len(native.requests) == 1
+    assert beta not in str(_mapping(native.requests[0]["headers"]).get("anthropic-beta"))
+
+
+_SYSTEM_PROMPT_REJECTED: Final = (
+    "invalid Anthropic messages request: data did not match any variant of untagged enum SystemPrompt"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system",
+    (
+        pytest.param([{"type": "text", "text": "Be terse."}, dict(UNPARSED_BLOCK)], id="list_with_an_unparsed_block"),
+        pytest.param({"type": "text", "text": "Be terse."}, id="object"),
+        pytest.param(5, id="number"),
+    ),
+)
+async def test_an_anthropic_system_prompt_that_does_not_parse_is_main_s_request_error(
+    system: object, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    native: Final = await _leg(
+        Case("anthropic_system_prompt_not_parsed", _kw(system=system), upstream=()), parity_server, native_messages
+    )
+
+    assert native.requests == ()
+    assert _SYSTEM_PROMPT_REJECTED in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+async def test_an_anthropic_beta_python_cannot_encode_is_held_back_as_on_main(
+    parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    """Main holds back an anthropic-beta the ascii codec cannot encode before the beta merge, so it is the header
+    the error names, ahead of any later header that cannot be encoded either."""
+    native: Final = await _leg(
+        Case(
+            "anthropic_beta_not_ascii_held_back",
+            _kw(extra_headers={"anthropic-beta": "ZWJ‍joined", "x-note": "café"}),
+            upstream=(),
+        ),
+        parity_server,
+        native_messages,
+    )
+
+    assert native.requests == ()
+    assert "can't encode character '\\u200d' in position 3" in str(native.outcome.get("message")), native.outcome
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", [pytest.param(case, id=case.name) for case in MALFORMED_BASE_CASES])
+async def test_a_malformed_api_base_sends_nothing_and_raises_python_s_exception(
+    case: Case, parity_server: RecordingServer, native_messages: FallbackProbe
+) -> None:
+    python, native = await _legs(case, parity_server, native_messages)
+
+    assert native.requests == python.requests == ()
+    assert python.outcome.get("kind") == "error"
+    assert native.outcome == _anthropic_reference(case, python.outcome, _kwargs(case, parity_server))

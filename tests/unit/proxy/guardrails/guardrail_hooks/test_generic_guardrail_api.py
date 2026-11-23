@@ -33,6 +33,7 @@ from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_converse_messages_pt
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import Choices, GenericGuardrailAPIInputs, Message
@@ -948,6 +949,89 @@ class TestStructuredMessagesInResponse:
             )
 
         assert guardrailed_inputs["structured_messages"] == [assistant_row, redacted_row]
+
+    @pytest.mark.asyncio
+    async def test_an_echo_that_drops_bucket_owner_still_sends_bucket_owner_to_bedrock(
+        self, raw_rows_guardrail, mock_request_data_input
+    ):
+        image_row = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe it."},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                },
+            ],
+        }
+        redacted_row = {"role": "user", "content": "my ssn is [SSN]"}
+
+        def echo_without_bucket_owner_and_redact_one_row(url, json, headers, **_kwargs):
+            sent_image_row = json["structured_messages"][0]
+            answer = MagicMock()
+            answer.json.return_value = {
+                "action": "GUARDRAIL_INTERVENED",
+                "structured_messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            sent_image_row["content"][0],
+                            {"type": "image_url", "image_url": {"url": sent_image_row["content"][1]["image_url"]["url"]}},
+                        ],
+                    },
+                    redacted_row,
+                ],
+            }
+            answer.raise_for_status = MagicMock()
+            return answer
+
+        with patch.object(
+            raw_rows_guardrail.async_handler, "post", side_effect=echo_without_bucket_owner_and_redact_one_row
+        ):
+            guardrailed_inputs = await raw_rows_guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Describe it.", "my ssn is 123-45-6789"],
+                    "structured_messages": [image_row, {"role": "user", "content": "my ssn is 123-45-6789"}],
+                },
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+        bedrock_messages = _bedrock_converse_messages_pt(
+            messages=guardrailed_inputs["structured_messages"], model="us.amazon.nova-2-lite-v1:0", llm_provider="bedrock"
+        )
+
+        assert [block for block in bedrock_messages[0]["content"] if "image" in block] == [
+            {
+                "image": {
+                    "format": "png",
+                    "source": {"s3Location": {"uri": "s3://media-bucket/dir/cat.png", "bucketOwner": "111122223333"}},
+                }
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_an_image_with_a_bucket_owner_that_is_not_a_string_keeps_its_turn_for_the_guardrail(
+        self, generic_guardrail
+    ):
+        row = {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is written here?"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "bucket_owner": 111122223333}},
+            ],
+        }
+
+        assert await _structured_messages_sent(generic_guardrail, [row]) == [
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is written here?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}},
+                    ],
+                }
+            ]
+        ]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2692,3 +2776,183 @@ async def test_during_mcp_call_blocked_raises() -> None:
             )
 
     assert exc_info.value.message == "credential detected in tool input"
+
+
+@pytest.mark.asyncio
+async def test_per_request_extra_body_from_a_proxy_request_reaches_the_guardrail_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: records every body the guardrail endpoint received
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.content)
+        return httpx.Response(200, json={"action": "NONE"}, request=request)
+
+    endpoint: Final = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    guardrail: Final = GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        headers={"Authorization": "Bearer test-key"},
+        guardrail_name="test-generic-guardrail",
+        event_hook="pre_call",
+        default_on=True,
+        async_handler=endpoint,
+    )
+    try:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "guardrails": [{"test-generic-guardrail": {"extra_body": {"success_threshold": 0.9}}}],
+            },
+            input_type="request",
+        )
+    finally:
+        await endpoint.close()
+
+    [body] = sent_bodies
+    assert json.loads(body)["additional_provider_specific_params"] == {"success_threshold": 0.9}
+
+
+def _run_shell_call(arguments: str) -> dict[str, object]:
+    return {"id": "call_1", "type": "function", "function": {"name": "run_shell", "arguments": arguments}}
+
+
+def _guardrail_answering(body: dict[str, object], fail_on_error: bool = True) -> GenericGuardrailAPI:
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body, request=request)
+
+    return GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        guardrail_name="tool-call-rewriter",
+        event_hook="post_call",
+        default_on=True,
+        fail_on_error=fail_on_error,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(answer)),
+    )
+
+
+async def _tool_calls_after(guardrail: GenericGuardrailAPI) -> GenericGuardrailAPIInputs:
+    return await guardrail.apply_guardrail(
+        inputs={"texts": [], "tool_calls": [_run_shell_call('{"cmd": "echo SECRET-123"}')]},
+        request_data={},
+        input_type="response",
+    )
+
+
+class TestToolCallsInResponse:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "returned_call",
+        [
+            _run_shell_call('{"cmd": "echo [REDACTED]"}'),
+            {"function": {"name": "run_shell", "arguments": '{"cmd": "echo [REDACTED]"}'}},
+            {
+                "id": "ignored",
+                "type": "ignored",
+                "function": {"name": "run_shell", "arguments": '{"cmd": "echo [REDACTED]"}'},
+            },
+        ],
+        ids=["as_received", "function_only", "foreign_id_and_type"],
+    )
+    async def test_rewritten_tool_calls_reach_the_caller_with_the_calls_own_id_and_type(
+        self, returned_call: dict[str, object]
+    ) -> None:
+        guardrail: Final = _guardrail_answering({"action": "GUARDRAIL_INTERVENED", "tool_calls": [returned_call]})
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [_run_shell_call('{"cmd": "echo [REDACTED]"}')]
+
+    @pytest.mark.asyncio
+    async def test_a_rewritten_name_reaches_the_caller(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "GUARDRAIL_INTERVENED", "tool_calls": [{"function": {"name": "run_safely", "arguments": "{}"}}]}
+        )
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [
+            {"id": "call_1", "type": "function", "function": {"name": "run_safely", "arguments": "{}"}}
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"action": "NONE"},
+            {"action": "NONE", "tool_calls": None},
+            {"action": "GUARDRAIL_INTERVENED", "texts": ["[MASKED]"], "tool_calls": []},
+        ],
+        ids=["absent", "null", "empty"],
+    )
+    async def test_an_answer_without_tool_calls_leaves_the_key_out(self, body: dict[str, object]) -> None:
+        guardrailed: Final = await _tool_calls_after(_guardrail_answering(body))
+
+        assert "tool_calls" not in guardrailed
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool_calls",
+        [
+            "not a list",
+            ["not a tool call"],
+            [{"id": "call_1", "type": "function", "function": None}],
+            [{"function": {"name": "run_shell"}}],
+            [{"function": {"name": "run_shell", "arguments": {"cmd": "echo [REDACTED]"}}}],
+            [_run_shell_call("{}"), _run_shell_call("{}")],
+        ],
+        ids=["not_a_list", "not_a_call", "null_function", "no_arguments", "object_arguments", "one_call_too_many"],
+    )
+    async def test_a_tool_calls_answer_that_cannot_be_applied_fails_the_guardrail(self, tool_calls: object) -> None:
+        guardrail: Final = _guardrail_answering({"action": "GUARDRAIL_INTERVENED", "tool_calls": tool_calls})
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed"):
+            await _tool_calls_after(guardrail)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_on_error", [True, False])
+    @pytest.mark.parametrize(
+        "tool_calls",
+        ["not a list", [{"function": {"name": "run_shell", "arguments": {"cmd": "echo [REDACTED]"}}}]],
+        ids=["not_a_list", "object_arguments"],
+    )
+    async def test_a_blocked_answer_blocks_even_when_its_tool_calls_are_malformed(
+        self, tool_calls: object, fail_on_error: bool
+    ) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "BLOCKED", "blocked_reason": "dangerous command", "tool_calls": tool_calls},
+            fail_on_error=fail_on_error,
+        )
+
+        with pytest.raises(GuardrailRaisedException, match="dangerous command"):
+            await _tool_calls_after(guardrail)
+
+    @pytest.mark.asyncio
+    async def test_a_malformed_tool_calls_answer_keeps_its_arguments_out_of_the_error(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {
+                "action": "GUARDRAIL_INTERVENED",
+                "tool_calls": [{"function": {"name": "run_shell", "arguments": {"cmd": "echo SECRET-123"}}}],
+            }
+        )
+
+        with pytest.raises(Exception, match="Generic Guardrail API failed") as raised:
+            await _tool_calls_after(guardrail)
+
+        assert "function.arguments" in str(raised.value)
+        assert "SECRET-123" not in str(raised.value)
+
+    @pytest.mark.asyncio
+    async def test_fail_on_error_off_sends_the_calls_as_received_when_the_answer_cannot_be_applied(self) -> None:
+        guardrail: Final = _guardrail_answering(
+            {"action": "GUARDRAIL_INTERVENED", "tool_calls": [_run_shell_call("{}"), _run_shell_call("{}")]},
+            fail_on_error=False,
+        )
+
+        guardrailed: Final = await _tool_calls_after(guardrail)
+
+        assert guardrailed["tool_calls"] == [_run_shell_call('{"cmd": "echo SECRET-123"}')]

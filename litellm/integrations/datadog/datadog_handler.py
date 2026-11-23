@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Sequence
 from typing import Final
 
 from litellm.types.utils import StandardLoggingPayload
@@ -46,12 +47,17 @@ def normalize_datadog_tag_value(value: object) -> str:
 
 def get_datadog_tags(
     standard_logging_object: StandardLoggingPayload | None = None,
+    *,
+    extra_tags: Sequence[str] = (),
+    include_dd_tags: bool = True,
 ) -> list[str]:
     """Build Datadog tags as a list of individual tag strings.
 
     Returns a list of "key:value" strings suitable for Datadog LLM Observability
     (which expects tags as an array). For Datadog Logs API (ddtags), join with
     comma: ",".join(get_datadog_tags(...)).
+
+    `DD_TAGS` goes last, split on commas or else on whitespace like ddtrace, without keys already tagged.
     """
 
     base_tags: Final = {
@@ -79,4 +85,16 @@ def get_datadog_tags(
         if team_tag:
             tags.append(f"team:{normalize_datadog_tag_value(team_tag)}")
 
-    return tags
+    litellm_tags: Final = [*tags, *extra_tags]
+    if not include_dd_tags:
+        return litellm_tags
+    dd_tags: Final = os.getenv("DD_TAGS", "")
+    tagged_keys: Final = frozenset(tag.partition(":")[0] for tag in litellm_tags)
+    return [
+        *litellm_tags,
+        *(
+            tag
+            for raw_tag in (dd_tags.split(",") if "," in dd_tags else dd_tags.split())
+            if (tag := raw_tag.strip()) and tag.partition(":")[0] not in tagged_keys
+        ),
+    ]

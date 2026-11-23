@@ -82,6 +82,7 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 
 
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
+UPSTREAM_BOUND_PARAMS: Final = frozenset((*clientside_credential_keys, *_ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE))
 
 
 def is_clientside_credential(request_kwargs: dict) -> bool:
@@ -100,6 +101,16 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
 
     for generating a unique model_id.
     """
+    from litellm.llms.github_copilot.app_auth import app_config
+
+    app_params: Final = cast("dict[str, object]", litellm_params)  # cast-ok: the existing request boundary is untyped
+    if app_config(app_params) is not None and is_clientside_credential(request_kwargs):
+        raise BadRequestError(
+            message="GitHub App deployments do not accept client-side credential or endpoint overrides.",
+            llm_provider="github_copilot",
+            model=None,
+        )
+
     # update litellm_params with clientside credentials
     for key in clientside_credential_keys:
         if key in request_kwargs:

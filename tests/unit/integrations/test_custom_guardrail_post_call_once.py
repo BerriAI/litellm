@@ -310,7 +310,6 @@ PROXY_CASES: Final = (
     pytest.param(
         ProxyCase(primary=(), request=("G",), style=InheritedApplyGuardrailG),
         id="K-I-request-chat-inherited-apply-guardrail",
-        marks=_known_gap("AI-2"),
     ),
     pytest.param(ProxyCase(primary=("other",), default_on=True), id="L-default-on"),
 )

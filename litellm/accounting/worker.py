@@ -9,9 +9,10 @@ from typing import (
 )
 
 from litellm._logging import verbose_proxy_logger
-from litellm.accounting.application import apply_deliveries
+from litellm.accounting.application import AppliedDeliveries, apply_deliveries
+from litellm.accounting.delivery_projection import entity_transactions
 from litellm.accounting.metrics import record_backlog, record_storage
-from litellm.accounting.projection import Contribution
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.repositories.accounting_delivery_repository import (
     AccountingDeliveryRepository,
     DeliveryBatchResult,
@@ -46,7 +47,7 @@ def _progressed(result: DeliveryBatchResult) -> bool:
 async def flush_accounting_deliveries(
     writer: "DBSpendUpdateWriter", prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging"
 ) -> None:
-    applied: tuple[Contribution, ...] = ()  # rebind-ok: keep committed contributions for cache invalidation
+    applied: AppliedDeliveries = AppliedDeliveries()  # rebind-ok: retain the committed batch for notifications
 
     async def apply(transaction: LedgerTransaction, deliveries: tuple[DeliveryProjection, ...]) -> None:
         nonlocal applied
@@ -64,7 +65,13 @@ async def flush_accounting_deliveries(
     async def run_batch(*, retry_only: bool) -> DeliveryBatchResult:
         result: Final = await repository.apply_pending(apply, batch_size=batch_size, retry_only=retry_only)
         if result.applied:
-            await writer.invalidate_accounting_entities(applied, proxy_logging_obj)
+            await writer.invalidate_accounting_entities(applied.contributions, proxy_logging_obj)
+            await CustomerBudgetAlerting.detect_committed_batch(
+                entity_transactions(applied.contributions),
+                prisma_client,
+                proxy_logging_obj.internal_usage_cache.dual_cache,
+                windows=applied.windows,
+            )
         if result.parked:
             verbose_proxy_logger.error(
                 "Accounting delivery parked %d requests after isolated failures", len(result.parked)

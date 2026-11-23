@@ -52,11 +52,14 @@ from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools,
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
     bedrock_model_encrypts_agent_messages,
     bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
+    strip_bedrock_runtime_route_suffix,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -66,9 +69,8 @@ from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
 BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
-    "/openai/v1/responses",
-    "/v1/responses",
-    "/responses",
+    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     "/openai/v1",
     "/v1",
 )
@@ -229,20 +231,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
         configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
-        override: Final = (
-            api_base
-            or (f"{configured_endpoint}" if configured_endpoint else None)
-            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        )
-        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
-        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
         host: Final = (
-            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
-        ).rstrip("/")
-        base: Final = next(
-            (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
-            host,
+            (configured_endpoint if isinstance(configured_endpoint, str) else None)
+            or api_base
+            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+            or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
         )
+        base: Final = strip_bedrock_runtime_route_suffix(host, BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES)
         return join_api_base(base, BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH)
 
     def supports_native_file_search(self) -> bool:

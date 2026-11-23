@@ -1,9 +1,10 @@
+import json
 import os
 import sys
 import time
 import webbrowser
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Final, Protocol, TypeVar
+from typing import Final, Protocol, TypeVar
 from urllib.parse import urlencode
 
 import click
@@ -41,16 +42,21 @@ from litellm.litellm_core_utils.cli_token_utils import (
     load_cli_token_left_in_keychain,
     save_cli_token,
 )
+from litellm.litellm_core_utils.core_helpers import joined, length_of, require_get, subscript
 
 from .claude_settings import (
     STARTING_MODEL_ROLE,
+    ApiKeyHelper,
+    ClaudeCredential,
     ClaudeSettingsError,
     KeepModel,
     StaticToken,
     claude_settings_path,
     configure_claude_settings,
     configure_state_path,
+    lite_api_key_helper,
     refuse_while_owned,
+    remove_launch_settings_files,
     settings_file_owners,
 )
 from .config import pkce_default
@@ -140,9 +146,10 @@ class CliAuthResult(TypedDict):
     team_id: str | None
 
 
-_TeamMapping: Final = TypeVar("_TeamMapping", bound=Mapping[str, object])
+_TeamMapping = TypeVar("_TeamMapping", bound=Mapping[str, object])
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_DECODED_JSON: Final = TypeAdapter(object)
 
 _PROXY_KEY_CHECK_TIMEOUT_SECONDS: Final = 3
 _PROXY_REJECTED_KEY_STATUSES: Final = frozenset({401, 403})
@@ -236,6 +243,14 @@ def load_token(*, vault: SecretVault = SYSTEM_KEYRING) -> Mapping[str, object] |
     return None if record is None else record.model_dump(exclude_none=True)
 
 
+def is_pkce_login(token_data: Mapping[str, object] | None, base_url: str) -> bool:
+    return (
+        token_data is not None
+        and token_data.get("refresh_token") is not None
+        and token_data.get("base_url") == base_url.rstrip("/")
+    )
+
+
 def _login_left_in_keychain(vault: SecretVault) -> Mapping[str, object] | None:
     """The login an earlier logout left in a keychain it could not reach"""
     left: Final = load_cli_token_left_in_keychain(vault=vault)
@@ -321,6 +336,23 @@ def _warn(message: str) -> None:
 
 def _login_command(renews: bool) -> str:
     return "lite login --pkce" if renews else "lite login"
+
+
+def sized_len(value: object) -> int:
+    return length_of(value)
+
+
+def joined_names(names: object) -> str:
+    return joined(", ", names)
+
+
+def models_summary(models: object) -> str:
+    if not models:
+        return "All models"
+    count: Final = length_of(models)
+    if count > 3:
+        return joined_names(subscript(models, slice(None, 3))) + f" (+{count - 3} more)"
+    return joined_names(models)
 
 
 # Team selection utilities
@@ -412,7 +444,7 @@ def get_key_input():
         return None
 
 
-def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selected_index: int = 0) -> None:
+def display_interactive_team_selection(teams: Sequence[Mapping[str, object]], selected_index: int = 0) -> None:
     """Display teams with one highlighted for selection"""
     console: Final = Console()
 
@@ -424,17 +456,10 @@ def display_interactive_team_selection(teams: Sequence[Mapping[str, Any]], selec
     for i, team in enumerate(teams):
         team_alias = team.get("team_alias") or "N/A"
         team_id = team.get("team_id", "N/A")
-        models: list[str] = team.get("models", [])
+        models = team.get("models", [])
         max_budget = team.get("max_budget")
 
-        # Format models list
-        if models:
-            if len(models) > 3:
-                models_str = ", ".join(models[:3]) + f" (+{len(models) - 3} more)"
-            else:
-                models_str = ", ".join(models)
-        else:
-            models_str = "All models"
+        models_str = models_summary(models)
 
         # Format budget
         budget_str = f"${max_budget}" if max_budget else "Unlimited"
@@ -646,7 +671,7 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
         )
 
     try:
-        data: Final[CliSsoStartData] = response.json()
+        decoded: Final = _DECODED_JSON.validate_python(response.json())
     except ValueError:
         content_type: Final = response.headers.get("content-type", "unknown")
         raise ValueError(
@@ -655,14 +680,26 @@ def _start_cli_sso_flow(base_url: str) -> CliSsoStartData:
             f"Response starts with: {response.text[:200]!r}"
         )
 
+    data: Final = require_get(decoded)
+    login_id: Final = data.get("login_id")
+    poll_secret: Final = data.get("poll_secret")
+    user_code: Final = data.get("user_code")
+    if isinstance(login_id, str) and isinstance(poll_secret, str) and isinstance(user_code, str):
+        verification_uri_complete: Final = data.get("verification_uri_complete")
+        if isinstance(verification_uri_complete, str):
+            return {
+                "login_id": login_id,
+                "poll_secret": poll_secret,
+                "user_code": user_code,
+                "verification_uri_complete": verification_uri_complete,
+            }
+        return {"login_id": login_id, "poll_secret": poll_secret, "user_code": user_code}
     required_fields: Final[tuple[str, ...]] = ("login_id", "poll_secret", "user_code")
     missing_fields: Final = tuple(field for field in required_fields if not isinstance(data.get(field), str))
-    if missing_fields:
-        raise ValueError(
-            f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
-            "The proxy version may not match this CLI; upgrade whichever is older."
-        )
-    return data
+    raise ValueError(
+        f"The response from {start_url} is missing required field(s): {', '.join(missing_fields)}. "
+        "The proxy version may not match this CLI; upgrade whichever is older."
+    )
 
 
 def _get_cli_sso_poll_headers(poll_secret: str) -> dict[str, str]:
@@ -833,16 +870,25 @@ def _render_and_prompt_for_team_selection(teams: list[CliTeam]) -> str | None:
             return None
 
 
-def _configure_claude_code(base_url: str, api_key: str) -> None:
-    """Write the key this login just minted into Claude Code's settings.json as a static token, undoable with
-    `lite unconfigure claude`. The key expires with the login, so the flag is the re-wire step of each login
-    rather than a one-time setup: no apiKeyHelper is written, since Claude Code would spawn `lite` (and its
-    keychain probe) on every credential refresh to keep one fresh."""
+def _claude_credential(base_url: str, api_key: str, renews: bool, stored: SecretSave) -> ClaudeCredential:
+    """`print-token` renews from the stored record, so only a stored login with a refresh token gets the helper."""
+    if not renews or isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
+        return StaticToken(api_key)
+    helper: Final = lite_api_key_helper(base_url)
+    if helper is None:
+        click.echo("Could not find the `lite` command, so Claude Code cannot run it to renew this login's key.")
+        return StaticToken(api_key)
+    return helper
+
+
+def _configure_claude_code(base_url: str, credential: ClaudeCredential, renews: bool) -> None:
+    """Undoable with `lite unconfigure claude`. A static key expires with the login, so the flag is then the
+    re-wire step of each login."""
     settings_path: Final = claude_settings_path(os.environ)
     try:
         configure_claude_settings(
             base_url,
-            StaticToken(api_key),
+            credential,
             KeepModel(),
             settings_path,
             configure_state_path(settings_path),
@@ -851,14 +897,27 @@ def _configure_claude_code(base_url: str, api_key: str) -> None:
     except ClaudeSettingsError as e:
         raise click.ClickException(f"Logged in, but could not configure Claude Code: {e}")
     click.echo(f"\nConfigured Claude Code: {settings_path} now routes through {base_url.rstrip('/')}.")
+    match credential:
+        case ApiKeyHelper():
+            click.echo(
+                "Claude Code gets this login's key from `lite auth print-token`, which renews it before it expires."
+            )
+        case StaticToken():
+            click.echo(
+                f"This login's key is stored in the file, so run `{_login_command(renews)} --config-claude` again "
+                "after it expires."
+            )
+            if not renews:
+                click.echo("`lite login --pkce --config-claude` instead lets Claude Code renew the key on its own.")
+        case _:
+            assert_never(credential)
     click.echo(
-        "This login's key is stored in the file, so run `lite login --config-claude` again after it expires. "
         "Your other Claude Code settings were left untouched. Restart Claude Code to pick this up. "
         f"Undo with `lite unconfigure claude`; `lite configure claude --model` sets {STARTING_MODEL_ROLE}."
     )
 
 
-def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave) -> None:
+def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: SecretSave, *, renews: bool) -> None:
     """Claude Code is configured from the key in hand, so it does not wait on the CLI's own store: a login whose
     token file or keychain refused it still has a usable key, and `--config-claude` asked for exactly that
     key to be written into settings.json."""
@@ -868,7 +927,7 @@ def _finish_login(base_url: str, api_key: str, config_claude: bool, stored: Secr
     click.echo(f"JWT Token: {api_key[:20]}...")
     click.echo(storage_notice(stored))
     if config_claude:
-        _configure_claude_code(base_url, api_key)
+        _configure_claude_code(base_url, _claude_credential(base_url, api_key, renews, stored), renews)
     if isinstance(stored, (CredentialNotSaved, CredentialNotRecorded)):
         if config_claude:
             click.echo("Claude Code was configured with this key even though the CLI itself could not keep it.")
@@ -904,7 +963,7 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
         click.echo(f"Authentication failed: {credential.reason}")
         return
     stored: Final = _replace_stored_token(pkce_token_record(base_url, credential), http, vault)
-    _finish_login(base_url, credential.access_token, config_claude, stored)
+    _finish_login(base_url, credential.access_token, config_claude, stored, renews=True)
 
 
 @click.command(name="login")
@@ -913,8 +972,9 @@ def _pkce_login(base_url: str, config_claude: bool, vault: SecretVault) -> None:
     is_flag=True,
     default=False,
     help=(
-        "After logging in, write this login's key into ~/.claude/settings.json so Claude Code routes through "
-        "this proxy; run it again after the key expires. Unrelated settings are preserved."
+        "After logging in, wire ~/.claude/settings.json so Claude Code routes through this proxy. A --pkce login "
+        "gets an apiKeyHelper that renews the key; any other login writes the key itself, so run it again after "
+        "the key expires. Unrelated settings are preserved."
     ),
 )
 @click.option(
@@ -996,7 +1056,7 @@ def login(ctx: click.Context, config_claude: bool, pkce: bool | None) -> None:
                 context_secret_vault(ctx),
             )
 
-            _finish_login(base_url, api_key, config_claude, stored)
+            _finish_login(base_url, api_key, config_claude, stored, renews=False)
             return
         else:
             click.echo("Authentication timed out. Please try again.")
@@ -1083,11 +1143,23 @@ def logout(ctx: click.Context):
         case KeyringUnreachable():
             click.echo(UNCHECKED_KEYCHAIN_MESSAGE)
             click.echo("Unlock your keychain and run 'lite logout' again to clear it.")
+    remove_launch_settings_files(claude_settings_path(os.environ).parent)
+
+
+def _renewing_login_command(ctx_obj: CliContextObj | None) -> str:
+    if ctx_obj is None or not ctx_obj.get("base_url_explicit"):
+        return "lite login --pkce"
+    return f"lite --base-url {ctx_obj['base_url'].rstrip('/')} login --pkce"
 
 
 @click.command(name="print-token")
+@click.option(
+    "--otel-headers",
+    is_flag=True,
+    help="Print the token as the JSON headers Claude Code's `otelHeadersHelper` expects.",
+)
 @click.pass_context
-def print_token(ctx: click.Context):
+def print_token(ctx: click.Context, otel_headers: bool = False):
     """Print a valid API token for this proxy.
 
     Designed to be used as Claude Code's `apiKeyHelper`
@@ -1102,7 +1174,7 @@ def print_token(ctx: click.Context):
     vault: Final = context_secret_vault(ctx)
     token_data: Final = load_token(vault=vault)
     if not token_data:
-        click.echo("Not authenticated. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated. Run '{_renewing_login_command(_optional_cli_context_obj(ctx))}'.", err=True)
         sys.exit(1)
 
     # apiKeyHelper is invoked bare (no --base-url), so unless the caller
@@ -1112,16 +1184,16 @@ def print_token(ctx: click.Context):
     ctx_obj: Final = cli_context_obj(ctx)
     issued_for_this_server: Final = token_data.get("base_url") == ctx_obj.get("base_url", "").rstrip("/")
     if ctx_obj.get("base_url_explicit") and not issued_for_this_server:
-        click.echo("Not authenticated for this server. Run 'lite login'.", err=True)
+        click.echo(f"Not authenticated for this server. Run '{_renewing_login_command(ctx_obj)}'.", err=True)
         sys.exit(1)
 
     renews: Final = "refresh_token" in token_data
     if not renews and token_expired(token_data):
-        click.echo("Token expired. Run 'lite login' again.", err=True)
+        click.echo(f"Token expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
     if token_data.get("key") is None:
-        click.echo(keychain_unreadable_notice(vault), err=True)
+        click.echo(keychain_unreadable_notice(vault, _renewing_login_command(ctx_obj)), err=True)
         sys.exit(1)
 
     http: Final = requests.Session()
@@ -1137,10 +1209,10 @@ def print_token(ctx: click.Context):
         )
     )
     if not api_key:
-        click.echo(f"Key expired. Run '{_login_command(renews)}' again.", err=True)
+        click.echo(f"Key expired. Run '{_renewing_login_command(ctx_obj)}' again.", err=True)
         sys.exit(1)
 
-    click.echo(api_key)
+    click.echo(json.dumps({"Authorization": f"Bearer {api_key}"}) if otel_headers else api_key)
 
 
 @click.command(name="whoami")
