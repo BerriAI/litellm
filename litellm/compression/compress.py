@@ -4,7 +4,7 @@ scoring, message stubbing, and retrieval tool injection.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from litellm.caching.dual_cache import DualCache
 from litellm.compression.message_stubbing import (
@@ -62,7 +62,7 @@ def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
     # module import for non-Anthropic call paths.
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    anthropic_tools, _mcp_servers = AnthropicConfig()._map_tools(openai_tools)
+    anthropic_tools, _mcp_servers = AnthropicConfig().map_tools(openai_tools)
     return cast(list[dict], anthropic_tools)
 
 
@@ -99,7 +99,7 @@ def _content_to_text(content: object) -> str:
 def _normalize_messages_for_compression(
     messages: list[dict],
     call_type: str,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict], list[dict[str, object]]]:
     """
     Normalize each original message to a text-surrogate content for scoring.
 
@@ -404,7 +404,7 @@ def compress(
 
     original_tokens: Final = token_counter(
         model=model,
-        messages=cast(list[Any], original_messages),
+        messages=original_messages,
     )
 
     # Pass through if below trigger
@@ -475,7 +475,7 @@ def compress(
     )
 
     # Build compressed messages and cache
-    compressed_messages: Final[list[dict]] = []
+    compressed_messages: Final[list[dict[str, object]]] = []
     cache: Final[dict[str, str]] = {}
     used_keys: Final[set[str]] = set()
     dropped_tool_span_indices: Final = _get_dropped_tool_span_indices(
@@ -499,7 +499,7 @@ def compress(
 
     compressed_tokens: Final = token_counter(
         model=model,
-        messages=cast(list[Any], compressed_messages),
+        messages=compressed_messages,
     )
 
     return CompressedResult(

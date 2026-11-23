@@ -1,3 +1,5 @@
+from collections.abc import Awaitable, Callable
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -7,6 +9,7 @@ from litellm.proxy.db.shadow_eval_funnel import (
     flush_shadow_eval_funnel,
     record_shadow_eval_funnel_event,
 )
+from tests.unit.proxy.db.fake_prisma_engine import engine_call
 
 
 @pytest.fixture(autouse=True)
@@ -33,11 +36,33 @@ async def test_increments_aggregate_per_job_and_flush_upserts_and_clears():
     await flush_shadow_eval_funnel(prisma)
 
     calls = {call.args[1]: call.args[2:] for call in prisma.db.execute_raw.await_args_list}
-    assert calls == {"leg-1": (2, 0, 1, 0), "leg-2": (0, 1, 0, 0)}
+    assert calls == {"leg-1": (2, 0, 0, 1, 0), "leg-2": (0, 0, 1, 0, 0)}
     sql = prisma.db.execute_raw.await_args_list[0].args[0]
     assert "ON CONFLICT (job_id) DO UPDATE" in sql
     assert '"LiteLLM_ShadowEvalFunnel".not_sampled + EXCLUDED.not_sampled' in sql
     assert shadow_eval_funnel._pending == {}
+
+
+@pytest.mark.asyncio
+async def test_same_model_skips_flush_into_their_own_column():
+    record_shadow_eval_funnel_event("leg-1", "same_model")
+    record_shadow_eval_funnel_event("leg-1", "same_model")
+    record_shadow_eval_funnel_event("leg-1", "not_sampled")
+    prisma: Final = _prisma()
+
+    await flush_shadow_eval_funnel(prisma)
+
+    sql, job_id, *counts = prisma.db.execute_raw.await_args.args
+    columns: Final = sql.split("(job_id, ", 1)[1].split(")", 1)[0].split(", ")
+    assert job_id == "leg-1"
+    assert dict(zip(columns, counts)) == {
+        "not_sampled": 1,
+        "same_model": 2,
+        "unjudgeable": 0,
+        "shed": 0,
+        "withheld": 0,
+    }
+    assert '"LiteLLM_ShadowEvalFunnel".same_model + EXCLUDED.same_model' in sql
 
 
 @pytest.mark.asyncio
@@ -82,7 +107,9 @@ async def test_events_recorded_during_a_flush_survive_into_the_next_batch():
 
     await flush_shadow_eval_funnel(prisma)
 
-    assert shadow_eval_funnel._pending == {"leg-2": {"not_sampled": 0, "unjudgeable": 0, "shed": 1, "withheld": 0}}
+    assert shadow_eval_funnel._pending == {
+        "leg-2": {"not_sampled": 0, "same_model": 0, "unjudgeable": 0, "shed": 1, "withheld": 0}
+    }
 
 
 def test_pending_count_feeds_the_drain_census():
@@ -93,3 +120,17 @@ def test_pending_count_feeds_the_drain_census():
     record_shadow_eval_funnel_event("leg-1", "shed")
     record_shadow_eval_funnel_event("leg-2", "unjudgeable")
     assert pending_shadow_eval_funnel_events() == 3
+
+
+@pytest.mark.asyncio
+async def test_a_funnel_flush_renders_one_postgres_upsert_span_per_job(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    record_shadow_eval_funnel_event("job-a", "not_sampled")
+    record_shadow_eval_funnel_event("job-b", "not_sampled")
+    prisma = MagicMock()
+    prisma.db.execute_raw = engine_call(1)
+
+    await flush_shadow_eval_funnel(prisma)
+
+    assert await postgres_span_names() == ("postgres.upsert LiteLLM_ShadowEvalFunnel",) * 2

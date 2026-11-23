@@ -6,15 +6,15 @@ import asyncio
 import traceback
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 
@@ -53,7 +53,7 @@ class OpikLogger(CustomBatchLogger):
 
     def __init__(self, **kwargs: Unpack[_OpikLoggerKwargs]) -> None:
         self.async_httpx_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        self.sync_httpx_client = _get_httpx_client()
+        self.sync_httpx_client = get_httpx_client()
 
         self.opik_project_name: str = (
             utils.get_opik_config_variable(
@@ -111,7 +111,7 @@ class OpikLogger(CustomBatchLogger):
     async def async_log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -194,7 +194,7 @@ class OpikLogger(CustomBatchLogger):
     def log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:

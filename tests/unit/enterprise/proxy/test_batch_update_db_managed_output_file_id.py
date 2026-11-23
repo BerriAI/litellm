@@ -3,15 +3,19 @@
 import json
 from types import SimpleNamespace
 from typing import Optional
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedBatchOutputFileWriter,
     ensure_batch_response_managed_file_ids,
     update_batch_in_database,
 )
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 
 def _build_batch_response(
@@ -39,9 +43,9 @@ def _build_batch_response(
 
 
 def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ="):
-    mock = MagicMock()
+    mock = MagicMock(spec=ManagedBatchOutputFileWriter)
     mock.get_unified_output_file_id = MagicMock(return_value=unified_id)
-    mock.store_unified_file_id = AsyncMock()
+    mock.store_batch_output_file = AsyncMock()
     return mock
 
 
@@ -114,9 +118,7 @@ async def test_cancel_path_registers_output_file_under_batch_owner():
         operation="cancel",
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "batch-owner"
     assert forwarded_auth.team_id == "batch-team"
     stored = json.loads(
@@ -156,9 +158,7 @@ async def test_update_batch_skips_lookup_when_db_batch_object_supplied():
     )
 
     mock_prisma.db.litellm_managedobjecttable.find_first.assert_not_called()
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "caller-owner"
     assert forwarded_auth.team_id == "caller-team"
 
@@ -222,11 +222,11 @@ async def test_ensure_batch_response_swallows_conversion_errors():
         hidden_params={"model_id": "my-model", "model_name": "openai/gpt-4o"},
     )
 
-    mock_managed_files = MagicMock()
+    mock_managed_files = MagicMock(spec=ManagedBatchOutputFileWriter)
     mock_managed_files.get_unified_output_file_id = MagicMock(
         side_effect=RuntimeError("boom")
     )
-    mock_managed_files.store_unified_file_id = AsyncMock()
+    mock_managed_files.store_batch_output_file = AsyncMock()
 
     mock_logger = MagicMock()
     await ensure_batch_response_managed_file_ids(
@@ -263,9 +263,7 @@ async def test_ensure_batch_response_builds_auth_from_db_batch_object():
         db_batch_object=db_batch_object,
     )
 
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "user-from-db"
     assert forwarded_auth.team_id == "team-from-db"
 
@@ -359,8 +357,8 @@ async def test_ensure_batch_response_returns_early_without_auth():
 
 
 def _in_memory_managed_files():
-    """Build a real _PROXY_LiteLLMManagedFiles whose prisma upsert hits an in-memory row."""
-    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+    """Build a real PROXY_LiteLLMManagedFiles whose prisma upsert hits an in-memory row."""
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 
     store: dict = {}
 
@@ -375,13 +373,12 @@ def _in_memory_managed_files():
     table.upsert = AsyncMock(side_effect=_upsert)
     prisma = MagicMock()
     prisma.db.litellm_managedobjecttable = table
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
 
     return (
-        _PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma),
+        PROXY_LiteLLMManagedFiles(internal_usage_cache=cache, prisma_client=prisma),
         store,
     )
 
@@ -413,17 +410,18 @@ async def test_store_unified_object_id_persists_key_and_tags_on_create():
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_resolves_org_through_the_cached_team():
+async def test_store_unified_object_id_resolves_org_through_the_cached_team(monkeypatch: pytest.MonkeyPatch):
     """Most keys belong to an org only through their team, so the auth object carries no
     org_id. The create reads the team that auth already cached, so org spend is snapshotted
     at submission time without a database query in the request path."""
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.proxy_server import user_api_key_cache
 
+    stores = install_rust_auth_stores(monkeypatch)
     instance, store = _in_memory_managed_files()
     creator = UserAPIKeyAuth(user_id="alice", team_id="team-cached", api_key="hash-alice")
     await user_api_key_cache.async_set_cache(
-        key="team_id:team-cached",
+        key=AuthObject.team("team-cached"),
         value=LiteLLM_TeamTableCachedObj(team_id="team-cached", organization_id="org-via-team"),
         model_type=LiteLLM_TeamTableCachedObj,
     )
@@ -438,23 +436,30 @@ async def test_store_unified_object_id_resolves_org_through_the_cached_team():
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-cached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-cached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-team"
-    instance.prisma_client.db.litellm_teamtable.find_unique.assert_not_awaited()
+    assert stores.team.lookups == []
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is_not_cached():
+async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A team no request has run under yet is absent from the auth cache; its organization
     still comes back from the table so the org is billed rather than dropped."""
     from litellm.models.team import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    instance, store = _in_memory_managed_files()
-    instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id="team-uncached", organization_id="org-via-db")
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={"team-uncached": LiteLLM_TeamTable(team_id="team-uncached", organization_id="org-via-db")}
+            )
+        ),
     )
+    instance, store = _in_memory_managed_files()
     creator = UserAPIKeyAuth(user_id="alice", team_id="team-uncached", api_key="hash-alice")
     try:
         await instance.store_unified_object_id(
@@ -467,7 +472,7 @@ async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-uncached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-uncached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-db"
 
@@ -558,3 +563,59 @@ async def test_store_unified_object_id_omits_unset_columns():
     assert "api_key" not in create_data
     assert "request_tags" not in create_data
     assert "unified-b" in store
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_drops_nul_characters_postgres_cannot_store():
+    """Regression (spend loss): Postgres rejects a NUL inside jsonb, and a client can send one
+    in a background response's instructions or tags. The row the cost poll bills from must
+    still be written, with only the NUL characters removed."""
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    instance, store = _in_memory_managed_files()
+    creator = UserAPIKeyAuth(user_id="alice", team_id="team-alpha", api_key="hash-alice")
+    response = ResponsesAPIResponse(
+        id="resp_nul",
+        created_at=1,
+        status="queued",
+        model="gpt-5.6",
+        instructions="be brief\x00",
+        metadata={"note\x00": "keep\x00 this"},
+        output=[],
+    )
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-r",
+        file_object=response,
+        litellm_parent_otel_span=None,
+        model_object_id="resp_nul",
+        file_purpose="response",
+        user_api_key_dict=creator,
+        request_tags=["env\x00:prod"],
+        persist_attribution=True,
+    )
+
+    row = store["unified-r"]
+    assert "\\u0000" not in row["file_object"]
+    stored = json.loads(row["file_object"])
+    assert stored == json.loads(response.model_dump_json().replace("\\u0000", ""))
+    assert stored["instructions"] == "be brief"
+    assert stored["metadata"] == {"note": "keep this"}
+    assert row["request_tags"].data == ["env:prod"]
+
+
+@pytest.mark.asyncio
+async def test_store_unified_object_id_keeps_the_provider_json_when_it_has_no_nul():
+    instance, store = _in_memory_managed_files()
+    batch = _build_batch_response(batch_id="b", status="validating")
+
+    await instance.store_unified_object_id(
+        unified_object_id="unified-b",
+        file_object=batch,
+        litellm_parent_otel_span=None,
+        model_object_id="b",
+        file_purpose="batch",
+        user_api_key_dict=UserAPIKeyAuth(user_id="alice", api_key="hash-alice"),
+    )
+
+    assert store["unified-b"]["file_object"] == batch.model_dump_json()

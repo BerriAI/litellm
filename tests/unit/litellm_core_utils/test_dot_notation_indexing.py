@@ -2,11 +2,15 @@
 Tests for litellm.litellm_core_utils.dot_notation_indexing module.
 """
 
+from types import MappingProxyType
+from typing import Final
+
 import pytest
 
 from litellm.litellm_core_utils.dot_notation_indexing import (
     get_nested_value,
     delete_nested_value,
+    delete_nested_values,
 )
 
 
@@ -125,3 +129,30 @@ class TestDeleteNestedValue:
         data = {"items": [{"a": 1, "b": 2}, {"a": 3, "b": 4}]}
         result = delete_nested_value(data, "items[0].b")
         assert result == {"items": [{"a": 1}, {"a": 3, "b": 4}]}
+
+    def test_delete_returns_a_fresh_dict_and_leaves_a_narrowly_typed_input_untouched(self):
+        payload: Final[dict[str, list[str]]] = {"tags": ["a", "b"], "secret": ["s"]}
+        result = delete_nested_value(payload, "secret")
+        assert result == {"tags": ["a", "b"]}
+        assert payload == {"tags": ["a", "b"], "secret": ["s"]}
+        assert result["tags"] is not payload["tags"]
+
+    def test_delete_accepts_a_read_only_mapping(self):
+        payload: Final = MappingProxyType({"tags": ["a"], "secret": ["s"]})
+        assert delete_nested_value(payload, "secret") == {"tags": ["a"]}
+
+
+def test_delete_nested_values_removes_every_path_and_leaves_the_input_untouched():
+    payload: Final = MappingProxyType(
+        {
+            "tools": [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}],
+            "meta": {"keep": 1, "drop": 2},
+            "top": "x",
+        }
+    )
+    result: Final = delete_nested_values(
+        payload, ("tools[*].secret", "meta.drop", "top", "top", "missing.path", "tools[9].name")
+    )
+    assert result == {"tools": [{"name": "t1"}, {"name": "t2"}], "meta": {"keep": 1}}
+    assert payload["tools"] == [{"name": "t1", "secret": "s1"}, {"name": "t2", "secret": "s2"}]
+    assert payload["meta"] == {"keep": 1, "drop": 2}

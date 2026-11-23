@@ -318,6 +318,29 @@ def test_parse_skips_subagent_messages_and_maps_errors():
     ]
 
 
+def test_user_message_yields_only_its_tool_result_objects():
+    line = {
+        "type": "user",
+        "message": {
+            "content": [
+                "plain text",
+                None,
+                ["tool_result"],
+                {"type": "text", "text": "not a result"},
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"},
+                {"type": "tool_result", "content": [{"type": "text", "text": "a"}, "b"], "is_error": 1},
+                {"type": "tool_result", "tool_use_id": 7, "content": None, "extra": {"kept": "out"}},
+            ]
+        },
+    }
+
+    assert ClaudeCodeHarnessConfig().transform_stream_line(line, ClaudeCodeStreamState()) == [
+        ToolResult(id="t1", output="ok", is_error=False),
+        ToolResult(id="", output="a\nb", is_error=True),
+        ToolResult(id="7", output="", is_error=False),
+    ]
+
+
 def test_parse_thinking_and_mcp_tools():
     state = ClaudeCodeStreamState()
     msg = {

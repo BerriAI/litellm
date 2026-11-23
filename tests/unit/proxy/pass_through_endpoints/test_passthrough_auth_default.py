@@ -19,19 +19,22 @@ defaults to ``True`` so a config dict (raw, not Pydantic) without an
 ``auth`` key still requires authentication.
 """
 
-from unittest.mock import AsyncMock, MagicMock
+from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 
-from litellm.proxy._types import PassThroughGenericEndpoint
-from litellm.proxy.auth.user_api_key_auth import (
-    check_api_key_for_custom_headers_or_pass_through_endpoints,
-)
+from litellm.proxy._types import LiteLLMRoutes, PassThroughGenericEndpoint, ProxyException
+from litellm.proxy.auth.user_api_key_auth import pass_through_auth_off, pass_through_key
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _register_pass_through_endpoint,
 )
+from litellm.proxy.proxy_server import openai_exception_handler
 
 
 def test_passthrough_auth_defaults_to_true():
@@ -57,26 +60,28 @@ def test_passthrough_auth_can_still_be_explicitly_disabled():
 
 
 @pytest.mark.asyncio
-async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch):
-    # Regression: setting ``auth: true`` used to raise at startup
-    # unless ``premium_user`` was True, leaving OSS with no safe
-    # configuration.
-    app = MagicMock(spec=FastAPI)
-    visited: set = set()
+async def test_register_passthrough_with_auth_true_works_for_oss(monkeypatch: pytest.MonkeyPatch) -> None:
+    app: Final = FastAPI(exception_handlers={ProxyException: openai_exception_handler})
+    visited: Final[set[str]] = set()
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-passthrough-test")
 
-    endpoint = PassThroughGenericEndpoint(
+    endpoint: Final = PassThroughGenericEndpoint(
         path="/forwarder",
         target="https://example.com",
         auth=True,
     )
 
-    # Should not raise; OSS premium_user=False is allowed to use auth=True.
     await _register_pass_through_endpoint(
         endpoint=endpoint,
         app=app,
         premium_user=False,
         visited_endpoints=visited,
     )
+    assert [route.path for route in app.routes if isinstance(route, APIRoute)] == ["/forwarder"]
+    with TestClient(app) as client:
+        response: Final = client.get(endpoint.path)
+    assert response.status_code == 401, response.text
+    assert response.json()["error"]["type"] == "auth_error"
 
 
 @pytest.mark.asyncio
@@ -95,26 +100,14 @@ async def test_runtime_check_treats_missing_auth_key_as_authenticated():
         # ``auth`` deliberately omitted
     }
 
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/forwarder",
-        pass_through_endpoints=[raw_endpoint_no_auth_key],
-        api_key="sk-1234",
-    )
-
-    # Result is the api_key string (auth is REQUIRED for this endpoint
-    # — flow continues to normal key validation), NOT an empty
-    # ``UserAPIKeyAuth()`` (which was the unauthenticated-forwarder
-    # bug).
-    assert result == "sk-1234"
+    assert not pass_through_auth_off("/forwarder", [raw_endpoint_no_auth_key])
+    assert pass_through_key(request, "/forwarder", [raw_endpoint_no_auth_key], "sk-9876") == "sk-9876"
 
 
 @pytest.mark.asyncio
 async def test_runtime_check_explicit_auth_false_still_skips_validation():
     # Operators who explicitly set ``auth: False`` get the legacy
     # behaviour — an empty UserAPIKeyAuth, no key required.
-    from litellm.proxy._types import UserAPIKeyAuth
-
     request = MagicMock()
     request.headers = {}
     raw_endpoint_auth_false = {
@@ -123,11 +116,19 @@ async def test_runtime_check_explicit_auth_false_still_skips_validation():
         "auth": False,
     }
 
-    result = await check_api_key_for_custom_headers_or_pass_through_endpoints(
-        request=request,
-        route="/public-webhook",
-        pass_through_endpoints=[raw_endpoint_auth_false],
-        api_key="",
-    )
+    assert pass_through_auth_off("/public-webhook", [raw_endpoint_auth_false])
 
-    assert isinstance(result, UserAPIKeyAuth)
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/eu_jev/v1/systemone", "/eu_jev/v1/systemone/extra", "/eu_jev/v1/systemone2"])
+async def test_no_eu_jev_route_reads_the_litellm_user_api_key_header(route: str) -> None:
+    request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-from-header")]})
+
+    assert pass_through_key(request, route, None, "sk-from-bearer") == "sk-from-bearer"
+
+
+def test_mapped_pass_through_route_authenticates_the_litellm_user_api_key_header() -> None:
+    route: Final = f"{LiteLLMRoutes.mapped_pass_through_routes.value[0]}/v1/x"
+    request: Final = Request({"type": "http", "headers": [(b"litellm_user_api_key", b"sk-proxy")]})
+
+    assert pass_through_key(request, route, None, "provider-key") == "sk-proxy"

@@ -46,12 +46,20 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_convert_url_to_base64,
     convert_url_to_base64,
 )
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.responses.codex_compat import drop_unsupported_tools, normalize_codex_input_items
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import (
+    BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX,
+    BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
+    DROP_DISABLED_REASONING_EFFORT_WARNING,
     BedrockError,
+    bedrock_model_encrypts_agent_messages,
+    bedrock_reasoning_effort_disabled,
     bedrock_supports_openai_responses,
+    strip_bedrock_runtime_route_suffix,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -61,9 +69,8 @@ from litellm.types.utils import LlmProviders
 
 BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH: Final = "/openai/v1/responses"
 BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES: Final = (
-    "/openai/v1/responses",
-    "/v1/responses",
-    "/responses",
+    *BEDROCK_RUNTIME_OPENAI_CHAT_ROUTE_SUFFIXES,
+    *BEDROCK_RUNTIME_OPENAI_RESPONSES_ROUTE_SUFFIXES,
     "/openai/v1",
     "/v1",
 )
@@ -74,6 +81,10 @@ BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
 IMAGE_BLOCK_KEYS: Final = ("content", "output")
 IMAGE_BLOCK_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
+
+
+def _without_chat_completions_route(model: str) -> str:
+    return model.removeprefix(BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX)
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -149,6 +160,29 @@ def inline_remote_image_urls(
     return items  # pyright: ignore[reportReturnType]  # items keep the caller's input union
 
 
+def _without_disabled_reasoning_effort(
+    params: Mapping[str, object], model: str, drop_params: bool
+) -> dict[str, object]:  # mutable-ok: becomes the map_openai_params return value
+    reasoning: Final = params.get("reasoning")
+    effort: Final = reasoning.get("effort") if isinstance(reasoning, Mapping) else None
+    if not isinstance(reasoning, Mapping) or not isinstance(effort, str):
+        return dict(params)
+    if not bedrock_reasoning_effort_disabled(model=model, effort=effort):
+        return dict(params)
+    if not (drop_params or litellm.drop_params):
+        raise litellm.UnsupportedParamsError(
+            message=(
+                f"{model} does not support reasoning.effort={effort}. "
+                "To drop unsupported params, set `litellm.drop_params = True`."
+            ),
+            status_code=400,
+        )
+    verbose_logger.warning(DROP_DISABLED_REASONING_EFFORT_WARNING, "reasoning.effort", effort, model)
+    rest: Final = {key: value for key, value in reasoning.items() if key != "effort"}
+    without_reasoning: Final = {key: value for key, value in params.items() if key != "reasoning"}
+    return {**without_reasoning, "reasoning": rest} if rest else without_reasoning
+
+
 class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
     """Responses API config for the OpenAI models on the bedrock-runtime endpoint."""
 
@@ -156,10 +190,12 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self,
         fetch_image: "Callable[[str], str]" = convert_url_to_base64,
         async_fetch_image: "Callable[[str], Awaitable[str]]" = async_convert_url_to_base64,
+        encrypted_agent_messages: bool = False,
     ) -> None:
         super().__init__()
         self.fetch_image = fetch_image
         self.async_fetch_image = async_fetch_image
+        self.encrypted_agent_messages = encrypted_agent_messages
 
     @classmethod
     def for_model(cls, model: str | None) -> "BedrockOpenAIResponsesConfig | None":
@@ -168,11 +204,15 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         The capability decision lives here rather than in the shared dispatch so that
         onboarding a model, or changing how the signal is read, stays inside the
         Bedrock adapter. ``None`` leaves the caller's existing behaviour untouched --
-        chat-only Bedrock models keep the Chat Completions bridge.
+        chat-only Bedrock models keep the Chat Completions bridge. The ``chat_completions/``
+        opt-in only moves Chat Completions calls off Converse, so a Responses call on such a
+        deployment still takes this surface instead of being bridged.
         """
-        if not bedrock_supports_openai_responses(model, litellm.model_cost):
+        if not model or not bedrock_supports_openai_responses(
+            _without_chat_completions_route(model), litellm.model_cost
+        ):
             return None
-        return cls()
+        return cls(encrypted_agent_messages=bedrock_model_encrypts_agent_messages(model))
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -190,24 +230,21 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: dict,  # mutable-ok: signature fixed by the BaseResponsesAPIConfig override contract
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=litellm_params, model=None)
-        override: Final = (
-            api_base
-            or litellm_params.get("aws_bedrock_runtime_endpoint")
-            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        )
-        # Partition-aware: bedrock-runtime is amazonaws.com.cn in China, and other
-        # suffixes in GovCloud/ISO, so defer to the shared endpoint builder.
+        configured_endpoint: Final = litellm_params.get("aws_bedrock_runtime_endpoint")
         host: Final = (
-            override or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
-        ).rstrip("/")
-        base: Final = next(
-            (host[: -len(suffix)] for suffix in BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES if host.endswith(suffix)),
-            host,
+            (configured_endpoint if isinstance(configured_endpoint, str) else None)
+            or api_base
+            or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+            or self._select_default_endpoint_url(endpoint_type="runtime", aws_region_name=region)
         )
-        return f"{base}{BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH}"
+        base: Final = strip_bedrock_runtime_route_suffix(host, BEDROCK_RUNTIME_OPENAI_BASE_SUFFIXES)
+        return join_api_base(base, BEDROCK_RUNTIME_OPENAI_RESPONSES_PATH)
 
     def supports_native_file_search(self) -> bool:
         return False
+
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.encrypted_agent_messages
 
     def validate_environment(
         self,
@@ -261,7 +298,8 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 "Bedrock Runtime Responses API: dropping unsupported parameter(s) %s that the endpoint rejects.",
                 unsupported,
             )
-        params: Final = {key: value for key, value in mapped.items() if key not in unsupported}
+        supported: Final[dict[str, object]] = {key: value for key, value in mapped.items() if key not in unsupported}
+        params: Final = _without_disabled_reasoning_effort(supported, model, drop_params)
         tools: Final = params.get("tools")
         if not isinstance(tools, list):
             return params
@@ -321,14 +359,16 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,  # mutable-ok: same
     ) -> dict:  # mutable-ok: same
-        normalized_input, rewritten_types = normalize_codex_input_items(input)
+        normalized_input, rewritten_types = normalize_codex_input_items(
+            input, keep_encrypted_agent_messages=self.supports_encrypted_agent_messages()
+        )
         if rewritten_types:
             verbose_logger.warning(
                 "Bedrock Runtime Responses API: rewrote Codex input item type(s) %s that the endpoint rejects.",
                 rewritten_types,
             )
         return super().transform_responses_api_request(
-            model=model,
+            model=_without_chat_completions_route(model),
             input=normalized_input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,

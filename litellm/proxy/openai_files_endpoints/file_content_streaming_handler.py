@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -18,11 +18,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         should_route: bool,
         original_file_id: str | None,
-        credentials: dict[str, Any] | None,
-    ) -> tuple[str, str, dict[str, Any]]:
+        credentials: dict[str, object] | None,
+    ) -> tuple[str, str, dict[str, object]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 
@@ -43,7 +43,6 @@ class FileContentStreamingHandler:
                 data=resolved_streaming_data,
                 credentials=credentials,
                 file_id=original_file_id,
-                include_internal_credentials=True,
             )
             resolved_streaming_data.pop("model", None)
             resolved_streaming_provider: Final = cast(str, credentials["custom_llm_provider"])
@@ -72,7 +71,7 @@ class FileContentStreamingHandler:
         stream_iterator: AsyncIterator[bytes],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        data: dict[str, Any],
+        data: dict[str, object],
     ):
         try:
             async for chunk in stream_iterator:
@@ -96,7 +95,7 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
         version: str,

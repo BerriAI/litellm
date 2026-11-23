@@ -7,23 +7,36 @@ from the Google Interactions API, similar to the responses API streaming iterato
 
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, Protocol
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import STREAM_SSE_DONE_STRING
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import process_response_headers, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
+from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.responses.streaming_iterator import spawn_logging_task
 from litellm.types.interactions import (
     InteractionsAPIStreamingResponse,
 )
 from litellm.utils import CustomStreamWrapper
+
+_INTERACTIONS_STREAMING_CHUNK_ADAPTER: Final = TypeAdapter(
+    object, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_OPAQUE_LITELLM_PARAMS: Final = TypeAdapter(object)
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, default: object, /) -> object: ...
 
 
 class BaseInteractionsAPIStreamingIterator:
@@ -39,7 +52,7 @@ class BaseInteractionsAPIStreamingIterator:
         model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
     ):
         self.response = response
@@ -48,7 +61,7 @@ class BaseInteractionsAPIStreamingIterator:
         self.finished = False
         self.interactions_api_config = interactions_api_config
         self.completed_response: InteractionsAPIStreamingResponse | None = None
-        self.start_time = datetime.now()
+        self.start_time = logging_obj.start_time
 
         # set request kwargs
         self.litellm_metadata = litellm_metadata
@@ -57,11 +70,13 @@ class BaseInteractionsAPIStreamingIterator:
         # set hidden params for response headers
         _api_base: Final = get_api_base(
             model=model or "",
-            optional_params=self.logging_obj.model_call_details.get("litellm_params", {}),
+            optional_params=_OPAQUE_LITELLM_PARAMS.validate_python(
+                self.logging_obj.model_call_details.get("litellm_params", {})
+            ),
         )
-        _model_info: Final[dict] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
+        _model_info: Final[object] = litellm_metadata.get("model_info", {}) if litellm_metadata else {}
         self._hidden_params = {
-            "model_id": _model_info.get("id", None),
+            "model_id": require_attributes(_model_info, _SupportsGet, "get").get("id", None),
             "api_base": _api_base,
         }
         self._hidden_params["additional_headers"] = process_response_headers(self.response.headers or {})
@@ -72,7 +87,7 @@ class BaseInteractionsAPIStreamingIterator:
             return None
 
         # Handle SSE format (data: {...})
-        stripped_chunk: Final = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
+        stripped_chunk: Final = CustomStreamWrapper.strip_sse_data_from_chunk(chunk)
         if stripped_chunk is None:
             return None
 
@@ -83,10 +98,12 @@ class BaseInteractionsAPIStreamingIterator:
 
         try:
             # Parse the JSON chunk
-            parsed_chunk: Final = json.loads(stripped_chunk)
+            parsed_chunk: Final = _INTERACTIONS_STREAMING_CHUNK_ADAPTER.validate_python(json.loads(stripped_chunk))
 
             # Format as InteractionsAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
+                if self.logging_obj.completion_start_time is None:
+                    self.logging_obj.update_completion_start_time(completion_start_time=datetime.now())
                 streaming_response: Final = self.interactions_api_config.transform_streaming_response(
                     model=self.model,
                     parsed_chunk=parsed_chunk,
@@ -127,7 +144,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
         model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
     ):
         super().__init__(
@@ -138,7 +155,7 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = aiter_sse_lines(response.aiter_text())
 
     def __aiter__(self):
         return self
@@ -172,14 +189,16 @@ class InteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator):
 
         logging_response: Final = copy.deepcopy(self.completed_response)
 
-        asyncio.create_task(
+        spawn_logging_task(
+            asyncio.get_running_loop(),
             self.logging_obj.dispatch_success_handlers(
                 logging_response,
                 start_time=self.start_time,
                 end_time=datetime.now(),
                 cache_hit=None,
                 prefer_async_handlers=True,
-            )
+            ),
+            task_name="Interactions API stream success logging",
         )
 
 
@@ -194,7 +213,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
         model: str | None,
         interactions_api_config: BaseInteractionsAPIConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_metadata: dict[str, Any] | None = None,
+        litellm_metadata: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
     ):
         super().__init__(
@@ -205,7 +224,7 @@ class SyncInteractionsAPIStreamingIterator(BaseInteractionsAPIStreamingIterator)
             litellm_metadata=litellm_metadata,
             custom_llm_provider=custom_llm_provider,
         )
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = iter_sse_lines(response.iter_text())
 
     def __iter__(self):
         return self

@@ -1,7 +1,9 @@
+import base64
 import json
 import re
 from collections.abc import Mapping, Sequence
 from functools import reduce
+from typing import Final
 
 import pytest
 from pydantic import JsonValue
@@ -9,7 +11,13 @@ from pydantic import JsonValue
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
 from litellm.proxy.auth.master_key_boot_check import MIGRATE_FROM_MASTER_KEY_ENV_VAR, SALT_KEY_ENV_VAR
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    ALGO_AES_GCM,
+    ENCRYPTION_ALGORITHM_SETTING,
+    decrypt_if_encrypted_with,
+    encrypt_secret_map,
+    encrypt_value_helper,
+)
 from litellm.proxy.db.master_key_migration import (
     _SECRET_COLUMNS,
     Migrated,
@@ -22,8 +30,9 @@ from litellm.proxy.db.master_key_migration import (
     reencrypt_stored_values,
     replace_ciphertexts,
 )
+from tests._master_key import MASTER_KEY
 
-PREVIOUS_KEY = "sk-1234"
+PREVIOUS_KEY = MASTER_KEY
 NEW_KEY = "sk-qa-9f2c1e7a44b0d3"
 UNRELATED_KEY = "sk-some-other-deployment"
 
@@ -176,6 +185,27 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
 
 
 @pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_moved_to_the_new_key():
+    tables: Tables = {
+        "LiteLLM_SearchToolsTable": [
+            {
+                "search_tool_id": "search-tool-1",
+                "litellm_params": {"search_provider": _encrypted("tavily"), "api_key": _encrypted("tvly-secret")},
+            },
+            {"search_tool_id": "legacy-search-tool", "litellm_params": {"api_key": "tvly-plaintext"}},
+        ]
+    }
+
+    migrated = await reencrypt_stored_values(_FakeDatabase(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 2
+    search_tool_params = tables["LiteLLM_SearchToolsTable"][0]["litellm_params"]
+    assert decrypt_if_encrypted_with(search_tool_params["api_key"], NEW_KEY) == "tvly-secret"
+    assert decrypt_if_encrypted_with(search_tool_params["search_provider"], NEW_KEY) == "tavily"
+    assert tables["LiteLLM_SearchToolsTable"][1]["litellm_params"] == {"api_key": "tvly-plaintext"}
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 
@@ -242,8 +272,9 @@ async def test_schema_without_some_of_the_tables_is_migrated_for_the_tables_it_h
 class _SomeoneEditsEachRowAfterItIsRead(_FakeDatabase):
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]:
         rows = await super().query_raw(query, *args)
-        for row in self.tables.get("LiteLLM_MCPUserCredentials", []):
-            row["credential_b64"] = "edited-by-an-admin"
+        if 'FROM "LiteLLM_MCPUserCredentials"' in query:
+            for row in self.tables.get("LiteLLM_MCPUserCredentials", []):
+                row["credential_b64"] = "edited-by-an-admin"
         return rows
 
 
@@ -257,6 +288,96 @@ async def test_value_edited_while_the_migration_runs_is_not_overwritten():
 
     assert migrated == 0
     assert tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"] == "edited-by-an-admin"
+
+
+@pytest.mark.asyncio
+async def test_rotation_reports_a_concurrent_edit_without_overwriting_it() -> None:
+    tables: Final[Tables] = {
+        "LiteLLM_MCPUserCredentials": [{"id": "cred-row-1", "credential_b64": _encrypted("byok-secret")}]
+    }
+
+    result: Final = await reencrypt_stored_values(
+        _SomeoneEditsEachRowAfterItIsRead(tables), from_key=PREVIOUS_KEY, to_key=NEW_KEY, require_unchanged=True
+    )
+
+    assert result is None
+    assert tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"] == "edited-by-an-admin"
+
+
+@pytest.mark.asyncio
+async def test_rotation_preserves_json_string_wrappers_and_malformed_json() -> None:
+    malformed: Final = '{"secret":'
+    foreign: Final = _encrypted("foreign", UNRELATED_KEY)
+    tables: Final[Tables] = {
+        "LiteLLM_Config": [
+            {"param_name": "wrapped", "param_value": json.dumps([_encrypted("stored"), malformed, foreign])},
+            {"param_name": "malformed", "param_value": malformed},
+        ]
+    }
+    database: Final = _FakeDatabase(tables)
+
+    migrated: Final = await reencrypt_stored_values(
+        database, from_key=PREVIOUS_KEY, to_key=NEW_KEY, require_unchanged=True
+    )
+
+    assert migrated == 1
+    stored, unchanged_malformed, unchanged_foreign = json.loads(str(tables["LiteLLM_Config"][0]["param_value"]))
+    assert decrypt_if_encrypted_with(stored, NEW_KEY) == "stored"
+    assert decrypt_if_encrypted_with(stored, PREVIOUS_KEY) is None
+    assert (unchanged_malformed, unchanged_foreign) == (malformed, foreign)
+    assert tables["LiteLLM_Config"][1]["param_value"] == malformed
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("algorithm", ["legacy", ALGO_AES_GCM])
+async def test_rotation_reencrypts_quoted_mcp_secret_maps(monkeypatch: pytest.MonkeyPatch, algorithm: str) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {ENCRYPTION_ALGORITHM_SETTING: algorithm})
+    plaintext: Final = {"X-Api-Key": "header-secret"}
+    stored: Final = encrypt_secret_map(plaintext, new_encryption_key=PREVIOUS_KEY)
+    tables: Final[Tables] = {"LiteLLM_MCPServerTable": [{"server_id": "mcp", "static_headers": stored}]}
+    database: Final = _FakeDatabase(tables)
+
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 1
+    assert await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY, require_unchanged=True) == 1
+    replacement: Final = json.loads(str(tables["LiteLLM_MCPServerTable"][0]["static_headers"]))
+    assert decrypt_if_encrypted_with(replacement, NEW_KEY) == '{"X-Api-Key":"header-secret"}'
+    assert await count_values_encrypted_with(database, PREVIOUS_KEY) == 0
+
+
+@pytest.mark.asyncio
+async def test_rotation_encrypts_legacy_mcp_secrets() -> None:
+    headers: Final = {"X-Api-Key": "header-secret"}
+    env: Final = {"MCP_TOKEN": "env-secret"}
+    legacy_credential: Final = base64.urlsafe_b64encode(b"byok-secret").decode()
+    foreign: Final = _encrypted("foreign", UNRELATED_KEY)
+    tables: Final[Tables] = {
+        "LiteLLM_MCPServerTable": [
+            {"server_id": "mcp", "static_headers": headers, "env": json.dumps(env)},
+            {"server_id": "empty", "static_headers": {}, "env": "{}"},
+        ],
+        "LiteLLM_MCPUserCredentials": [
+            {"id": "legacy", "credential_b64": legacy_credential},
+            {"id": "foreign", "credential_b64": foreign},
+        ],
+    }
+    database: Final = _FakeDatabase(tables)
+
+    assert (
+        await reencrypt_stored_values(
+            database, from_key=PREVIOUS_KEY, to_key=NEW_KEY, require_unchanged=True, upgrade_legacy_mcp=True
+        )
+        == 3
+    )
+    server, empty = tables["LiteLLM_MCPServerTable"]
+    for field, expected in (("static_headers", headers), ("env", env)):
+        ciphertext = json.loads(str(server[field]))
+        assert decrypt_if_encrypted_with(ciphertext, NEW_KEY) == json.dumps(expected, separators=(",", ":"))
+    assert (empty["static_headers"], empty["env"]) == ({}, "{}")
+    assert (
+        decrypt_if_encrypted_with(str(tables["LiteLLM_MCPUserCredentials"][0]["credential_b64"]), NEW_KEY)
+        == "byok-secret"
+    )
+    assert tables["LiteLLM_MCPUserCredentials"][1]["credential_b64"] == foreign
 
 
 def test_replacing_ciphertexts_keeps_structure_markers_and_non_strings():
@@ -561,3 +682,29 @@ async def test_boot_leaves_the_database_alone_unless_a_migration_was_requested_a
     assert result is outcome
     assert len(database_handles_taken) == (0 if outcome is None else 1)
     assert len(logged) == (0 if outcome is None else 1)
+
+
+@pytest.mark.asyncio
+async def test_guardrail_params_move_to_the_new_key_and_legacy_plaintext_rows_are_left_alone():
+    legacy_params = {"guardrail": "generic_guardrail_api", "api_key": "legacy-plaintext-key"}
+    tables: Tables = {
+        "LiteLLM_GuardrailsTable": [
+            {
+                "guardrail_id": "guardrail-1",
+                "litellm_params": {
+                    "guardrail": "generic_guardrail_api",
+                    "api_key": "litellm_enc::" + _encrypted("guardrail-vendor-key"),
+                },
+            },
+            {"guardrail_id": "guardrail-legacy", "litellm_params": dict(legacy_params)},
+        ]
+    }
+    database = _FakeDatabase(tables)
+
+    assert await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY) == 1
+
+    migrated_key = tables["LiteLLM_GuardrailsTable"][0]["litellm_params"]["api_key"]
+    assert migrated_key.startswith("litellm_enc::")
+    assert decrypt_if_encrypted_with(migrated_key.removeprefix("litellm_enc::"), NEW_KEY) == "guardrail-vendor-key"
+    assert tables["LiteLLM_GuardrailsTable"][1]["litellm_params"] == legacy_params
+    assert database.writes == [("LiteLLM_GuardrailsTable", "litellm_params", "guardrail-1")]

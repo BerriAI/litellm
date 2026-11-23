@@ -14,23 +14,56 @@ from __future__ import annotations
 
 import base64
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid4
 from litellm.constants import DEFAULT_CHUNK_OVERLAP, DEFAULT_CHUNK_SIZE
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
 from litellm.litellm_core_utils.url_utils import async_safe_get
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
+    header_value,
     httpxSpecialProvider,
 )
 from litellm.rag.ingestion.file_parsers import extract_text_from_pdf
 from litellm.rag.text_splitters import RecursiveCharacterTextSplitter
-from litellm.types.rag import RAGIngestOptions, RAGIngestResponse
+from litellm.types.rag import RAGChunkingStrategy, RAGIngestOptions, RAGIngestResponse
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Iterable, Mapping
+
     from litellm import Router
+
+
+class RAGIngestBadRequestError(ValueError):
+    status_code: Final = 400
+
+
+class _ChunkingStrategyWithType(RAGChunkingStrategy, total=False):
+    type: ReadOnly[str]
+
+
+class _OcrRouter(Protocol):
+    @property
+    def aocr(self) -> Callable[..., Awaitable[object]]: ...
+
+
+class _OcrPages(Protocol):
+    @property
+    def pages(self) -> Iterable[object]: ...
+
+
+class _OcrPage(Protocol):
+    @property
+    def markdown(self) -> str: ...
+
+
+def _vector_store_provider(vector_store_config: Mapping[str, object]) -> object:
+    return vector_store_config.get("custom_llm_provider", "openai")
 
 
 class BaseRAGIngestion(ABC):
@@ -55,10 +88,9 @@ class BaseRAGIngestion(ABC):
 
         # Extract configs from options
         self.ocr_config = ingest_options.get("ocr")
-        self.chunking_strategy: dict[str, Any] = cast(
-            dict[str, Any],
-            ingest_options.get("chunking_strategy") or {"type": "auto"},
-        )
+        self.chunking_strategy: RAGChunkingStrategy | _ChunkingStrategyWithType = ingest_options.get(
+            "chunking_strategy"
+        ) or {"type": "auto"}
         self.embedding_config = ingest_options.get("embedding")
         self.vector_store_config: dict[str, Any] = cast(dict[str, Any], ingest_options.get("vector_store") or {})
         self.ingest_name = ingest_options.get("name")
@@ -79,7 +111,7 @@ class BaseRAGIngestion(ABC):
         from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 
         credential_name: Final = self.vector_store_config.get("litellm_credential_name")
-        if credential_name and litellm.credential_list:
+        if isinstance(credential_name, str) and credential_name and litellm.credential_list:
             credential_values: Final = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 return
@@ -94,9 +126,9 @@ class BaseRAGIngestion(ABC):
                     del self.vector_store_config[key]
 
     @property
-    def custom_llm_provider(self) -> str:
+    def custom_llm_provider(self) -> object:
         """Get the vector store provider."""
-        return self.vector_store_config.get("custom_llm_provider", "openai")
+        return _vector_store_provider(self.vector_store_config)
 
     async def upload(
         self,
@@ -125,7 +157,8 @@ class BaseRAGIngestion(ABC):
             response.raise_for_status()
             file_content = response.content
             filename = file_url.split("/")[-1] or "document"
-            content_type = response.headers.get("content-type", "application/octet-stream")
+            content_type_header: Final = header_value(response.headers, "content-type")
+            content_type = "application/octet-stream" if content_type_header is None else content_type_header
             return filename, file_content, content_type, None
 
         if file_id:
@@ -165,7 +198,8 @@ class BaseRAGIngestion(ABC):
 
         # Use router if available
         if self.router is not None:
-            ocr_response = await self.router.aocr(
+            ocr_router: Final = require_attributes(self.router, _OcrRouter, "aocr")
+            ocr_response = await ocr_router.aocr(
                 model=ocr_model,
                 document={"type": doc_type, url_key: data_url},
             )
@@ -176,8 +210,10 @@ class BaseRAGIngestion(ABC):
             )
 
         # Extract text from pages
-        if hasattr(ocr_response, "pages") and ocr_response.pages:
-            return "\n\n".join(page.markdown for page in ocr_response.pages if hasattr(page, "markdown"))
+        if has_attributes(ocr_response, _OcrPages, "pages") and ocr_response.pages:
+            return "\n\n".join(
+                page.markdown for page in ocr_response.pages if has_attributes(page, _OcrPage, "markdown")
+            )
 
         return None
 
@@ -230,15 +266,11 @@ class BaseRAGIngestion(ABC):
         chunk_overlap: Final = splitter_args.get("chunk_overlap", DEFAULT_CHUNK_OVERLAP)
         separators: Final = splitter_args.get("separators", None)
 
-        # Build splitter kwargs
-        splitter_kwargs: Final[dict[str, Any]] = {
-            "chunk_size": chunk_size,
-            "chunk_overlap": chunk_overlap,
-        }
-        if separators:
-            splitter_kwargs["separators"] = separators
-
-        text_splitter: Final = RecursiveCharacterTextSplitter(**splitter_kwargs)
+        text_splitter: Final = (
+            RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap, separators=separators)
+            if separators
+            else RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        )
         return text_splitter.split_text(text_to_chunk)
 
     async def embed(
@@ -320,13 +352,18 @@ class BaseRAGIngestion(ABC):
             file_id=file_id,
         )
 
-        try:
-            if existing_file_id and not self.supports_existing_file_id:
-                raise ValueError(
-                    f"{self.__class__.__name__} does not support ingesting an existing file_id. "
-                    "Upload file data or provide file_url instead."
-                )
+        if existing_file_id and not self.supports_existing_file_id:
+            return RAGIngestResponse(
+                id=self.ingest_id,
+                status="failed",
+                vector_store_id="",
+                file_id=None,
+                error=f"{self.__class__.__name__} does not support ingesting an existing file_id. "
+                "Upload file data or provide file_url instead.",
+                error_status_code=400,
+            )
 
+        try:
             # Step 2: OCR (optional)
             extracted_text: Final = await self.ocr(
                 file_content=file_content,
@@ -362,10 +399,12 @@ class BaseRAGIngestion(ABC):
 
         except Exception as e:
             verbose_logger.exception("RAG Pipeline failed: %s", e)
+            error_status_code: Final[object] = getattr(e, "status_code", None)
             return RAGIngestResponse(
                 id=self.ingest_id,
                 status="failed",
                 vector_store_id="",
                 file_id=None,
                 error=str(e),
+                error_status_code=error_status_code if isinstance(error_status_code, int) else None,
             )

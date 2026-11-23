@@ -21,6 +21,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+from pydantic import TypeAdapter
 from redis import Redis
 from redis.asyncio import Redis as AsyncRedis
 from redis.commands.search.field import TagField, VectorField
@@ -29,10 +30,13 @@ from redis.commands.search.query import Query
 
 from litellm._logging import print_verbose
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import float_of, set_item
 from litellm.llms.valkey.common_utils import build_valkey_url, pack_vector
 
 from ._embedding_router import resolve_embedding_timeout
 from .redis_semantic_cache import RedisSemanticCache
+
+_OPAQUE_SEARCH_FIELD: Final = TypeAdapter(object)
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,20 +230,20 @@ class ValkeySemanticCache(RedisSemanticCache):
         if not docs:
             return None
         doc: Final = docs[0]
-        response_field: Final[object] = getattr(doc, cls.RESPONSE_FIELD_NAME)
-        distance_field: Final[str | bytes | float] = getattr(doc, cls.DISTANCE_FIELD_NAME)
+        response_field: Final = _OPAQUE_SEARCH_FIELD.validate_python(getattr(doc, cls.RESPONSE_FIELD_NAME))
+        distance_field: Final = _OPAQUE_SEARCH_FIELD.validate_python(getattr(doc, cls.DISTANCE_FIELD_NAME))
         return _ValkeyCacheHit(
             response=str(response_field),
-            distance=float(distance_field),
+            distance=float_of(distance_field),
         )
 
     @staticmethod
-    def _record_similarity(kwargs: dict[str, Any], similarity: float) -> None:
+    def _record_similarity(kwargs: dict[str, object], similarity: float) -> None:
         """Stamp the semantic-similarity score onto the request metadata carried in ``kwargs``."""
-        kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
+        set_item(kwargs.setdefault("metadata", dict[str, object]()), "semantic-similarity", similarity)
 
     @staticmethod
-    def _embedding_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    def _embedding_metadata(kwargs: dict[str, Any]) -> dict[str, object] | None:
         """The request metadata forwarded to the embedding call."""
         return kwargs.get("metadata")
 

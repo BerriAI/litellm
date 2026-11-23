@@ -8,6 +8,7 @@ import io
 
 import asyncio
 import logging
+from typing import Final
 
 import pytest
 from fastapi import Request
@@ -38,11 +39,11 @@ def test_routes_on_litellm_proxy():
     # missing-route regressions.
     import importlib
 
-    from litellm.proxy._lazy_features import LAZY_FEATURES
+    from litellm.proxy._lazy_features import LAZY_FEATURES, loaded_lazy_modules
 
-    registered_paths = [getattr(r, "path", "") for r in app.routes]
+    already_loaded: Final = loaded_lazy_modules(app)
     for feat in LAZY_FEATURES:
-        if any(rp.startswith(p) for p in feat.path_prefixes for rp in registered_paths):
+        if feat.module_path in already_loaded:
             continue
         try:
             module = importlib.import_module(feat.module_path)
@@ -246,9 +247,9 @@ def _is_assistants(req):
 
 
 def _metadata_var_name(req):
-    from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+    from litellm.proxy.litellm_pre_call_utils import get_metadata_variable_name
 
-    return _get_metadata_variable_name(req)
+    return get_metadata_variable_name(req)
 
 
 def _vector_store_id_in_path(req):

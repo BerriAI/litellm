@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, TypeVar
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.llms.bedrock import (
     BedrockInvokeNovaRequest,
@@ -24,7 +25,12 @@ from litellm.types.llms.bedrock import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
-from ..converse_transformation import AmazonConverseConfig
+from ...common_utils import served_service_tier
+from ..converse_transformation import (
+    AmazonConverseConfig,
+    messages_with_guard_content_as_text,
+    system_with_guard_content_as_text,
+)
 from .base_invoke_transformation import AmazonInvokeConfig
 
 if TYPE_CHECKING:
@@ -92,8 +98,16 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        model_info: Mapping[str, object] | None = None,
     ) -> dict:
-        return AmazonConverseConfig.map_openai_params(self, non_default_params, optional_params, model, drop_params)
+        return AmazonConverseConfig.map_openai_params(
+            self,
+            {key: value for key, value in non_default_params.items() if key != "requestMetadata"},
+            optional_params,
+            model,
+            drop_params,
+            model_info,
+        )
 
     def transform_request(
         self,
@@ -107,12 +121,16 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             self,
             model=model,
             messages=messages,
-            optional_params=_without_tool_config_injection_points(optional_params),
+            optional_params=_without_tool_config_injection_points(
+                {key: value for key, value in optional_params.items() if key != "requestMetadata"}
+            ),
             litellm_params=litellm_params,
             headers=headers,
         )
+        _nova_request: Final = BedrockInvokeNovaRequest(**_transformed_nova_request)
+        _drops_guard_content: Final = litellm.drop_params is True or litellm_params.get("drop_params") is True
         _bedrock_invoke_nova_request: Final = self._inline_cache_points(
-            BedrockInvokeNovaRequest(**_transformed_nova_request)
+            self._with_guard_content_as_text(_nova_request) if _drops_guard_content else _nova_request
         )
         self._remove_empty_system_messages(_bedrock_invoke_nova_request)
         bedrock_invoke_nova_request: Final = self._filter_allowed_fields(_bedrock_invoke_nova_request)
@@ -132,7 +150,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        return AmazonConverseConfig.transform_response(
+        response: Final = AmazonConverseConfig.transform_response(
             self,
             model,
             raw_response,
@@ -146,6 +164,10 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             api_key,
             json_mode,
         )
+        served_tier: Final = served_service_tier(raw_response.headers)
+        if served_tier is None:
+            return response
+        return response.model_copy(update={"service_tier": served_tier})
 
     @staticmethod
     def _inline_cache_points(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:
@@ -163,6 +185,14 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
                 )
                 for message in request.get("messages", [])
             ],
+        }
+
+    @staticmethod
+    def _with_guard_content_as_text(request: BedrockInvokeNovaRequest) -> BedrockInvokeNovaRequest:
+        return {
+            **request,
+            "system": list(system_with_guard_content_as_text(request.get("system", ()))),
+            "messages": list(messages_with_guard_content_as_text(request.get("messages", ()))),
         }
 
     def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:

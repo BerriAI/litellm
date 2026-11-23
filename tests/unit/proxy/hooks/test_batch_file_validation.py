@@ -7,12 +7,48 @@ VERIA-39 regression tests:
   models the caller is not authorized to use.
 """
 
+from collections.abc import Callable, Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+
+def _mock_parallel_request_limiter() -> MagicMock:
+    """A stand-in online limiter whose batch descriptor builders are awaitable and build nothing."""
+    limiter = MagicMock()
+    limiter.batch_rate_limit_descriptors = AsyncMock(return_value=[])
+    limiter.project_io_token_rate_limit_descriptors = AsyncMock(return_value=())
+    return limiter
+
+
+_STAND_IN_CALLS: Final = (
+    "atomic_check_and_increment_by_n",
+    "batch_rate_limit_descriptors",
+    "project_io_token_rate_limit_descriptors",
+    "rate_limited_model",
+)
+
+
+@pytest.fixture(autouse=True)
+def _stand_in_limiter_answers_its_own_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The batch limiter calls the online limiter's module functions with the limiter; a stand-in answers them."""
+    from litellm.proxy.hooks import batch_rate_limiter
+
+    for name in _STAND_IN_CALLS:
+        real = getattr(batch_rate_limiter, name)
+
+        def call(
+            limiter: object, *args: object, _real: Callable[..., object] = real, _name: str = name, **kwargs: object
+        ) -> object:
+            if isinstance(limiter, MagicMock):
+                return getattr(limiter, _name)(*args, **kwargs)
+            return _real(limiter, *args, **kwargs)
+
+        monkeypatch.setattr(batch_rate_limiter, name, call)
 
 
 def _models(file_content_as_dict):
@@ -31,9 +67,9 @@ def _models(file_content_as_dict):
 
 
 def test_token_counter_counts_chat_messages():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-4o-mini",
@@ -47,27 +83,27 @@ def test_token_counter_counts_chat_messages():
 def test_token_counter_counts_text_completion_prompt():
     """Pre-fix this returned 0 tokens (the counter only inspected
     `messages`), letting `prompt`-style batches slip past TPM limits."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {"body": {"model": "gpt-3.5-turbo-instruct", "prompt": "hello world"}}
     )
     assert tokens > 0
 
 
 def test_token_counter_counts_embedding_input_string():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {"body": {"model": "text-embedding-3-small", "input": "hello world"}}
     )
     assert tokens > 0
 
 
 def test_token_counter_counts_embedding_input_list():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "text-embedding-3-small",
@@ -79,9 +115,9 @@ def test_token_counter_counts_embedding_input_list():
 
 
 def test_token_counter_counts_text_completion_prompt_list():
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -96,9 +132,9 @@ def test_token_counter_counts_pre_tokenized_prompt_int_list():
     """OpenAI's text-completion API accepts a single pre-tokenized prompt as
     a list of ints. Each int is one token; pre-fix this shape was silently
     counted as zero, leaving a TPM bypass."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -113,9 +149,9 @@ def test_token_counter_counts_pre_tokenized_prompt_list_of_int_lists():
     """Multiple pre-tokenized prompts (`list[list[int]]`) — the most
     important bypass shape. A 1000-token batch must report 1000 tokens,
     not zero."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "gpt-3.5-turbo-instruct",
@@ -128,9 +164,9 @@ def test_token_counter_counts_pre_tokenized_prompt_list_of_int_lists():
 
 def test_token_counter_counts_pre_tokenized_input_for_embeddings():
     """Same shape applies to embeddings (`input`)."""
-    from litellm.batches.batch_utils import _count_entry_tokens
+    from litellm.batches.batch_utils import count_entry_tokens
 
-    tokens = _count_entry_tokens(
+    tokens = count_entry_tokens(
         {
             "body": {
                 "model": "text-embedding-3-small",
@@ -151,11 +187,11 @@ async def test_pre_call_rejects_unauthorized_model_in_batch_file():
     """Pre-fix the hook only validated the outer `model` parameter and
     forwarded the file as-is. With this fix, a model named inside the
     JSONL that the caller cannot use must trigger a 403."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
 
     # Simulated decoded batch file: caller is restricted to gpt-3.5
@@ -199,11 +235,11 @@ async def test_pre_call_allows_all_team_models_key_when_model_in_team_allowlist(
     """Keys with ``all-team-models`` must inherit the team allowlist when
     validating models embedded in batch JSONL."""
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     proxy_alias = "openai/openai/gpt-5.5-batch"
     file_dict = [
@@ -233,11 +269,11 @@ async def test_pre_call_allows_all_team_models_key_when_model_in_team_allowlist(
 @pytest.mark.asyncio
 async def test_pre_call_uses_current_team_allowlist_for_all_team_models_key():
     from litellm.proxy._types import LiteLLM_TeamTable, SpecialModelNames
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     stale_model = "stale-model"
     current_model = "current-model"
@@ -287,11 +323,11 @@ async def test_pre_call_allows_all_team_models_key_via_current_team_object():
     allowlist must be authorized through the freshly-fetched team object,
     not the cached-``team_models`` fallback."""
     from litellm.proxy._types import LiteLLM_TeamTable, SpecialModelNames
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     current_model = "current-model"
     file_dict = [
@@ -352,11 +388,11 @@ async def test_pre_call_denies_all_team_models_key_via_member_scope():
         LiteLLM_TeamTable,
         SpecialModelNames,
     )
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     team_model = "team-model"
     file_dict = [
@@ -416,11 +452,11 @@ async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_
     team_fetch_error, expected_status
 ):
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     stale_model = "stale-model"
     file_dict = [
@@ -470,11 +506,11 @@ async def test_pre_call_allows_teamless_all_team_models_key():
     someone re-introduces a teamless denial in _resolve_key_models_for_auth_check
     or adds a team_id guard that blocks the batch path."""
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     file_dict = [
         {
@@ -503,11 +539,11 @@ async def test_pre_call_allows_teamless_all_team_models_key():
 async def test_pre_call_allows_authorized_model_in_batch_file():
     """If every model in the JSONL is on the caller's allowlist, the hook
     must not raise."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
 
     file_dict = [
@@ -542,11 +578,11 @@ async def test_pre_call_allows_authorized_model_in_batch_file():
 
 @pytest.mark.asyncio
 async def test_pre_call_skips_file_fetch_when_disabled_in_general_settings():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
 
@@ -562,16 +598,16 @@ async def test_pre_call_skips_file_fetch_when_disabled_in_general_settings():
         )
 
     assert result == {"input_file_id": "file-abc123"}
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_not_called()
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_pre_call_skips_file_fetch_for_configured_provider():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice", models=["*"])
     data = {"input_file_id": "file-abc123", "model": "my-vllm-model"}
@@ -600,7 +636,7 @@ async def test_pre_call_skips_file_fetch_for_configured_provider():
     # work — assert the skip happened rather than the hook's error-recovery
     # path (which also returns data unchanged).
     mock_afile_content.assert_not_awaited()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.assert_not_called()
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -609,17 +645,17 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
     user-supplied ``custom_llm_provider`` that is not backed by the routing
     deployment must not trigger a skip: the input file must still be fetched
     and the rate-limit counters incremented."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     # An applicable rate limit keeps the no-limits shortcut from firing, so the
     # only thing that could prevent the fetch below is the provider skip. If the
     # spoofed ``custom_llm_provider`` were honored, afile_content would never be
     # awaited.
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 100}}
     ]
     rate_limiter.parallel_request_limiter.atomic_check_and_increment_by_n = AsyncMock(
@@ -672,7 +708,7 @@ async def test_pre_call_does_not_skip_for_spoofed_provider():
 async def test_count_input_file_usage_decodes_model_embedded_file_id():
     import base64
 
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
     original_file_id = "file-provider-xyz"
     encoded_payload = (
@@ -684,9 +720,9 @@ async def test_count_input_file_usage_decodes_model_embedded_file_id():
     )
     encoded_file_id = f"file-{encoded_payload}"
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
 
     mock_content = MagicMock()
@@ -727,11 +763,11 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
     """After replace_model_in_jsonl, body.model is the provider id (e.g. gpt-5.5).
     Auth must check target_model_names from the unified file id, not reverse-map
     the stripped id."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     proxy_alias = "openai/openai/gpt-5.5-batch"
     file_dict = [
@@ -791,11 +827,11 @@ async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
 ):
     """LIT-3593: three deployments strip to gpt-5.5; auth must use the upload
     target alias from target_model_names, not first-match reverse lookup."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     batch_alias = "openai/openai/gpt-5.5-batch"
     deployment_templates = {
@@ -862,11 +898,11 @@ async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
 async def test_pre_call_skips_check_when_no_models_present():
     """Files without any `body.model` (corrupt or empty) must not 500;
     the rate limiter logs a warning elsewhere and proceeds."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     user = UserAPIKeyAuth(api_key="sk-ok", user_id="alice")
 
@@ -889,11 +925,11 @@ async def test_pre_call_skips_check_when_no_models_present():
 
 
 def _make_rate_limiter():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    return _PROXY_BatchRateLimiter(
+    return PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
 
 
@@ -954,7 +990,7 @@ def test_get_batch_routing_model_uses_unified_file_id_target():
             return_value=None,
         ),
         patch(
-            "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+            "litellm.proxy.openai_files_endpoints.common_utils.is_base64_encoded_unified_file_id",
             return_value="unified-id",
         ),
         patch(
@@ -969,9 +1005,9 @@ def test_get_batch_routing_model_uses_unified_file_id_target():
 
 
 def test_key_requires_batch_model_access_check_branches():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    check = _PROXY_BatchRateLimiter._key_requires_batch_model_access_check
+    check = PROXY_BatchRateLimiter._key_requires_batch_model_access_check
     assert check(UserAPIKeyAuth(api_key="sk", models=["*"])) is False
     assert check(UserAPIKeyAuth(api_key="sk", models=["all-proxy-models"])) is False
     assert (
@@ -1007,38 +1043,40 @@ def test_key_requires_batch_model_access_check_branches():
 
 
 def test_has_applicable_batch_rate_limits():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    has_limits = _PROXY_BatchRateLimiter._has_applicable_batch_rate_limits
+    has_limits = PROXY_BatchRateLimiter._has_applicable_batch_rate_limits
     assert has_limits([{"rate_limit": {"tokens_per_unit": 100}}]) is True
     assert has_limits([{"rate_limit": {"requests_per_unit": 5}}]) is True
     assert has_limits([{"rate_limit": {"max_parallel_requests": 2}}]) is True
     assert has_limits([{"rate_limit": {}}, {}]) is False
 
 
-def test_should_skip_returns_false_when_key_needs_model_access_check():
+@pytest.mark.asyncio
+async def test_should_skip_returns_false_when_key_needs_model_access_check():
     rate_limiter = _make_rate_limiter()
     user = UserAPIKeyAuth(api_key="sk", models=["gpt-4o-mini"])
-    should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+    should_skip, descriptors = await rate_limiter._should_skip_batch_input_file_processing(
         data={"input_file_id": "file-abc"}, user_api_key_dict=user
     )
     assert should_skip is False
     assert descriptors is None
 
 
-def test_should_skip_ignores_client_supplied_metadata_flag():
+@pytest.mark.asyncio
+async def test_should_skip_ignores_client_supplied_metadata_flag():
     """A caller must not be able to bypass batch rate limits by setting
     ``litellm_metadata.skip_batch_input_file_rate_limiting`` in the request
     body. The skip decision is server-controlled only, so with applicable rate
     limits the JSONL is still processed despite the client flag."""
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={
                     "input_file_id": "file-abc",
                     "litellm_metadata": {"skip_batch_input_file_rate_limiting": True},
@@ -1049,7 +1087,8 @@ def test_should_skip_ignores_client_supplied_metadata_flag():
     assert should_skip is False
 
 
-def test_should_not_skip_for_forged_model_embedded_file_id():
+@pytest.mark.asyncio
+async def test_should_not_skip_for_forged_model_embedded_file_id():
     """A ``file-<base64>`` id embeds an unsigned model name the caller fully
     controls, so a caller can re-encode any accessible provider file id with a
     skip-listed model while the JSONL still routes rate-limited ``body.model``
@@ -1059,7 +1098,7 @@ def test_should_not_skip_for_forged_model_embedded_file_id():
     import base64
 
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1073,7 +1112,7 @@ def test_should_not_skip_for_forged_model_embedded_file_id():
         {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
     ):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"input_file_id": f"file-{encoded}"},
                 user_api_key_dict=user,
             )
@@ -1082,13 +1121,14 @@ def test_should_not_skip_for_forged_model_embedded_file_id():
     assert descriptors is not None
 
 
-def test_should_not_skip_for_skip_listed_top_level_model():
+@pytest.mark.asyncio
+async def test_should_not_skip_for_skip_listed_top_level_model():
     """A caller must not bypass batch rate limits by naming a skip-listed model
     in the top-level ``model`` while routing a different model through the JSONL
     ``body.model`` entries. No per-model skip exists, so a skip-listed model over
     a plain file still gets processed."""
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1097,7 +1137,7 @@ def test_should_not_skip_for_skip_listed_top_level_model():
         {"skip_batch_input_file_rate_limiting_for_models": ["gpt-4o-mini"]},
     ):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
                 user_api_key_dict=user,
             )
@@ -1105,7 +1145,8 @@ def test_should_not_skip_for_skip_listed_top_level_model():
     assert should_skip is False
 
 
-def test_should_not_skip_when_file_bound_provider_is_rate_limited():
+@pytest.mark.asyncio
+async def test_should_not_skip_when_file_bound_provider_is_rate_limited():
     """A caller must not bypass batch rate limits by pointing the top-level
     ``model`` at a skip-listed provider while the model-embedded ``input_file_id``
     routes to a rate-limited provider. ``create_batch`` runs the batch on the
@@ -1114,7 +1155,7 @@ def test_should_not_skip_when_file_bound_provider_is_rate_limited():
     import base64
 
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1140,7 +1181,7 @@ def test_should_not_skip_when_file_bound_provider_is_rate_limited():
         ),
     ):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
                 user_api_key_dict=user,
             )
@@ -1149,14 +1190,15 @@ def test_should_not_skip_when_file_bound_provider_is_rate_limited():
     assert descriptors is not None
 
 
-def test_should_skip_when_file_bound_provider_is_skip_listed():
+@pytest.mark.asyncio
+async def test_should_skip_when_file_bound_provider_is_skip_listed():
     """The provider skip must still fire when the model the batch actually runs
     on (the file-bound model) resolves to a skip-listed provider, even if the
     top-level ``model`` resolves to a different, non-skipped provider."""
     import base64
 
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1182,7 +1224,7 @@ def test_should_skip_when_file_bound_provider_is_skip_listed():
         ),
     ):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"input_file_id": f"file-{encoded}", "model": "gpt-skip"},
                 user_api_key_dict=user,
             )
@@ -1190,11 +1232,12 @@ def test_should_skip_when_file_bound_provider_is_skip_listed():
     assert should_skip is True
 
 
-def test_warns_once_for_unsupported_model_skip_setting():
+@pytest.mark.asyncio
+async def test_warns_once_for_unsupported_model_skip_setting():
     """Operators who set the no-op per-model skip key get a single warning so a
     misconfigured deployment does not silently leave batch limits unenforced."""
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1208,7 +1251,7 @@ def test_warns_once_for_unsupported_model_skip_setting():
         ) as mock_logger,
     ):
         for _ in range(3):
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
                 user_api_key_dict=user,
             )
@@ -1219,9 +1262,10 @@ def test_warns_once_for_unsupported_model_skip_setting():
     )
 
 
-def test_no_warning_when_model_skip_setting_absent():
+@pytest.mark.asyncio
+async def test_no_warning_when_model_skip_setting_absent():
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"requests_per_unit": 5}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
@@ -1234,22 +1278,23 @@ def test_no_warning_when_model_skip_setting_absent():
             "litellm.proxy.hooks.batch_rate_limiter.verbose_proxy_logger"
         ) as mock_logger,
     ):
-        rate_limiter._should_skip_batch_input_file_processing(
+        await rate_limiter._should_skip_batch_input_file_processing(
             data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
             user_api_key_dict=user,
         )
     mock_logger.warning.assert_not_called()
 
 
-def test_should_skip_when_no_rate_limits_configured():
+@pytest.mark.asyncio
+async def test_should_skip_when_no_rate_limits_configured():
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {}}
     ]
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
         should_skip, descriptors = (
-            rate_limiter._should_skip_batch_input_file_processing(
+            await rate_limiter._should_skip_batch_input_file_processing(
                 data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
                 user_api_key_dict=user,
             )
@@ -1258,15 +1303,16 @@ def test_should_skip_when_no_rate_limits_configured():
     assert descriptors is None
 
 
-def test_should_not_skip_and_reuses_descriptors_when_limits_present():
+@pytest.mark.asyncio
+async def test_should_not_skip_and_reuses_descriptors_when_limits_present():
     rate_limiter = _make_rate_limiter()
     descriptors = [{"rate_limit": {"tokens_per_unit": 100}}]
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = (
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = (
         descriptors
     )
     user = UserAPIKeyAuth(api_key="sk", models=["*"])
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        should_skip, returned = rate_limiter._should_skip_batch_input_file_processing(
+        should_skip, returned = await rate_limiter._should_skip_batch_input_file_processing(
             data={"model": "gpt-4o-mini", "input_file_id": "file-abc"},
             user_api_key_dict=user,
         )
@@ -1274,7 +1320,8 @@ def test_should_not_skip_and_reuses_descriptors_when_limits_present():
     assert returned is descriptors
 
 
-def test_resolve_fetch_params_uses_request_model_credentials():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_uses_request_model_credentials():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1288,7 +1335,7 @@ def test_resolve_fetch_params_uses_request_model_credentials():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1300,7 +1347,8 @@ def test_resolve_fetch_params_uses_request_model_credentials():
     assert fetch_kwargs["api_base"] == "http://vllm:8000/v1"
 
 
-def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     rate_limiter = _make_rate_limiter()
     with (
         patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
@@ -1310,7 +1358,7 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id="file-plain-openai",
                 custom_llm_provider="openai",
                 data={"model": "my-vllm-batch"},
@@ -1320,7 +1368,8 @@ def test_resolve_fetch_params_fails_open_on_credential_lookup_error():
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
 
-def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
+@pytest.mark.asyncio
+async def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     import base64
 
     rate_limiter = _make_rate_limiter()
@@ -1342,7 +1391,7 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
         ),
     ):
         provider_file_id, fetch_kwargs = (
-            rate_limiter._resolve_batch_input_file_fetch_params(
+            await rate_limiter._resolve_batch_input_file_fetch_params(
                 file_id=encoded_file_id,
                 custom_llm_provider="openai",
                 data={},
@@ -1353,21 +1402,66 @@ def test_resolve_fetch_params_model_embedded_fails_open_on_credential_error():
     assert fetch_kwargs == {"custom_llm_provider": "openai"}
 
 
+
+def _a_team_wildcard_caller(team_models: list[str]) -> UserAPIKeyAuth:
+    import litellm
+
+    family: Final = min(
+        model for model in litellm.open_ai_chat_completion_models if "-" in model and "/" not in model
+    ).partition("-")[0]
+    return UserAPIKeyAuth(
+        api_key="sk", user_id="u", team_id="team-a", team_models=team_models, models=[f"{family}-*"]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_models, reads_with_the_team_key", [(["openai/*"], True), (["claude-opus-4-6"], False)]
+)
+async def test_the_input_file_is_read_with_the_provider_key_its_upload_used(
+    team_models: list[str], reads_with_the_team_key: bool
+):
+    from litellm import Router
+    from litellm.proxy.openai_files_endpoints.common_utils import apply_team_provider_credentials
+
+    llm_router: Final = Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": "team-openai-key"},
+                "model_info": {"id": "team-a-openai", "team_id": "team-a"},
+            }
+        ]
+    )
+    caller: Final = _a_team_wildcard_caller(team_models)
+    upload: Final[dict[str, object]] = {}
+    await apply_team_provider_credentials(
+        data=upload, llm_router=llm_router, user_api_key_dict=caller, custom_llm_provider="openai"
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", llm_router):
+        _, fetch_kwargs = await _make_rate_limiter()._resolve_batch_input_file_fetch_params(
+            file_id="file-plain-openai", custom_llm_provider="openai", data={}, user_api_key_dict=caller
+        )
+
+    assert fetch_kwargs.get("api_key") == upload.get("api_key")
+    assert (upload.get("api_key") == "team-openai-key") is reads_with_the_team_key
+
 @pytest.mark.asyncio
 async def test_check_and_increment_computes_descriptors_when_not_passed():
     from litellm.proxy.hooks.batch_rate_limiter import (
         BatchFileUsage,
-        _PROXY_BatchRateLimiter,
+        PROXY_BatchRateLimiter,
     )
 
-    parallel_request_limiter = MagicMock()
-    parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    parallel_request_limiter = _mock_parallel_request_limiter()
+    parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {"tokens_per_unit": 100}}
     ]
     parallel_request_limiter.atomic_check_and_increment_by_n = AsyncMock(
         return_value={"overall_code": "OK", "statuses": []}
     )
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=parallel_request_limiter,
     )
@@ -1379,7 +1473,7 @@ async def test_check_and_increment_computes_descriptors_when_not_passed():
         descriptors=None,
     )
 
-    parallel_request_limiter._create_rate_limit_descriptors.assert_called_once()
+    parallel_request_limiter.batch_rate_limit_descriptors.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1390,17 +1484,17 @@ async def test_pre_call_enforces_project_otpm_limit_for_batch():
     quota. The project OTPM descriptor must now be present and charged with
     the batch's estimated *output* tokens, not its input tokens."""
     from litellm import DualCache
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     local_cache = DualCache()
-    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    parallel_request_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(local_cache),
         parallel_request_limiter=parallel_request_limiter,
     )
@@ -1448,17 +1542,17 @@ async def test_pre_call_enforces_project_itpm_limit_for_batch():
     """Companion to the OTPM regression above: a project's ITPM quota must
     also apply to batch submissions."""
     from litellm import DualCache
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     local_cache = DualCache()
-    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    parallel_request_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(local_cache),
         parallel_request_limiter=parallel_request_limiter,
     )
@@ -1505,17 +1599,17 @@ async def test_pre_call_enforces_project_otpm_limit_for_non_routing_row_model():
     different, quota-limited model. That row's tokens must still be charged
     against its own model's project OTPM quota."""
     from litellm import DualCache
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     local_cache = DualCache()
-    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    parallel_request_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(local_cache),
         parallel_request_limiter=parallel_request_limiter,
     )
@@ -1566,18 +1660,19 @@ async def test_pre_call_charges_each_row_model_against_its_own_project_quota():
     model's request must succeed even though the over-limit model's row
     would fail on its own."""
     from litellm import DualCache
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         PROJECT_OTPM_DESCRIPTOR_KEY,
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
+        should_rate_limit,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     local_cache = DualCache()
-    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(
+    parallel_request_limiter = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=InternalUsageCache(local_cache),
         parallel_request_limiter=parallel_request_limiter,
     )
@@ -1625,7 +1720,8 @@ async def test_pre_call_charges_each_row_model_against_its_own_project_quota():
 
     # model-a's own counter was not touched by model-b's rejection: a
     # follow-up model-a-only batch well within its own limit must still pass.
-    model_a_status = await parallel_request_limiter.should_rate_limit(
+    model_a_status = await should_rate_limit(
+        parallel_request_limiter,
         descriptors=[
             {
                 "key": PROJECT_OTPM_DESCRIPTOR_KEY,
@@ -1642,7 +1738,8 @@ async def test_pre_call_charges_each_row_model_against_its_own_project_quota():
     assert model_a_status["overall_code"] == "OK"
 
 
-def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
+@pytest.mark.asyncio
+async def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
     """The no-limits skip must not fire just because the file-bound/top-level
     routing model itself has no configured quota: a JSONL row can name a
     different model that the project *does* quota, and that isn't knowable
@@ -1650,7 +1747,7 @@ def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
     rate_limiter = _make_rate_limiter()
     # No key/team/model-level limits at all -- only a project OTPM limit for a
     # model unrelated to the routing model below.
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {}}
     ]
     user = UserAPIKeyAuth(
@@ -1660,7 +1757,7 @@ def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
         project_metadata={"model_otpm_limit": {"some-other-model": 50}},
     )
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+        should_skip, descriptors = await rate_limiter._should_skip_batch_input_file_processing(
             data={"model": "unlimited-model", "input_file_id": "file-abc"},
             user_api_key_dict=user,
         )
@@ -1668,12 +1765,13 @@ def test_should_not_skip_when_project_has_io_limit_for_non_routing_model():
     assert descriptors is not None
 
 
-def test_should_skip_when_project_has_no_io_limits_and_no_other_limits():
+@pytest.mark.asyncio
+async def test_should_skip_when_project_has_no_io_limits_and_no_other_limits():
     """Sanity check for the new project-limits carve-out: a project caller
     with no ITPM/OTPM configuration anywhere must still get the fast-path
     skip when no other rate limits apply, exactly as before this fix."""
     rate_limiter = _make_rate_limiter()
-    rate_limiter.parallel_request_limiter._create_rate_limit_descriptors.return_value = [
+    rate_limiter.parallel_request_limiter.batch_rate_limit_descriptors.return_value = [
         {"rate_limit": {}}
     ]
     user = UserAPIKeyAuth(
@@ -1683,7 +1781,7 @@ def test_should_skip_when_project_has_no_io_limits_and_no_other_limits():
         project_metadata={},
     )
     with patch("litellm.proxy.proxy_server.general_settings", {}):
-        should_skip, descriptors = rate_limiter._should_skip_batch_input_file_processing(
+        should_skip, descriptors = await rate_limiter._should_skip_batch_input_file_processing(
             data={"model": "unlimited-model", "input_file_id": "file-abc"},
             user_api_key_dict=user,
         )
@@ -1693,11 +1791,11 @@ def test_should_skip_when_project_has_no_io_limits_and_no_other_limits():
 
 @pytest.mark.asyncio
 async def test_count_input_file_usage_raises_on_non_bytes_content():
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
 
     bad_content = MagicMock()
@@ -1741,13 +1839,13 @@ def _make_batch_input_bytes(n_rows: int, padding: int = 200) -> bytes:
 
 def test_iter_batch_output_entries_matches_dict_list():
     from litellm.batches.batch_utils import (
-        _get_file_content_as_dictionary,
+        get_file_content_as_dictionary,
         _iter_batch_output_entries,
     )
 
     raw = _make_batch_input_bytes(50)
     streamed = list(_iter_batch_output_entries(raw))
-    assert streamed == _get_file_content_as_dictionary(raw)
+    assert streamed == get_file_content_as_dictionary(raw)
     assert streamed[0]["custom_id"] == "request-0"
     # tolerant of blank lines and a missing trailing newline
     assert list(_iter_batch_output_entries(raw + b"\n\n")) == streamed
@@ -1758,7 +1856,7 @@ def test_streaming_count_peak_below_dict_list():
     import tracemalloc
 
     from litellm.batches.batch_utils import (
-        _get_file_content_as_dictionary,
+        get_file_content_as_dictionary,
         _iter_batch_output_entries,
     )
 
@@ -1785,7 +1883,7 @@ def test_streaming_count_peak_below_dict_list():
         return count
 
     def _build_list():
-        return len(_get_file_content_as_dictionary(raw))
+        return len(get_file_content_as_dictionary(raw))
 
     stream_peak = _measure(_stream)
     list_peak = _measure(_build_list)
@@ -1800,11 +1898,11 @@ async def test_count_input_file_usage_streams_without_building_list():
     """count_input_file_usage must count requests/tokens in one streaming pass.
     Mocks the download; asserts the count is correct and that the dict-list
     helper is never called (a revert to the list approach would call it)."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     raw = _make_batch_input_bytes(10)
     fake_content = MagicMock()
@@ -1813,7 +1911,7 @@ async def test_count_input_file_usage_streams_without_building_list():
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
         patch(
-            "litellm.batches.batch_utils._get_file_content_as_dictionary"
+            "litellm.batches.batch_utils.get_file_content_as_dictionary"
         ) as mock_dict_list,
     ):
         usage = await rate_limiter.count_input_file_usage(
@@ -1852,11 +1950,11 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
     NOT skip the model allowlist check. async_pre_call_hook swallows non-HTTP
     exceptions and submits the batch, so a raised counting error would otherwise
     fail open. The access check must still run and deny the restricted model."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     fake_content = MagicMock()
     fake_content.content = _one_row_batch_bytes("restricted-model")
@@ -1874,7 +1972,7 @@ async def test_count_input_file_usage_enforces_models_when_token_counting_fails(
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=deny),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
@@ -1897,11 +1995,11 @@ async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_a
     zero the token total, which would let a caller evade the TPM limit by sending
     rows the counter cannot measure. The row falls back to a conservative
     size-based estimate so the batch proceeds with a non-zero count."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     fake_content = MagicMock()
     fake_content.content = _one_row_batch_bytes("allowed-model")
@@ -1919,7 +2017,7 @@ async def test_count_input_file_usage_estimates_tokens_when_counting_fails_for_a
 
     with (
         patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
-        patch("litellm.proxy.hooks.batch_rate_limiter._count_entry_tokens", new=_boom),
+        patch("litellm.proxy.hooks.batch_rate_limiter.batch_row_counter", return_value=_boom),
         patch("litellm.proxy.auth.auth_checks.can_key_call_model", new=allow),
         patch("litellm.proxy.proxy_server.llm_router", MagicMock(model_list=[])),
     ):
@@ -1941,11 +2039,11 @@ async def test_count_input_file_usage_collects_models_after_malformed_line():
     named on a row AFTER a malformed line must still be collected and denied by the
     allowlist check, otherwise a caller could hide a restricted model behind a bad
     row."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
-    rate_limiter = _PROXY_BatchRateLimiter(
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
-        parallel_request_limiter=MagicMock(),
+        parallel_request_limiter=_mock_parallel_request_limiter(),
     )
     fake_content = MagicMock()
     fake_content.content = (
@@ -1987,27 +2085,24 @@ async def test_count_input_file_usage_collects_models_after_malformed_line():
 # ---------------------------------------------------------------------------
 
 
-def _output_estimator():
+def _output_estimator(monkeypatch: pytest.MonkeyPatch):
     """A `_PROXY_BatchRateLimiter` whose output-token floor is observable:
     the no-`max_tokens` floor mock returns a distinctive sentinel so tests can
     tell "floor was used" apart from "an explicit cap was read"."""
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
-    )
+    from litellm.proxy.hooks import batch_rate_limiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
 
     limiter = MagicMock()
-    limiter.no_max_tokens_output_floor.return_value = 999
-    limiter.get_output_candidate_count = _PROXY_MaxParallelRequestsHandler_v3.get_output_candidate_count
-    return _PROXY_BatchRateLimiter(
+    monkeypatch.setattr(batch_rate_limiter, "no_max_tokens_output_floor", MagicMock(return_value=999))
+    return PROXY_BatchRateLimiter(
         internal_usage_cache=MagicMock(),
         parallel_request_limiter=limiter,
     )
 
 
-def test_estimate_entry_output_tokens_zero_for_embeddings_url():
+def test_estimate_entry_output_tokens_zero_for_embeddings_url(monkeypatch: pytest.MonkeyPatch):
     """A real `/v1/embeddings` row reserves zero output tokens."""
-    rate_limiter = _output_estimator()
+    rate_limiter = _output_estimator(monkeypatch)
     entry = {
         "url": "/v1/embeddings",
         "body": {"model": "text-embedding-3-small", "input": "hello world"},
@@ -2016,13 +2111,13 @@ def test_estimate_entry_output_tokens_zero_for_embeddings_url():
     assert rate_limiter._estimate_entry_output_tokens(entry, None) == 0
 
 
-def test_estimate_entry_output_tokens_does_not_zero_responses_row_with_input():
+def test_estimate_entry_output_tokens_does_not_zero_responses_row_with_input(monkeypatch: pytest.MonkeyPatch):
     """Pre-fix: a `/v1/responses` row carries `body.input` with no `messages`/
     `prompt`, so the old body-shape heuristic misclassified it as embeddings
     and reserved zero output tokens -- a project caller could submit large
     Responses generations against a quota-limited model without consuming
     OTPM. The row's own `url` (not body shape) must decide this."""
-    rate_limiter = _output_estimator()
+    rate_limiter = _output_estimator(monkeypatch)
     entry = {
         "url": "/v1/responses",
         "body": {"model": "gpt-4o", "input": "write me an essay"},
@@ -2031,28 +2126,32 @@ def test_estimate_entry_output_tokens_does_not_zero_responses_row_with_input():
     # No explicit cap on the row, so it must fall back to the no-max-tokens
     # floor -- never straight to zero.
     assert rate_limiter._estimate_entry_output_tokens(entry, None) == 999
-    rate_limiter.parallel_request_limiter.no_max_tokens_output_floor.assert_called_once_with(None)
+    from litellm.proxy.hooks import batch_rate_limiter
+
+    batch_rate_limiter.no_max_tokens_output_floor.assert_called_once_with(None)
 
 
-def test_estimate_entry_output_tokens_uses_max_output_tokens_for_responses():
+def test_estimate_entry_output_tokens_uses_max_output_tokens_for_responses(monkeypatch: pytest.MonkeyPatch):
     """`/v1/responses` caps output with `max_output_tokens`, not `max_tokens`/
     `max_completion_tokens`. Pre-fix this field was never inspected, so a
     capped Responses row still fell through to the (possibly larger) floor
     estimate instead of the caller's own declared cap."""
-    rate_limiter = _output_estimator()
+    rate_limiter = _output_estimator(monkeypatch)
     entry = {
         "url": "/v1/responses",
         "body": {"model": "gpt-4o", "input": "hi", "max_output_tokens": 123},
     }
 
     assert rate_limiter._estimate_entry_output_tokens(entry, None) == 123
-    rate_limiter.parallel_request_limiter.no_max_tokens_output_floor.assert_not_called()
+    from litellm.proxy.hooks import batch_rate_limiter
+
+    batch_rate_limiter.no_max_tokens_output_floor.assert_not_called()
 
 
-def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens():
+def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens(monkeypatch: pytest.MonkeyPatch):
     """When a row somehow carries both fields, the chat-style cap wins first --
     `max_output_tokens` is only consulted once the chat-style caps are absent."""
-    rate_limiter = _output_estimator()
+    rate_limiter = _output_estimator(monkeypatch)
     entry = {
         "url": "/v1/chat/completions",
         "body": {
@@ -2082,12 +2181,14 @@ def test_estimate_entry_output_tokens_prefers_max_tokens_over_max_output_tokens(
         ({"n": 3}, 2997),
     ],
 )
-def test_estimate_entry_output_tokens_multiplies_candidate_count(body_extra, expected):
+def test_estimate_entry_output_tokens_multiplies_candidate_count(
+    body_extra, expected, monkeypatch: pytest.MonkeyPatch
+):
     """A row generating n / best_of candidates consumes that many completions'
     worth of output tokens, so the OTPM reservation must scale with the
     effective candidate count. Pre-fix a `max_tokens: 40, n: 10` row consumed
     up to 400 output tokens while reserving only 40."""
-    rate_limiter = _output_estimator()
+    rate_limiter = _output_estimator(monkeypatch)
     entry = {
         "url": "/v1/chat/completions",
         "body": {"model": "gpt-4o", "messages": [], **body_extra},
@@ -2101,20 +2202,26 @@ def test_estimate_entry_output_tokens_multiplies_candidate_count(body_extra, exp
 # ---------------------------------------------------------------------------
 
 
-def _enqueued_rate_limiter():
+def _enqueued_rate_limiter(
+    model_group_resolver: Callable[[str], str | None] = lambda _model: None,
+    deployment_model_name: Callable[[str], str | None] = lambda _model: None,
+):
     from litellm import DualCache
-    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+    from litellm.proxy.hooks.batch_rate_limiter import PROXY_BatchRateLimiter
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-        _PROXY_MaxParallelRequestsHandler_v3,
+        PROXY_MaxParallelRequestsHandler_v3,
     )
     from litellm.proxy.utils import InternalUsageCache
 
     local_cache = DualCache(default_in_memory_ttl=60)
     internal_usage_cache = InternalUsageCache(local_cache)
-    parallel_request_limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
-    rate_limiter = _PROXY_BatchRateLimiter(
+    parallel_request_limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=internal_usage_cache, model_group_resolver=model_group_resolver
+    )
+    rate_limiter = PROXY_BatchRateLimiter(
         internal_usage_cache=internal_usage_cache,
         parallel_request_limiter=parallel_request_limiter,
+        deployment_model_name=deployment_model_name,
     )
     return rate_limiter, local_cache
 
@@ -2126,9 +2233,9 @@ _ENQUEUED_BATCH_FILE_CONTENT = (
 )
 
 
-def _enqueued_batch_patches():
+def _enqueued_batch_patches(file_content: bytes = _ENQUEUED_BATCH_FILE_CONTENT):
     mock_content = MagicMock()
-    mock_content.content = _ENQUEUED_BATCH_FILE_CONTENT
+    mock_content.content = file_content
     afile_content_mock = AsyncMock(return_value=mock_content)
     return afile_content_mock, (
         patch("litellm.proxy.proxy_server.general_settings", {}),
@@ -2259,6 +2366,307 @@ async def test_enqueued_team_limit_applies_to_batch_submission():
 
     assert exc.value.status_code == 429
     assert "Batch enqueued token limit exceeded for team: team-enqueued-batch" in str(exc.value.detail)
+
+
+_MODEL_LESS_BATCH_FILE_CONTENT = (
+    b'{"body": {"max_tokens": 40, "messages": [{"role": "user", "content": "hi"}]}}\n'
+    b'{"body": {"max_tokens": 40, "messages": [{"role": "user", "content": "hi"}]}}\n'
+)
+_ALIASED_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"mini-alias")
+_UNLISTED_MODEL_BATCH_FILE_CONTENT = _ENQUEUED_BATCH_FILE_CONTENT.replace(b"gpt-4o-mini", b"unlisted-model")
+_MIXED_MODEL_BATCH_FILE_CONTENT = (
+    _ENQUEUED_BATCH_FILE_CONTENT
+    + b'{"body": {"model": "gpt-5.5", "max_tokens": 40, "messages": [{"role": "user", "content": "hello there"}]}}\n'
+)
+
+
+def _project_model_limited_user(model_limits: Mapping[str, int]) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(
+        api_key="hashed-jwt-project-caller",
+        models=["*"],
+        team_id="shared-team",
+        project_id="project-enqueued-batch",
+        project_metadata={"model_batch_enqueued_token_limit": model_limits},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "file_content",
+    [
+        _ENQUEUED_BATCH_FILE_CONTENT,
+        _MODEL_LESS_BATCH_FILE_CONTENT,
+        _ALIASED_BATCH_FILE_CONTENT,
+        _UNLISTED_MODEL_BATCH_FILE_CONTENT,
+    ],
+    ids=[
+        "rows name the model",
+        "rows name no model",
+        "rows name an alias of the model",
+        "rows name an unlisted model",
+    ],
+)
+async def test_project_model_enqueued_limit_rejects_a_batch_over_that_models_limit(file_content):
+    rate_limiter, local_cache = _enqueued_rate_limiter({"mini-alias": "gpt-4o-mini"}.get)
+    afile_content_mock, patches = _enqueued_batch_patches(file_content)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini" in str(
+        exc.value.detail
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_reserves_only_the_limited_models_rows():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_project_model_limited_user({"gpt-5.5": 100000}),
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    (scope,) = stash.batch_enqueued_reservation.scopes
+    assert scope.value == "project-enqueued-batch:gpt-5.5"
+    assert scope.tokens is not None
+    assert 0 < scope.tokens < data["_batch_token_count"]
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_for_another_model_leaves_the_batch_on_per_minute_limits():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=_project_model_limited_user({"gpt-5.5": 10}),
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    assert data["_batch_token_count"] > 10
+    stash: Final = get_request_stash()
+    assert stash is None or stash.batch_enqueued_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_per_minute_limits_still_apply_when_only_a_rows_model_has_a_project_allowance():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped: Final = _project_model_limited_user({"gpt-5.5": allowance}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=per_minute_capped,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit" not in str(exc.value.detail)
+    whole_allowance: Final = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-5.5", limit=allowance, tokens=allowance
+    )
+    refilled: Final = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
+async def test_a_project_allowance_for_the_routing_model_replaces_per_minute_limits():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_request_stash
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        per_minute_capped: Final = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(
+            update={"rpm_limit": 1, "tpm_limit": 10}
+        )
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=per_minute_capped,
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    stash: Final = get_request_stash()
+    assert stash is not None and stash.batch_enqueued_reservation is not None
+    assert stash.batch_enqueued_reservation.tokens == data["_batch_token_count"] > 10
+
+
+@pytest.mark.asyncio
+async def test_a_routing_model_allowance_keeps_project_input_limits_on_the_other_row_models():
+    from litellm.proxy.hooks.batch_enqueued_tokens import BatchEnqueuedTokenScope
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches(_MIXED_MODEL_BATCH_FILE_CONTENT)
+    allowance: Final = 1000000
+    user: Final = _project_model_limited_user({"gpt-4o-mini": allowance}).model_copy(
+        update={
+            "project_metadata": {
+                "model_batch_enqueued_token_limit": {"gpt-4o-mini": allowance},
+                "model_itpm_limit": {"gpt-5.5": 1},
+            }
+        }
+    )
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=user,
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "gpt-4o-mini"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "model_per_project_itpm" in str(exc.value.detail)
+    whole_allowance: Final = BatchEnqueuedTokenScope(
+        key="project_model", value="project-enqueued-batch:gpt-4o-mini", limit=allowance, tokens=allowance
+    )
+    refilled: Final = await rate_limiter.parallel_request_limiter.batch_enqueued_token_store.reserve(
+        tokens=allowance, scopes=(whole_allowance,)
+    )
+    assert refilled.scopes == (whole_allowance,)
+
+
+@pytest.mark.asyncio
+async def test_daily_token_limit_still_applies_alongside_a_project_model_reservation():
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        daily_capped: Final = _project_model_limited_user({"gpt-4o-mini": 1000000}).model_copy(update={"tpd_limit": 10})
+        rejected_data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=daily_capped,
+                cache=local_cache,
+                data=rejected_data,
+                call_type="acreate_batch",
+            )
+        assert exc.value.status_code == 429
+        assert "Batch enqueued token limit" not in str(exc.value.detail)
+
+        exact_fit: Final = _project_model_limited_user({"gpt-4o-mini": rejected_data["_batch_token_count"]})
+        accepted_data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=exact_fit,
+            cache=local_cache,
+            data=accepted_data,
+            call_type="acreate_batch",
+        )
+
+    assert result is accepted_data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "opted_in_user",
+    [
+        UserAPIKeyAuth(
+            api_key="sk-enqueued-daily", models=["*"], tpd_limit=10, metadata={"batch_enqueued_token_limit": 1000000}
+        ),
+        UserAPIKeyAuth(
+            api_key="sk-team-enqueued-daily",
+            models=["*"],
+            team_id="team-enqueued-daily",
+            team_tpd_limit=10,
+            team_metadata={"batch_enqueued_token_limit": 1000000},
+        ),
+    ],
+    ids=["key", "team"],
+)
+async def test_key_or_team_enqueued_limit_alone_governs_a_batch_over_its_daily_cap(opted_in_user):
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        data: Final = {"input_file_id": "file-abc123", "model": "gpt-4o-mini"}
+        result: Final = await rate_limiter.async_pre_call_hook(
+            user_api_key_dict=opted_in_user,
+            cache=local_cache,
+            data=data,
+            call_type="acreate_batch",
+        )
+
+    assert result is data
+    assert data["_batch_token_count"] > 10
+
+
+@pytest.mark.asyncio
+async def test_a_model_bound_upload_still_charges_the_model_its_rows_name():
+    from litellm.proxy.openai_files_endpoints.common_utils import encode_file_id_with_model
+
+    rate_limiter, local_cache = _enqueued_rate_limiter()
+    afile_content_mock, patches = _enqueued_batch_patches()
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini-priority": 1000000, "gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": encode_file_id_with_model("file-abc123", "gpt-4o-mini-priority")},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini." in str(
+        exc.value.detail
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_model_enqueued_limit_applies_to_a_batch_that_names_a_deployment_id():
+    rate_limiter, local_cache = _enqueued_rate_limiter(deployment_model_name={"deployment-1": "gpt-4o-mini"}.get)
+    afile_content_mock, patches = _enqueued_batch_patches(_MODEL_LESS_BATCH_FILE_CONTENT)
+
+    with patches[0], patches[1], patches[2], patch("litellm.afile_content", new=afile_content_mock):
+        with pytest.raises(HTTPException) as exc:
+            await rate_limiter.async_pre_call_hook(
+                user_api_key_dict=_project_model_limited_user({"gpt-4o-mini": 10}),
+                cache=local_cache,
+                data={"input_file_id": "file-abc123", "model": "deployment-1"},
+                call_type="acreate_batch",
+            )
+
+    assert exc.value.status_code == 429
+    assert "Batch enqueued token limit exceeded for project_model: project-enqueued-batch:gpt-4o-mini" in str(
+        exc.value.detail
+    )
 
 
 @pytest.mark.asyncio

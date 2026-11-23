@@ -10,10 +10,12 @@ Has 4 methods:
 
 import ast
 import asyncio
-import json
 import os
+from collections.abc import Iterable, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol
+
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import print_verbose
@@ -23,8 +25,14 @@ from litellm.constants import (
     SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    json_loaded,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -38,6 +46,9 @@ from ._embedding_router import (
 from .base_cache import BaseCache
 
 _WAIT_FOR_INDEXING: Final = MappingProxyType({"wait": "true"})
+_EMBEDDING_VECTOR: Final = TypeAdapter(object)
+_CACHED_RESPONSE: Final = TypeAdapter(object)
+_SEARCH_RESULTS: Final = TypeAdapter(object)
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -47,6 +58,10 @@ class _QdrantCollectionDetailsResponse(Protocol):
     """The qdrant `/collections/{name}` response, whose body is kept as an opaque JSON object."""
 
     def json(self) -> dict[str, object]: ...
+
+
+class _CacheKeyPayload(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class QdrantSemanticCache(BaseCache):
@@ -68,8 +83,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -112,7 +127,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:
@@ -172,16 +187,17 @@ class QdrantSemanticCache(BaseCache):
             else:
                 raise Exception("Error while creating new collection")
 
-    def _get_cache_logic(self, cached_response: Any):
+    def _get_cache_logic(self, cached_response: object) -> object:
         if cached_response is None:
             return cached_response
         try:
-            cached_response = json.loads(cached_response)  # Convert string to dictionary
+            return _CACHED_RESPONSE.validate_python(json_loaded(cached_response))
         except Exception:
-            cached_response = ast.literal_eval(cached_response)
-        return cached_response
+            return _CACHED_RESPONSE.validate_python(
+                ast.literal_eval(cached_response)  # pyright: ignore[reportArgumentType]  # raises its own ValueError
+            )
 
-    def _get_qdrant_cache_key_filter(self, key: str) -> dict:
+    def _get_qdrant_cache_key_filter(self, key: str) -> dict[str, object]:
         return {
             "must": [
                 {
@@ -191,7 +207,7 @@ class QdrantSemanticCache(BaseCache):
             ]
         }
 
-    def _add_cache_key_filter_to_search_data(self, data: dict, key: str) -> None:
+    def _add_cache_key_filter_to_search_data(self, data: dict[str, object], key: str) -> None:
         data["filter"] = self._get_qdrant_cache_key_filter(key)
 
     def _ensure_cache_key_payload_index(self) -> None:
@@ -209,12 +225,12 @@ class QdrantSemanticCache(BaseCache):
         except Exception as exc:
             print_verbose(f"Qdrant semantic-cache could not create cache-key payload index: {exc}")
 
-    def _payload_matches_cache_key(self, payload: dict, key: str) -> bool:
+    def _payload_matches_cache_key(self, payload: object, key: str) -> bool:
         # Pre-isolation points stored only prompt + response with no cache-key
         # payload field. Reassigning them to a caller's key would risk
         # cross-scope hits, so they're treated as misses and re-populated on
         # the next set_cache.
-        cached_key: Final = payload.get(self.CACHE_KEY_FIELD_NAME)
+        cached_key: Final = require_attributes(payload, _CacheKeyPayload, "get").get(self.CACHE_KEY_FIELD_NAME)
         return cached_key is not None and str(cached_key) == str(key)
 
     def _embedding_input(self, prompt: str, router: "Router | None") -> str:
@@ -280,22 +296,19 @@ class QdrantSemanticCache(BaseCache):
         )
         return await asyncio.wait_for(embedding_call, self.embedding_timeout)
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: object, value: object, **kwargs):
         print_verbose(f"qdrant semantic-cache set_cache, kwargs: {kwargs}")
         from litellm._uuid import uuid
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -320,21 +333,18 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: str, **kwargs):
         print_verbose(f"sync qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
-        embedding_response: Final = cast(
-            EmbeddingResponse,
-            self._get_embedding(prompt, metadata=kwargs.get("metadata")),
-        )
+        embedding_response: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,
@@ -355,24 +365,24 @@ class QdrantSemanticCache(BaseCache):
             headers=self.headers,
             json=data,
         )
-        results: Final = search_response.json()["result"]
+        results: Final = _SEARCH_RESULTS.validate_python(search_response.json()["result"])
 
         if results is None:
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
-        if isinstance(results, list):
-            if len(results) == 0:
-                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
-                return None
+        listed_results: Final = as_object_list(results)
+        if listed_results is not None and len(listed_results) == 0:
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+            return None
 
-        similarity: Final = results[0]["score"]
-        payload: Final = results[0]["payload"]
+        similarity: Final = subscript(subscript(results, 0), "score")
+        payload: Final = subscript(subscript(results, 0), "payload")
         if not self._payload_matches_cache_key(payload=payload, key=key):
             print_verbose("Qdrant semantic-cache hit did not match cache key scope")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
 
-        cached_prompt: Final = payload["text"]
+        cached_prompt: Final = subscript(payload, "text")
 
         # check similarity, if more than self.similarity_threshold, return results
         print_verbose(
@@ -384,7 +394,7 @@ class QdrantSemanticCache(BaseCache):
 
         if similarity >= self.similarity_threshold:
             # cache hit !
-            cached_value: Final = payload["response"]
+            cached_value: Final = subscript(payload, "response")
             print_verbose(
                 f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
             )
@@ -393,18 +403,18 @@ class QdrantSemanticCache(BaseCache):
             # cache miss !
             return None
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: object, value: object, **kwargs):
         from litellm._uuid import uuid
 
         print_verbose(f"async qdrant semantic-cache set_cache, kwargs: {kwargs}")
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         value = str(value)
         assert isinstance(value, str)
@@ -430,17 +440,17 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: str, **kwargs):
         print_verbose(f"async qdrant semantic-cache get_cache, kwargs: {kwargs}")
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
-        embedding: Final = embedding_response["data"][0]["embedding"]
+        embedding: Final = _EMBEDDING_VECTOR.validate_python(embedding_response["data"][0]["embedding"])
 
         data: Final = {
             "vector": embedding,
@@ -462,24 +472,24 @@ class QdrantSemanticCache(BaseCache):
             json=data,
         )
 
-        results: Final = search_response.json()["result"]
+        results: Final = _SEARCH_RESULTS.validate_python(search_response.json()["result"])
 
         if results is None:
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
-        if isinstance(results, list):
-            if len(results) == 0:
-                kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
-                return None
+        listed_results: Final = as_object_list(results)
+        if listed_results is not None and len(listed_results) == 0:
+            kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
+            return None
 
-        similarity: Final = results[0]["score"]
-        payload: Final = results[0]["payload"]
+        similarity: Final = subscript(subscript(results, 0), "score")
+        payload: Final = subscript(subscript(results, 0), "payload")
         if not self._payload_matches_cache_key(payload=payload, key=key):
             print_verbose("Qdrant semantic-cache hit did not match cache key scope")
             kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
             return None
 
-        cached_prompt: Final = payload["text"]
+        cached_prompt: Final = subscript(payload, "text")
 
         # check similarity, if more than self.similarity_threshold, return results
         print_verbose(
@@ -491,7 +501,7 @@ class QdrantSemanticCache(BaseCache):
 
         if similarity >= self.similarity_threshold:
             # cache hit !
-            cached_value: Final = payload["response"]
+            cached_value: Final = subscript(payload, "response")
             print_verbose(
                 f"got a cache hit, similarity: {similarity}, Current prompt: {prompt}, cached_prompt: {cached_prompt}"
             )
@@ -503,7 +513,7 @@ class QdrantSemanticCache(BaseCache):
     async def _collection_info(self):
         return self.collection_info
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs):
         tasks: Final = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))

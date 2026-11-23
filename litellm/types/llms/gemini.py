@@ -1,5 +1,6 @@
+from collections.abc import Mapping
 from enum import Enum
-from typing import Any, Literal
+from typing import Final, Literal
 
 from typing_extensions import Required, TypedDict
 
@@ -10,6 +11,8 @@ from .vertex_ai import (
     Tools,
     UsageMetadata,
 )
+
+GEMINI_SEARCH_TOOL_ID_PREFIX: Final = "gsearch_"
 
 
 class GeminiFilesState(Enum):
@@ -80,6 +83,14 @@ class BidiGenerateContentServerMessage(TypedDict, total=False):
     """Output only. The setup complete message."""
 
 
+class BidiGenerateContentActivityStart(TypedDict):
+    pass
+
+
+class BidiGenerateContentActivityEnd(TypedDict):
+    pass
+
+
 class BidiGenerateContentRealtimeInput(TypedDict, total=False):
     text: str
     """The text to be sent to the model."""
@@ -93,11 +104,11 @@ class BidiGenerateContentRealtimeInput(TypedDict, total=False):
     audioStreamEnd: bool
     """Output only. If true, indicates that the audio stream has ended."""
 
-    activityStart: bool
-    """Output only. If true, indicates that the activity has started."""
+    activityStart: BidiGenerateContentActivityStart
+    """Marks the start of user activity when automatic activity detection is disabled."""
 
-    activityEnd: bool
-    """Output only. If true, indicates that the activity has ended."""
+    activityEnd: BidiGenerateContentActivityEnd
+    """Marks the end of user activity when automatic activity detection is disabled."""
 
 
 StartOfSpeechSensitivityEnum = Literal[
@@ -151,7 +162,7 @@ class BidiGenerateContentSetup(TypedDict, total=False):
 
 
 # Image Generation Types
-from pydantic import BaseModel
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class GeminiImageGenerationInstance(TypedDict):
@@ -160,7 +171,7 @@ class GeminiImageGenerationInstance(TypedDict):
     prompt: str
 
 
-class GeminiImageGenerationParameters(BaseModel):
+class GeminiImageGenerationParameters(LiteLLMBaseModel):
     """Parameters for Gemini image generation request"""
 
     sampleCount: int | None = None
@@ -204,7 +215,7 @@ class GeminiImageGenerationParameters(BaseModel):
     """User specification"""
 
 
-class GeminiImageGenerationRequest(BaseModel):
+class GeminiImageGenerationRequest(LiteLLMBaseModel):
     """Complete request body for Gemini image generation"""
 
     instances: list[GeminiImageGenerationInstance]
@@ -235,10 +246,10 @@ class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
 
     prompt: Required[str]
-    image: dict[str, Any]
+    image: Mapping[str, object]
 
 
-class GeminiVideoGenerationParameters(BaseModel):
+class GeminiVideoGenerationParameters(LiteLLMBaseModel):
     """
     Parameters for Gemini video generation request.
 
@@ -263,7 +274,7 @@ class GeminiVideoGenerationParameters(BaseModel):
     negativePrompt: str | None = None
     """Text describing what not to include in the video."""
 
-    lastFrame: Any | None = None
+    lastFrame: object | None = None
     """
     The final image for interpolation video to transition.
     Should be used with the 'image' parameter.
@@ -275,7 +286,7 @@ class GeminiVideoGenerationParameters(BaseModel):
     Only supported in Veo 3.1 (list of VideoGenerationReferenceImage objects).
     """
 
-    video: Any | None = None
+    video: object | None = None
     """
     Video to be used for video extension (Video object).
     Only supported in Veo 3.1 & Veo 3 Fast.
@@ -290,7 +301,7 @@ class GeminiVideoGenerationParameters(BaseModel):
     """
 
 
-class GeminiVideoGenerationRequest(BaseModel):
+class GeminiVideoGenerationRequest(LiteLLMBaseModel):
     """Complete request body for Gemini video generation"""
 
     instances: list[GeminiVideoGenerationInstance]
@@ -298,35 +309,35 @@ class GeminiVideoGenerationRequest(BaseModel):
 
 
 # Video Generation Operation Response Types
-class GeminiVideoUri(BaseModel):
+class GeminiVideoUri(LiteLLMBaseModel):
     """Video URI in the generated sample"""
 
     uri: str
     """File URI of the generated video (e.g., 'files/abc123...')"""
 
 
-class GeminiGeneratedVideoSample(BaseModel):
+class GeminiGeneratedVideoSample(LiteLLMBaseModel):
     """Individual generated video sample"""
 
     video: GeminiVideoUri
     """Video object containing the URI"""
 
 
-class GeminiGenerateVideoResponse(BaseModel):
+class GeminiGenerateVideoResponse(LiteLLMBaseModel):
     """Generate video response containing the samples"""
 
     generatedSamples: list[GeminiGeneratedVideoSample]
     """List of generated video samples"""
 
 
-class GeminiOperationResponse(BaseModel):
+class GeminiOperationResponse(LiteLLMBaseModel):
     """Response object in the operation when done"""
 
     generateVideoResponse: GeminiGenerateVideoResponse
     """Video generation response"""
 
 
-class GeminiOperationMetadata(BaseModel):
+class GeminiOperationMetadata(LiteLLMBaseModel):
     """Metadata for the operation"""
 
     createTime: str | None = None
@@ -335,7 +346,7 @@ class GeminiOperationMetadata(BaseModel):
     """Model used for generation"""
 
 
-class GeminiLongRunningOperationResponse(BaseModel):
+class GeminiLongRunningOperationResponse(LiteLLMBaseModel):
     """
     Complete response for a long-running operation.
 
@@ -354,5 +365,5 @@ class GeminiLongRunningOperationResponse(BaseModel):
     response: GeminiOperationResponse | None = None
     """Response object when operation is complete"""
 
-    error: dict[str, Any] | None = None
+    error: dict[str, object] | None = None
     """Error details if operation failed"""

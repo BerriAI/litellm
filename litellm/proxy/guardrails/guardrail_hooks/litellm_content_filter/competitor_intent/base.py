@@ -4,9 +4,11 @@ Generic competitor intent checker: two entity sets and overridable disambiguatio
 
 import re
 import unicodedata
+from collections.abc import Mapping
 from re import Pattern
 from typing import Any, Final, cast
 
+from litellm.litellm_core_utils.core_helpers import float_of
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     CompetitorActionHint,
     CompetitorIntentEvidenceEntry,
@@ -31,17 +33,23 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", t)
 
 
-def _word_boundary_match(text: str, token: str) -> bool:
+def word_boundary_match(text: str, token: str) -> bool:
     """True if token appears as a word in text."""
     return bool(re.search(r"\b" + re.escape(token) + r"\b", text))
 
 
-def _count_signals(text: str, patterns: list[str]) -> int:
+_word_boundary_match: Final = word_boundary_match
+
+
+def count_signals(text: str, patterns: list[str]) -> int:
     """Count how many of the patterns appear in text."""
     return sum(1 for p in patterns if re.search(p, text, re.IGNORECASE))
 
 
-def _compile_marker(pattern: str | None) -> Pattern[str] | None:
+_count_signals: Final = count_signals
+
+
+def compile_marker(pattern: str | None) -> Pattern[str] | None:
     """Compile optional regex string to a pattern."""
     if not pattern or not pattern.strip():
         return None
@@ -51,10 +59,17 @@ def _compile_marker(pattern: str | None) -> Pattern[str] | None:
         return None
 
 
+_compile_marker: Final = compile_marker
+
+
 def text_for_entity_matching(text: str) -> str:
     """Letters-only variant for entity matching (e.g. split punctuation)."""
     t: Final = re.sub(r"[^\w\s]", " ", text)
     return re.sub(r"\s+", " ", t).strip()
+
+
+def _float_setting(config: Mapping[str, object], key: str, default: float) -> float:
+    return float_of(config.get(key, default))
 
 
 class BaseCompetitorIntentChecker:
@@ -84,9 +99,9 @@ class BaseCompetitorIntentChecker:
         self._ambiguous: set[str] = self._competitor_tokens & self._other_meaning_tokens
 
         self.policy: dict[str, str] = config.get("policy") or {}
-        self.threshold_high = float(config.get("threshold_high", 0.70))
-        self.threshold_medium = float(config.get("threshold_medium", 0.45))
-        self.threshold_low = float(config.get("threshold_low", 0.30))
+        self.threshold_high = _float_setting(config, "threshold_high", 0.70)
+        self.threshold_medium = _float_setting(config, "threshold_medium", 0.45)
+        self.threshold_low = _float_setting(config, "threshold_low", 0.30)
         self.reframe_message_template: str | None = config.get("reframe_message_template")
         self.refuse_message_template: str | None = config.get("refuse_message_template")
         self._comparison_words: list[str] = list(
@@ -117,7 +132,7 @@ class BaseCompetitorIntentChecker:
         found: Final[list[tuple[str, str, bool]]] = []
         seen: Final[set[tuple[str, str]]] = set()
         for token in self._competitor_tokens:
-            if not _word_boundary_match(normalized, token):
+            if not word_boundary_match(normalized, token):
                 continue
             canonical = self.competitor_canonical.get(token, token)
             key = (token, canonical)
@@ -139,7 +154,7 @@ class BaseCompetitorIntentChecker:
         }
 
         for b in self.brand_self:
-            if _word_boundary_match(normalized, b):
+            if word_boundary_match(normalized, b):
                 entities["brand_self"].append(b)
                 evidence.append({"type": "entity", "key": "brand_self", "value": b, "match": b})
 

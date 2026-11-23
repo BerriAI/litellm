@@ -9,6 +9,7 @@ API calling is done using the OpenAI SDK with an api_base
 """
 
 import types
+from collections.abc import Mapping
 from typing import Final
 
 
@@ -32,16 +33,17 @@ class NvidiaNimEmbeddingConfig:
         input_type: str | None = None,
         truncate: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -64,7 +66,7 @@ class NvidiaNimEmbeddingConfig:
         self,
         non_default_params: dict,
         optional_params: dict,
-        kwargs: dict | None = None,
+        kwargs: Mapping[str, object] | None = None,
     ):
         if "extra_body" not in optional_params:
             optional_params["extra_body"] = {}
@@ -78,5 +80,11 @@ class NvidiaNimEmbeddingConfig:
 
         if kwargs is not None:
             # pass kwargs in extra_body
-            optional_params["extra_body"].update(kwargs)
+            nested_extra_body: Final = kwargs.get("extra_body")
+            optional_params["extra_body"].update(
+                {
+                    **{k: v for k, v in kwargs.items() if k != "extra_body"},
+                    **(nested_extra_body if isinstance(nested_extra_body, Mapping) else {}),
+                }
+            )
         return optional_params

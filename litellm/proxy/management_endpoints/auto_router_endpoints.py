@@ -5,6 +5,8 @@ POST /auto_router/test_routing - Route one request through an unsaved complexity
 POST /auto_router/validate_complexity_router_config - Dry-run the complexity-router write gate without saving
 """
 
+import asyncio
+import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
@@ -12,7 +14,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, TypeAdapter, field_validator
+from pydantic import ConfigDict, TypeAdapter, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -26,35 +28,52 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
-    _virtual_key_max_budget_check,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _virtual_key_max_budget_check,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     can_key_call_resolved_model,
+    virtual_key_max_budget_check,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
     bounded_session_id,
 )
+from litellm.proxy.db.db_span import db_span
+from litellm.proxy.db.prisma_query_span import sql_relation
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
-from litellm.proxy.management.teams.access import is_team_admin
+from litellm.proxy.management.teams.authz import is_team_admin
+from litellm.proxy.management_endpoints.common_daily_activity import daily_activity_scope
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
+    auto_router_environment_reference_error,
+    raise_auto_router_environment_reference_error,
     validate_member_auto_router_config,
 )
 from litellm.repositories.autorouter_session_repository import AutoRouterSessionRepository
 from litellm.repositories.base_repository import SupportsModelDump
+from litellm.repositories.daily_activity_sql import build_where_clause
+from litellm.repositories.table_repositories import PrismaTableRepository
 from litellm.repositories.team_repository import TeamRepository
-from litellm.router_strategy.complexity_router import ComplexityRouter
-from litellm.router_utils.auto_router_model_naming import (
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
+from litellm.router_api import RoutingContext
+from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependencyRole,
     classify_strategy_router_model,
     strategy_router_dependencies,
 )
+from litellm.router_strategy.complexity_router import ComplexityRouter
+from litellm.router_strategy.complexity_router.request_models import (
+    AutoRouterRoutingTestRequest,
+    RequestComplexityRouterConfig,
+)
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.management_endpoints.auto_router_endpoints import (
+    SHADOW_EVAL_RUBRIC_VERSION,
     SHADOW_EVAL_TURN_VALVE,
     AutoRouterAvailabilityRequest,
     AutoRouterAvailabilityResponse,
@@ -63,19 +82,22 @@ from litellm.types.management_endpoints.auto_router_endpoints import (
     AutoRouterBenchmarkTotals,
     AutoRouterCacheBucket,
     AutoRouterCacheStats,
-    AutoRouterRoutingTestRequest,
     AutoRouterRoutingTestResponse,
     AutoRouterSessionResponse,
     ComplexityRouterConfigValidationRequest,
     ComplexityRouterConfigValidationResponse,
-    RequestComplexityRouterConfig,
     ShadowEvalDirection,
+    ShadowEvalGradePair,
     ShadowEvalJobResponse,
     ShadowEvalJobTargetResponse,
     ShadowEvalResult,
+    ShadowEvalRubricJobResponse,
+    ShadowEvalRubricResultResponse,
+    ShadowEvalRubricSlice,
     ShadowEvalSlice,
     ShadowEvalTargetType,
     StartShadowEvalRequest,
+    StartShadowEvalRubricRequest,
 )
 
 if TYPE_CHECKING:
@@ -167,7 +189,7 @@ class _ShadowEvalAttemptRow(Protocol):
 
 
 class _ShadowEvalFunnelTable(Protocol):
-    async def create_many(self, data: Sequence[Mapping[str, object]], skip_duplicates: bool) -> int: ...
+    async def create_many(self, data: Sequence[Mapping[str, object]], *, skip_duplicates: bool) -> int: ...
 
 
 class _ShadowEvalAttemptTable(Protocol):
@@ -181,31 +203,53 @@ def _team_table(prisma_client: "PrismaClient") -> _TeamTable:
 
 
 def _verification_tokens(prisma_client: "PrismaClient") -> _VerificationTokenTable:
-    return prisma_client.db.litellm_verificationtoken
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_rows(prisma_client: "PrismaClient") -> _TeamRowsTable:
-    return prisma_client.db.litellm_teamtable
+    return TeamRepository(prisma_client).table
 
 
 def _user_rows(prisma_client: "PrismaClient") -> _UserRowsTable:
-    return prisma_client.db.litellm_usertable
+    return UserRepository(prisma_client).table
+
+
+class _ShadowEvalJobRepository(PrismaTableRepository[_ShadowEvalJobRow]):
+    table_name = "litellm_shadowevaljob"
+
+
+class _ShadowEvalFunnelRepository(PrismaTableRepository[object]):
+    table_name = "litellm_shadowevalfunnel"
+
+
+class _ShadowEvalAttemptRepository(PrismaTableRepository[_ShadowEvalAttemptRow]):
+    table_name = "litellm_shadowevalattempt"
 
 
 def _shadow_eval_jobs(prisma_client: "PrismaClient") -> _ShadowEvalJobTable:
-    return prisma_client.db.litellm_shadowevaljob
+    return _ShadowEvalJobRepository(prisma_client).table
 
 
 def _shadow_eval_funnel(prisma_client: "PrismaClient") -> _ShadowEvalFunnelTable:
-    return prisma_client.db.litellm_shadowevalfunnel  # pyright: ignore[reportAttributeAccessIssue]  # generated client
+    return _ShadowEvalFunnelRepository(prisma_client).table
 
 
 def _shadow_eval_attempts(prisma_client: "PrismaClient") -> _ShadowEvalAttemptTable:
-    return prisma_client.db.litellm_shadowevalattempt
+    return _ShadowEvalAttemptRepository(prisma_client).table
+
+
+_RAW_ROWS: Final = TypeAdapter(Sequence[dict[str, object]], config=ConfigDict(strict=True))
 
 
 async def _query_raw(prisma_client: "PrismaClient", query: str, *args: object) -> Sequence[Mapping[str, object]]:
-    return await prisma_client.db.query_raw(query, *args)
+    from litellm.proxy.utils import query_raw_rows
+
+    async with db_span("auto_router_report_query", sql_relation(query)):
+        return _RAW_ROWS.validate_python(await query_raw_rows(prisma_client.db, query, *args))
+
+
+async def _execute_raw(prisma_client: "PrismaClient", query: str, *args: object) -> int:
+    return await prisma_client.db.execute_raw(query, *args)
 
 
 async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: str | None) -> LiteLLM_TeamTable | None:
@@ -316,7 +360,7 @@ async def _authorize_models_this_test_can_call(
     its calls through the proxy. Team and member budgets are already enforced on every route.
     """
     models: Final = _models_this_test_can_call(config)
-    if not models and config.classifier_type != "jev":
+    if not models and config.classifier_type != "oss_classifier":
         return
 
     from litellm.proxy.proxy_server import proxy_logging_obj
@@ -324,13 +368,13 @@ async def _authorize_models_this_test_can_call(
     for model in models:
         await can_key_call_resolved_model(
             model=model,
-            llm_model_list=llm_router.model_list,
+            llm_model_list=llm_router.registry().all(),
             valid_token=user_api_key_dict,
             llm_router=llm_router,
         )
 
     try:
-        await _virtual_key_max_budget_check(
+        await virtual_key_max_budget_check(
             valid_token=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
         )
@@ -342,9 +386,9 @@ async def _authorize_models_this_test_can_call(
             code=status.HTTP_400_BAD_REQUEST,
         ) from e
 
-    if config.classifier_type == "jev" and user_api_key_dict.budget_throttle_pct is not None:
+    if config.classifier_type == "oss_classifier" and user_api_key_dict.budget_throttle_pct is not None:
         raise ProxyException(
-            message="Budget has been exceeded! JEV Test Routing requires available budget.",
+            message="Budget has been exceeded! OSS Classifier Test Routing requires available budget.",
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=status.HTTP_400_BAD_REQUEST,
@@ -372,7 +416,11 @@ async def validate_complexity_router_config(
     """
     member_team: Final = await _authorize_router_dry_run(user_api_key_dict=user_api_key_dict, team_id=data.team_id)
 
-    from litellm.router_utils.auto_router_model_naming import (
+    raise_auto_router_environment_reference_error(
+        auto_router_environment_reference_error(data.complexity_router_config, user_api_key_dict)
+    )
+
+    from litellm.router_strategy.auto_router.auto_router_model_naming import (
         validate_complexity_router_config_write,
     )
 
@@ -417,7 +465,9 @@ async def get_auto_router_availability(
         ):
             raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
     existing: Final = saved.deployment if saved is not None else None
-    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(llm_router.config_deployments())
+    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(
+        llm_router.registry().deployments(source="config")
+    )
     candidate: Final = MappingProxyType(
         {
             "litellm_params": MappingProxyType(
@@ -442,14 +492,14 @@ async def _resolve_saved_routing_test(
 ) -> AutoRouterRoutingTestRequest:
     if data.saved_model_id is None:
         return data
-    deployment: Final = llm_router.get_deployment(data.saved_model_id)
+    deployment: Final = llm_router.registry().deployment(data.saved_model_id)
     if deployment is None or deployment.model_info.blocked:
         raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and deployment.model_info.team_id != data.team_id:
         raise HTTPException(status_code=403, detail="Saved auto router belongs to a different team")
     await can_key_call_resolved_model(
         model=deployment.model_info.team_public_model_name or deployment.model_name,
-        llm_model_list=llm_router.model_list,
+        llm_model_list=llm_router.registry().all(),
         valid_token=user_api_key_dict,
         llm_router=llm_router,
     )
@@ -530,6 +580,12 @@ async def preview_auto_router_routing(
             detail={"error": CommonProxyErrors.no_llm_router.value},
         )
     resolved: Final = await _resolve_saved_routing_test(data, user_api_key_dict, llm_router)
+    if data.saved_model_id is None:
+        raise_auto_router_environment_reference_error(
+            auto_router_environment_reference_error(
+                data.complexity_router_config.model_dump(exclude_none=True), user_api_key_dict
+            )
+        )
     actor: Final = (
         await _authorize_member_dry_run_config(
             config=resolved.complexity_router_config.model_dump(exclude_none=True),
@@ -548,10 +604,10 @@ async def preview_auto_router_routing(
 
     if member_team is not None and _models_this_test_can_call(resolved.complexity_router_config):
         from litellm.proxy.auth.user_api_key_auth import (
-            _run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
+            run_centralized_common_checks,  # pyright: ignore[reportPrivateUsage]  # reuse the serving admission policy
         )
 
-        await _run_centralized_common_checks(
+        await run_centralized_common_checks(
             user_api_key_auth_obj=actor,
             request=http_request,
             request_data=request_data,
@@ -564,13 +620,16 @@ async def preview_auto_router_routing(
         llm_router=llm_router,
     )
 
-    complexity_router: Final = ComplexityRouter(
-        model_name=resolved.router_name,
-        litellm_router_instance=llm_router,
-        complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
-        default_model=resolved.default_model,
-        derive_savings_baseline=False,
-    )
+    try:
+        complexity_strategy: Final = ComplexityRouter(
+            model_name=resolved.router_name,
+            ctx=RoutingContext(llm_router),
+            complexity_router_config=resolved.complexity_router_config.model_dump(exclude_none=True),
+            default_model=resolved.complexity_router_config.resolve_default_model(resolved.default_model),
+            derive_savings_baseline=False,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Could not route this prompt: {e}"}) from e
 
     request_kwargs: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
         data=request_data,
@@ -580,7 +639,7 @@ async def preview_auto_router_routing(
     refresh_proxy_server_request_body_snapshot(request_kwargs)
 
     try:
-        hook_response: Final = await complexity_router.async_pre_routing_hook(
+        hook_response: Final = await complexity_strategy.async_pre_routing_hook(
             model=resolved.router_name,
             request_kwargs=request_kwargs,
             messages=request_kwargs["messages"],
@@ -615,35 +674,39 @@ async def preview_auto_router_routing(
     )
 
 
-class _SessionAggRow(BaseModel):
+class _SessionAggRow(LiteLLMBaseModel):
+    """One router's window: session shape from overlapping sessions, money from the selected days."""
+
     router_name: str
     router_type: str
-    tier_turns: Mapping[str, int]
-    sessions: int
-    turns: int
-    unordered_turns: int
-    covered_turns: int
-    cache_hits: int
-    same_model_turns: int
-    same_model_hits: int
-    first_visit_turns: int
-    first_visit_hits: int
-    return_turns: int
-    return_hits: int
-    return_expired_misses: int
-    return_within_ttl_misses: int
-    ttl_5m_turns: int
-    ttl_1h_turns: int
-    total_tokens: int
-    spend: float
-    saved_spend: float
+    tier_turns: Mapping[str, int] = MappingProxyType({})
+    sessions: int = 0
+    session_turns: int = 0
+    unordered_turns: int = 0
+    covered_turns: int = 0
+    cache_hits: int = 0
+    same_model_turns: int = 0
+    same_model_hits: int = 0
+    first_visit_turns: int = 0
+    first_visit_hits: int = 0
+    return_turns: int = 0
+    return_hits: int = 0
+    return_expired_misses: int = 0
+    return_within_ttl_misses: int = 0
+    ttl_5m_turns: int = 0
+    ttl_1h_turns: int = 0
+    total_tokens: int = 0
+    day_total_tokens: int | None = None
+    session_seconds: float = 0.0
+    turns: int = 0
+    spend: float = 0.0
+    saved_spend: float = 0.0
     savings_estimated_turns: int = 0
     savings_estimated_actual_spend: float = 0.0
     savings_estimated_classifier_cost: float | None = None
     savings_estimated_saved_spend: float = 0.0
-    classifier_cost: float
-    classifier_cost_recorded_turns: int
-    session_seconds: float
+    classifier_cost: float = 0.0
+    classifier_cost_recorded_turns: int = 0
 
 
 _SESSION_AGG_ROWS: Final = TypeAdapter(list[_SessionAggRow])
@@ -692,6 +755,13 @@ def _compared_row(row: _SessionAggRow) -> _SessionAggRow:
     )
 
 
+def _per_session(row: _SessionAggRow, total: float) -> float | None:
+    """Unknown, not zero, when routed requests have no session rows of their own to average over."""
+    if row.sessions:
+        return total / row.sessions
+    return None if row.turns else 0.0
+
+
 def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return_misses: Final = row.return_turns - row.return_hits
     saved_spend, baseline_spend = _savings_cohort(
@@ -701,9 +771,10 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
     return AutoRouterBenchmarkTotals(
         sessions=sessions,
         turns=row.turns,
-        avg_turns_per_session=row.turns / sessions if sessions else 0.0,
-        avg_session_seconds=row.session_seconds / sessions if sessions else 0.0,
-        avg_tokens_per_session=row.total_tokens / sessions if sessions else 0.0,
+        total_tokens=row.day_total_tokens,
+        avg_turns_per_session=_per_session(row, row.session_turns),
+        avg_session_seconds=_per_session(row, row.session_seconds),
+        avg_tokens_per_session=_per_session(row, row.total_tokens),
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
@@ -712,9 +783,8 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
         saved_pct=_pct(saved_spend, baseline_spend) if saved_spend is not None and baseline_spend is not None else None,
-        saved_per_session=(saved_spend / sessions if sessions else 0.0) if saved_spend is not None else None,
         cache=AutoRouterCacheStats(
-            coverage_pct=_pct(row.covered_turns, row.turns),
+            coverage_pct=_pct(row.covered_turns, row.session_turns),
             hit_rate_pct=_pct(row.cache_hits, row.covered_turns),
             same_model=_cache_bucket(row.same_model_turns, row.same_model_hits),
             first_visit=_cache_bucket(row.first_visit_turns, row.first_visit_hits),
@@ -737,6 +807,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         tier_turns=row.tier_turns,
         sessions=totals.sessions,
         turns=totals.turns,
+        total_tokens=totals.total_tokens,
         avg_turns_per_session=totals.avg_turns_per_session,
         avg_session_seconds=totals.avg_session_seconds,
         avg_tokens_per_session=totals.avg_tokens_per_session,
@@ -748,7 +819,6 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
-        saved_per_session=totals.saved_per_session,
         cache=totals.cache,
     )
 
@@ -759,6 +829,7 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         router_type="",
         tier_turns=MappingProxyType({}),
         sessions=sum(row.sessions for row in rows),
+        session_turns=sum(row.session_turns for row in rows),
         turns=sum(row.turns for row in rows),
         unordered_turns=sum(row.unordered_turns for row in rows),
         covered_turns=sum(row.covered_turns for row in rows),
@@ -774,6 +845,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         ttl_5m_turns=sum(row.ttl_5m_turns for row in rows),
         ttl_1h_turns=sum(row.ttl_1h_turns for row in rows),
         total_tokens=sum(row.total_tokens for row in rows),
+        day_total_tokens=(
+            sum(row.day_total_tokens or 0 for row in rows)
+            if all(row.day_total_tokens is not None for row in rows)
+            else None
+        ),
         spend=sum(row.spend for row in rows),
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
@@ -787,6 +863,49 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         classifier_cost=sum(row.classifier_cost for row in rows),
         classifier_cost_recorded_turns=sum(row.classifier_cost_recorded_turns for row in rows),
         session_seconds=sum(row.session_seconds for row in rows),
+    )
+
+
+async def _recorded_autorouter_savings(
+    prisma_client: "PrismaClient", start_day: str, end_day: str, api_key: str | None, user_id: str | None
+) -> float:
+    """The selected days' auto-router savings exactly as the Overall view sums them: same table, same filters."""
+    where, params = build_where_clause(
+        daily_activity_scope(
+            table="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=user_id,
+            exclude_entity_ids=None,
+            api_key=(api_key,) if api_key is not None else None,
+            start_date=start_day,
+            end_date=end_day,
+            model=None,
+            timezone_offset_minutes=None,
+        )
+    )
+    rows: Final = await _query_raw(
+        prisma_client,
+        f'SELECT COALESCE(SUM(autorouter_savings_spend), 0)::float8 AS saved FROM "LiteLLM_DailyUserSpend" WHERE {where}',
+        *params,
+    )
+    return float(rows[0]["saved"]) if rows else 0.0
+
+
+def _with_recorded_savings(
+    totals: AutoRouterBenchmarkTotals, rows: Sequence[_SessionAggRow], recorded: float
+) -> AutoRouterBenchmarkTotals:
+    """The headline is the recorded total. Savings outside the compared routers void the cost comparison,
+    and the part no router's day rows account for is reported as unattributed."""
+    if math.isclose(recorded, totals.saved_spend or 0.0, abs_tol=1e-9):
+        return totals
+    unattributed: Final = recorded - sum(row.saved_spend for row in rows)
+    return totals.model_copy(
+        update={
+            "saved_spend": recorded,
+            "unattributed_saved_spend": None if math.isclose(unattributed, 0.0, abs_tol=1e-9) else unattributed,
+            "baseline_spend": None,
+            "saved_pct": None,
+        }
     )
 
 
@@ -828,7 +947,7 @@ def _idle_router_groups(
     zero: Final = _summed_agg_row(())
     idle: Final = frozenset(
         key
-        for key in (_strategy_router_key(deployment) for deployment in llm_router.model_list or ())
+        for key in map(_strategy_router_key, llm_router.registry().all() or ())
         if key is not None and key not in covered
     )
     return tuple(
@@ -849,7 +968,7 @@ async def get_auto_router_benchmarks(
         str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to 30 days before end_date)")
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
-    api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
+    api_key: Annotated[str | None, Query(min_length=1, description="Filter to one virtual key token hash")] = None,
     user_id: Annotated[
         str | None, Query(min_length=1, description="Filter to one canonical internal user recorded on each turn")
     ] = None,
@@ -860,9 +979,10 @@ async def get_auto_router_benchmarks(
 
     Reads session rollups folded once per request at spend-write time, so this endpoint
     never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
-    internal user when written; older key-only history remains outside user views. A session
-    is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
-    end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
+    internal user when written; older key-only history remains outside user views. Money counts
+    only requests on the selected UTC days, and the all-router savings headline is the same daily
+    total the Overall view reads. Session shape and caching cover every session that overlaps the
+    window, whole. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
 
     The rollup supplies the measures, never the list. Which routers appear comes from the
@@ -885,24 +1005,35 @@ async def get_auto_router_benchmarks(
     if end_day < start_day:
         raise HTTPException(status_code=400, detail="end_date must not be earlier than start_date")
 
-    raw_rows: Final = await _query_raw(
-        prisma_client,
-        AUTOROUTER_BENCHMARKS_SQL,
-        start_day.isoformat(),
-        (end_day + timedelta(days=1)).isoformat(),
-        api_key,
-        user_id,
+    first_day: Final = start_day.strftime("%Y-%m-%d")
+    last_day: Final = end_day.strftime("%Y-%m-%d")
+    raw_rows, recorded = await asyncio.gather(
+        _query_raw(
+            prisma_client,
+            AUTOROUTER_BENCHMARKS_SQL,
+            start_day.isoformat(),
+            (end_day + timedelta(days=1)).isoformat(),
+            api_key,
+            user_id,
+            first_day,
+            last_day,
+        ),
+        _recorded_autorouter_savings(prisma_client, first_day, last_day, api_key, user_id),
     )
     rows: Final = tuple(_compared_row(row) for row in _SESSION_AGG_ROWS.validate_python(raw_rows or ()))
+    totals: Final = _with_recorded_savings(_benchmark_totals(_summed_agg_row(rows)), rows, recorded)
+    unattributed: Final = MappingProxyType(
+        {"baseline_spend": None, "saved_pct": None} if totals.unattributed_saved_spend is not None else {}
+    )
     groups: Final = (
-        *(_benchmark_group(row) for row in rows),
+        *(_benchmark_group(row).model_copy(update=unattributed) for row in rows),
         *_idle_router_groups(llm_router, frozenset((row.router_name, row.router_type) for row in rows)),
     )
     return AutoRouterBenchmarksResponse(
-        start_date=start_day.strftime("%Y-%m-%d"),
-        end_date=end_day.strftime("%Y-%m-%d"),
+        start_date=first_day,
+        end_date=last_day,
         routers_in_scope=len(groups),
-        totals=_benchmark_totals(_summed_agg_row(rows)),
+        totals=totals,
         groups=groups,
     )
 
@@ -927,7 +1058,7 @@ async def get_auto_router_session(
     fills a moment after each turn; a session with no flushed auto-routed turn yet is a 404. The
     id is bounded the way the writer bounded it, so an oversized client id still finds its row.
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
@@ -938,6 +1069,11 @@ async def get_auto_router_session(
         raise HTTPException(
             status_code=404, detail=f"No auto-routed turns recorded for session {session_id!r} under this key"
         )
+    total: Final = (
+        await proxy_logging_obj.session_spend_totals.read(user_api_key_dict.api_key, session_id)
+        if user_api_key_dict.api_key
+        else None
+    )
     saved_spend, baseline_spend = _savings_cohort(row.turns, row.savings_estimated_turns, row.spend, row.saved_spend)
     _, estimated_baseline_spend = _savings_cohort(
         row.turns, row.savings_estimated_turns, row.savings_estimated_actual_spend, row.savings_estimated_saved_spend
@@ -949,6 +1085,7 @@ async def get_auto_router_session(
         turns=row.turns,
         last_model=row.last_model,
         spend=row.spend,
+        total_spend=total,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
         saved_spend=saved_spend,
@@ -981,13 +1118,15 @@ def _require_admin_writer(user_api_key_dict: UserAPIKeyAuth, action: str) -> Non
 
 
 def _is_configured_pre_routing_strategy(llm_router: "Router", router_name: str) -> bool:
+    router_registry: Final = llm_router.registry()
     return any(
         router_name in registry
         for registry in (
-            llm_router.auto_routers,
-            llm_router.complexity_routers,
-            llm_router.adaptive_routers,
-            llm_router.quality_routers,
+            router_registry.plugins("auto"),
+            router_registry.plugins("complexity"),
+            router_registry.plugins("adaptive"),
+            router_registry.plugins("quality"),
+            router_registry.plugins("switchyard"),
         )
     )
 
@@ -1063,7 +1202,7 @@ def _validate_model_scope(llm_router: "Router | None", models: Sequence[str]) ->
         model
         for model in models
         if judge_target(llm_router, model).via == "nothing"
-        and (llm_router is None or model not in llm_router.team_public_model_names)
+        and (llm_router is None or model not in llm_router.registry().names(kind="team_public"))
     )
     if unreachable:
         raise HTTPException(
@@ -1092,7 +1231,7 @@ def _router_arm_models(llm_router: "Router | None", router_name: str) -> tuple[t
     this lookup is unscoped; what each tier NAME resolves to is the team-dependent half, and
     it belongs to the caller that compares them.
     """
-    deployments: Final = llm_router.get_model_list(model_name=router_name) if llm_router is not None else None
+    deployments: Final = llm_router.registry().deployments(router_name) if llm_router is not None else None
     return tuple(
         dict.fromkeys(
             (dependency.role, dependency.model_name)
@@ -1173,7 +1312,7 @@ def _is_unique_violation(error: Exception) -> bool:
     return isinstance(error, UniqueViolationError)
 
 
-class _AttemptAggRow(BaseModel):
+class _AttemptAggRow(LiteLLMBaseModel):
     grp: str
     turn_count: int
     real_wins: int
@@ -1260,6 +1399,7 @@ GROUP BY a.job_id
 _FUNNEL_TOTALS_SQL: Final = """
 SELECT COUNT(*)::int AS legs_with_rows,
     COALESCE(SUM(not_sampled), 0)::int AS not_sampled,
+    COALESCE(SUM(same_model), 0)::int AS same_model,
     COALESCE(SUM(unjudgeable), 0)::int AS unjudgeable,
     COALESCE(SUM(shed), 0)::int AS shed,
     COALESCE(SUM(withheld), 0)::int AS withheld
@@ -1285,15 +1425,16 @@ WHERE group_id = $1 AND stopped_by IS NULL
 """
 
 
-class _FunnelTotalsRow(BaseModel):
+class _FunnelTotalsRow(LiteLLMBaseModel):
     legs_with_rows: int
     not_sampled: int
+    same_model: int
     unjudgeable: int
     shed: int
     withheld: int
 
 
-class _AttemptCountRow(BaseModel):
+class _AttemptCountRow(LiteLLMBaseModel):
     job_id: str
     attempt_count: int
     spend: float
@@ -1319,13 +1460,58 @@ WHERE group_id IN (
 """
 
 
-class _AttemptTotalsRow(BaseModel):
+class _AttemptTotalsRow(LiteLLMBaseModel):
     judged_count: int
     error_count: int
     judge_spend: float
 
 
 _ATTEMPT_TOTALS_ROWS: Final = TypeAdapter(list[_AttemptTotalsRow])
+
+# Grades are counted per arm on the same rows the preference results read (errors
+# excluded); a verdict row without grades is counted as ungraded, never as a grade.
+_RUBRIC_GRADE_COUNTS_SQL: Final = """
+SELECT COALESCE(a.router_name, j.router_name) AS grp, a.real_grade, a.shadow_grade, COUNT(*)::int AS turn_count
+FROM "LiteLLM_ShadowEvalAttempt" a
+JOIN "LiteLLM_ShadowEvalJob" j ON j.id = a.job_id
+WHERE a.job_id = ANY($1::text[]) AND a.outcome != 'error'
+GROUP BY 1, 2, 3
+"""
+
+
+class _GradeCountRow(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    grp: str
+    real_grade: int | None
+    shadow_grade: int | None
+    turn_count: int
+
+    @property
+    def grade_pair(self) -> tuple[int, int] | None:
+        if self.real_grade is None or self.shadow_grade is None:
+            return None
+        return self.real_grade, self.shadow_grade
+
+
+_GRADE_COUNT_ROWS: Final = TypeAdapter(list[_GradeCountRow])
+
+
+def _rubric_slice(group: str, rows: Sequence[_GradeCountRow]) -> ShadowEvalRubricSlice:
+    pairs: Final = sorted(frozenset(pair for row in rows if (pair := row.grade_pair) is not None))
+    return ShadowEvalRubricSlice(
+        group=group,
+        graded_count=sum(row.turn_count for row in rows if row.grade_pair is not None),
+        ungraded_count=sum(row.turn_count for row in rows if row.grade_pair is None),
+        grade_distribution=tuple(
+            ShadowEvalGradePair(
+                real_grade=real_grade,
+                shadow_grade=shadow_grade,
+                turn_count=sum(row.turn_count for row in rows if row.grade_pair == (real_grade, shadow_grade)),
+            )
+            for real_grade, shadow_grade in pairs
+        ),
+    )
 
 
 def _pct_of(numerator: int, denominator: int) -> float:
@@ -1353,7 +1539,7 @@ def _leg_group_id(leg: "_LegRow") -> str:
     return leg.group_id
 
 
-class _LegRow(BaseModel):
+class _LegRow(LiteLLMBaseModel):
     """One LiteLLM_ShadowEvalJob row, validated off the untyped prisma record. A row is
     one target's leg of a job; the legs of a job share group_id and identical config,
     written together by one create_many. The API's job id is the group id, so leg ids
@@ -1370,6 +1556,7 @@ class _LegRow(BaseModel):
     models: tuple[str, ...] = ()
     direction: ShadowEvalDirection
     baseline_model: str | None = None
+    skip_same_model: bool = False
     judge_model: str
     shadow_percentage: float
     max_turns: int
@@ -1378,6 +1565,8 @@ class _LegRow(BaseModel):
     ends_at: datetime
     stopped_at: datetime | None = None
     stopped_by: str | None = None
+    rubric: str | None = None
+    rubric_version: int | None = None
 
     @property
     def arm_router_names(self) -> tuple[str, ...]:
@@ -1440,6 +1629,7 @@ def _group_response(
         models=first.models,
         direction=first.direction,
         baseline_model=first.baseline_model,
+        skip_same_model=first.skip_same_model,
         judge_model=first.judge_model,
         shadow_percentage=first.shadow_percentage,
         created_at=first.created_at,
@@ -1522,8 +1712,16 @@ async def _with_target_labels(
     )
 
 
+async def _job_funnel(prisma_client: "PrismaClient", leg_ids: Sequence[str]) -> _FunnelTotalsRow | None:
+    """Job-level coverage counts, or None unless EVERY leg has a funnel row: a partial seed
+    (one leg's insert failed) must read as unknown, not as counts missing a leg's traffic."""
+    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, list(leg_ids))
+    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
+    return counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
+
+
 async def _shadow_eval_results(
-    prisma_client: "PrismaClient", legs: Sequence[_LegRow]
+    prisma_client: "PrismaClient", legs: Sequence[_LegRow], funnel: _FunnelTotalsRow | None
 ) -> tuple[ShadowEvalResult | None, Mapping[tuple[str, str], ShadowEvalSlice]]:
     """One job's stratified verdicts, plus each target's own slice keyed by the
     (target_type, target_id) pair so a key, team, and user sharing an id can never
@@ -1556,11 +1754,6 @@ async def _shadow_eval_results(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_ROUTER_SQL, leg_ids) or ()
     )
     total_turns: Final = sum(r.turn_count for r in by_tier)
-    funnel_rows: Final = await _query_raw(prisma_client, _FUNNEL_TOTALS_SQL, leg_ids)
-    counted: Final = _FunnelTotalsRow.model_validate(funnel_rows[0]) if funnel_rows else None
-    # Coverage only when EVERY leg has a funnel row: a partial seed (one leg's insert
-    # failed) must read as unknown, not as job-level counts missing a leg's traffic.
-    funnel: Final = counted if counted is not None and counted.legs_with_rows == len(leg_ids) else None
     result: Final = ShadowEvalResult(
         by_tier=_slices(by_tier),
         by_current_model=_slices(by_model),
@@ -1616,9 +1809,17 @@ async def start_shadow_eval(
     seconds. Shadow and judge calls bill to the sampled request's own identity but are
     excluded from request counts and auto-router adoption metrics.
     """
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    return await _create_shadow_eval_job(data, user_api_key_dict, rubric=None)
+
+
+async def _create_shadow_eval_job(
+    data: StartShadowEvalRequest, user_api_key_dict: UserAPIKeyAuth, rubric: str | None
+) -> ShadowEvalJobResponse:
+    """Validate and claim a job for an authorized writer. The rubric columns are written
+    only for a rubric job, so a preference-only job inserts exactly what it always did."""
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
-    _require_admin_writer(user_api_key_dict, "start a shadow eval")
     if prisma_client is None:
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     unconfigured: Final = tuple(
@@ -1700,7 +1901,7 @@ async def start_shadow_eval(
     # deliberate. Sweep and claim filter on exact (target_type, id) pairs so a team id
     # that happens to equal a key hash never matches the other kind's slot.
     for target_type, ids in requested_by_type:
-        await prisma_client.db.execute_raw(_SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
+        await _execute_raw(prisma_client, _SWEEP_FINISHED_JOBS_SQL, list(ids), target_type)
     claimed: Final = await _shadow_eval_jobs(prisma_client).find_many(
         where={
             "OR": [
@@ -1730,6 +1931,7 @@ async def start_shadow_eval(
         "models": list(data.models),
         "direction": data.direction,
         "baseline_model": data.baseline_model,
+        "skip_same_model": data.skip_same_model,
         "judge_model": data.judge_model,
         "shadow_percentage": data.shadow_percentage,
         "max_turns": SHADOW_EVAL_TURN_VALVE,
@@ -1737,6 +1939,7 @@ async def start_shadow_eval(
         "created_by": user_api_key_dict.user_id,
         "created_at": now,
         "ends_at": ends_at,
+        **({"rubric": rubric, "rubric_version": SHADOW_EVAL_RUBRIC_VERSION} if rubric is not None else {}),
     }
     try:
         # Leg ids are minted here rather than by the DB default so the funnel seed below
@@ -1792,10 +1995,104 @@ async def start_shadow_eval(
         models=data.models,
         direction=data.direction,
         baseline_model=data.baseline_model,
+        skip_same_model=data.skip_same_model,
         judge_model=data.judge_model,
         shadow_percentage=data.shadow_percentage,
         created_at=now,
         ends_at=ends_at,
+    )
+
+
+@router.post(
+    "/auto_router/shadow_eval/rubric/start",
+    tags=["auto router"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalRubricJobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def start_shadow_eval_rubric(
+    data: StartShadowEvalRubricRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalRubricJobResponse:
+    """
+    Start a shadow eval whose judge, besides picking the better response, grades each
+    response from 1 (fails the rubric's criteria) to 5 (fully meets them). Everything
+    else matches /auto_router/shadow_eval/start, and the job's preference results stay
+    on the regular job endpoints. Read grades from
+    /auto_router/shadow_eval/{job_id}/rubric_results.
+
+    Disabled unless LITELLM_SHADOW_EVAL_RUBRIC_ENABLED=true. Each worker process reads
+    its own environment, so a change applies only once every worker is redeployed or
+    restarted with it. A worker without rubric support ignores the setting and samples a
+    rubric job as a preference-only job, so enable it only after every API and sampling
+    worker sharing the database runs a version with this route. Workers with the setting
+    off neither start nor sample rubric jobs.
+
+    Rolling back to a version without rubric support is not zero-downtime for rubric
+    jobs. Before any older worker starts: apply the setting off to every upgraded worker,
+    stop every running rubric job with /auto_router/shadow_eval/{job_id}/stop, and wait
+    until every upgraded worker's in-flight evaluations have finished, for example by
+    draining or stopping those workers. The roughly 10 second job cache expiry alone does
+    not guarantee that drain.
+    """
+    from litellm.integrations.shadow_eval_logger import (
+        SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR,
+        is_shadow_eval_rubric_enabled,
+    )
+
+    _require_admin_writer(user_api_key_dict, "start a shadow eval")
+    if not is_shadow_eval_rubric_enabled():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Rubric shadow evals are disabled. Set {SHADOW_EVAL_RUBRIC_ENABLED_ENV_VAR}=true once every "
+                "worker sharing this database supports rubric grading"
+            ),
+        )
+    job: Final = await _create_shadow_eval_job(data, user_api_key_dict, rubric=data.rubric)
+    return ShadowEvalRubricJobResponse.model_validate(
+        {
+            **job.model_dump(exclude={"router_name", "status"}),
+            "rubric": data.rubric,
+            "rubric_version": SHADOW_EVAL_RUBRIC_VERSION,
+        }
+    )
+
+
+@router.get(
+    "/auto_router/shadow_eval/{job_id}/rubric_results",
+    tags=["auto router"],
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=ShadowEvalRubricResultResponse,
+)
+async def get_shadow_eval_rubric_results(
+    job_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ShadowEvalRubricResultResponse:
+    """A rubric job's grades: graded and ungraded turn counts and the joint distribution
+    of (real_grade, shadow_grade), overall and per router arm. A job started without a
+    rubric is a 404 here."""
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_admin_viewer(user_api_key_dict, "view shadow evals")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
+    legs: Final = _LEG_ROWS.validate_python(
+        await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()
+    )
+    first: Final = legs[0] if legs else None
+    if first is None or first.rubric is None or first.rubric_version is None:
+        raise HTTPException(status_code=404, detail=f"No rubric shadow eval job {job_id}")
+    rows: Final = _GRADE_COUNT_ROWS.validate_python(
+        await _query_raw(prisma_client, _RUBRIC_GRADE_COUNTS_SQL, [leg.id for leg in legs]) or ()
+    )
+    routers: Final = sorted(frozenset((*first.arm_router_names, *(row.grp for row in rows))))
+    return ShadowEvalRubricResultResponse(
+        job_id=job_id,
+        rubric=first.rubric,
+        rubric_version=first.rubric_version,
+        overall=_rubric_slice("all", rows),
+        by_router=tuple(_rubric_slice(name, tuple(row for row in rows if row.grp == name)) for name in routers),
     )
 
 
@@ -1878,7 +2175,8 @@ async def get_shadow_eval_job(
     labeled: Final = await _with_target_labels(
         prisma_client, (_group_response(job_id, legs, await _leg_attempt_counts(prisma_client, legs)),)
     )
-    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs)
+    funnel: Final = await _job_funnel(prisma_client, leg_ids)
+    results, verdicts_by_target = await _shadow_eval_results(prisma_client, legs, funnel)
     return labeled[0].model_copy(
         update={
             "judged_count": totals[0].judged_count if totals else 0,
@@ -1886,6 +2184,7 @@ async def get_shadow_eval_job(
             "judge_spend": round(totals[0].judge_spend, 6) if totals else 0.0,
             "last_error": latest_error.error if latest_error else None,
             "results": results,
+            "same_model_skipped_count": funnel.same_model if funnel is not None else None,
             "targets": tuple(
                 target.model_copy(update={"verdicts": verdicts_by_target.get((target.target_type, target.target_id))})
                 for target in labeled[0].targets
@@ -1917,8 +2216,8 @@ async def stop_shadow_eval_job(
         raise HTTPException(status_code=500, detail=CommonProxyErrors.db_not_connected_error.value)
     stamp: Final = datetime.now(timezone.utc)
     operator: Final = user_api_key_dict.user_id or "operator"
-    claimed: Final = await prisma_client.db.execute_raw(
-        _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
+    claimed: Final = await _execute_raw(
+        prisma_client, _STOP_JOB_SQL, job_id, operator, stamp.replace(tzinfo=None).isoformat()
     )
     legs: Final = _LEG_ROWS.validate_python(
         await _shadow_eval_jobs(prisma_client).find_many(where={"group_id": job_id}) or ()

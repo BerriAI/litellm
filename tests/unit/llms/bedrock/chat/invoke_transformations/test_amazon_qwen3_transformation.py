@@ -1,8 +1,8 @@
-import asyncio
-import json
 from unittest.mock import Mock
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
@@ -11,6 +11,21 @@ from litellm.llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformatio
     AmazonQwen3Config,
 )
 from litellm.types.utils import ModelResponse
+
+
+def _transform(body: object) -> ModelResponse:
+    return AmazonQwen3Config().transform_response(
+        model="qwen3/test-model",
+        raw_response=httpx.Response(200, json=body),
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=[{"role": "user", "content": "Hello!"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+        api_key="test-key",
+    )
 
 
 def test_qwen3_get_supported_params():
@@ -181,10 +196,74 @@ def test_qwen3_transform_response_without_usage():
     assert result.choices[0]["finish_reason"] == "stop"
 
 
+@pytest.mark.parametrize(
+    ("usage", "expected_counts"),
+    [
+        pytest.param({}, (0, 0, 0), id="no-counts"),
+        pytest.param(
+            {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None}, (0, 0, 0), id="null-counts"
+        ),
+        pytest.param({"prompt_tokens": 7}, (7, 0, 0), id="only-prompt-count"),
+        pytest.param(
+            {"prompt_tokens": "7", "completion_tokens": 3.0, "total_tokens": ""}, (7, 3, 0), id="loosely-typed-counts"
+        ),
+        pytest.param(
+            {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3, "latency_ms": [12, None]},
+            (1, 2, 3),
+            id="unmodelled-field",
+        ),
+    ],
+)
+def test_qwen3_transform_response_reads_usage_counts_that_are_missing_null_or_loosely_typed(
+    usage: dict[str, object], expected_counts: tuple[int, int, int]
+) -> None:
+    result = _transform({"generation": "Hi", "usage": usage})
+
+    reported = result.usage
+    assert (reported.prompt_tokens, reported.completion_tokens, reported.total_tokens) == expected_counts
+    assert result.choices[0].message.content == "Hi"
+
+
+def test_qwen3_transform_response_yields_empty_content_when_the_body_carries_no_generated_text() -> None:
+    result = _transform({"stop_reason": "length", "metrics": {"latency_ms": 12}})
+
+    assert result.choices[0].message.content == ""
+    assert result.choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"generation": ["secret-output"]}, id="generated-text-is-a-list"),
+        pytest.param({"generation": None, "debug": "secret-output"}, id="generated-text-is-null"),
+        pytest.param({"generation": "Hi", "usage": ["secret-output"]}, id="usage-is-a-list"),
+        pytest.param(["secret-output"], id="body-is-a-list"),
+    ],
+)
+def test_qwen3_transform_response_rejects_a_malformed_body_without_echoing_it(body: object) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform(body)
+
+    assert "secret-output" not in str(exc_info.value)
+
+
+def test_qwen3_transform_response_reports_every_count_that_is_not_a_number_with_its_value() -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"generation": "Hi", "usage": {"prompt_tokens": "many", "total_tokens": [4, 2]}})
+
+    assert exc_info.value.title == "Usage"
+    assert {error["loc"]: error["input"] for error in exc_info.value.errors()} == {
+        ("prompt_tokens",): "many",
+        ("total_tokens",): [4, 2],
+    }
+    assert "input_value='many'" in str(exc_info.value)
+    assert "input_value=[4, 2]" in str(exc_info.value)
+
+
 def test_qwen3_provider_detection():
     """Test that Qwen3 provider is correctly detected from model names"""
-    from litellm.utils import ProviderConfigManager
     from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
 
     # Test with qwen3/ prefix
     config = ProviderConfigManager.get_provider_chat_config(

@@ -3,15 +3,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel
-
-from litellm._logging import verbose_proxy_logger
+from litellm._internal_context import with_service_target
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import (
-    _cache_key_object,
-    _copy_user_api_key_auth_for_cache,
-    _fetch_key_object_from_db_with_reconnect,
-    get_object_permission,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _copy_user_api_key_auth_for_cache,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    cache_key_object,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
+    copy_user_api_key_auth_for_cache,
+    load_key_object,
 )
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.network import NetworkContext
@@ -32,10 +31,12 @@ from litellm.proxy.auth.resolvers.models import (
     UserIdentity,
 )
 from litellm.proxy.auth.roles import TeamRole, map_role, team_role
+from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
+from litellm.redis.stores.auth_cache import AuthObject
 
 if TYPE_CHECKING:
-    from litellm.caching.caching import DualCache
     from litellm.integrations.opentelemetry import Span
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
@@ -59,7 +60,7 @@ class IdentityStore:
     def __init__(
         self,
         prisma_client: PrismaClient | None,
-        cache: DualCache,
+        cache: UserApiKeyCache,
         *,
         parent_otel_span: Span | None = None,
         proxy_logging_obj: ProxyLogging | None = None,
@@ -79,7 +80,7 @@ class IdentityStore:
         network: NetworkContext | None = None,
     ) -> Principal:
         key: Final = await self._resolve_key(hashed_token)
-        return self._principal_from_key(
+        return self.principal_from_key(
             key,
             auth_method=auth_method,
             network=network,
@@ -99,54 +100,33 @@ class IdentityStore:
             raise PrincipalMissingSourceKeyError()
         return principal.source_key
 
+    @with_service_target(AUTH_OBJECTS_TARGET)
     async def _resolve_key(self, hashed_token: str) -> UserAPIKeyAuth:
         if self._prisma is None:
             raise NoDatabaseConnectionError()
 
-        cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        cached: Final = await self._cache.async_get_cache(
+            key=AuthObject.virtual_key(hashed_token), model_type=UserAPIKeyAuth
+        )
         if cached is not None:
-            return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
+            return copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
 
         if self._check_cache_only:
             raise KeyNotInCacheError(hashed_token)
 
-        from_db: Final[BaseModel | None] = await _fetch_key_object_from_db_with_reconnect(
+        key: Final = await load_key_object(
             hashed_token=hashed_token,
             prisma_client=self._prisma,
             parent_otel_span=self._parent_otel_span,
             proxy_logging_obj=self._proxy_logging_obj,
-        )
-        if from_db is None:
-            raise KeyNotFoundError(hashed_token)
-
-        key: Final = UserAPIKeyAuth.model_validate(from_db.model_dump(exclude_none=True))
-
-        if key.object_permission_id and not key.object_permission:
-            try:
-                key.object_permission = await get_object_permission(
-                    object_permission_id=key.object_permission_id,
-                    prisma_client=self._prisma,
-                    user_api_key_cache=self._cache,
-                    parent_otel_span=self._parent_otel_span,
-                    proxy_logging_obj=self._proxy_logging_obj,
-                )
-            except Exception as e:
-                verbose_proxy_logger.debug(
-                    "Failed to load object_permission for key with object_permission_id=%s: %s",
-                    key.object_permission_id,
-                    e,
-                )
-
-        await _cache_key_object(
-            hashed_token=hashed_token,
-            user_api_key_obj=key,
             user_api_key_cache=self._cache,
-            proxy_logging_obj=self._proxy_logging_obj,
         )
+        if key is None:
+            raise KeyNotFoundError(hashed_token)
         return key
 
     @staticmethod
-    def _principal_from_key(
+    def principal_from_key(
         key: UserAPIKeyAuth,
         *,
         auth_method: AuthMethod,
@@ -189,3 +169,5 @@ class IdentityStore:
             network=network or NetworkContext(),
             source_key=key,
         )
+
+    _principal_from_key = principal_from_key

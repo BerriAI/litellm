@@ -1,0 +1,17 @@
+model_list:
+  - model_name: gpt-4.1-mini-2025-04-14
+    litellm_params:
+      model: openai/gpt-4.1-mini-2025-04-14
+      api_base: os.environ/FINE_TUNING_UPSTREAM_URL
+      api_key: synthetic-fine-tuning-key
+finetune_settings:
+  - custom_llm_provider: openai
+    api_base: os.environ/FINE_TUNING_UPSTREAM_URL
+    api_key: synthetic-fine-tuning-key
+files_settings:
+  - custom_llm_provider: openai
+    api_base: os.environ/FINE_TUNING_UPSTREAM_URL
+    api_key: synthetic-fine-tuning-key
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

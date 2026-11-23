@@ -3,11 +3,15 @@ Unit tests for DashScope rerank transformation.
 """
 
 import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
+from pydantic import ValidationError
 
+import litellm
 
 from litellm.llms.dashscope.common_utils import DashScopeError
 from litellm.llms.dashscope.rerank.transformation import (
@@ -24,6 +28,21 @@ class TestDashScopeRerankURL:
     def test_default_url(self):
         url = self.config.get_complete_url(api_base=None, model="qwen3-rerank")
         assert url == DEFAULT_RERANK_URL
+
+    def test_domain_root_remaps_to_rerank_route(self):
+        url: Final = self.config.get_complete_url(
+            api_base="https://llm-abc123.cn-beijing.maas.aliyuncs.com",
+            model="qwen3-rerank",
+        )
+        assert url == "https://llm-abc123.cn-beijing.maas.aliyuncs.com/compatible-api/v1/reranks"
+
+    def test_explicit_rerank_url_wins_over_the_rerank_env(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("DASHSCOPE_API_BASE_RERANK", DEFAULT_RERANK_URL)
+        explicit_url: Final = "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+
+        url: Final = self.config.get_complete_url(api_base=explicit_url, model="qwen3-rerank")
+
+        assert url == explicit_url
 
     def test_chat_shaped_base_remaps_to_rerank_route(self):
         url = self.config.get_complete_url(
@@ -347,3 +366,123 @@ class TestProviderConfigManagerDispatch:
             present_version_params=[],
         )
         assert isinstance(cfg, DashScopeRerankConfig)
+
+
+def _transform(payload: object, status_code: int = 200) -> RerankResponse:
+    return DashScopeRerankConfig().transform_rerank_response(
+        model="qwen3-rerank",
+        raw_response=httpx.Response(status_code, json=payload),
+        model_response=RerankResponse(),
+        logging_obj=MagicMock(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("usage", "expected_total_tokens"),
+    [
+        ({"total_tokens": 79}, 79),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_transform_rerank_response_reads_total_tokens_from_usage(usage: object, expected_total_tokens: int | None):
+    response = _transform({"id": "rerank-1", "results": [{"index": 0, "relevance_score": 0.5}], "usage": usage})
+
+    assert response.meta == {
+        "billed_units": {"total_tokens": expected_total_tokens},
+        "tokens": {"input_tokens": expected_total_tokens},
+    }
+
+
+def test_transform_rerank_response_keeps_provider_id_and_drops_unknown_result_fields():
+    response = _transform(
+        {
+            "id": "rerank-1",
+            "results": [{"index": 2, "relevance_score": 0.25, "document": {"text": "doc", "extra": 1}, "extra": 2}],
+        }
+    )
+
+    assert response.id == "rerank-1"
+    assert response.results == [{"index": 2, "relevance_score": 0.25, "document": {"text": "doc"}}]
+
+
+def test_transform_rerank_response_empty_results_list_yields_no_results():
+    assert _transform({"id": "rerank-1", "results": []}).results == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        {"results": 7},
+        {"results": ["not an object"]},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "usage": "seventy nine"},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "usage": {"total_tokens": 1.5}},
+        {"results": [{"index": 0, "relevance_score": 0.5}], "id": 7},
+    ],
+)
+def test_transform_rerank_response_rejects_malformed_payloads(payload: object):
+    with pytest.raises(ValidationError):
+        _transform(payload)
+
+
+def test_transform_rerank_response_result_without_index_raises_key_error():
+    with pytest.raises(KeyError, match="index"):
+        _transform({"results": [{"relevance_score": 0.5}]})
+
+
+def test_transform_rerank_response_error_envelope_raises_with_the_provider_status_and_message():
+    with pytest.raises(DashScopeError) as exc_info:
+        _transform({"code": "Throttling", "message": "slow down"}, status_code=429)
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.message == "slow down"
+
+
+def test_transform_rerank_response_without_results_raises_dashscope_error_naming_the_body():
+    with pytest.raises(DashScopeError) as exc_info:
+        _transform({"id": "rerank-1"}, status_code=502)
+
+    assert exc_info.value.status_code == 502
+    assert exc_info.value.message == "No results in DashScope rerank response: {'id': 'rerank-1'}"
+
+
+def test_transform_rerank_response_shape_errors_do_not_echo_the_payload():
+    with pytest.raises(ValidationError) as exc_info:
+        _transform({"results": [["leaked document text"]]})
+
+    assert "leaked document text" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("provider", "rerank_env"),
+    [
+        ("dashscope", "DASHSCOPE_API_BASE_RERANK"),
+        ("qwencloud", "QWENCLOUD_API_BASE_RERANK"),
+        ("qwen_ai_platform", "QWEN_AI_PLATFORM_API_BASE_RERANK"),
+    ],
+)
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks",
+        "https://dashscope-intl.aliyuncs.com/compatible-api/v1",
+        "https://dashscope-intl.aliyuncs.com",
+        "https://dashscope-intl.aliyuncs.com/api/v1",
+    ],
+)
+def test_rerank_sends_an_explicit_base_over_the_rerank_env(
+    monkeypatch: pytest.MonkeyPatch, provider: str, rerank_env: str, api_base: str
+):
+    monkeypatch.setenv("DASHSCOPE_API_BASE", "https://dashscope-intl.aliyuncs.com")
+    monkeypatch.setenv(rerank_env, DEFAULT_RERANK_URL)
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks").respond(
+            200, json={"id": "r1", "results": [{"index": 0, "relevance_score": 0.9}], "usage": {"total_tokens": 5}}
+        )
+        response: Final = litellm.rerank(
+            model=f"{provider}/qwen3-rerank", query="q", documents=["a"], api_base=api_base, api_key="sk-test"
+        )
+
+    assert response.results == [{"index": 0, "relevance_score": 0.9}]

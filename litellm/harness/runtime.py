@@ -12,11 +12,10 @@ import inspect
 import logging
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine, Generator, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Generator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import (
-    Any,
     Final,
     get_args,
 )
@@ -79,7 +78,7 @@ class SessionConfig:
     api_key: str | None = None
     api_base: str | None = None
     instructions: str | None = None
-    tools: Sequence[Callable[..., Any]] = ()
+    tools: Sequence[Callable[..., object]] = ()
     skills: Sequence[str] = ()
     disable_tools: Sequence[str] = ()
     permissions: PermissionMode = "full"
@@ -87,7 +86,7 @@ class SessionConfig:
     output: type[BaseModel] | None = None
     max_turns: int | None = None
     timeout: float | None = None
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, object] = field(default_factory=dict)
     options: HarnessOptions | None = None
     install: bool = False
 
@@ -184,7 +183,7 @@ def build_config(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -192,7 +191,7 @@ def build_config(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> SessionConfig:
@@ -331,11 +330,15 @@ async def _put_end(queue: asyncio.Queue[Event | _End], end: _End) -> None:
     queue.put_nowait(end)
 
 
+async def _await_decision(pending: Awaitable[object]) -> object:
+    return await pending
+
+
 async def call_approval_handler(handler: ApprovalHandler, approval: Approval) -> None:
     """Run on_approval (sync in a worker thread, or async) and resolve approval."""
     try:
         if inspect.iscoroutinefunction(handler):
-            decision: Any = await handler(approval)
+            decision: object = await _await_decision(handler(approval))
         else:
             decision = await asyncio.to_thread(handler, approval)
             if inspect.isawaitable(decision):
@@ -374,7 +377,7 @@ class _Turn:
         self.error_text: str | None = None
         self.before: Mapping[str, str] = MappingProxyType({})
         self.before_contents: Mapping[str, bytes] = MappingProxyType({})
-        self.usage_before: tuple[int, int, int, float] = (0, 0, 0, 0.0)
+        self.usage_before: tuple[int, int, int, float, int] = (0, 0, 0, 0.0, 0)
         self.deadline: float | None = None
 
     async def _begin(self) -> None:
@@ -476,7 +479,7 @@ class _Turn:
             return text
         return f"{text}\n\n{self.error_text}" if text else self.error_text
 
-    def _usage(self) -> tuple[Usage, float]:
+    def _usage(self) -> tuple[Usage, float | None]:
         now = self.session.usage_counters()
         before = self.usage_before
         usage = Usage(
@@ -484,7 +487,8 @@ class _Turn:
             output_tokens=now[1] - before[1],
             calls=now[2] - before[2],
         )
-        return usage, max(now[3] - before[3], 0.0)
+        cost: Final = None if now[4] != before[4] else max(now[3] - before[3], 0.0)
+        return usage, cost
 
     def _result(
         self,
@@ -717,14 +721,14 @@ class AsyncSession:
     detach = adetach
     stop = astop
 
-    def usage_counters(self) -> tuple[int, int, int, float]:
-        """(input_tokens, output_tokens, calls, cost) so far, from endpoint or handler."""
+    def usage_counters(self) -> tuple[int, int, int, float, int]:
+        """Token counts, calls, known cost subtotal and unpriced calls so far."""
         endpoint = self.ctx.endpoint
         if endpoint is not None:
             usage = endpoint.usage
-            return (usage.input_tokens, usage.output_tokens, usage.calls, usage.cost)
+            return (usage.input_tokens, usage.output_tokens, usage.calls, usage.costs.known, usage.costs.unknown_calls)
         ctx = self.ctx
-        return (ctx.input_tokens, ctx.output_tokens, ctx.calls, ctx.cost)
+        return (ctx.input_tokens, ctx.output_tokens, ctx.calls, ctx.costs.known, ctx.costs.unknown_calls)
 
     def record(self, result: Result) -> None:
         self.results.append(result)
@@ -749,15 +753,16 @@ class AsyncSession:
 
     async def history(
         self,
-    ) -> list[dict[str, Any]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
+    ) -> list[dict[str, object]]:  # mutable-ok: public API returns OpenAI-format message dicts from the handler
         if not self.harness_config.capabilities.history:
             raise CapabilityUnsupported(f"Harness.{self.config.harness.name} does not expose history")
         await self._ensure_ready()
         return await self.handler.history(self.ctx)
 
     @property
-    def cost(self) -> float:
-        return sum(result.cost for result in self.results)
+    def cost(self) -> float | None:
+        costs: Final = tuple(result.cost for result in self.results)
+        return None if any(cost is None for cost in costs) else sum(cost for cost in costs if cost is not None)
 
     @property
     def usage(self) -> Usage:
@@ -794,7 +799,7 @@ def aagent_session(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -802,7 +807,7 @@ def aagent_session(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> AsyncSession:
@@ -838,7 +843,7 @@ async def arun_agent(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -846,7 +851,7 @@ async def arun_agent(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> Result:
@@ -883,7 +888,7 @@ def astream_agent(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -891,7 +896,7 @@ def astream_agent(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> AsyncEventStream:
@@ -935,7 +940,7 @@ def aagent_resume(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -943,7 +948,7 @@ def aagent_resume(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
 ) -> AsyncSession:
@@ -988,7 +993,7 @@ def aagent(
     api_key: str | None = None,
     api_base: str | None = None,
     instructions: str | None = None,
-    tools: Sequence[Callable[..., Any]] = (),
+    tools: Sequence[Callable[..., object]] = (),
     skills: Sequence[str | os.PathLike[str]] = (),
     disable_tools: Sequence[str] = (),
     permissions: PermissionMode = "full",
@@ -996,33 +1001,33 @@ def aagent(
     output: type[BaseModel] | None = None,
     max_turns: int | None = None,
     timeout: float | None = None,
-    metadata: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, object] | None = None,
     options: HarnessOptions | None = None,
     install: bool = False,
-) -> Coroutine[Any, Any, Result] | AsyncEventStream:
+) -> Coroutine[object, object, Result] | AsyncEventStream:
     """Run an agent harness on one prompt.
 
     `await litellm.aagent(...)` returns a Result. With stream=True it returns an async
     iterator of events instead: `async for event in litellm.aagent(..., stream=True)`.
     """
-    kwargs: dict[str, Any] = {  # mutable-ok: forwarded as **kwargs to arun_agent/astream_agent
-        "sandbox": sandbox,
-        "model": model,
-        "api_key": api_key,
-        "api_base": api_base,
-        "instructions": instructions,
-        "tools": tools,
-        "skills": skills,
-        "disable_tools": disable_tools,
-        "permissions": permissions,
-        "on_approval": on_approval,
-        "output": output,
-        "max_turns": max_turns,
-        "timeout": timeout,
-        "metadata": metadata,
-        "options": options,
-        "install": install,
-    }
-    if stream:
-        return astream_agent(harness, prompt, **kwargs)
-    return arun_agent(harness, prompt, **kwargs)
+    call: Final = astream_agent if stream else arun_agent
+    return call(
+        harness,
+        prompt,
+        sandbox=sandbox,
+        model=model,
+        api_key=api_key,
+        api_base=api_base,
+        instructions=instructions,
+        tools=tools,
+        skills=skills,
+        disable_tools=disable_tools,
+        permissions=permissions,
+        on_approval=on_approval,
+        output=output,
+        max_turns=max_turns,
+        timeout=timeout,
+        metadata=metadata,
+        options=options,
+        install=install,
+    )

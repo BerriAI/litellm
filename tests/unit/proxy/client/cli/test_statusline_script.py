@@ -1,6 +1,7 @@
 """The status line script is copied verbatim to the user's machine, so these drive it the way Claude Code
 and Codex do: the documented stdin payload, a transcript on disk, and the proxy behind an injected fetch."""
 
+import hashlib
 import io
 import json
 import os
@@ -155,6 +156,19 @@ class TestCredentials:
 
 
 class TestSessionCache:
+    def test_upgrade_does_not_reuse_a_cached_partial_baseline(self, tmp_path: Path) -> None:
+        credentials: Final = Credentials("http://p", "sk-virtual")
+        identity: Final = "\n".join((credentials.base_url, credentials.api_key, SESSION_ID))
+        previous_cache: Final = tmp_path / hashlib.sha256(identity.encode()).hexdigest()
+        tmp_path.chmod(0o700)
+        previous_cache.write_text(
+            json.dumps({"fetched_at": 1.0, "session": RECORDED._replace(spend=10.0)._asdict()})
+        )
+        whole_session: Final = RECORDED._replace(spend=10.0, baseline_spend=10.24)
+        assert load_session(
+            credentials, SESSION_ID, tmp_path, lambda c, s: Fetched(whole_session, True), now=lambda: 1.0
+        ) == whole_session
+
     def test_a_definite_answer_is_served_from_the_cache_within_the_ttl(self, tmp_path):
         calls = []
 
@@ -342,19 +356,39 @@ class TestRender:
 
 
 class TestClaudeCodeMode:
-    @pytest.mark.parametrize("estimated_turns", (0, 1))
-    def test_current_estimates_keep_the_routed_model_and_compare_only_covered_turns(
-        self, tmp_path: Path, transcript: Path, config_dir: Path, estimated_turns: int
+    @pytest.mark.parametrize(
+        ("estimated_turns", "baseline", "covered_actual", "covered_baseline", "delta", "amounts"),
+        (
+            (1, 9.5, 2.0, 1.5, "+5%", ("$10.00", "$9.50")),
+            (1, 11.0, 1.0, 2.0, "-9%", ("$10.00", "$11.00")),
+            (3, 9.5, 10.0, 9.5, "+5%", ("$10.00", "$9.50")),
+            (0, 11.0, 0.0, None, "-9%", ("$10.00", "$11.00")),
+            (0, None, 0.0, None, None, ()),
+            (1, None, 2.0, 1.5, None, ()),
+        ),
+        ids=("partial-loss", "partial-savings", "full", "legacy-savings", "unknown", "missing-total"),
+    )
+    def test_session_comparison_includes_all_spend_and_keeps_baseline_coverage(
+        self,
+        tmp_path: Path,
+        transcript: Path,
+        config_dir: Path,
+        estimated_turns: int,
+        baseline: float | None,
+        covered_actual: float,
+        covered_baseline: float | None,
+        delta: str | None,
+        amounts: tuple[str, ...],
     ) -> None:
         session: Final = statusline_script._session_from_payload(
             {
                 **RECORDED._asdict(),
                 "spend": 10.0,
-                "baseline_spend": None,
-                "savings_estimated_baseline_spend": 1.5 if estimated_turns else None,
+                "baseline_spend": baseline,
+                "savings_estimated_baseline_spend": covered_baseline,
                 "turns": 3,
                 "savings_estimated_turns": estimated_turns,
-                "savings_estimated_actual_spend": 2.0 if estimated_turns else 0.0,
+                "savings_estimated_actual_spend": covered_actual,
             }
         )
         assert session is not None
@@ -364,14 +398,13 @@ class TestClaudeCodeMode:
 
         first: Final = _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
         assert first == _run(_payload(transcript), _env(tmp_path, config_dir), fetch)
-        assert first.startswith("Routed to: claude-sonnet-5")
-        if estimated_turns:
-            assert "+33% vs Claude Opus 5 · 1 of 3 turns estimated" in first
-            assert "$2.00" in first and "$1.50" in first
-            assert "$10.00" not in first and "+567%" not in first
-        else:
-            assert "Savings unavailable" in first
-            assert "%" not in first and "$" not in first
+        comparison: Final = (
+            f"  {delta} vs Claude Opus 5 · baseline estimated for {estimated_turns} of 3 turns"
+            if delta is not None
+            else " · Savings unavailable"
+        )
+        assert first.splitlines()[0] == f"Routed to: claude-sonnet-5{comparison}"
+        assert tuple(line.rsplit(" ", 1)[-1] for line in first.splitlines()[1:]) == amounts
 
     @pytest.mark.parametrize("transcript_model", ("claude-auto", "anthropic/claude-opus-5"))
     def test_the_session_names_the_routed_model_even_when_the_transcript_differs(

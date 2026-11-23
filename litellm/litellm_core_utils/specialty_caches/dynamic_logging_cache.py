@@ -27,7 +27,7 @@ class LangfuseInMemoryCache(InMemoryCache):
     (https://github.com/BerriAI/litellm/issues/11169).
     """
 
-    def _remove_key(self, key: str) -> None:
+    def _remove_key(self, key: object) -> None:
         from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
         evicted: Final = self.cache_dict.pop(key, None)
@@ -69,6 +69,6 @@ class DynamicLoggingCache:
         response: Final = self.cache.get_cache(key=key_name)
         return response
 
-    def set_cache(self, credentials: dict, service_name: str, logging_obj: Any) -> None:
+    def set_cache(self, credentials: dict, service_name: str, logging_obj: object) -> None:
         key_name: Final = self.get_cache_key(args={**credentials, "service_name": service_name})
         self.cache.set_cache(key=key_name, value=logging_obj)
