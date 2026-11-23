@@ -1058,19 +1058,19 @@ def test_vertex_ai_fable_5_1_response_format_uses_native_output_format(local_mod
     assert "tools" not in result_params
 
 
-def _is_tool_based_vertex_claude_rejecting_forced_tools(info: Mapping[str, object]) -> bool:
-    return (
-        info.get("litellm_provider") == "vertex_ai-anthropic_models"
-        and info.get("supports_forced_tool_use") is False
-        and info.get("supports_native_structured_output") is not True
-    )
-
-
-def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_model_rejects_it(local_model_cost_map):
-    model: Final = next(
-        name.removeprefix("vertex_ai/")
-        for name, info in litellm.model_cost.items()
-        if _is_tool_based_vertex_claude_rejecting_forced_tools(info)
+def test_vertex_ai_tool_based_response_format_skips_forced_tool_choice_when_model_rejects_it(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = "vertex_ai/claude-unit-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "litellm_provider": "vertex_ai-anthropic_models",
+            "mode": "chat",
+            "supports_forced_tool_use": False,
+            "supports_native_structured_output": False,
+        },
     )
     result_params: Final = VertexAIAnthropicConfig().map_openai_params(
         non_default_params={
