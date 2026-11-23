@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Protocol, TypeAlias
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from mcp.types import CallToolRequestParams, CallToolResult, InputRequiredResult
 from mcp.types import Tool as MCPTool
@@ -128,12 +128,16 @@ class _DirectClaim:
 _Claim: TypeAlias = _Unclaimed | _RegisteredClaim | _DirectClaim
 
 
+def _carries_credentials(parts: SplitResult) -> bool:
+    return parts.username is not None or parts.password is not None
+
+
 def normalized_mcp_url(url: str) -> str | None:
     """The form two MCP server URLs share when they name the same endpoint: lowercase scheme and host, no default port,
     fragment or trailing slash, and the path and query as sent. None for a URL the gateway never connects to."""
     parts: Final = urlsplit(url.strip())
     scheme: Final = parts.scheme.lower()
-    if scheme not in _DEFAULT_PORTS or not parts.hostname or parts.username is not None or parts.password is not None:
+    if scheme not in _DEFAULT_PORTS or not parts.hostname or _carries_credentials(parts):
         return None
     try:
         port: Final = parts.port
@@ -249,13 +253,9 @@ def direct_mcp_labels(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
 def _claim(tool: Mapping[str, object], servers: Collection[MCPServer], allowed_hosts: Sequence[str]) -> _Claim:
     server_url: Final = _text_field(tool, "server_url")
     url: Final = None if server_url is None else normalized_mcp_url(server_url)
-    if (
-        tool.get("type") != "mcp"
-        or server_url is None
-        or url is None
-        or server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL)
-        or _served_proxy_path(tool, servers)
-    ):
+    if tool.get("type") != "mcp" or server_url is None or url is None:
+        return _Unclaimed(tool=tool)
+    if server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL) or _served_proxy_path(tool, servers):
         return _Unclaimed(tool=tool)
     label: Final = _text_field(tool, "server_label") or "unlabeled"
     matches: Final = _registered_matches(url, servers)

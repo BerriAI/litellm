@@ -380,7 +380,7 @@ class OpenAIStreamShaper:
         self, event: ResponsesAPIStreamingResponse
     ) -> tuple["OpenAIStreamShaper", tuple[ResponsesAPIStreamingResponse, ...]]:
         opening: Final = _field(event, "type") in _OPENING_EVENTS
-        listing: Final = () if self.listed or opening else self._list_events()
+        listing: Final = () if self.listed or opening else self._listing_events()
         listed_state: Final = self if self.listed or opening else replace(self, listed=True)
         shaped_state, shaped = listed_state._shaped(event)
         numbered: Final = tuple(
@@ -397,7 +397,7 @@ class OpenAIStreamShaper:
     def client_output(self, output: Sequence[object]) -> tuple[object, ...]:
         return openai_output(self.items, output)
 
-    def _list_events(self) -> tuple[ResponsesAPIStreamingResponse, ...]:
+    def _listing_events(self) -> tuple[ResponsesAPIStreamingResponse, ...]:
         return tuple(chain.from_iterable(_list_events(index, item) for index, item in enumerate(self.items.list_items)))
 
     def _public_index(self, index: int) -> tuple["OpenAIStreamShaper", int]:
