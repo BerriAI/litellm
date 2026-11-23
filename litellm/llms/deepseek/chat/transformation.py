@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast, overload
 
 import litellm
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
@@ -73,6 +74,9 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         """
         return [*super().get_supported_openai_params(model), "thinking", "reasoning_effort"]
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def map_openai_params(
         self,
         non_default_params: dict[str, object],
@@ -81,7 +85,13 @@ class DeepSeekChatConfig(OpenAIGPTConfig):
         drop_params: bool,
     ) -> dict[str, object]:
         optional_params = super().map_openai_params(
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="deepseek", drop_params=drop_params),
+            tool_params_without_hosted_mcp(
+                non_default_params,
+                model=model,
+                route="deepseek",
+                drop_params=drop_params,
+                handling=self.hosted_mcp_tool_handling(model),
+            ),
             optional_params,
             model,
             drop_params,

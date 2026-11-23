@@ -9,7 +9,10 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 
-use super::{Failed, FallbackChain, FallbackHop, Lists, Target, Tried, ends_call, group_members};
+use super::{
+    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
+    group_members,
+};
 use crate::{
     Call, Router, RouterStateSnapshot,
     config::Op,
@@ -17,7 +20,8 @@ use crate::{
     fallback::FallbackTarget,
     health::should_retry_status,
     host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
-    select::{Candidates, SelectInputs},
+    retry::RetryStep,
+    select::{SelectInputs, skips_batch_only},
 };
 
 /// Where a streamed response came from: the level of the fallback chain its attempt served, as
@@ -342,9 +346,15 @@ impl<H: RouterHost> Call<'_, H> {
                 .attempted
                 .push(Tried::Target(FallbackTarget::Name(request.model.clone())));
         }
-        let at = origin.at();
-        self.fall_back(snapshot, op, request, origin.target, at, &mut chain, failed)
-            .await
+        let level = Level {
+            snapshot,
+            op,
+            request,
+            at: origin.at(),
+            target: origin.target,
+            chain: &mut chain,
+        };
+        self.fall_back(level, failed).await
     }
 
     /// The retries of the level a stream came from, which failed with `failure`. What they end
@@ -358,47 +368,45 @@ impl<H: RouterHost> Call<'_, H> {
         origin: &StreamOrigin,
         failure: AttemptError,
     ) -> Result<super::RouterResponse<H::Response>, Spent> {
-        let target = &origin.target;
-        let at = origin.at();
-        let counting = SelectInputs {
-            count_only: true,
-            ..SelectInputs::default()
+        // A stream's retries start from a chain that has tried nothing.
+        let mut chain = FallbackChain::default();
+        let level = Level {
+            snapshot,
+            op,
+            request,
+            target: origin.target.clone(),
+            at: origin.at(),
+            chain: &mut chain,
         };
-        let counted = |c: &Candidates, n: usize| if c.kind.is_single() { 0 } else { n };
+        let target = &level.target;
         let (healthy, all) = self
-            .candidates(snapshot, op, request, &target.group, &counting)
+            .candidates(snapshot, op, request, &target.group, &counting())
             .await
-            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.all.len())))
+            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.routable())))
             .unwrap_or((0, 0));
         let mut inputs = SelectInputs {
             target_order: target.order,
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
-            fallback_hop: at.level > 0,
+            fallback_hop: level.at.level > 0,
             failed_ids: origin.deployment_id.iter().cloned().collect(),
             ..SelectInputs::default()
         };
         let (budget, policy_applies) = stream_retry_budget(snapshot, request, origin, failure.kind);
         let mut newest = origin.failed(failure);
         let mut committed_budget = origin.committed_budget;
-        for attempt in origin.attempted_retries..budget {
+        for attempt in origin.attempted_retries.. {
             let Some(last) = newest.error.attempt() else {
                 break;
             };
             if last.ends_retries() {
                 break;
             }
-            if !policy_applies && !self.should_retry(snapshot, request, last, healthy, all) {
+            let step = level.retry_step(last, (budget, policy_applies), attempt, healthy, all);
+            let RetryStep::Retry { backoff } = step else {
                 break;
-            }
-            let delay = self.time_to_sleep(
-                snapshot,
-                last.retry_after,
-                budget - attempt,
-                budget,
-                healthy,
-                all,
-            );
+            };
+            let delay = backoff.delay(|| self.rng.next_f64());
             self.host.sleep(delay).await;
             committed_budget = Some(budget);
             self.host.observe(&RouterEvent::Retry {
@@ -406,17 +414,7 @@ impl<H: RouterHost> Call<'_, H> {
                 retry: attempt + 1,
                 delay,
             });
-            let retried = self
-                .attempt(
-                    snapshot,
-                    op,
-                    request,
-                    target,
-                    &inputs,
-                    (attempt + 1, budget),
-                    (at, &[]),
-                )
-                .await;
+            let retried = self.attempt(&level, &inputs, (attempt + 1, budget)).await;
             let failed = match retried {
                 Ok(mut response) => {
                     response.attempted_retries = attempt + 1;
@@ -610,9 +608,14 @@ fn stream_can_fall_back(
     }
     // `_stream_order_levels`, the levels the fallback walk sees for the group.
     let listing_team = request.listing_team_id.as_deref();
-    let mut orders: Vec<i64> = group_members(snapshot, &origin.target.group, listing_team)
-        .iter()
+    let members: Vec<_> = group_members(snapshot, &origin.target.group, listing_team)
+        .into_iter()
         .filter(|d| d.listed_for_team(listing_team))
+        .collect();
+    let skips_batch_only = skips_batch_only(request, &members);
+    let mut orders: Vec<i64> = members
+        .iter()
+        .filter(|d| !skips_batch_only || !d.serves_only_batches())
         .filter_map(|d| d.order())
         .collect();
     orders.sort_unstable();

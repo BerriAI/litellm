@@ -1,10 +1,14 @@
 import i18n from "@/i18n/i18n";
 
 /** Primary label for the navbar account control — avoids raw placeholder JWT/user IDs in the UI. */
-export function navAccountDisplayName(userEmail: string | null, userId: string | null): string {
-  const email = userEmail?.trim();
-  if (email) {
-    return email;
+export function navAccountDisplayName(
+  userEmail: string | null,
+  userId: string | null,
+  userAlias?: string | null,
+): string {
+  const identity = userEmail?.trim() || userAlias?.trim();
+  if (identity) {
+    return identity;
   }
   const id = userId?.trim();
   if (!id) {

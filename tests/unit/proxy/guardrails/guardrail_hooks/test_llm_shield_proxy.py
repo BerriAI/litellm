@@ -1697,6 +1697,21 @@ class TestAnthropicStreamRestoration:
         assert "".join(deltas) == "Mail a@example.com now"
 
     @pytest.mark.asyncio
+    async def test_a_frame_nested_too_deep_to_decode_passes_through_and_restoring_goes_on(self):
+        guardrail, _ = _shielded(self.VAULT)
+        deep_frame = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+        stream = _text_block_stream("Mail [EMA", "IL_1] now")
+
+        out: Final[list[bytes]] = await _restore_stream(guardrail, [*stream[:3], deep_frame, *stream[3:]])
+
+        raw = b"".join(out)
+        assert deep_frame in raw
+        deltas: Final[list[str]] = [
+            e["delta"]["text"] for e in _sse_events([raw.replace(deep_frame, b"")]) if e["type"] == "content_block_delta"
+        ]
+        assert "".join(deltas) == "Mail a@example.com now"
+
+    @pytest.mark.asyncio
     async def test_str_frames_stay_str(self):
         guardrail, _ = _shielded(self.VAULT)
 

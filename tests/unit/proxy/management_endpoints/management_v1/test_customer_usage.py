@@ -30,6 +30,7 @@ class DailyRecord(SpendMetrics):
     customer_team_id: str
     customer_member_id: str
     app_id: str = ""
+    app_group_id: str = ""
     api_key: str
     model: str | None = None
     model_group: str | None = None
@@ -125,6 +126,7 @@ class Database:
             Record(app_id="search", resource_type="team", resource_id="search-team"),
         )
     )
+    litellm_appgrouptable: Table = Table((Record(app_group_id="first"), Record(app_group_id="second")))
     litellm_deletedverificationtoken: Table = Table()
     litellm_usertable: Table = Table()
     litellm_teamtable: Table = Table()
@@ -151,6 +153,7 @@ def usage_row(
     provider: str = "provider-a",
     spend: float = 2.0,
     app_id: str = "",
+    app_group_id: str = "",
 ) -> DailyRecord:
     return DailyRecord(
         id=id,
@@ -159,6 +162,7 @@ def usage_row(
         customer_team_id=customer_team_id,
         customer_member_id=customer_member_id,
         app_id=app_id,
+        app_group_id=app_group_id,
         api_key=api_key,
         model=model,
         model_group=model_group,
@@ -488,9 +492,7 @@ def granted(route: str) -> Database:
                 ),
             )
         ),
-        litellm_teamtable=Table(
-            (Record(team_id="owners", object_permission_id="grant" if route == "team" else None),)
-        ),
+        litellm_teamtable=Table((Record(team_id="owners", object_permission_id="grant" if route == "team" else None),)),
         litellm_organizationtable=Table(
             (Record(organization_id="division", object_permission_id="grant" if route == "organization" else None),)
         ),
@@ -527,3 +529,30 @@ def test_a_grantee_cannot_reach_another_apps_usage_by_naming_its_key(path: str) 
     response: Final = http.get(path, params={**DATES, "app_id": "chat", "api_key": "hash-b"})
     assert response.status_code == 200, response.text
     assert response.json()["metadata"]["total_spend"] == 0
+
+
+@pytest.mark.parametrize("resource,parameter,excluded,first,second,label", SCOPES)
+def test_group_filter_uses_the_recorded_group_and_intersects_app_permissions(
+    resource: str,
+    parameter: str,
+    excluded: str,
+    first: str,
+    second: str,
+    label: str,
+) -> None:
+    http: Final = client(
+        (
+            usage_row(app_id="chat", app_group_id="first", spend=2),
+            usage_row(id="later", app_id="chat", app_group_id="second", spend=5),
+            usage_row(id="sibling", app_id="search", app_group_id="first", spend=7),
+        )
+    )
+    path: Final = f"/management/v1/{resource}/daily/activity"
+    response: Final = http.get(path, params={**DATES, parameter: first, "app_group_id": "first"})
+    assert response.status_code == 200
+    assert response.json()["metadata"]["total_spend"] == 9
+    app: Final = http.get(path, params={**DATES, parameter: first, "app_group_id": "first", "app_id": "chat"})
+    assert app.status_code == 200
+    assert app.json()["metadata"]["total_spend"] == 2
+    grantee: Final = client(role=LitellmUserRoles.INTERNAL_USER, database=granted("user"))
+    assert grantee.get(path, params={**DATES, "app_group_id": "first"}).status_code == 403

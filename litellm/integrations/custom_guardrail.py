@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import copy
 import hashlib
@@ -23,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     redact_nested_match_and_regex_keys,
     require_attributes,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
@@ -896,7 +898,7 @@ class CustomGuardrail(CustomLogger):
         if isinstance(event_hook, list):
             _validate_event_hook_list_is_in_supported_event_hooks(event_hook, supported_event_hooks)
         elif isinstance(event_hook, Mode):
-            tag_values_flat: Final[list] = []
+            tag_values_flat: Final[list[str]] = []
             for v in event_hook.tags.values():
                 if isinstance(v, list):
                     tag_values_flat.extend(v)
@@ -911,7 +913,7 @@ class CustomGuardrail(CustomLogger):
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
-    def _get_admin_metadata(data: dict) -> dict:
+    def _get_admin_metadata(data: Mapping[str, object]) -> dict:
         """Return merged admin-configured key and team metadata from the request data.
 
         The proxy may inject admin metadata (user_api_key_metadata,
@@ -932,7 +934,7 @@ class CustomGuardrail(CustomLogger):
             key_meta = meta.get("user_api_key_metadata") or key_meta
         return {**team_meta, **key_meta}
 
-    def get_disable_global_guardrail(self, data: dict) -> bool | None:
+    def get_disable_global_guardrail(self, data: Mapping[str, object]) -> bool | None:
         """
         Returns True if the global guardrail should be disabled.
 
@@ -941,7 +943,7 @@ class CustomGuardrail(CustomLogger):
         """
         return self._get_admin_metadata(data).get("disable_global_guardrails", False)
 
-    def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> list[str]:
+    def get_opted_out_global_guardrails_from_metadata(self, data: Mapping[str, object]) -> list[str]:
         """
         Returns the list of global guardrail names the team/key has opted out of.
 
@@ -1108,7 +1110,7 @@ class CustomGuardrail(CustomLogger):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -1338,7 +1340,8 @@ class CustomGuardrail(CustomLogger):
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
                     verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
             else:
-                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                with contextlib.suppress(UnappliableRequestRewrite):
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
@@ -1892,7 +1895,7 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
-def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+def _append_slg_to_litellm_params(lp: object, entries: Sequence[object]) -> None:
     """Merge guardrail entries into a single litellm_params dict."""
     if not isinstance(lp, dict):
         return
@@ -1921,7 +1924,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     slg_info: Final = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return
-    entries: Final[list] = slg_info if isinstance(slg_info, list) else [slg_info]
+    entries: Final[list[object]] = slg_info if isinstance(slg_info, list) else [slg_info]
     mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
@@ -1938,7 +1941,7 @@ def _original_inputs_for(
     kwargs: Mapping[str, object],
     request_data: Mapping[str, object],
     event_type: GuardrailEventHooks | None,
-) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+) -> dict[str, object] | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
     Hooks may edit their argument in place and return it, so the baseline is always a deep

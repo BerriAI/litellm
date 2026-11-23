@@ -43,6 +43,7 @@ const useAuthorized = () => {
     accessToken: decoded?.key ?? null,
     userId: currentUser?.user_id ?? null,
     userEmail: currentUser?.user_email ?? null,
+    userAlias: currentUser?.user_alias ?? null,
     userRole: effectiveSessionRole(serverRole),
     userRoleLabel: userRoleDisplayLabel(formatUserRole(serverRole)),
     isViewOnly: isViewOnlySessionRole(serverRole),

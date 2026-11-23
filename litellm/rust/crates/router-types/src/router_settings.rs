@@ -3,18 +3,21 @@ use std::{collections::BTreeMap, fmt};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
+use crate::{RouterRedis, RoutingGroupSpec, RoutingStrategy};
+
 /// A proxy config's `router_settings`, as written. What each setting means, and its default when
 /// unset, is the router core's.
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct RouterSettings {
-    pub routing_strategy: Option<String>,
+    pub routing_strategy: Option<RoutingStrategy>,
     pub routing_strategy_args: Option<Map<String, Value>>,
-    pub routing_groups: Option<Vec<Map<String, Value>>>,
+    pub routing_groups: Option<Vec<RoutingGroupSpec>>,
     pub retry_policy: Option<Map<String, Value>>,
     pub model_group_retry_policy: Option<Map<String, Value>>,
     pub allowed_fails_policy: Option<Map<String, Value>>,
-    pub model_group_affinity_config: Option<Map<String, Value>>,
+    /// Each model group and the affinity checks its callers are pinned by.
+    pub model_group_affinity_config: Option<BTreeMap<String, Vec<String>>>,
     pub allowed_fails: Option<u32>,
     pub cooldown_time: Option<f64>,
     pub disable_cooldowns: Option<bool>,
@@ -38,6 +41,8 @@ pub struct RouterSettings {
     pub weights: Option<Map<String, Value>>,
     pub tag_routing_prefix: Option<String>,
     pub optional_pre_call_checks: Option<Vec<String>>,
+    #[serde(flatten)]
+    pub redis: RouterRedis,
     #[serde(flatten)]
     pub additional_fields: BTreeMap<String, Value>,
 }

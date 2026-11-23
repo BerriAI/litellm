@@ -24,7 +24,10 @@ use crate::{
         beta_gated_fields::strip_beta_gated_request,
         beta_headers::BetaPolicy,
         common_utils::{existing_betas, merge_beta_headers, supports_effort_param},
-        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, provider_feature_betas},
+        messages::transformation::{
+            ANTHROPIC_MESSAGES_CONFIG, drop_sampling_params_removed_by_version,
+            provider_feature_betas,
+        },
     },
     base_llm::{
         auth::{AuthScheme, Headers, LoggedIn, ValidatedEnvironment},
@@ -156,6 +159,7 @@ impl MessagesDialect for VertexAiMessagesConfig {
         &self,
         request: MessagesRequest,
         headers: &Headers,
+        _url: &str,
         drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         let request = with_vertex_anthropic_version(request, headers, drop_params)?;
@@ -248,7 +252,7 @@ pub fn vertex_connection_params(
 /// `get_vertex_region`'s warning when it overrides a configured location the model does not
 /// support.
 fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Vertex AI model {model} is not served in {configured}, so the call goes to {routed} (served in {}).",
         supported.join(", ")
     );
@@ -424,6 +428,7 @@ fn with_vertex_anthropic_version(
         header_value(headers, VERSION_HEADER),
         drop_params,
     )?;
+    let request = drop_sampling_params_removed_by_version(request, version, drop_params)?;
     Ok(MessagesRequest {
         params: MessagesOptionalParams {
             extra: request
@@ -503,6 +508,7 @@ mod tests {
 
     const PATH: &str =
         "/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929";
+    const VERTEX_URL: &str = "https://us-east5-aiplatform.googleapis.com/v1/projects/proj/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929:rawPredict";
 
     #[rstest]
     #[case::regional(
@@ -892,7 +898,7 @@ mod tests {
             .collect();
         let body = serde_json::to_value(
             VERTEX_AI_MESSAGES_CONFIG
-                .request_body(request, &headers, drop_params)
+                .request_body(request, &headers, VERTEX_URL, drop_params)
                 .unwrap(),
         )
         .unwrap();
@@ -911,7 +917,7 @@ mod tests {
         .unwrap();
         let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
         let Error::InvalidRequest(detail) = VERTEX_AI_MESSAGES_CONFIG
-            .request_body(request, &headers, false)
+            .request_body(request, &headers, VERTEX_URL, false)
             .unwrap_err()
         else {
             panic!("expected an invalid request");
@@ -922,6 +928,72 @@ mod tests {
                 "claude-sonnet-4-5 does not support anthropic-version={requested}. \
                  To drop unsupported params, set `litellm.drop_params = True`."
             )
+        );
+    }
+
+    fn sampling_request() -> MessagesRequest {
+        serde_json::from_value(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 16,
+            "temperature": 1.0,
+            "top_p": 0.9,
+            "top_k": 40,
+            "messages": [{"role": "user", "content": "hi"}],
+        }))
+        .unwrap()
+    }
+
+    fn sampling_params(body: &MessagesRequest) -> (Option<f64>, Option<f64>, Option<i64>) {
+        (
+            body.params
+                .temperature
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+            body.params
+                .top_p
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+            body.params
+                .top_k
+                .as_ref()
+                .and_then(Recognized::known)
+                .copied(),
+        )
+    }
+
+    #[rstest]
+    #[case::sdk_2_under_drop_params("2026-10-21", true, (None, None, None))]
+    #[case::sdk_1("2023-06-01", false, (Some(1.0), Some(0.9), Some(40)))]
+    #[case::sdk_1_under_drop_params("2023-06-01", true, (Some(1.0), Some(0.9), Some(40)))]
+    #[case::unknown_version_served_as_the_vertex_default("2027-01-01", true, (Some(1.0), Some(0.9), Some(40)))]
+    fn sampling_params_follow_the_version_vertex_applies(
+        #[case] requested: &str,
+        #[case] drop_params: bool,
+        #[case] expected: (Option<f64>, Option<f64>, Option<i64>),
+    ) {
+        let headers: Headers = vec![("anthropic-version".to_string(), requested.to_string())];
+        let body = VERTEX_AI_MESSAGES_CONFIG
+            .request_body(sampling_request(), &headers, VERTEX_URL, drop_params)
+            .unwrap();
+        assert_eq!(sampling_params(&body), expected);
+    }
+
+    #[rstest]
+    fn sampling_params_are_refused_under_2026_10_21_without_drop_params() {
+        let headers: Headers = vec![("anthropic-version".to_string(), "2026-10-21".to_string())];
+        let Error::InvalidRequest(detail) = VERTEX_AI_MESSAGES_CONFIG
+            .request_body(sampling_request(), &headers, VERTEX_URL, false)
+            .unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "claude-sonnet-4-5 does not support temperature=1.0. anthropic-version 2026-10-21 \
+             removed temperature, top_p and top_k. To drop unsupported params, set \
+             `litellm.drop_params = True`."
         );
     }
 
@@ -940,7 +1012,12 @@ mod tests {
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
         VERTEX_AI_MESSAGES_CONFIG
-            .request_body(serde_json::from_value(request).unwrap(), &headers, false)
+            .request_body(
+                serde_json::from_value(request).unwrap(),
+                &headers,
+                VERTEX_URL,
+                false,
+            )
             .map(|body| serde_json::to_value(body).unwrap())
     }
 
@@ -1023,6 +1100,7 @@ mod tests {
                         )
                         .unwrap(),
                     &Vec::new(),
+                    VERTEX_URL,
                     false,
                 )
                 .unwrap(),

@@ -58,7 +58,7 @@ describe("CustomerMemberSpend pagination", () => {
         onMemberClick={vi.fn()}
       />,
     );
-    expect(screen.getByRole("cell", { name: "$10.00" })).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: "$10.00/7d $2.00/48h" })).toBeInTheDocument();
     expect(screen.queryByText("No limit")).not.toBeInTheDocument();
     expect(screen.getByText(/\(7d\)/)).toBeInTheDocument();
     expect(screen.getByText(/\(48h\)/)).toBeInTheDocument();

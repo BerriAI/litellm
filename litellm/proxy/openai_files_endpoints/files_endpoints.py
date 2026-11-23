@@ -94,13 +94,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_row_model_for_deployment,
-    deployment_drop_params,
+    configured_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
@@ -215,7 +216,7 @@ class UploadedFileInfo(TypedDict):
 files_config = None
 
 
-def set_files_config(config):
+def set_files_config(config: object):
     global files_config
     if config is None:
         return
@@ -388,7 +389,7 @@ def get_first_json_object(file_source: bytes | BinaryIO) -> dict | None:
         return None
 
 
-def get_model_from_json_obj(json_object: dict) -> str | None:
+def get_model_from_json_obj(json_object: Mapping[str, object]) -> str | None:
     """
     The model a record names, or None when it does not name one readably.
 
@@ -503,7 +504,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={**credentials, **configured_drop_params(llm_router, model, _create_file_request)},
             keep_request_buckets=True,
         )
 
@@ -596,7 +597,10 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
+            CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
+        )
+        response = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
 
     return response
 
