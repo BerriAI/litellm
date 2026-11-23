@@ -814,6 +814,15 @@ def _handler_model_group(request: Mapping[str, object] | None) -> tuple[object, 
         return None, error
 
 
+def _served_model_group(args: HookArgs, handler_group: object) -> object:
+    from litellm.types.utils import CallTypes
+
+    if member(args.request, "call_type") != CallTypes.arealtime.value:
+        return handler_group
+    router_metadata: Final = mapping(litellm_params(args).get("litellm_metadata")) or {}
+    return router_metadata.get("model_group", handler_group)
+
+
 def logged_model_group(args: HookArgs) -> LoggedModelGroup | None:
     request: Final = mapping(args.request)
     if request is None:
@@ -821,7 +830,7 @@ def logged_model_group(args: HookArgs) -> LoggedModelGroup | None:
     group, error = _handler_model_group(request)
     if error is not None:
         return LoggedModelGroup(error_type=type(error).__name__, error_text=str(error))
-    return coerce_record(LoggedModelGroup, {"value": group})
+    return coerce_record(LoggedModelGroup, {"value": _served_model_group(args, group)})
 
 
 def rate_limit_state(args: HookArgs) -> RateLimitState | None:
