@@ -123,7 +123,7 @@ _BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_TIER_PREFIXES)})_above
 _NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
-def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
 
 
@@ -380,7 +380,7 @@ def _batch_rate_for_prefix(model_info: ModelInfo, prefix: str, usage: Usage, inc
 
 
 def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
-    inclusive: Final = _uses_inclusive_token_thresholds(custom_llm_provider)
+    inclusive: Final = uses_inclusive_token_thresholds(custom_llm_provider)
     return BatchCostRates(
         input=_batch_rate_for_prefix(model_info, "input_cost_per_token", usage, inclusive),
         output=_batch_rate_for_prefix(model_info, "output_cost_per_token", usage, inclusive),
@@ -1242,7 +1242,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
 
 
 def get_modality_token_cost_key(
-    model_info: ModelInfo,
+    model_info: Mapping[str, object],
     cost_key: str,
     prompt_tokens: int,
     *,
@@ -1612,7 +1612,7 @@ def _token_rates_at(
         usage=usage,
         service_tier=service_tier,
         current_time=current_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
     )
     return replace(
         base_rates,
@@ -1671,9 +1671,17 @@ def resolve_token_rates(
             )
             for info in off_peak_variants
         ),
-        multiplier=get_regional_uplift_multiplier(model_info, data_residency)
+        multiplier=token_rate_uplift(model_info, data_residency=data_residency, vertex_location=vertex_location),
+    )
+
+
+def token_rate_uplift(model_info: ModelInfo, *, data_residency: str | None, vertex_location: str | None) -> float:
+    """The price uplift of the regional or FedRAMP OpenAI host or non-global Vertex location a request is sent to,
+    applied to every per-token rate."""
+    return (
+        get_regional_uplift_multiplier(model_info, data_residency)
         * get_fedramp_uplift_multiplier(model_info, data_residency)
-        * get_vertex_regional_endpoint_uplift(model_info, vertex_location),
+        * get_vertex_regional_endpoint_uplift(model_info, vertex_location)
     )
 
 
@@ -1781,7 +1789,7 @@ def generic_cost_per_token(
         usage=usage,
         service_tier=service_tier,
         current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
     )
     completion_base_cost: Final = base_costs.output_rate
     resolved_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
@@ -1803,7 +1811,7 @@ def generic_cost_per_token(
         cache_creation_cost_by_ttl=base_costs.cache_creation_rates_by_ttl,
         service_tier=service_tier,
         prompt_tokens=usage.prompt_tokens,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
     )
 
     ## CALCULATE OUTPUT COST
@@ -1992,7 +2000,7 @@ def _cost_map_billed_rates(
         usage=usage,
         service_tier=service_tier,
         current_time=billing_time,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
     )
     provider_cache_read_cost_rate: Final = resolve_explicit_cache_read_cost_rate(
         model_info=model_info,
@@ -2168,7 +2176,7 @@ def calculate_prompt_caching_savings(
         usage=usage,
         service_tier=service_tier,
         current_time=billed_at,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        threshold_is_inclusive=uses_inclusive_token_thresholds(custom_llm_provider),
     )
     provider_cache_read_cost: Final = resolve_explicit_cache_read_cost_rate(
         model_info=model_info,

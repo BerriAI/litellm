@@ -142,8 +142,8 @@ class _DeploymentEntry(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
-_DeploymentT: Final = TypeVar("_DeploymentT", bound=_DeploymentEntry)
-_DeploymentT_co: Final = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
+_DeploymentT = TypeVar("_DeploymentT", bound=_DeploymentEntry)
+_DeploymentT_co = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
 
 
 class _DeploymentRegistry(Protocol[_DeploymentT_co]):

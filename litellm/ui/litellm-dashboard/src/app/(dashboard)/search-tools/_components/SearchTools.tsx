@@ -1,5 +1,5 @@
 import { isAdminRole } from "@/utils/roles";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Search } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
@@ -300,95 +300,93 @@ const SearchTools: React.FC<SearchToolsProps> = ({ accessToken, userRole, userID
     );
 
   return (
-    <Page className="h-full">
-      <PageContent>
-        <DeleteResourceModal
-          isOpen={isDeleteModalOpen}
-          title={t("searchTools.page.deleteModal.title")}
-          message={t("searchTools.page.deleteModal.message")}
-          resourceInformationTitle={t("searchTools.page.deleteModal.infoTitle")}
-          resourceInformation={
-            toolToDelete
-              ? [
-                  { label: t("searchTools.page.deleteModal.fields.name"), value: toolToDelete.search_tool_name },
-                  {
-                    label: t("searchTools.page.deleteModal.fields.id"),
-                    value: toolToDelete.search_tool_id,
-                    code: true,
-                  },
-                  {
-                    label: t("searchTools.page.deleteModal.fields.provider"),
-                    value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
-                  },
-                  {
-                    label: t("searchTools.page.deleteModal.fields.description"),
-                    value: toolToDelete.search_tool_info?.description || "-",
-                  },
-                ]
-              : []
+    <PageContent>
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title={t("searchTools.page.deleteModal.title")}
+        message={t("searchTools.page.deleteModal.message")}
+        resourceInformationTitle={t("searchTools.page.deleteModal.infoTitle")}
+        resourceInformation={
+          toolToDelete
+            ? [
+                { label: t("searchTools.page.deleteModal.fields.name"), value: toolToDelete.search_tool_name },
+                {
+                  label: t("searchTools.page.deleteModal.fields.id"),
+                  value: toolToDelete.search_tool_id,
+                  code: true,
+                },
+                {
+                  label: t("searchTools.page.deleteModal.fields.provider"),
+                  value: providerInfo?.ui_friendly_name || toolToDelete.litellm_params.search_provider,
+                },
+                {
+                  label: t("searchTools.page.deleteModal.fields.description"),
+                  value: toolToDelete.search_tool_info?.description || "-",
+                },
+              ]
+            : []
+        }
+        onCancel={cancelDelete}
+        onOk={confirmDelete}
+        confirmLoading={isDeleting}
+      />
+
+      <CreateSearchTool
+        userRole={userRole}
+        accessToken={accessToken}
+        onCreateSuccess={handleCreateSuccess}
+        isModalVisible={isCreateModalVisible}
+        setModalVisible={setCreateModalVisible}
+      />
+
+      <Dialog
+        open={isEditModalVisible}
+        onOpenChange={(open) => {
+          if (!open) {
+            setEditModalVisible(false);
+            form.reset(EMPTY_EDIT_VALUES);
+            setSelectedToolId(null);
           }
-          onCancel={cancelDelete}
-          onOk={confirmDelete}
-          confirmLoading={isDeleting}
-        />
+        }}
+      >
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>{t("searchTools.page.editModal.title")}</DialogTitle>
+          </DialogHeader>
+          {renderEditForm()}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setEditModalVisible(false);
+                form.reset(EMPTY_EDIT_VALUES);
+                setSelectedToolId(null);
+              }}
+            >
+              {t("searchTools.page.editModal.cancel")}
+            </Button>
+            <Button onClick={handleEditSubmit}>{t("searchTools.page.editModal.ok")}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-        <CreateSearchTool
-          userRole={userRole}
-          accessToken={accessToken}
-          onCreateSuccess={handleCreateSuccess}
-          isModalVisible={isCreateModalVisible}
-          setModalVisible={setCreateModalVisible}
-        />
+      <PageHeader>
+        <PageHeaderTitle>
+          <Search />
+          {t("searchTools.page.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("searchTools.page.subtitle")}</PageHeaderDescription>
+        {isAdminRole(userRole) && (
+          <PageHeaderControls>
+            <Button variant="outline" onClick={() => setCreateModalVisible(true)}>
+              {t("searchTools.page.addButton")}
+            </Button>
+          </PageHeaderControls>
+        )}
+      </PageHeader>
 
-        <Dialog
-          open={isEditModalVisible}
-          onOpenChange={(open) => {
-            if (!open) {
-              setEditModalVisible(false);
-              form.reset(EMPTY_EDIT_VALUES);
-              setSelectedToolId(null);
-            }
-          }}
-        >
-          <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
-            <DialogHeader>
-              <DialogTitle>{t("searchTools.page.editModal.title")}</DialogTitle>
-            </DialogHeader>
-            {renderEditForm()}
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setEditModalVisible(false);
-                  form.reset(EMPTY_EDIT_VALUES);
-                  setSelectedToolId(null);
-                }}
-              >
-                {t("searchTools.page.editModal.cancel")}
-              </Button>
-              <Button onClick={handleEditSubmit}>{t("searchTools.page.editModal.ok")}</Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-
-        <PageHeader>
-          <PageHeaderTitle>
-            <Search />
-            {t("searchTools.page.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("searchTools.page.subtitle")}</PageHeaderDescription>
-          {isAdminRole(userRole) && (
-            <PageHeaderControls>
-              <Button variant="outline" onClick={() => setCreateModalVisible(true)}>
-                {t("searchTools.page.addButton")}
-              </Button>
-            </PageHeaderControls>
-          )}
-        </PageHeader>
-
-        <ToolsTab />
-      </PageContent>
-    </Page>
+      <ToolsTab />
+    </PageContent>
   );
 };
 
