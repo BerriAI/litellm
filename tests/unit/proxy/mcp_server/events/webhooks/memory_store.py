@@ -118,6 +118,15 @@ class MemoryStore:
         await self.drop_deliveries(subscription_id)
         return True
 
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None:
+        current: Final = self.rows.get(row.id)
+        if current is not None and (current.status, current.generation, current.upstream_subscription_id) == (
+            "terminated",
+            row.generation,
+            row.upstream_subscription_id,
+        ):
+            self.rows[row.id] = current.model_copy(update={"upstream_subscription_id": None})
+
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         current: Final = self.rows.get(subscription_id)
         if (

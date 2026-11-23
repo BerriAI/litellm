@@ -3,7 +3,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
 
-import anyio
 from mcp.shared.exceptions import MCPError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
@@ -154,14 +153,15 @@ async def _admit_new(
 
 async def _discard_pending(subscription: _Subscription) -> None:
     if subscription.reserved:
-        with anyio.CancelScope(shield=True):
-            await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
+        await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
 
 
 async def _roll_back(
     subscription: _Subscription, upstream: SubscribeEventsResult, settings: EventsSettings, runtime: EventsRuntime
 ) -> None:
     """Undo an upstream subscription this request created but could not record."""
+    # The conditional delete serializes with a possibly committed activation before the ownership read.
+    await _discard_pending(subscription)
     current: Final = await subscription.request.store.get(subscription.base.id)
     if current is not None and current.upstream_secret == subscription.base.upstream_secret:
         if current.status in ("active", "suspended"):
@@ -170,7 +170,6 @@ async def _roll_back(
             return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
     await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
-    await _discard_pending(subscription)
 
 
 async def activate_subscription(

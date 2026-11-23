@@ -123,6 +123,8 @@ class EventStore(Protocol):
         """Terminate the row only while it is still this upstream subscription; None when it changed or ended."""
         ...
 
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None: ...
+
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
@@ -359,6 +361,17 @@ class PrismaEventStore:
             if ended:
                 await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return ended > 0
+
+    async def acknowledge_teardown(self, row: SubscriptionRow) -> None:
+        await self._subscriptions.update_many(
+            where={
+                "id": row.id,
+                "status": "terminated",
+                "generation": row.generation,
+                "upstream_subscription_id": row.upstream_subscription_id,
+            },
+            data={"upstream_subscription_id": None},
+        )
 
     async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
         held: Final = await self._subscriptions.update_many(
