@@ -1276,16 +1276,24 @@ def stamp_litellm_bill_on_usage(response: object, usage: object, bill: float) ->
     """Writes litellm's bill into ``usage.cost`` and the hidden ``response_cost`` cache, keeping the upstream's own
     ``usage.cost`` under ``upstream_usage_cost`` so a later pricing pass still bills the upstream's charge instead of
     reading litellm's bill back as if the upstream had reported it."""
-    hidden: Final[object] = getattr(response, "_hidden_params", None)
+    hidden: Final[object] = (
+        response.get("_hidden_params") if isinstance(response, dict) else getattr(response, "_hidden_params", None)
+    )
     if isinstance(hidden, dict):
         hidden_params: Final = cast(dict[str, object], hidden)  # cast-ok: hidden params ride on the response as a dict
+        raw_usage_cost: Final[object] = (
+            usage.get("cost") if isinstance(usage, dict) else getattr(usage, "cost", None)
+        )
         upstream: Final = (
             hidden_params[UPSTREAM_USAGE_COST]
             if UPSTREAM_USAGE_COST in hidden_params
-            else _numeric(getattr(usage, "cost", None))
+            else _numeric(raw_usage_cost)
         )
         hidden_params.update({"response_cost": bill, UPSTREAM_USAGE_COST: upstream})
-    setattr(usage, "cost", bill)
+    if isinstance(usage, dict):
+        usage["cost"] = bill
+    else:
+        setattr(usage, "cost", bill)
 
 
 def billed_usage_cost(response: object, custom_llm_provider: str | None) -> float | None:

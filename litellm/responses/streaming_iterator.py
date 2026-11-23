@@ -1917,21 +1917,30 @@ def _estimate_usage_safely(
 
 
 def stamp_responses_usage_cost(
-    response_obj: ResponsesAPIResponse | None, logging_obj: LiteLLMLoggingObj | None
+    response_obj: ResponsesAPIResponse | dict[str, object] | None, logging_obj: LiteLLMLoggingObj | None
 ) -> None:
     """The terminal response's ``usage.cost`` is the bill litellm writes to the spend row. It is priced on a copy
     shaped the way the success handler shapes the spend row's result (the reported ``usage.cost`` in the
     response-cost header, the usage in chat shape), so the client and the row read the same number."""
     if response_obj is None:
         return
-    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(getattr(response_obj, "usage", None))
+    raw_usage: Final[object] = (
+        response_obj.get("usage") if isinstance(response_obj, dict) else getattr(response_obj, "usage", None)
+    )
+    usage_obj: Final[ResponseAPIUsage | None] = _usage_as_model(raw_usage)
     if usage_obj is None:
         return
-    response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
+    if isinstance(response_obj, dict):
+        response_obj["usage"] = usage_obj
+    else:
+        response_obj.usage = usage_obj  # rebind-ok: the typed usage has to ride on the response the client receives
     if logging_obj is None:
         return
-    priced: Final = response_obj.model_copy(
-        update={"usage": ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)}
+    chat_usage: Final = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(usage_obj)
+    priced: Final = (
+        response_obj.model_copy(update={"usage": chat_usage})
+        if isinstance(response_obj, ResponsesAPIResponse)
+        else ResponsesAPIResponse.model_construct(**{**response_obj, "usage": chat_usage})
     )
     priced.hidden_params = {}
     set_response_cost_in_hidden_params(

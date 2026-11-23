@@ -1336,6 +1336,55 @@ def test_stamp_responses_usage_cost_survives_calculator_failure():
     assert getattr(response.usage, "cost", None) is None
 
 
+def test_stamp_responses_usage_cost_with_dict_response_obj():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response: Final[dict[str, object]] = {
+        "id": "resp_dict_test",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o",
+        "usage": {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+        },
+    }
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 0.0005
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response["usage"], ResponseAPIUsage)
+    assert response["usage"].cost == pytest.approx(0.0005)
+
+
+def test_stamp_responses_usage_cost_with_dict_response_obj_preexisting_cost():
+    from litellm.responses.streaming_iterator import stamp_responses_usage_cost
+
+    response: Final[dict[str, object]] = {
+        "id": "resp_dict_cost_test",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": "gpt-4o",
+        "usage": {
+            "input_tokens": 15,
+            "output_tokens": 25,
+            "total_tokens": 40,
+            "cost": 0.001,
+        },
+    }
+    logging_obj: Final = Mock(spec=LiteLLMLoggingObj)
+    logging_obj.model_call_details = {"custom_llm_provider": "openai"}
+    logging_obj.response_cost_calculator.return_value = 0.0008
+
+    stamp_responses_usage_cost(response, logging_obj)
+
+    assert isinstance(response["usage"], ResponseAPIUsage)
+    assert response["usage"].cost == pytest.approx(0.0008)
+
+
 def _capture_dispatch(logged: list):
     """Record the object handed to the success handlers.
 
