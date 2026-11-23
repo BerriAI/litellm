@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -430,6 +431,13 @@ def _request_token(
         raise RuntimeError(f"Token request failed: {msg}") from e
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedToken:
+    value: str
+    refresh_at: datetime
+    expires_at: datetime
+
+
 class OAuthTokenCache:
     """One OAuth token shared by every request made with the same credentials, refetched near expiry or after SAP rejects it."""
 
@@ -438,13 +446,13 @@ class OAuthTokenCache:
         fetch_token: Callable[[], tuple[str, timedelta]],
         expiry_buffer: timedelta,
         clock: Callable[[], datetime],
+        lock: AbstractContextManager[object],
     ) -> None:
         self._fetch_token: Final = fetch_token
         self._expiry_buffer: Final = expiry_buffer
         self._clock: Final = clock
-        self._lock: Final = Lock()
-        self._token: str | None = None
-        self._refresh_at: datetime | None = None
+        self._lock: Final = lock
+        self._cached: _CachedToken | None = None
         self._failed_fetches = 0
         self._last_fetch_error: Exception | None = None
 
@@ -452,27 +460,35 @@ class OAuthTokenCache:
         failed_fetches_before_waiting: Final = self._failed_fetches
         with self._lock:
             now: Final = self._clock()
-            if self._token is not None and self._refresh_at is not None and now <= self._refresh_at:
-                return self._token
+            cached: Final = self._cached
+            if cached is not None and now <= cached.refresh_at:
+                return cached.value
+            unexpired: Final = cached if cached is not None and now < cached.expires_at else None
             if self._last_fetch_error is not None and self._failed_fetches != failed_fetches_before_waiting:
+                if unexpired is not None:
+                    return unexpired.value
                 raise self._last_fetch_error
             try:
                 token, lifetime = self._fetch_token()
             except Exception as err:
                 self._failed_fetches += 1
                 self._last_fetch_error = err
-                raise
+                if unexpired is None:
+                    raise
+                verbose_logger.warning("SAP token refresh failed, reusing the cached token until it expires: %s", err)
+                return unexpired.value
             self._last_fetch_error = None
-            self._token = token
-            self._refresh_at = now + lifetime - min(self._expiry_buffer, lifetime / 2)
+            self._cached = _CachedToken(
+                value=token,
+                refresh_at=now + lifetime - min(self._expiry_buffer, lifetime / 2),
+                expires_at=now + lifetime,
+            )
             return token
 
     def invalidate(self, rejected_token: str) -> None:
-        with self._lock:
-            if self._token != rejected_token:
-                return
-            self._token = None
-            self._refresh_at = None
+        cached: Final = self._cached
+        if cached is not None and cached.value == rejected_token:
+            self._cached = None
 
 
 def get_token_creator(
@@ -592,4 +608,4 @@ def _cached_token_getter(
         # Defensive guard: should never reach here due to validate_credentials()
         raise ValueError("Invalid authentication configuration: no valid credentials found. ")
 
-    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock)
+    return OAuthTokenCache(_fetch_token, timedelta(minutes=expiry_buffer_minutes), clock, Lock())

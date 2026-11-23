@@ -1,6 +1,6 @@
 import json
+import queue
 import threading
-import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -249,6 +249,53 @@ def test_short_lived_token_is_replaced_halfway_through_its_lifetime(aicore: Mock
     assert aicore.token.call_count == 2
 
 
+def test_a_failed_early_refresh_reuses_the_cached_token_until_it_expires(aicore: MockAICore) -> None:
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "first", "expires_in": 43200}),
+        httpx.Response(503, text="Service Unavailable"),
+        httpx.Response(503, text="Service Unavailable"),
+    ]
+    call_times: Final = iter((_T0, _T0 + timedelta(hours=11, minutes=30), _T0 + timedelta(hours=12, seconds=1)))
+
+    def clock() -> datetime:
+        return next(call_times)
+
+    token_creator: Final = sap_credentials.get_token_creator(clock=clock)[0]
+    tokens: Final = (token_creator(), token_creator())
+
+    with pytest.raises(RuntimeError, match="Service Unavailable"):
+        token_creator()
+    assert tokens == ("Bearer first", "Bearer first")
+    assert aicore.token.call_count == 3
+
+
+def test_a_rejected_token_is_dropped_without_waiting_for_a_token_fetch_in_progress() -> None:
+    fetch_started: Final = threading.Event()
+    rejection_handled: Final = threading.Event()
+
+    def fetch_that_finishes_after_the_rejection() -> tuple[str, timedelta]:
+        fetch_started.set()
+        assert rejection_handled.wait(timeout=5)
+        return "Bearer fresh", timedelta(hours=12)
+
+    token_cache: Final = sap_credentials.OAuthTokenCache(
+        fetch_that_finishes_after_the_rejection,
+        timedelta(minutes=60),
+        lambda: _T0,
+        threading.Lock(),
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fetching: Final = pool.submit(token_cache)
+        assert fetch_started.wait(timeout=5)
+        token_cache.invalidate("Bearer revoked")
+        rejection_handled.set()
+        fresh_token: Final = fetching.result()
+
+    assert fresh_token == "Bearer fresh"
+    assert token_cache() == "Bearer fresh"
+
+
 @pytest.mark.parametrize(
     "make_config", [GenAIHubOrchestrationConfig, GenAIHubEmbeddingConfig], ids=["chat", "embedding"]
 )
@@ -269,24 +316,78 @@ def test_a_late_rejection_of_a_replaced_token_keeps_the_new_token(
     assert aicore.token.call_count == 2
 
 
-def test_requests_waiting_on_a_failing_token_fetch_share_its_error(aicore: MockAICore) -> None:
-    def slow_outage(request: httpx.Request) -> httpx.Response:
-        time.sleep(0.3)
-        return httpx.Response(503, text="Service Unavailable")
+class _LockThatCountsArrivals:
+    def __init__(self, arrived: threading.Semaphore) -> None:
+        self._arrived: Final = arrived
+        self._lock: Final = threading.Lock()
 
-    aicore.token.side_effect = slow_outage
-    token_creator: Final = sap_credentials.get_token_creator()[0]
-    concurrent_requests: Final = 4
-    start: Final = threading.Barrier(concurrent_requests)
+    def __enter__(self) -> bool:
+        self._arrived.release()
+        return self._lock.acquire()
 
+    def __exit__(self, *_: object) -> None:
+        self._lock.release()
+
+
+def _results_of_concurrent_requests(token_cache: sap_credentials.OAuthTokenCache, count: int) -> tuple[str, ...]:
     def request_token(_: int) -> str:
-        start.wait()
-        with pytest.raises(RuntimeError) as failure:
-            token_creator()
-        return str(failure.value)
+        try:
+            return token_cache()
+        except RuntimeError as err:
+            return str(err)
 
-    with ThreadPoolExecutor(max_workers=concurrent_requests) as pool:
-        errors: Final = tuple(pool.map(request_token, range(concurrent_requests)))
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        return tuple(pool.map(request_token, range(count)))
 
-    assert errors == ("Token request failed: Service Unavailable",) * concurrent_requests
-    assert aicore.token.call_count == 1
+
+def test_requests_waiting_on_a_failing_token_fetch_share_its_error() -> None:
+    concurrent_requests: Final = 4
+    arrived: Final = threading.Semaphore(0)
+    fetches: Final = queue.SimpleQueue[None]()
+
+    def fetch_fails_once_every_request_is_waiting() -> tuple[str, timedelta]:
+        fetches.put(None)
+        assert all(arrived.acquire(timeout=5) for _ in range(concurrent_requests))
+        raise RuntimeError("Token request failed: Service Unavailable")
+
+    token_cache: Final = sap_credentials.OAuthTokenCache(
+        fetch_fails_once_every_request_is_waiting,
+        timedelta(minutes=60),
+        lambda: _T0,
+        _LockThatCountsArrivals(arrived),
+    )
+
+    results: Final = _results_of_concurrent_requests(token_cache, concurrent_requests)
+
+    assert results == ("Token request failed: Service Unavailable",) * concurrent_requests
+    assert fetches.qsize() == 1
+
+
+def test_requests_waiting_on_a_failing_refresh_reuse_the_unexpired_cached_token() -> None:
+    concurrent_requests: Final = 4
+    arrived: Final = threading.Semaphore(0)
+    fetches: Final = queue.SimpleQueue[None]()
+    first_fetch: Final = iter((("Bearer first", timedelta(hours=12)),))
+    call_times: Final = iter((_T0,))
+
+    def refresh_fails_once_every_request_is_waiting() -> tuple[str, timedelta]:
+        fetches.put(None)
+        token: Final = next(first_fetch, None)
+        if token is not None:
+            return token
+        assert all(arrived.acquire(timeout=5) for _ in range(concurrent_requests))
+        raise RuntimeError("Token request failed: Service Unavailable")
+
+    token_cache: Final = sap_credentials.OAuthTokenCache(
+        refresh_fails_once_every_request_is_waiting,
+        timedelta(minutes=60),
+        lambda: next(call_times, _T0 + timedelta(hours=11, minutes=30)),
+        _LockThatCountsArrivals(arrived),
+    )
+    assert token_cache() == "Bearer first"
+    assert arrived.acquire(timeout=5)
+
+    results: Final = _results_of_concurrent_requests(token_cache, concurrent_requests)
+
+    assert results == ("Bearer first",) * concurrent_requests
+    assert fetches.qsize() == 2
