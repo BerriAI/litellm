@@ -220,6 +220,7 @@ class PartLocation:
 @dataclass(frozen=True, slots=True)
 class StreamedFunctionCall:
     location: PartLocation
+    candidate_index: int
     name: str
     args: Mapping[str, object]
     part: Mapping[str, object]
@@ -239,7 +240,9 @@ def _all_calls(results: Iterable[_StreamedCalls | None]) -> _StreamedCalls | Non
     return tuple(chain.from_iterable(result for result in collected if result is not None))
 
 
-def _function_call(location: PartLocation, part: Mapping[str, object], value: object) -> StreamedFunctionCall | None:
+def _function_call(
+    location: PartLocation, candidate_index: int, part: Mapping[str, object], value: object
+) -> StreamedFunctionCall | None:
     fields: Final = as_str_mapping(value)
     if fields is None or not fields.keys() <= _FUNCTION_CALL_KEYS:
         return None
@@ -248,10 +251,10 @@ def _function_call(location: PartLocation, part: Mapping[str, object], value: ob
     args: Final = _NO_ARGS if raw_args is None else as_str_mapping(raw_args)
     if not isinstance(name, str) or args is None:
         return None
-    return StreamedFunctionCall(location=location, name=name, args=args, part=part)
+    return StreamedFunctionCall(location=location, candidate_index=candidate_index, name=name, args=args, part=part)
 
 
-def _part_function_calls(location: PartLocation, part: object) -> _StreamedCalls | None:
+def _part_function_calls(location: PartLocation, candidate_index: int, part: object) -> _StreamedCalls | None:
     fields: Final = as_str_mapping(part)
     if fields is None:
         return None
@@ -260,7 +263,7 @@ def _part_function_calls(location: PartLocation, part: object) -> _StreamedCalls
         case ():
             return ()
         case (function_call,):
-            call: Final = _function_call(location, fields, function_call)
+            call: Final = _function_call(location, candidate_index, fields, function_call)
             return None if call is None else (call,)
         case _:
             return None
@@ -277,13 +280,22 @@ def _candidate_parts(candidate: Mapping[str, object]) -> Sequence[object] | None
     return () if parts is None else _object_sequence(parts)
 
 
+def _candidate_index(candidate: Mapping[str, object], position: int) -> int | None:
+    index: Final = candidate.get("index")
+    if index is None:
+        return position
+    return index if isinstance(index, int) and not isinstance(index, bool) else None
+
+
 def _candidate_function_calls(line: int, position: int, candidate: object) -> _StreamedCalls | None:
     fields: Final = as_str_mapping(candidate)
     parts: Final = None if fields is None else _candidate_parts(fields)
-    if parts is None:
+    candidate_index: Final = None if fields is None else _candidate_index(fields, position)
+    if parts is None or candidate_index is None:
         return None
     return _all_calls(
-        _part_function_calls(PartLocation(line, position, index), part) for index, part in enumerate(parts)
+        _part_function_calls(PartLocation(line, position, index), candidate_index, part)
+        for index, part in enumerate(parts)
     )
 
 
@@ -342,8 +354,8 @@ def _thought_signature(part: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _calls_by_candidate(calls: _StreamedCalls) -> tuple[_StreamedCalls, ...]:
-    positions: Final = frozenset(call.location.candidate for call in calls)
-    return tuple(tuple(call for call in calls if call.location.candidate == position) for position in positions)
+    indexes: Final = frozenset(call.candidate_index for call in calls)
+    return tuple(tuple(call for call in calls if call.candidate_index == index) for index in indexes)
 
 
 def _signature_handoff(

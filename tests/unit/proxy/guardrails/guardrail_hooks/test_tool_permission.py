@@ -4168,9 +4168,10 @@ class TestToolPermissionGuardrailAnthropicMessages:
 _GENERATE_CONTENT_STREAM_ROUTE: Final = "/v1beta/models/gemini-3.8-flash:streamGenerateContent"
 
 
-def _generate_content_frame(*candidate_parts: list[dict[str, object]]) -> bytes:
+def _generate_content_frame(*candidate_parts: list[dict[str, object]], first_index: int = 0) -> bytes:
     candidates: Final = [
-        {"content": {"role": "model", "parts": parts}, "index": index} for index, parts in enumerate(candidate_parts)
+        {"content": {"role": "model", "parts": parts}, "index": index}
+        for index, parts in enumerate(candidate_parts, start=first_index)
     ]
     return f"data: {json.dumps({'candidates': candidates})}\r\n\r\n".encode()
 
@@ -4364,19 +4365,29 @@ class TestToolPermissionGuardrailGenerateContentStream:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "frame",
+        "chunks",
         [
             pytest.param(
-                _generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("delete_file")]), id="every-call-denied"
+                [_generate_content_frame([_DENIED_FIRST_CALL, _gemini_function_call("delete_file")])],
+                id="every-call-denied",
             ),
             pytest.param(
-                _generate_content_frame([_DENIED_FIRST_CALL], [_gemini_function_call("get_weather")]),
+                [_generate_content_frame([_DENIED_FIRST_CALL], [_gemini_function_call("get_weather")])],
                 id="kept-call-in-another-candidate",
+            ),
+            pytest.param(
+                [
+                    _generate_content_frame([_DENIED_FIRST_CALL]),
+                    _generate_content_frame([_gemini_function_call("get_weather")], first_index=1),
+                ],
+                id="kept-call-of-another-candidate-in-a-later-frame",
             ),
         ],
     )
-    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(self, frame: bytes) -> None:
-        delivered: Final = await self._drain(self.rewriting, [frame])
+    async def test_rewrite_keeps_the_signature_on_the_denial_when_its_turn_has_no_kept_call(
+        self, chunks: list[bytes]
+    ) -> None:
+        delivered: Final = await self._drain(self.rewriting, chunks)
 
         signed_denial, other_part = _stream_parts(delivered)
         assert signed_denial == {"text": signed_denial["text"], **_THOUGHT_SIGNATURE}
@@ -4448,6 +4459,10 @@ class TestToolPermissionGuardrailGenerateContentStream:
             pytest.param(
                 [b'data: {"candidates": [{"content": {"parts": {"functionCall": {"name": "delete_file"}}}}]}\r\n\r\n'],
                 id="parts-not-a-list",
+            ),
+            pytest.param(
+                [b'data: {"candidates": [{"index": "1", "content": {"parts": [{"functionCall": {"name": "get_weather"}}]}}]}\r\n\r\n'],
+                id="non-integer-candidate-index",
             ),
             pytest.param(
                 [f"data: {json.dumps({'candidates': [{'content': {'parts': [{'text': 'a data: {}'}]}}]}, ensure_ascii=False)}\r\n\r\n".encode()],
