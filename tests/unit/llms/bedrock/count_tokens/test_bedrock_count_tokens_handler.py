@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from botocore.credentials import RefreshableCredentials
-from botocore.exceptions import UnauthorizedSSOTokenError
+from botocore.exceptions import TokenRetrievalError, UnauthorizedSSOTokenError
 
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -124,22 +124,34 @@ async def test_handle_count_tokens_request_answers_400_for_a_malformed_body_with
 
 
 class _ExpiredSsoSessionCountTokensHandler(BedrockCountTokensHandler):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
     def get_credentials(
         self,
         **kwargs: object,  # kwargs-ok: mirrors the base resolver's keyword contract, which this stub ignores
     ) -> RefreshableCredentials:
-        raise UnauthorizedSSOTokenError()
+        raise self._error
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    (
+        UnauthorizedSSOTokenError(),
+        TokenRetrievalError(provider="sso", error_msg="Token has expired and refresh failed"),
+    ),
+    ids=("legacy-sso-profile", "sso-session-refresh-failed"),
+)
 async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_session_without_calling_bedrock(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     client: Final = AsyncMock(spec=AsyncHTTPHandler)
 
     with pytest.raises(BedrockError) as exc_info:
-        await _ExpiredSsoSessionCountTokensHandler().handle_count_tokens_request(
+        await _ExpiredSsoSessionCountTokensHandler(error).handle_count_tokens_request(
             request_data={"model": _COUNTED_MODEL, "messages": [{"role": "user", "content": "hi"}]},
             litellm_params={"aws_region_name": "us-east-1"},
             resolved_model=_COUNTED_MODEL,
@@ -148,6 +160,7 @@ async def test_handle_count_tokens_request_answers_401_for_an_expired_sso_sessio
 
     assert exc_info.value.status_code == 401
     assert exc_info.value.message.startswith("No usable AWS credentials are set, so Bedrock can't count tokens")
+    assert "aws sso login" in exc_info.value.message
     client.post.assert_not_awaited()
 
 

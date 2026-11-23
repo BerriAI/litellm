@@ -38,27 +38,37 @@ def aws_credentials_error(error: Exception) -> BedrockCountTokensCredentialsErro
         PartialCredentialsError,
         ProfileNotFound,
         SSOTokenLoadError,
+        TokenRetrievalError,
         UnauthorizedSSOTokenError,
     )
 
     match error:
         case AwsAuthError():
             return BedrockCountTokensCredentialsError(error.status_code, error.message)
-        case (
-            NoCredentialsError()
-            | PartialCredentialsError()
-            | ProfileNotFound()
-            | SSOTokenLoadError()
-            | UnauthorizedSSOTokenError()
-        ):
-            return BedrockCountTokensCredentialsError(
-                401,
-                f"No usable AWS credentials are set, so Bedrock can't count tokens ({error}). Set "
-                "aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
+        case ProfileNotFound():
+            return _missing_aws_credentials(
+                error, "Add that profile to the proxy's AWS config file, or set aws_profile_name to one that exists."
+            )
+        case SSOTokenLoadError() | UnauthorizedSSOTokenError() | TokenRetrievalError():
+            return _missing_aws_credentials(
+                error,
+                "Run `aws sso login` for the deployment's aws_profile_name on the proxy host, or set other AWS "
+                "credentials on the deployment.",
+            )
+        case NoCredentialsError() | PartialCredentialsError():
+            return _missing_aws_credentials(
+                error,
+                "Set aws_access_key_id and aws_secret_access_key, aws_profile_name, aws_role_name, or api_key on the "
                 "deployment, or AWS credentials in the proxy environment.",
             )
         case _:
             return None
+
+
+def _missing_aws_credentials(error: Exception, fix: str) -> BedrockCountTokensCredentialsError:
+    return BedrockCountTokensCredentialsError(
+        401, f"No usable AWS credentials are set, so Bedrock can't count tokens ({error}). {fix}"
+    )
 
 
 class BedrockCountTokensHandler(BedrockCountTokensConfig):

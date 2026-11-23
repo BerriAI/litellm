@@ -228,12 +228,12 @@ def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_no_aws_credentials")
 @pytest.mark.parametrize(
-    ("credentials", "environment"),
+    ("credentials", "environment", "fix"),
     (
-        ({}, {}),
-        ({"aws_profile_name": "litellm-test-missing-profile"}, {}),
-        ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}),
-        ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}),
+        ({}, {}, "Set aws_access_key_id and aws_secret_access_key"),
+        ({"aws_profile_name": "litellm-test-missing-profile"}, {}, "set aws_profile_name to one that exists"),
+        ({}, {"AWS_ACCESS_KEY_ID": "AKIATESTACCESSKEY"}, "Set aws_access_key_id and aws_secret_access_key"),
+        ({"aws_profile_name": "litellm-test-sso-never-logged-in"}, {}, "Run `aws sso login`"),
     ),
     ids=("none", "unknown-profile", "access-key-without-secret", "sso-never-logged-in"),
 )
@@ -243,7 +243,11 @@ def _no_aws_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None
     ids=("runtime", "mantle"),
 )
 async def test_count_without_usable_aws_credentials_is_a_401_rejected_before_calling_bedrock(
-    monkeypatch: pytest.MonkeyPatch, model_to_use: str, credentials: dict[str, str], environment: dict[str, str]
+    monkeypatch: pytest.MonkeyPatch,
+    model_to_use: str,
+    credentials: dict[str, str],
+    environment: dict[str, str],
+    fix: str,
 ) -> None:
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
@@ -262,6 +266,7 @@ async def test_count_without_usable_aws_credentials_is_a_401_rejected_before_cal
     assert (result.error_message or "").startswith(
         "No usable AWS credentials are set, so Bedrock can't count tokens"
     ), result.error_message
+    assert fix in (result.error_message or ""), result.error_message
     assert bedrock.posted_hosts() == ()
 
 

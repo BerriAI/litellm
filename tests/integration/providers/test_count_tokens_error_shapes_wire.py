@@ -481,3 +481,33 @@ def test_bedrock_count_without_aws_credentials_is_a_401_naming_the_missing_crede
             assert message.startswith(_MISSING_AWS_CREDENTIALS), message
             assert "token_count_model" not in message, message
         assert runtime.drain() == mantle.drain() == ()
+
+
+@pytest.mark.parametrize(
+    "credentials",
+    ({}, {"aws_profile_name": "litellm-qa-missing-profile"}),
+    ids=("none", "unknown-profile"),
+)
+def test_bedrock_passthrough_count_without_aws_credentials_is_a_401_naming_the_missing_credentials(
+    credentialless_bedrock_proxy: OwnedProxy, bedrock_mantle_port: int, credentials: dict[str, JsonValue]
+) -> None:
+    gateway: Final = credentialless_bedrock_proxy.gateway
+    with (
+        wire_server(_never_called) as runtime,
+        wire_server(_never_called, port=bedrock_mantle_port) as mantle,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="bedrock/us.anthropic.claude-sonnet-5-5",
+            aws_region_name="us-east-1",
+            api_base=runtime.url,
+            api_key=None,
+            num_retries=0,
+            **credentials,
+        )
+        response: Final = gateway.request(
+            "POST", "/bedrock/v1/messages/count_tokens", {"model": model, "messages": _MESSAGES}
+        )
+        assert response.status_code == 401, response.text
+        assert _MISSING_AWS_CREDENTIALS in response.text, response.text
+        assert runtime.drain() == mantle.drain() == ()
