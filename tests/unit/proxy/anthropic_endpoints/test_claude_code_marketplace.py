@@ -428,6 +428,22 @@ async def test_get_marketplace_key_query_param_adds_granted_disabled_plugins(mon
 
 
 @pytest.mark.asyncio
+async def test_marketplace_500_body_carries_no_exception_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _boom(*_args, **_kwargs):
+        raise RuntimeError("db.internal password=hunter2")
+
+    monkeypatch.setattr(claude_code_marketplace, "get_prisma_client", _boom)
+
+    with pytest.raises(HTTPException) as exc:
+        await get_marketplace(request=MagicMock())
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == {"error": "Failed to generate marketplace"}
+    assert "hunter2" not in str(exc.value.detail)
+    assert "db.internal" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("preference", ["available", "auto_install", "required"])
 async def test_get_marketplace_emits_installation_preference(preference):
     await register_plugin(
@@ -1718,7 +1734,8 @@ async def test_archive_refetch_failure_is_reported_as_a_bad_gateway(archive_dir,
         await get_plugin_archive("s3-skill", request=_marketplace_request())
 
     assert exc.value.status_code == 502
-    assert exc.value.detail["error"] == ("Could not rebuild the archive for plugin 's3-skill': upstream is gone")
+    assert exc.value.detail["error"] == "Could not rebuild the archive for plugin 's3-skill'"
+    assert "upstream is gone" not in exc.value.detail["error"]
 
 
 @pytest.mark.asyncio

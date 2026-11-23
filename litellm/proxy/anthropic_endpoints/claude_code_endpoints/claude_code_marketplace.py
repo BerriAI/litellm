@@ -283,7 +283,7 @@ async def get_marketplace(request: Request, key: str | None = None):
         verbose_proxy_logger.exception("Error generating marketplace: %s", e)
         raise HTTPException(
             status_code=500,
-            detail={"error": f"Failed to generate marketplace: {e}"},
+            detail={"error": "Failed to generate marketplace"},
         )
 
 
@@ -442,7 +442,8 @@ async def _load_archive(plugin_name: str, manifest: Mapping[str, object], source
             )
         except plugin_archive.ArchiveBuildError as e:
             _ARCHIVE_RETRY_CACHE.failure(plugin_name)
-            raise _error_response(502, f"Could not rebuild the archive for plugin '{plugin_name}': {e}")
+            verbose_proxy_logger.warning("Could not rebuild archive for plugin %s: %s", plugin_name, e)
+            raise _error_response(502, f"Could not rebuild the archive for plugin '{plugin_name}'")
         if rebuilt.sha256 != expected:
             _ARCHIVE_RETRY_CACHE.failure(plugin_name)
             raise _error_response(
