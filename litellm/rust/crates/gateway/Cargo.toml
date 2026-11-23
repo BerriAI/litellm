@@ -26,6 +26,8 @@ litellm-gateway-auth.workspace = true
 litellm-gateway-auth-core.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
+litellm-callbacks-spend-logger.workspace = true
+litellm-coroutine.workspace = true
 parking_lot.workspace = true
 arc-swap.workspace = true
 rand.workspace = true
@@ -78,6 +80,8 @@ rstest.workspace = true
 litellm-callbacks-spend-log.workspace = true
 litellm-callbacks-spend-logger.workspace = true
 litellm-redaction.workspace = true
+litellm-callbacks-budgets.workspace = true
+litellm-spend-log-writer.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
 flate2 = "1.1.10"
