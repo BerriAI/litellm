@@ -115,7 +115,7 @@ def _concrete_sequence(value: object) -> Sequence[object] | None:
 
 
 def _extra_body_pair(item: object) -> tuple[str, object] | None:
-    pair: Final = _concrete_sequence(item)
+    pair: Final = item if isinstance(item, str) else _concrete_sequence(item)
     if pair is None or len(pair) != 2:
         return None
     key: Final = pair[0]

@@ -662,7 +662,8 @@ def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
         [("top_k",)],
         [("top_k", 5, 6)],
         [(5, "top_k")],
-        ["ab"],
+        ["a"],
+        ["abc"],
         [("top_k", 5), ("min_p",)],
         {"return_token_ids": False},
         {"continuation_token": ""},
@@ -678,7 +679,8 @@ def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
         "short_pair",
         "long_pair",
         "non_string_pair_key",
-        "string_item",
+        "short_string_item",
+        "long_string_item",
         "one_malformed_pair",
         "falsy_token_ids",
         "empty_continuation",
@@ -788,6 +790,8 @@ def test_default_cache_key_reads_extra_body_given_as_key_value_pairs(
     assert key_of(pair_sequence([("top_k", 1), ("top_k", 5)])) != key_of({"top_k": 1})
     assert key_of(pair_sequence([("return_token_ids", True)])) != key_of(None)
     assert key_of(pair_sequence([["top_k", 5]])) == key_of({"top_k": 5})
+    assert key_of(pair_sequence(["ab"])) == key_of({"a": "b"})
+    assert key_of(pair_sequence(["ab"])) != key_of(pair_sequence(["ac"]))
 
 
 def test_default_cache_key_leaves_one_shot_extra_body_iterators_unread(monkeypatch: pytest.MonkeyPatch) -> None:
