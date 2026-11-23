@@ -34,6 +34,7 @@ from litellm.llms.chatgpt.subscription_login import (
 from litellm.proxy.common_utils.credential_hydration import decrypted_credential, stored_credential_provider
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable
+from litellm.proxy.db.db_span import db_span
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InProcessRefreshCoordinator,
     OAuthToken,
@@ -115,14 +116,15 @@ class _SavepointRows:
         info_match: tuple[str, str] | None,
         data: Mapping[str, object],
     ) -> bool:
-        await self.transaction.execute_raw(_SAVEPOINT_SQL)
-        try:
-            saved: Final = await self.rows.update_if_value_unchanged(credential_name, value_match, info_match, data)
-        except Exception:
-            await self.transaction.execute_raw(_ROLLBACK_TO_SAVEPOINT_SQL)
-            raise
-        await self.transaction.execute_raw(_RELEASE_SAVEPOINT_SQL)
-        return saved
+        async with db_span("save_chatgpt_login", "LiteLLM_CredentialsTable"):
+            await self.transaction.execute_raw(_SAVEPOINT_SQL)
+            try:
+                saved: Final = await self.rows.update_if_value_unchanged(credential_name, value_match, info_match, data)
+            except Exception:
+                await self.transaction.execute_raw(_ROLLBACK_TO_SAVEPOINT_SQL)
+                raise
+            await self.transaction.execute_raw(_RELEASE_SAVEPOINT_SQL)
+            return saved
 
 
 @dataclass(frozen=True, slots=True)
