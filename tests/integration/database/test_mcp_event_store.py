@@ -417,6 +417,36 @@ async def test_inbound_insert_acknowledges_duplicates_and_rejects_a_replaced_sub
 
 
 @pytest.mark.asyncio
+async def test_delayed_teardown_preserves_reused_upstream_id_and_replacement_delivery() -> None:
+    async with _connected() as old, _connected() as new:
+        row: Final = await _active(old)
+        current: Final = await old.get(row.id)
+        assert current is not None
+        try:
+            assert await old.hold_for_unsubscribe(row.id, "up_1", current.generation)
+            assert await new.end_if_expired(row.id, datetime.now(timezone.utc) + timedelta(days=1))
+            replacement: Final = _row().model_copy(update={"id": row.id})
+            assert await new.reserve(replacement)
+            activation: Final = Activation(
+                client_secret=SECRET,
+                upstream_subscription_id="up_1",
+                upstream_refresh_before=None,
+                refresh_before=None,
+                cursor=None,
+            )
+            assert await new.activate(row.id, activation)
+            active: Final = await new.get(row.id)
+            assert active is not None and active.generation != current.generation
+            assert await new.enqueue_current(active, _delivery(row.id))
+            assert not await old.end_if_current(row.id, "up_1", current.generation)
+            assert not await old.hold_for_unsubscribe(row.id, "up_1", current.generation)
+            await old.delete_held(row.id, "up_1", current.generation)
+            assert await new.has_pending(row.id) and await new.get(row.id) == active
+        finally:
+            await new.delete(row.id)
+
+
+@pytest.mark.asyncio
 async def test_refresh_retains_the_cursor_when_a_receiver_enqueues_before_activation() -> None:
     async with _connected() as subscriber, _connected() as receiver:
         row: Final = await _active(subscriber)

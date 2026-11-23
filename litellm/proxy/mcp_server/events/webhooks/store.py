@@ -125,7 +125,9 @@ class EventStore(Protocol):
 
     async def acknowledge_teardown(self, row: SubscriptionRow) -> None: ...
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         """Freeze a live row as pending while it is torn down, so delivery stops and a racing subscribe is told to
         retry instead of reclaiming it; the pending deadline frees the row if teardown never finishes."""
         ...
@@ -373,15 +375,23 @@ class PrismaEventStore:
             data={"upstream_subscription_id": None},
         )
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
-        held: Final = await self._subscriptions.update_many(
-            where={
-                "id": subscription_id,
-                "upstream_subscription_id": upstream_subscription_id,
-                "status": {"in": ["active", "suspended"]},
-            },
-            data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
-        )
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
+        where: Final[LiteLLM_MCPEventSubscriptionWhereInput] = {
+            "id": subscription_id,
+            "upstream_subscription_id": upstream_subscription_id,
+            "status": {"in": ["active", "suspended"]},
+        }
+        if generation is not None:
+            where["generation"] = generation
+        async with self._client.tx() as tx:
+            held: Final = await tx.litellm_mcpeventsubscription.update_many(
+                where=where,
+                data={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL},
+            )
+            if held:
+                await tx.litellm_mcpeventdelivery.delete_many(where={"subscription_id": subscription_id})
         return held > 0
 
     async def delete_held(

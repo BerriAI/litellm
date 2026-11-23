@@ -6,11 +6,12 @@ from typing import Final
 
 import anyio
 from mcp.shared.exceptions import MCPError
+from pydantic import ValidationError
 
 from litellm.proxy.mcp_server.contracts import OperationContext
 from litellm.proxy.mcp_server.events.access import holds_webhooks, principal_of, stored_key_hash
-from litellm.proxy.mcp_server.events.admission import admit, binding_for
-from litellm.proxy.mcp_server.events.catalog import PreparedEvent
+from litellm.proxy.mcp_server.events.admission import admit, binding_for, check_routing_headers
+from litellm.proxy.mcp_server.events.catalog import PreparedEvent, prepare_event
 from litellm.proxy.mcp_server.events.config import EventsSettings
 from litellm.proxy.mcp_server.events.cursors import (
     CursorBinding,
@@ -31,8 +32,14 @@ from litellm.proxy.mcp_server.events.errors import (
 )
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
-from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, is_https_callback
+from litellm.proxy.mcp_server.events.upstream import routing_headers
+from litellm.proxy.mcp_server.events.webhooks.delivery import (
+    CALLBACK_DEADLINE_SECONDS,
+    is_https_callback,
+    post_callback,
+)
 from litellm.proxy.mcp_server.events.webhooks.policy import (
+    callback_url,
     client_grant,
     granted_ttl_ms,
     iso,
@@ -53,8 +60,10 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import (
     DeliveryStatus,
     EventsErrorCode,
+    JsonObject,
     SubscribeEventsParams,
     SubscribeEventsResult,
+    UnsubscribeEventsParams,
 )
 
 _KNOWN_CODES: Final = frozenset(member.value for member in EventsErrorCode)
@@ -149,6 +158,41 @@ async def _admit_new(
         return None
     failure: Final = await verify_callback(params.delivery.url, request.secret, sid, now, post)
     return callback_error(failure) if failure is not None else None
+
+
+def _upstream_params(subscription: _Subscription, settings: EventsSettings) -> JsonObject:
+    params: Final = subscription.params
+    prepared: Final = subscription.prepared
+    return {
+        "name": prepared.resolved.upstream_name,
+        "arguments": dict(params.arguments),
+        "delivery": {
+            "mode": "webhook",
+            "url": callback_url(settings, subscription.base.id, subscription.base.upstream_secret),
+            "secret": subscription.base.upstream_secret,
+        },
+        "cursor": subscription.opened.upstream,
+        **({"maxAgeMs": params.max_age_ms} if params.max_age_ms is not None else {}),
+        "ttlMs": granted_ttl_ms(params, prepared.resolved.target.server),
+    }
+
+
+async def _subscribe_upstream(
+    subscription: _Subscription, settings: EventsSettings, runtime: EventsRuntime
+) -> Result[SubscribeEventsResult, EventsFailure]:
+    prepared: Final = subscription.prepared
+    try:
+        raw: Final = await runtime.call(
+            prepared.upstream,
+            "events/subscribe",
+            _upstream_params(subscription, settings),
+            routing_headers(prepared.resolved.upstream_name, subscription.params.arguments, prepared.descriptor),
+        )
+        return Ok(SubscribeEventsResult.model_validate(raw))
+    except MCPError as error:
+        return Error(upstream_failure(error))
+    except ValidationError:
+        return Error(internal_error("Upstream returned an invalid events/subscribe result"))
 
 
 async def _discard_pending(subscription: _Subscription) -> None:
@@ -310,3 +354,108 @@ async def reserve_subscription(
             await store.discard_pending(subscription.base.id, subscription.base.generation)
         raise
     return Ok(replace(subscription, reserved=True))
+
+
+async def subscribe(
+    context: OperationContext,
+    params: SubscribeEventsParams,
+    headers: Mapping[str, str] | None,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    store: EventStore | None = None,
+    post: Poster = post_callback,
+) -> Result[SubscribeEventsResult, EventsFailure]:
+    request: Final = validate_subscription(context, params, settings, store)
+    if isinstance(request, Error):
+        return Error(request.error)
+    prepared: Final = await prepare_subscription(context, params, headers, settings, runtime, request.ok, post)
+    if isinstance(prepared, Error):
+        return Error(prepared.error)
+    reserved: Final = await reserve_subscription(prepared.ok, settings)
+    if isinstance(reserved, Error):
+        return Error(reserved.error)
+    subscription: Final = reserved.ok
+    try:
+        upstream: Final = await _subscribe_upstream(subscription, settings, runtime)
+    except BaseException:
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await _discard_pending(subscription)
+        raise
+    if isinstance(upstream, Error):
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await _discard_pending(subscription)
+        return Error(upstream.error)
+    try:
+        return await activate_subscription(subscription, upstream.ok, context, settings, runtime)
+    except anyio.get_cancelled_exc_class() as cancelled:
+        try:
+            with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+                await _roll_back(subscription, upstream.ok, settings, runtime)
+        except Exception as error:  # noqa: BLE001  # preserve cancellation when reconciliation itself fails
+            raise cancelled from error
+        raise
+
+
+async def unsubscribe(
+    context: OperationContext,
+    params: UnsubscribeEventsParams,
+    headers: Mapping[str, str] | None,
+    settings: EventsSettings,
+    runtime: EventsRuntime,
+    store: EventStore | None = None,
+) -> Result[None, EventsFailure]:
+    principal: Final = principal_of(context.user_api_key_auth)
+    if principal is None:
+        return Error(forbidden("Webhook subscriptions require an authenticated caller"))
+    events_store: Final = store or default_store()
+    if events_store is None:
+        return Error(unsupported("webhook"))
+    sid: Final = subscription_id(principal, params.delivery.url, params.name, params.arguments)
+    row: Final = await events_store.get(sid)
+    if row is None or row.status == "terminated":
+        return Error(subscription_not_found())
+    if row.status == "pending" and row.upstream_subscription_id is None:
+        return Error(_BEING_CREATED)
+    prepared: Final = await _same_server_event(context, params.name, row, runtime)
+    if prepared is not None:
+        mismatch: Final = check_routing_headers(headers, params.name, params.arguments, prepared)
+        if mismatch is not None:
+            return Error(mismatch)
+    if row.status != "pending" and not await events_store.hold_for_unsubscribe(
+        sid, row.upstream_subscription_id, row.generation
+    ):
+        held: Final = await events_store.get(sid)
+        expected: Final = ("pending", row.generation, row.upstream_subscription_id)
+        if held is None or (held.status, held.generation, held.upstream_subscription_id) != expected:
+            return Error(subscription_not_found())
+    with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS) as deadline:
+        if not await end_upstream(row, settings, runtime, prepared=prepared):
+            return Error(internal_error("Upstream unsubscribe was not confirmed; retry"))
+        await events_store.delete_held(sid, row.upstream_subscription_id, row.generation)
+    if deadline.cancel_called:
+        return Error(internal_error("Upstream unsubscribe timed out; retry"))
+    await runtime.record(
+        EventActivity(
+            call_type="mcp_event_subscribe",
+            mode="webhook",
+            server_id=row.server_id,
+            event_name=params.name,
+            outcome="unsubscribed",
+            caller=context.user_api_key_auth,
+            subscription_id=sid,
+        )
+    )
+    return Ok(None)
+
+
+async def _same_server_event(
+    context: OperationContext, name: str, row: SubscriptionRow, runtime: EventsRuntime
+) -> PreparedEvent | None:
+    """The event on the server this row was made on; None when the name moved or the catalog is unreachable."""
+    try:
+        prepared: Final = await prepare_event(context, name, runtime)
+    except Exception:  # noqa: BLE001  # an upstream outage must not keep a cancelled subscription delivering
+        return None
+    if isinstance(prepared, Error) or prepared.ok.resolved.target.server.server_id != row.server_id:
+        return None
+    return prepared.ok

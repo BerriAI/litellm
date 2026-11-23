@@ -125,17 +125,21 @@ class MemoryStore:
         ):
             self.rows[row.id] = current.model_copy(update={"upstream_subscription_id": None})
 
-    async def hold_for_unsubscribe(self, subscription_id: str, upstream_subscription_id: str | None) -> bool:
+    async def hold_for_unsubscribe(
+        self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+    ) -> bool:
         current: Final = self.rows.get(subscription_id)
         if (
             current is None
             or current.status not in ("active", "suspended")
+            or generation not in (None, current.generation)
             or current.upstream_subscription_id != upstream_subscription_id
         ):
             return False
         self.rows[subscription_id] = current.model_copy(
             update={"status": "pending", "refresh_before": datetime.now(timezone.utc) + PENDING_TTL}
         )
+        await self.drop_deliveries(subscription_id)
         return True
 
     async def delete_held(
