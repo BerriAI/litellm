@@ -37430,6 +37430,22 @@
         "input_cost_per_second": 0.0001,
         "source": "https://developers.openai.com/api/docs/pricing"
     },
+    "openai/Qwen/Qwen3-ASR-1.7B": {
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "source": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B#using-openai-sdk",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions",
+            "/v1/chat/completions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "gpt-image-1.5": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_image_token_cost_batches": 1e-06,
@@ -57875,7 +57891,8 @@
         "max_input_tokens": 16000,
         "max_output_tokens": 16000,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/rerank-2-lite": {
         "input_cost_per_token": 2e-08,
@@ -57883,7 +57900,8 @@
         "max_input_tokens": 8000,
         "max_output_tokens": 8000,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/rerank-1": {
         "input_cost_per_token": 5e-08,
@@ -57909,7 +57927,8 @@
         "max_input_tokens": 32000,
         "max_output_tokens": 32000,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/rerank-2.5-lite": {
         "input_cost_per_token": 2e-08,
@@ -57917,7 +57936,8 @@
         "max_input_tokens": 32000,
         "max_output_tokens": 32000,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.voyageai.com/docs/pricing"
     },
     "voyage/rerank-3": {
         "input_cost_per_token": 5e-08,
@@ -72853,7 +72873,7 @@
         "max_output_tokens": 1000000,
         "mode": "chat",
         "output_cost_per_token": 4.7e-07,
-        "source": "https://api.together.ai/v1/models",
+        "source": "https://www.together.ai/pricing",
         "supports_function_calling": true,
         "supports_response_schema": true
     },

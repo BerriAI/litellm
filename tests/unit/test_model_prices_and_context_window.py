@@ -32,6 +32,17 @@ def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
 
 
+def test_qwen3_asr_is_available_for_openai_compatible_transcription(local_model_cost_map: None) -> None:
+    model: Final = "openai/Qwen/Qwen3-ASR-1.7B"
+    info: Final = litellm.get_model_info(model)
+    assert (info["litellm_provider"], info["mode"], info["supported_endpoints"]) == (
+        "openai",
+        "audio_transcription",
+        ["/v1/audio/transcriptions", "/v1/chat/completions"],
+    )
+    assert litellm.supports_audio_input(model)
+
+
 @pytest.mark.parametrize("model", ("azure/gpt-audio-1.5-2026-02-23", "azure/gpt-audio-mini-2025-10-06"))
 def test_azure_audio_snapshot_capabilities_match_declared_modalities(model: str, local_model_cost_map: None) -> None:
     catalog: Final = TypeAdapter(dict[str, JsonValue]).validate_json(PRICES_PATH.read_bytes())
