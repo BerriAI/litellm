@@ -25,13 +25,18 @@ from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_event_type,
     anthropic_sse_event_types,
     anthropic_sse_frames,
-    anthropic_sse_reads_alike,
     anthropic_sse_started_blocks,
     anthropic_sse_stopped_block_index,
     anthropic_sse_unfinished_blocks,
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     anthropic_sse_assembles_every_tool_input as anthropic_sse_assembles_every_tool_input,  # noqa: PLC0414  # public re-export
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_frames_as_read as anthropic_sse_frames_as_read,  # noqa: PLC0414  # public re-export
+)
+from litellm.llms.anthropic.messages.stream_assembly import (
+    anthropic_sse_reads_alike as anthropic_sse_reads_alike,  # noqa: PLC0414  # public re-export
 )
 from litellm.llms.anthropic.messages.stream_assembly import (
     assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,  # noqa: PLC0414  # public re-export
@@ -191,6 +196,23 @@ def anthropic_sse_chunks_from_response(
             raise
         verbose_proxy_logger.warning("Failed Anthropic stream could not be rebuilt, sending its upstream error alone")
         return anthropic_sse_chunks_of_events(error_events)
+
+
+def _reads_as_scanned(chunks: Sequence[object]) -> bool:
+    return anthropic_sse_reads_alike(chunks) and anthropic_sse_assembles_every_tool_input(chunks)
+
+
+def anthropic_sse_chunks_as_scanned(scanned: ModelResponse, source_chunks: Sequence[object]) -> Sequence[object]:
+    """What goes out for a stream a guardrail scanned and left as it was: the upstream's own frames when every
+    client reads them as the guardrail did, else only what the guardrail read."""
+    if anthropic_sse_error_events(source_chunks):
+        return anthropic_sse_chunks_from_response(scanned, source_chunks, keep_explanations=True)
+    if _reads_as_scanned(source_chunks):
+        return source_chunks
+    frames_as_scanned: Final = anthropic_sse_frames_as_read(source_chunks)
+    if _reads_as_scanned(frames_as_scanned):
+        return frames_as_scanned
+    return anthropic_sse_chunks_from_response(scanned, source_chunks, keep_explanations=True)
 
 
 def _rebuilt_sse_chunks(

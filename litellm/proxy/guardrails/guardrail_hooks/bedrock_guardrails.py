@@ -62,6 +62,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import serialize_http_exception_detail
 from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
     assemble_anthropic_sse_stream,
@@ -3202,7 +3203,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 for sse_chunk in (
                     anthropic_sse_chunks_from_response(assembled_model_response, all_chunks)
                     if model_response_text(assembled_model_response) != pre_guardrail_text
-                    else all_chunks
+                    else anthropic_sse_chunks_as_scanned(assembled_model_response, all_chunks)
                 ):
                     yield sse_chunk
                 return

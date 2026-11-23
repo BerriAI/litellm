@@ -37,6 +37,7 @@ from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_assembles_every_tool_input,
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
     anthropic_sse_reads_alike,
@@ -1197,6 +1198,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         return self._assemble_chat_completion_stream(list(all_chunks))
 
     @staticmethod
+    def _unsanitized_stream(
+        all_chunks: Sequence[object],
+        assembled_response: ModelResponse | TextCompletionResponse | ResponsesAPIResponse,
+        surface: _StreamSurface,
+    ) -> Sequence[object]:
+        if surface is _StreamSurface.ANTHROPIC_MESSAGES and isinstance(assembled_response, ModelResponse):
+            return anthropic_sse_chunks_as_scanned(assembled_response, all_chunks)
+        return all_chunks
+
+    @staticmethod
     def _error_payload(exc: HTTPException) -> Mapping[str, object]:
         """Error object for a terminal stream item, carrying the status the frame would otherwise lose."""
         detail: Final = exc.detail if isinstance(exc.detail, Mapping) else {"message": str(exc.detail)}
@@ -1291,7 +1302,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         if not content:
             verbose_proxy_logger.debug("Model Armor: No text content in streaming response, skipping guardrail")
-            for chunk in all_chunks:
+            for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
                 yield chunk
             return
 
@@ -1364,7 +1375,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 raise
 
         # Return original chunks if no sanitization needed
-        for chunk in all_chunks:
+        for chunk in self._unsanitized_stream(all_chunks, assembled_response, surface):
             yield chunk
 
     @log_guardrail_information
