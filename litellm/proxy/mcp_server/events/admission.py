@@ -72,9 +72,9 @@ async def admit(
     mismatch: Final = check_routing_headers(headers, name, arguments, prepared.ok)
     if mismatch is not None:
         return Error(mismatch)
-    if mode not in offered_modes(prepared.ok.descriptor, settings, context):
-        return Error(unsupported("deliveryMode", mode))
     server: Final = prepared.ok.resolved.target.server
+    if mode not in offered_modes(prepared.ok.descriptor, server, settings, context):
+        return Error(unsupported("deliveryMode", mode))
     if await runtime.rate_limited(server, context.user_api_key_auth):
         return Error(exhausted("rate", server.rpm or 0))
     return prepared
