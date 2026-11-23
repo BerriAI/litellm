@@ -193,17 +193,17 @@ mod tests {
         type Complete = ();
 
         fn resume(&mut self) -> Step<'_, Self> {
-            litellm_tracing::warn!("machine started");
+            tracing::warn!("machine started");
             Box::pin(async {
                 tokio::task::yield_now().await;
-                litellm_tracing::warn!("machine warning");
+                tracing::warn!("machine warning");
                 Ok(MachineStep::Complete(()))
             })
         }
 
         fn interrupt(&mut self, _: HostFailure<String>) -> Interrupted<'_, Self> {
             Box::pin(async {
-                litellm_tracing::warn!("machine interrupted");
+                tracing::warn!("machine interrupted");
                 Ok(())
             })
         }
@@ -221,7 +221,7 @@ mod tests {
             let raise_level = self.raise_level;
             Box::pin(async move {
                 for index in 0..3 {
-                    litellm_tracing::debug!(index, "stream chunk");
+                    tracing::debug!(index, "stream chunk");
                     if raise_level {
                         Python::attach(|py| {
                             py.import("litellm._logging")?
@@ -277,7 +277,7 @@ mod tests {
     #[pyfunction]
     fn warning(py: Python<'_>) {
         super::capture(py).scope(|| {
-            litellm_tracing::warn!(attempt = 3, retry = true, "native warning");
+            tracing::warn!(attempt = 3, retry = true, "native warning");
         });
     }
 
@@ -297,19 +297,19 @@ mod tests {
     #[pyfunction]
     fn levels(py: Python<'_>) {
         super::capture(py).scope(|| {
-            litellm_tracing::trace!("trace");
-            litellm_tracing::debug!("debug");
-            litellm_tracing::info!("info");
-            litellm_tracing::warn!("warn");
-            litellm_tracing::error!("error");
-            litellm_tracing::warn!(target: "unrelated_transport", "private wire data");
+            tracing::trace!("trace");
+            tracing::debug!("debug");
+            tracing::info!("info");
+            tracing::warn!("warn");
+            tracing::error!("error");
+            tracing::warn!(target: "unrelated_transport", "private wire data");
         });
     }
 
     #[pyfunction]
     fn limiter_warning(py: Python<'_>) {
         super::capture(py).scope(|| {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 target: "litellm_callbacks_parallel_request_limiter::hosted",
                 "limiter warning"
             );
@@ -320,7 +320,7 @@ mod tests {
     fn asynchronous_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         crate::execution::run_async_value(py, async {
             tokio::task::yield_now().await;
-            litellm_tracing::warn!("async warning");
+            tracing::warn!("async warning");
             Ok(())
         })
     }
@@ -329,7 +329,7 @@ mod tests {
     fn synchronous_warning(py: Python<'_>) -> PyResult<()> {
         crate::execution::run_sync_value(py, async {
             tokio::task::yield_now().await;
-            litellm_tracing::warn!("sync warning");
+            tracing::warn!("sync warning");
             Ok(())
         })
     }
@@ -337,7 +337,7 @@ mod tests {
     #[pyfunction]
     fn synchronous_failure(py: Python<'_>) -> PyResult<()> {
         crate::execution::run_sync_value(py, async {
-            litellm_tracing::warn!("failure diagnostic");
+            tracing::warn!("failure diagnostic");
             Err(pyo3::exceptions::PyValueError::new_err("request failed"))
         })
     }
@@ -362,7 +362,7 @@ mod tests {
     #[pyfunction]
     fn sentinel(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
         crate::execution::run_async_value(py, async {
-            litellm_tracing::error!(
+            tracing::error!(
                 target: "litellm_callbacks_parallel_request_limiter::sentinel",
                 "log sentinel"
             );

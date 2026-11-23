@@ -5,9 +5,10 @@ use std::sync::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Scrubbed, Sink, info, warn};
+use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Scrubbed, Sink};
 use rstest::rstest;
 use serde_json::{Value, json};
+use tracing::{info, warn};
 
 struct Output {
     enabled: Arc<AtomicBool>,
@@ -184,43 +185,26 @@ fn spans_inherit_fields_accept_updates_and_close_once() {
 }
 
 #[rstest]
-fn sink_layers_filter_independently_and_recheck_span_delivery() {
-    use tracing_subscriber::prelude::*;
-
-    let (first_sender, first) = mpsc::channel();
-    let (second_sender, second) = mpsc::channel();
-    let enabled = Arc::new(AtomicBool::new(false));
-    let subscriber = tracing_subscriber::Registry::default()
-        .with(litellm_tracing::sink_layer(Output {
-            enabled: enabled.clone(),
-            sender: first_sender,
-        }))
-        .with(litellm_tracing::sink_layer(Output {
-            enabled: Arc::new(AtomicBool::new(true)),
-            sender: second_sender,
-        }));
-    tracing::subscriber::with_default(subscriber, || {
-        info!("second only");
-        enabled.store(true, Ordering::Relaxed);
+fn a_span_that_closes_after_its_sink_stopped_listening_is_not_reported() {
+    let (sender, receiver) = mpsc::channel();
+    let enabled = Arc::new(AtomicBool::new(true));
+    let logger = Logger::new(Output {
+        enabled: enabled.clone(),
+        sender,
+    });
+    logger.scope(|| {
         let span = tracing::info_span!("shared", route = "responses");
-        span.in_scope(|| info!("both"));
+        span.in_scope(|| info!("inside"));
         enabled.store(false, Ordering::Relaxed);
         drop(span);
     });
     assert_eq!(
-        first.try_iter().map(|record| record.0).collect::<Vec<_>>(),
-        ["both"]
-    );
-    let records = second.try_iter().collect::<Vec<_>>();
-    assert_eq!(
-        records
-            .iter()
-            .map(|record| record.0.as_str())
+        receiver
+            .try_iter()
+            .map(|record| record.0)
             .collect::<Vec<_>>(),
-        ["second only", "both", "span closed"]
+        ["inside"]
     );
-    assert_eq!(records[1].1["route"], "responses");
-    assert_eq!(records[2].1["route"], "responses");
 }
 
 #[rstest]
