@@ -4,7 +4,7 @@ import importlib
 import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from email.utils import formatdate
 from pathlib import Path
@@ -105,8 +105,8 @@ def sha256_base64(data: bytes) -> str:
     return base64.b64encode(digest).decode()
 
 
-def build_signature_string(method: str, path: str, headers: dict, signed_headers: list) -> str:
-    lines: Final = []
+def build_signature_string(method: str, path: str, headers: Mapping[str, object], signed_headers: Sequence[str]) -> str:
+    lines: Final[list[str]] = []
     for header in signed_headers:
         if header == "(request-target)":
             value = f"{method.lower()} {path}"
@@ -339,7 +339,7 @@ def get_oci_base_url(optional_params: Mapping[str, object], api_base: str | None
 def sign_with_oci_signer(
     headers: dict,
     optional_params: dict,
-    request_data: dict,
+    request_data: Mapping[str, object],
     api_base: str,
 ) -> tuple[dict, bytes]:
     """Sign a request using an OCI SDK Signer object passed in optional_params."""
@@ -378,8 +378,8 @@ def sign_with_oci_signer(
 
 def sign_with_manual_credentials(
     headers: dict,
-    optional_params: dict,
-    request_data: dict,
+    optional_params: Mapping[str, object],
+    request_data: Mapping[str, object],
     api_base: str,
 ) -> tuple[dict, bytes]:
     """Sign a request using manually provided OCI credentials (user/fingerprint/tenancy/key)."""
@@ -492,7 +492,7 @@ def sign_with_manual_credentials(
 def sign_oci_request(
     headers: dict,
     optional_params: dict,
-    request_data: dict,
+    request_data: Mapping[str, object],
     api_base: str,
     api_key: str | None = None,
     model: str | None = None,
@@ -516,7 +516,7 @@ def sign_oci_request(
 
 def validate_oci_environment(
     headers: dict,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     api_key: str | None = None,
 ) -> dict:
     """
@@ -664,7 +664,7 @@ def enrich_cohere_param_description(description: str, param_schema: dict[str, Js
     if "format" in param_schema:
         parts.append(f"Format: {param_schema['format']}")
     if "minimum" in param_schema or "maximum" in param_schema:
-        range_parts: Final = []
+        range_parts: Final[list[str]] = []
         if "minimum" in param_schema:
             range_parts.append(f"min={param_schema['minimum']}")
         if "maximum" in param_schema:
