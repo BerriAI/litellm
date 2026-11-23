@@ -147,7 +147,7 @@ def actor_admission_failure(
     return None
 
 
-_INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
+_INVOCATION_COST: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
@@ -187,7 +187,9 @@ async def prepare_agent_invocation(
     auth.invoked_agent_policy = effective
     if auth.agent_id is None and effective.identity_managed:
         auth.billing_agent_policy = effective
-    raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
+    raw_fee: Final = (
+        (effective.litellm_params or MappingProxyType[str, object]({})).get("cost_per_query", 0.0) if billable else 0.0
+    )
     try:
         fee: Final = _INVOCATION_COST.validate_python(raw_fee)
     except ValidationError:
