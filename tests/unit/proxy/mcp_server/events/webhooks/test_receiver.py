@@ -96,7 +96,7 @@ async def test_a_signed_verification_challenge_is_echoed(status: SubscriptionSta
         ({"sub_1": _row()}, EVENT, {"upstream_id": "someone-else"}, 401),
         ({"sub_1": _row("pending")}, EVENT, {}, 425),
         ({"sub_1": _row()}, b"not json", {}, 400),
-        ({"sub_1": _row()}, b"x" * (MAX_BODY_BYTES + 1), {}, 413),
+        pytest.param({"sub_1": _row()}, b"x" * (MAX_BODY_BYTES + 1), {}, 413, id="oversized-body"),
     ),
 )
 @pytest.mark.asyncio
