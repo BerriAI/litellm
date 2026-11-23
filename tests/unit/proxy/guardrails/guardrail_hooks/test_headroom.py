@@ -1030,6 +1030,13 @@ def model_groups() -> litellm.Router:
             {"model_name": "best-gpt", "litellm_params": {"model": "openai/gpt-5.6"}},
             {"model_name": "best-mixed", "litellm_params": {"model": "openai/gpt-5.6"}},
             {"model_name": "best-mixed", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
+            {"model_name": "best-flash", "litellm_params": {"model": "gemini/gemini-3.8-flash"}},
+            {
+                "model_name": "best-arn",
+                "litellm_params": {
+                    "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+                },
+            },
             {
                 "model_name": "model_name_team-1_sonnet",
                 "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"},
@@ -1078,10 +1085,12 @@ def _claude_code_request(model: str, team_id: str | None = None) -> dict[str, ob
     [
         pytest.param("best-sonnet", None, id="alias"),
         pytest.param("best-mixed", None, id="group_with_one_claude_deployment"),
+        pytest.param("best-flash", None, id="gemini_alias"),
+        pytest.param("best-arn", None, id="bedrock_arn_alias"),
         pytest.param("team-sonnet", "team-1", id="team"),
     ],
 )
-async def test_claude_code_cached_prefix_is_never_compressed_on_a_claude_alias(
+async def test_claude_code_cached_prefix_is_never_compressed_on_an_alias_that_caches(
     guardrail: HeadroomGuardrail, model_groups: litellm.Router, model: str, team_id: str | None
 ):
     from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
