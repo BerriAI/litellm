@@ -12,7 +12,7 @@ from litellm.utils import add_path_to_api_base
 
 class AzureImageEditConfig(OpenAIImageEditConfig):
     @staticmethod
-    def azure_deployment_image_edit_form_data(data: dict[str, object], request_url: str) -> dict[str, object]:
+    def azure_deployment_image_edit_form_data(data: dict, request_url: str) -> dict:
         """
         Azure OpenAI ``.../openai/deployments/{deployment}/images/edits`` routes by
         deployment in the URL; including ``model`` in multipart fields can break
@@ -26,12 +26,12 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict[str, object] | None = None,
+        litellm_params: dict | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
         Validate Azure environment and set up authentication headers.
 
@@ -71,7 +71,7 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
     ) -> str:
         """
         Constructs a complete URL for the API request.
@@ -134,5 +134,5 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
 
         return str(final_url)
 
-    def finalize_image_edit_request_data(self, data: dict[str, object], resolved_request_url: str) -> dict[str, object]:
+    def finalize_image_edit_request_data(self, data: dict, resolved_request_url: str) -> dict:
         return self.azure_deployment_image_edit_form_data(data, resolved_request_url)

@@ -18,7 +18,7 @@ from litellm.llms.azure_ai.image_generation.flux_transformation import (
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.llms.openai import FileTypes, OpenAIImageGenerationOptionalParams
+from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -35,7 +35,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     with the image passed as base64 in JSON body.
     """
 
-    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list:
         return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
 
     def map_openai_params(
@@ -43,7 +43,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Map OpenAI params to FLUX 2 params.
         FLUX 2 uses the same param names as OpenAI for supported params.
@@ -66,7 +66,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        litellm_params: dict | None = None,
         api_base: str | None = None,
     ) -> dict:
         """
@@ -89,10 +89,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: Mapping[str, object],
+        image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: Mapping[str, object],
-    ) -> tuple[dict[str, object], RequestFiles]:
+        headers: dict,
+    ) -> tuple[dict, RequestFiles]:
         """
         Transform image edit request for FLUX 2.
 
