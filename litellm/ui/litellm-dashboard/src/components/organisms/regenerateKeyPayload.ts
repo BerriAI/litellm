@@ -23,13 +23,19 @@ export const roundToPrecision = (value: number, precision: number): number => {
   return value < 0 ? -rounded : rounded;
 };
 
-export const buildRegenerateKeyPayload = (values: RegenerateKeyFormValues): RegenerateKeyPayload => {
-  const { duration, ...rest } = values;
+export const buildRegenerateKeyPayload = (
+  values: RegenerateKeyFormValues,
+  storedMaxBudget?: number | null,
+): RegenerateKeyPayload => {
+  const { duration, max_budget, ...rest } = values;
 
   return {
     ...rest,
-    max_budget:
-      typeof rest.max_budget === "number" ? roundToPrecision(rest.max_budget, MAX_BUDGET_PRECISION) : rest.max_budget,
+    ...(max_budget === storedMaxBudget
+      ? {}
+      : {
+          max_budget: typeof max_budget === "number" ? roundToPrecision(max_budget, MAX_BUDGET_PRECISION) : max_budget,
+        }),
     ...(duration.trim() !== "" ? { duration } : {}),
   };
 };

@@ -42,7 +42,7 @@ describe("RegenerateKeyModal submit payload", () => {
     mockRegenerateKeyCall.mockResolvedValue({ key: "sk-new-regenerated-key", token: "new-token-hash" });
   });
 
-  it("sends the seeded key fields untouched, with grace_period blank", async () => {
+  it("sends the seeded key fields untouched, with grace_period blank and no unchanged budget", async () => {
     const user = userEvent.setup();
     renderModal();
 
@@ -51,7 +51,6 @@ describe("RegenerateKeyModal submit payload", () => {
     await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
     expect(submittedPayload()).toStrictEqual({
       key_alias: "my-test-key",
-      max_budget: 100,
       tpm_limit: 5000,
       rpm_limit: 500,
       duration: "30d",
@@ -63,7 +62,6 @@ describe("RegenerateKeyModal submit payload", () => {
     const user = userEvent.setup();
     const expectedPayload = {
       key_alias: "my-test-key",
-      max_budget: 100,
       tpm_limit: 5000,
       rpm_limit: 500,
       grace_period: "",
@@ -183,7 +181,6 @@ describe("RegenerateKeyModal submit payload", () => {
     await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
     expect(submittedPayload()).toStrictEqual({
       key_alias: undefined,
-      max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
       grace_period: "",
@@ -208,11 +205,20 @@ describe("RegenerateKeyModal submit payload", () => {
     await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
     expect(submittedPayload()).toStrictEqual({
       key_alias: null,
-      max_budget: null,
       tpm_limit: null,
       rpm_limit: null,
       grace_period: "",
     });
+  });
+
+  it("leaves out a sub-cent stored budget the user did not touch", async () => {
+    const user = userEvent.setup();
+    renderModal(makeToken({ max_budget: 0.125 }));
+
+    await regenerate(user);
+
+    await waitFor(() => expect(mockRegenerateKeyCall).toHaveBeenCalledOnce());
+    expect(submittedPayload()).not.toHaveProperty("max_budget");
   });
 
   it("sends a typed duration when the original key has no stored duration", async () => {

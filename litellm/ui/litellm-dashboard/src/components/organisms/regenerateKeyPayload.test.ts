@@ -83,7 +83,6 @@ describe("buildRegenerateKeyPayload", () => {
 
     expect(payload).toStrictEqual({
       key_alias: undefined,
-      max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
       duration: "30d",
@@ -93,6 +92,20 @@ describe("buildRegenerateKeyPayload", () => {
       grace_period: "",
       duration: "30d",
     });
+  });
+
+  it.each([0.125, 33.3333, 100, null])("omits a max_budget left at the stored value %s", (stored) => {
+    const payload = buildRegenerateKeyPayload(values({ max_budget: stored }), stored);
+
+    expect(payload).not.toHaveProperty("max_budget");
+  });
+
+  it("rounds a max_budget the user changed away from a sub-cent stored value", () => {
+    expect(buildRegenerateKeyPayload(values({ max_budget: 42.567 }), 0.125).max_budget).toBe(42.57);
+  });
+
+  it("sends null when the user clears a stored budget", () => {
+    expect(buildRegenerateKeyPayload(values({ max_budget: null }), 0.125).max_budget).toBeNull();
   });
 
   it("does not mutate the values it is handed", () => {

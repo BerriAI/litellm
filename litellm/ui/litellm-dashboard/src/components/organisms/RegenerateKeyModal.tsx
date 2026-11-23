@@ -99,7 +99,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const submitRegenerateKey = async (values: RegenerateKeyFormValues) => {
     if (!selectedToken || !accessToken) return;
 
-    const formValues = buildRegenerateKeyPayload(values);
+    const formValues = buildRegenerateKeyPayload(values, selectedToken.max_budget);
     try {
       const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues);
       setRegeneratedKey(response.key);
@@ -115,7 +115,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         ...response,
         token: response.token_id || response.token || selectedToken.token,
         key_name: response.key,
-        max_budget: formValues.max_budget,
+        max_budget: "max_budget" in formValues ? formValues.max_budget : selectedToken.max_budget,
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         expires: response.expires ?? selectedToken.expires,
