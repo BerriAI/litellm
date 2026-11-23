@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 from typing import Final
-from unittest.mock import patch
 
 import pytest
 import respx
@@ -305,11 +304,12 @@ def test_nagaai_without_a_key_does_not_fall_back_to_the_openai_key(monkeypatch: 
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "openai_key", "sk-openai-must-not-leave")
 
-    with patch("litellm.llms.openai.openai.OpenAIChatCompletion.completion") as sent:
+    with respx.mock(assert_all_called=False) as upstream:
+        route: Final = upstream.post(_CHAT_COMPLETIONS_URL).respond(200, json=_CHAT_COMPLETION)
         with pytest.raises(litellm.AuthenticationError, match="NAGA_API_KEY"):
             litellm.completion(
                 model="nagaai/anthropic/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "hi"}],
             )
 
-    sent.assert_not_called()
+    assert route.call_count == 0
