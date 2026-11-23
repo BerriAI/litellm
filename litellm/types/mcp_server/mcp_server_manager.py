@@ -41,10 +41,14 @@ MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metada
 
 def _validate_event_callback_base(value: str) -> str:
     url: Final = HttpUrl(value)
-    if url.scheme != "https" or not urlsplit(value).netloc or any(
-        part is not None for part in (url.username, url.password, url.query, url.fragment)
+    if (
+        url.scheme != "https"
+        or not urlsplit(value).netloc
+        or any(part is not None for part in (url.username, url.password, url.query, url.fragment))
     ):
-        raise ValueError("MCP Events callback base must be an absolute HTTPS URL without credentials, query or fragment")
+        raise ValueError(
+            "MCP Events callback base must be an absolute HTTPS URL without credentials, query or fragment"
+        )
     return str(url).rstrip("/")
 
 
