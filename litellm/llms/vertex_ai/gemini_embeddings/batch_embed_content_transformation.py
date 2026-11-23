@@ -480,7 +480,6 @@ def transform_openai_input_gemini_embed_content(
     return request_body
 
 
-_IMAGE_MIME_TYPES: Final = frozenset({"image/png", "image/jpeg"})
 _Modality: TypeAlias = Literal["text", "image", "audio", "video", "other"]
 _SOUND_MODALITIES: Final[frozenset[_Modality]] = frozenset(("audio", "video"))
 _usage_metadata_adapter: Final = TypeAdapter(UsageMetadata)
@@ -532,19 +531,12 @@ def _element_mime_type(
     return _source_mime_type(_file_block_source(block), block.file.format, resolved_files)
 
 
-def _is_image_element(
-    element: GeminiEmbeddingElement,
-    resolved_files: Mapping[str, Mapping[str, str]],
-) -> bool:
-    return _element_mime_type(element, resolved_files) in _IMAGE_MIME_TYPES
-
-
 def _is_image_only_input(
     input: GeminiEmbeddingInput,
     resolved_files: Mapping[str, Mapping[str, str]],
 ) -> bool:
     elements: Final = _flatten_input(input)
-    return bool(elements) and all(_is_image_element(element, resolved_files) for element in elements)
+    return bool(elements) and all(_modality(element, resolved_files) == "image" for element in elements)
 
 
 def _tokens_for_modality(details: Sequence[PromptTokensDetails], modality: str) -> int:

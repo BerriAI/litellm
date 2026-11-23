@@ -38,6 +38,7 @@ from litellm.types.utils import EmbeddingResponse, Usage
 
 IMAGE_DATA_URI = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAIAQMAAAD+wSzIAAAABlBMVEX///+/v7+jQ3Y5AAAADklEQVQI12P4AIX8EAgALgAD/aNpbtEAAAAASUVORK5CYII"
 GCS_URL = "gs://my-bucket/image.png"
+PDF_GCS_URL = "gs://my-bucket/invoice.pdf"
 VIDEO_DATA_URI = "data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDEAAAAIZnJlZQAA"
 AUDIO_DATA_URI = "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA"
 FILES_URI = "https://generativelanguage.googleapis.com/v1beta/files/clip123"
@@ -689,9 +690,22 @@ class TestFileContentBlocks:
         )
         assert result.usage.prompt_tokens == 0
 
-    def test_image_block_counts_as_image_only_input(self) -> None:
+    @pytest.mark.parametrize(
+        "embedding_input, image_tokens",
+        [
+            ([_file_block(file_data=IMAGE_DATA_URI)], 258),
+            ([PDF_GCS_URL], 258),
+            ([_file_block(file_data=PDF_GCS_URL)], 258),
+            ([IMAGE_DATA_URI, PDF_GCS_URL], 258),
+            ([PDF_GCS_URL, AUDIO_DATA_URI], 0),
+        ],
+        ids=["image-block", "bare-pdf-gcs-url", "pdf-block", "image-and-pdf", "pdf-and-audio"],
+    )
+    def test_image_only_input_bills_undetailed_usage_as_image_tokens(
+        self, embedding_input: list[object], image_tokens: int
+    ) -> None:
         result: Final = process_embed_content_response(
-            input=[_file_block(file_data=IMAGE_DATA_URI)],
+            input=embedding_input,
             model_response=EmbeddingResponse(),
             model=self.MODEL,
             response_json={
@@ -699,7 +713,7 @@ class TestFileContentBlocks:
                 "usageMetadata": {"promptTokenCount": 258, "totalTokenCount": 258},
             },
         )
-        assert result.usage.prompt_tokens_details.image_tokens == 258
+        assert result.usage.prompt_tokens_details.image_tokens == image_tokens
 
 
 @pytest.mark.respx(assert_all_called=True)
