@@ -20,6 +20,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.epistemic_guard import (
+    EpistemicGuardConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
     CiscoAIDefenseGuardrailConfigModel,
 )
@@ -142,6 +145,7 @@ class SupportedGuardrailIntegrations(Enum):
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
+    EPISTEMIC_GUARD = "epistemic_guard"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
@@ -1451,6 +1455,7 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     OvalixGuardrailConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    EpistemicGuardConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
