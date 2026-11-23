@@ -414,6 +414,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     has_attributes,
+    is_timed_out_call,
     iter_items,
     json_contains,
     normalize_drop_params,
@@ -10850,7 +10851,12 @@ async def async_data_generator(
                 await close_guarded_stream(guarded_layer)
         raise
     except Exception as e:  # noqa: BLE001  # stream boundary: any failure must end the SSE body as an error event
-        verbose_proxy_logger.exception("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
+        log_fn: Final = (
+            verbose_proxy_logger.error
+            if is_timed_out_call(e) and not litellm.log_client_error_tracebacks
+            else verbose_proxy_logger.exception
+        )
+        log_fn("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
         replacement: Final = await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
             original_exception=e,

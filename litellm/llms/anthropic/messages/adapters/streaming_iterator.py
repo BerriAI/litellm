@@ -31,6 +31,7 @@ from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     attribute_items,
     finish_evidence_of,
+    is_timed_out_call,
     joined,
 )
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
@@ -1443,9 +1444,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 else:
                     yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
-            verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
-            logging_obj: Final = self.litellm_logging_obj
             provider_error: Final = _provider_error(e)
+            log_fn: Final = (
+                verbose_logger.error
+                if is_timed_out_call(provider_error) and not litellm.log_client_error_tracebacks
+                else verbose_logger.exception
+            )
+            log_fn("Anthropic Adapter - mid-stream error: %s", e)
+            logging_obj: Final = self.litellm_logging_obj
             self.stream_failure = provider_error
             if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
                 if provider_error is e:

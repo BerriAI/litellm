@@ -95,6 +95,7 @@ from litellm.litellm_core_utils.core_helpers import (
     has_attributes,
     independent_snapshot,
     is_expected_client_error,
+    is_timed_out_call,
     map_finish_reason,
     proxy_request_headers,
     redact_nested_match_and_regex_keys,
@@ -2449,7 +2450,7 @@ def log_llm_api_exception(e: Exception, litellm_call_id: str | None) -> None:
         return
     log_fn: Final = (
         verbose_proxy_logger.error
-        if is_expected_client_error(e) and not litellm.log_client_error_tracebacks
+        if (is_timed_out_call(e) or is_expected_client_error(e)) and not litellm.log_client_error_tracebacks
         else verbose_proxy_logger.exception
     )
     log_fn(
@@ -5732,9 +5733,12 @@ class ProxyBaseLLMRequestProcessing:
                 await release_budget_reservation_on_cancel(getattr(user_api_key_dict, "budget_reservation", None))
             raise
         except Exception as e:
-            verbose_proxy_logger.exception(
-                "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
+            log_fn: Final = (
+                verbose_proxy_logger.error
+                if is_timed_out_call(e) and not litellm.log_client_error_tracebacks
+                else verbose_proxy_logger.exception
             )
+            log_fn("litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e)
             answered: Final = e if answer_status is None else answer_status(e)
             already_reported: Final = (
                 isinstance(stream_logging_obj, LiteLLMLoggingObj)
