@@ -5,7 +5,8 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
+from collections import Counter
+from collections.abc import Awaitable, Callable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby, takewhile
@@ -83,6 +84,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
     message_field,
     parts_of,
 )
+from litellm.litellm_core_utils.tool_fields import SentToolNames, chat_member_name, qualified_member_name
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
@@ -322,8 +324,8 @@ _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 _IMAGE_URL_ADAPTER: Final = TypeAdapter(S3MediaImageUrlObject)
 _FILE_ADAPTER: Final = TypeAdapter(S3MediaFileObjectFile)
 _MessageT = TypeVar("_MessageT")
-_MediaT: Final = TypeVar("_MediaT")
-_InputItemT: Final = TypeVar("_InputItemT")
+_MediaT = TypeVar("_MediaT")
+_InputItemT = TypeVar("_InputItemT")
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
@@ -1164,7 +1166,7 @@ def _pending_claude_server_tool_call(search: ResponseFunctionWebSearch) -> ChatC
 
 class LiteLLMCompletionResponsesConfig:
     @staticmethod
-    def get_supported_openai_params(model: str) -> list:
+    def get_supported_openai_params(model: str) -> list[str]:
         """
         LiteLLM Adapter from OpenAI Responses API to Chat Completion API supports a subset of OpenAI Responses API params
         """
@@ -1510,7 +1512,7 @@ class LiteLLMCompletionResponsesConfig:
         if malformed_field_error is not None:
             raise malformed_field_error
 
-        litellm_completion_request: dict = {
+        litellm_completion_request: dict[str, object] = {
             "messages": (
                 list(
                     _request_messages_for_cache_points(
@@ -1522,8 +1524,8 @@ class LiteLLMCompletionResponsesConfig:
                 else bridged_messages
             ),
             "model": model,
-            "tool_choice": LiteLLMCompletionResponsesConfig._transform_tool_choice(
-                responses_api_request.get("tool_choice")
+            "tool_choice": LiteLLMCompletionResponsesConfig._chat_tool_choice(
+                responses_api_request.get("tool_choice"), request_tools
             ),
             "tools": tools,
             "top_p": responses_api_request.get("top_p"),
@@ -1574,6 +1576,8 @@ class LiteLLMCompletionResponsesConfig:
         only_since_compaction: bool = False,
         replay_tool_search: bool = False,
         caller_input: str | ResponseInputParam | None = None,
+        member_name: Callable[[str, str], str] = chat_member_name,
+        tool_names: SentToolNames | None = None,
         route_fills_empty_user_turns: Callable[[], bool] | None = None,
         keep_tool_references: bool = False,
     ) -> list[
@@ -1642,14 +1646,21 @@ class LiteLLMCompletionResponsesConfig:
         sent_input: Final = _without_item_keys(
             read_input, _dropped_item_keys(item_cache_control, tool_call_provider_fields)
         )
+        names: Final = (
+            tool_names
+            if tool_names is not None
+            else LiteLLMCompletionResponsesConfig.sent_tool_names(
+                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request), member_name
+            )
+        )
         convert_input: Final = partial(
             LiteLLMCompletionResponsesConfig._transform_response_input_param_to_chat_completion_message,
             replay_reasoning=replay_reasoning,
             native_compaction=native_compaction,
+            self_named_namespace_members=names.self_named_namespace_members,
+            member_chat_names=names.member_chat_names,
+            member_name=member_name,
             keep_tool_references=keep_tool_references,
-            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(
-                LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
-            ),
         )
         try:
             converted: Final = (
@@ -1856,7 +1867,9 @@ class LiteLLMCompletionResponsesConfig:
         input: str | ResponseInputParam,
         replay_reasoning: bool = False,
         native_compaction: bool = False,
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
         keep_tool_references: bool = False,
     ) -> list[
         AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall | ChatCompletionResponseMessage
@@ -1885,6 +1898,8 @@ class LiteLLMCompletionResponsesConfig:
                         replay_reasoning=replay_reasoning,
                         native_compaction=native_compaction,
                         self_named_namespace_members=self_named_namespace_members,
+                        member_chat_names=member_chat_names,
+                        member_name=member_name,
                         keep_tool_references=keep_tool_references,
                     )
                 )
@@ -2598,7 +2613,9 @@ class LiteLLMCompletionResponsesConfig:
         input_item: Mapping[str, object],
         replay_reasoning: bool = False,
         native_compaction: bool = False,
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
         keep_tool_references: bool = False,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
@@ -2655,6 +2672,8 @@ class LiteLLMCompletionResponsesConfig:
                     Mapping[str, str], input_item
                 ),
                 self_named_namespace_members=self_named_namespace_members,
+                member_chat_names=member_chat_names,
+                member_name=member_name,
             )
         elif input_item.get("type") == "compaction":
             return list(
@@ -2925,7 +2944,9 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Mapping[str, str],
-        self_named_namespace_members: frozenset[str] = frozenset(),
+        self_named_namespace_members: Container[str] = frozenset(),
+        member_chat_names: Mapping[str, str] = MappingProxyType({}),
+        member_name: Callable[[str, str], str] = chat_member_name,
     ) -> list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionResponseMessage]:
         """
         Transform a Responses API function_call into a Chat Completion message with tool calls
@@ -2959,7 +2980,7 @@ class LiteLLMCompletionResponsesConfig:
         qualify: Final = bool(namespace) and not deferred_top_level and function_call.get("type") != "custom_tool_call"
         tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
         tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
-            name=f"{namespace}__{raw_name}" if qualify else raw_name,
+            name=member_name(namespace, raw_name) if qualify else member_chat_names.get(raw_name, raw_name),
             arguments=serialize_tool_call_arguments(raw_arguments),
         )
         function_call_cache_control: Final = _input_item_cache_control(function_call)
@@ -3123,6 +3144,7 @@ class LiteLLMCompletionResponsesConfig:
         namespace_description: str,
         namespace_tool: NamespaceTool,
         nested: bool,
+        member_name: Callable[[str, str], str],
     ) -> ChatCompletionToolParam | None:
         tool_type: Final = namespace_tool.get("type")
         if nested and tool_type not in NAMESPACE_MEMBER_TYPES_WITH_CHAT_TOOLS:
@@ -3147,7 +3169,7 @@ class LiteLLMCompletionResponsesConfig:
             parameters if parameters and "type" in parameters else MappingProxyType({**parameters, "type": "object"})
         )
         tool_name: Final = str(namespace_tool.get("name") or "")
-        chat_tool_name: Final = f"{namespace}__{tool_name}" if nested else tool_name
+        chat_tool_name: Final = member_name(namespace, tool_name) if nested else tool_name
         function: Final = ChatCompletionToolParamFunctionChunk(
             name=chat_tool_name,
             description=description,
@@ -3161,7 +3183,9 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def _namespace_chat_tools(tool: NamespaceTool) -> tuple[ChatCompletionToolParam, ...]:
+    def _namespace_chat_tools(
+        tool: NamespaceTool, member_name: Callable[[str, str], str]
+    ) -> tuple[ChatCompletionToolParam, ...]:
         namespace: Final = str(tool.get("name") or "")
         namespace_description: Final = str(tool.get("description") or "")
         namespace_tools: Final = tool.get("tools")
@@ -3176,38 +3200,47 @@ class LiteLLMCompletionResponsesConfig:
                         namespace_description,
                         raw_tool,
                         True,
+                        member_name,
                     )
                 )
                 is not None
             )
         flat_tool: Final = LiteLLMCompletionResponsesConfig._build_ns_chat_tool(
-            namespace, namespace_description, tool, False
+            namespace, namespace_description, tool, False, member_name
         )
         return (flat_tool,) if flat_tool is not None else ()
 
     @staticmethod
-    def _validate_namespace_name_collisions(tools: ResponseTools) -> None:
+    def validate_namespace_name_collisions(tools: ResponseTools) -> None:
+        member_chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
-        flattened_namespace_names: Final = frozenset(
-            f"{(tool.get('name') or '')!s}__{(namespace_tool.get('name') or '')!s}"
-            for tool in tools or ()
-            if tool.get("type") == "namespace"
-            for namespace_tools in (tool.get("tools"),)
-            if isinstance(namespace_tools, Sequence) and not isinstance(namespace_tools, (str, bytes))
-            for namespace_tool in namespace_tools
-            if isinstance(namespace_tool, Mapping) and namespace_tool.get("type") == "function"
-        )
+        flattened_namespace_names: Final = frozenset(chain.from_iterable(member_chat_names.items()))
         conflicting_tool_names: Final = top_level_function_names & flattened_namespace_names
         if conflicting_tool_names:
-            raise ValueError(
-                "Top-level function names conflict with flattened namespace tools: "
-                + ", ".join(sorted(conflicting_tool_names))
+            raise litellm.BadRequestError(
+                message=(
+                    "Top-level function names conflict with flattened namespace tools: "
+                    + ", ".join(sorted(conflicting_tool_names))
+                ),
+                model="",
+                llm_provider="",
+            )
+        shared_chat_names: Final = sorted(
+            chat_name for chat_name, count in Counter(member_chat_names.values()).items() if count > 1
+        )
+        if shared_chat_names:
+            raise litellm.BadRequestError(
+                message="Flattened namespace tools share a name: " + ", ".join(shared_chat_names),
+                model="",
+                llm_provider="",
             )
 
     @staticmethod
-    def _responses_tool_to_chat_form(tool: Mapping[str, object]) -> ResponsesToolChatForm:
+    def _responses_tool_to_chat_form(
+        tool: Mapping[str, object], member_name: Callable[[str, str], str]
+    ) -> ResponsesToolChatForm:
         tool_type: Final = tool.get("type")
         if tool_type == "mcp":
             return ResponsesToolChatForm(chat_tools=(cast(OpenAIMcpServerTool, tool),), web_search_options=None)
@@ -3255,7 +3288,8 @@ class LiteLLMCompletionResponsesConfig:
             )
         if tool_type == "namespace":
             return ResponsesToolChatForm(
-                chat_tools=LiteLLMCompletionResponsesConfig._namespace_chat_tools(tool), web_search_options=None
+                chat_tools=LiteLLMCompletionResponsesConfig._namespace_chat_tools(tool, member_name),
+                web_search_options=None,
             )
         if tool_type == "custom":
             converted: Final = convert_custom_tool_to_function_tool(tool)
@@ -3274,9 +3308,12 @@ class LiteLLMCompletionResponsesConfig:
         return ResponsesToolChatForm(chat_tools=(cast(ChatToolParam, tool),), web_search_options=None)
 
     @staticmethod
-    def responses_tools_to_chat_forms(tools: ResponseTools) -> tuple[ResponsesToolChatForm, ...]:
-        LiteLLMCompletionResponsesConfig._validate_namespace_name_collisions(tools)
-        return tuple(LiteLLMCompletionResponsesConfig._responses_tool_to_chat_form(tool) for tool in tools or ())
+    def responses_tools_to_chat_forms(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> tuple[ResponsesToolChatForm, ...]:
+        return tuple(
+            LiteLLMCompletionResponsesConfig._responses_tool_to_chat_form(tool, member_name) for tool in tools or ()
+        )
 
     @staticmethod
     def transform_responses_api_tools_to_chat_completion_tools(
@@ -3290,6 +3327,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         if tools is None:
             return [], None
+        LiteLLMCompletionResponsesConfig.validate_namespace_name_collisions(tools)
         forms: Final = LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(tools)
         web_search_options: Final = next(
             (form.web_search_options for form in reversed(forms) if form.web_search_options is not None),
@@ -3384,13 +3422,47 @@ class LiteLLMCompletionResponsesConfig:
         )
 
     @staticmethod
-    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
-        namespace_entries: Final = tuple(
+    def _namespace_entries(tools: ResponseTools) -> tuple[tuple[str, str], ...]:
+        return tuple(
             (str(tool.get("name") or ""), member_name)
             for tool in tools or ()
             if tool.get("type") == "namespace"
             for member_name in LiteLLMCompletionResponsesConfig._namespace_member_names(tool)
         )
+
+    @staticmethod
+    def member_chat_names(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> Mapping[str, str]:
+        return MappingProxyType(
+            {
+                qualified_member_name(namespace, member): member_name(namespace, member)
+                for namespace, member in LiteLLMCompletionResponsesConfig._namespace_entries(tools)
+            }
+        )
+
+    @staticmethod
+    def sent_tool_names(
+        tools: ResponseTools, member_name: Callable[[str, str], str] = chat_member_name
+    ) -> SentToolNames:
+        return SentToolNames(
+            member_chat_names=LiteLLMCompletionResponsesConfig.member_chat_names(tools, member_name),
+            self_named_namespace_members=LiteLLMCompletionResponsesConfig.self_named_namespace_members(tools),
+        )
+
+    @staticmethod
+    def _chat_tool_choice(tool_choice: object, tools: ResponseTools) -> object:
+        chat_tool_choice: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        match chat_tool_choice:
+            case {"type": "function", "function": {"name": str(forced_name)}}:
+                chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(tools)
+                return {"type": "function", "function": {"name": chat_names.get(forced_name, forced_name)}}
+            case _:
+                return chat_tool_choice
+
+    @staticmethod
+    def namespace_tool_name_map(tools: ResponseTools) -> NamespaceNameMap:
+        namespace_entries: Final = LiteLLMCompletionResponsesConfig._namespace_entries(tools)
         top_level_function_names: Final = frozenset(
             str(tool.get("name") or "") for tool in tools or () if tool.get("type") == "function"
         )
@@ -3406,13 +3478,14 @@ class LiteLLMCompletionResponsesConfig:
             if tool_name not in top_level_function_names and unqualified_counts[tool_name] == 1
         )
         qualified_entries: Final = tuple(
-            (f"{namespace}__{tool_name}", (namespace, tool_name)) for namespace, tool_name in namespace_entries
+            (chat_member_name(namespace, tool_name), (namespace, tool_name))
+            for namespace, tool_name in namespace_entries
         )
         # The OpenAI Agents SDK reserves namespace == name for a deferred top-level tool (agents/_tool_identity.py)
         deferred_top_level_entries: Final = tuple(
             (name, (name, name)) for name in LiteLLMCompletionResponsesConfig.deferred_top_level_names(tools)
         )
-        return MappingProxyType(dict(qualified_entries + unambiguous_entries + deferred_top_level_entries))
+        return MappingProxyType(dict(unambiguous_entries + qualified_entries + deferred_top_level_entries))
 
     @staticmethod
     def _restore_namespace_tool_name(tool_name: str, names: NamespaceNameMap) -> tuple[str, str | None]:
@@ -3850,6 +3923,9 @@ class LiteLLMCompletionResponsesConfig:
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
+            LiteLLMCompletionResponsesConfig._unclaimed_web_search_calls(chat_completion_response, choices)
+        )
+        responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_message_output_items(chat_completion_response, choices)
         )
         responses_output.extend(
@@ -3887,6 +3963,21 @@ class LiteLLMCompletionResponsesConfig:
                 and getattr(item, "call_id", None) in server_tool_call_ids
             )
         ]
+
+    @staticmethod
+    def _unclaimed_web_search_calls(
+        chat_completion_response: ModelResponse, choices: Sequence[Choices]
+    ) -> tuple[ResponseFunctionWebSearch, ...]:
+        claimed_call_ids: Final = frozenset(
+            tool_call.id
+            for tool_call in chain.from_iterable(
+                (*anthropic_server_tool_calls(choice.message), *(choice.message.tool_calls or ())) for choice in choices
+            )
+        )
+        web_search_calls: Final = LiteLLMCompletionResponsesConfig._web_search_calls_by_call_id(
+            chat_completion_response
+        )
+        return tuple(call for call_id, call in web_search_calls.items() if call_id not in claimed_call_ids)
 
     @staticmethod
     def _server_tool_call_ids(choices: Sequence[Choices]) -> frozenset[str]:
@@ -4110,7 +4201,7 @@ class LiteLLMCompletionResponsesConfig:
         messages: Final[list[AllMessageValues | GenericChatCompletionMessage | ChatCompletionMessageToolCall]] = []
         output_items: Final = responses_api_output.output
         for _output_item in output_items:
-            output_item: dict = dict(_output_item)
+            output_item: dict[str, object] = dict(_output_item)
             if output_item.get("type") == "function_call":
                 # handle function call output
                 messages.append(

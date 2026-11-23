@@ -12,7 +12,7 @@ litellm-callbacks-spend-log.workspace = true
 litellm-python-compat.workspace = true
 litellm-redis-store.workspace = true
 litellm-spend-log-writer.workspace = true
-litellm-tracing.workspace = true
+litellm-redaction.workspace = true
 
 chrono = { workspace = true, features = ["clock"] }
 futures-util.workspace = true

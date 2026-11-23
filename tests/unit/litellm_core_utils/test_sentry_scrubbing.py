@@ -163,6 +163,19 @@ def test_pii_opt_in_keeps_identifiers_and_still_scrubs_secrets() -> None:
     assert "db-password-under-test" not in serialized
 
 
+@pytest.mark.parametrize("env", (PII_OFF, PII_ON), ids=("default", "pii-opt-in"))
+def test_gnani_header_is_scrubbed_from_transcription_breadcrumb(env: Mapping[str, str]) -> None:
+    transport: Final = RecordingTransport()
+    client: Final = sentry_sdk.Client(transport=transport, **build_sentry_init_options(env))
+    secret: Final = secrets.token_hex(12)
+    headers: Final = {"X-API-Key-ID": secret, "Content-Type": "audio/wav"}
+    client.capture_event({"breadcrumbs": {"values": [{"message": str({"headers": headers})}]}})
+    assert transport.last_envelope is not None
+    serialized: Final = json.dumps(transport.last_envelope.items[0].payload.json)
+    assert secret not in serialized
+    assert str({"headers": {**headers, "X-API-Key-ID": FILTERED}}) in serialized
+
+
 def test_transaction_events_are_scrubbed_too() -> None:
     transport: Final = RecordingTransport()
     client: Final = sentry_sdk.Client(transport=transport, **build_sentry_init_options(PII_OFF))

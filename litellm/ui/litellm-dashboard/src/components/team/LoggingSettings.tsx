@@ -266,55 +266,60 @@ const LoggingSettings: React.FC<LoggingSettingsProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Disabled Callbacks Section */}
-      <div className="space-y-4">
-        <div className="flex items-center space-x-2">
-          <BanIcon className="w-5 h-5 text-destructive" />
-          <span className="text-base font-semibold text-foreground">
-            {t("teams.loggingSettings.disabledCallbacks.title")}
-          </span>
-          <SimpleTooltip content={t("teams.loggingSettings.disabledCallbacks.tooltip")}>
-            <Info className="size-4 text-muted-foreground cursor-help" />
-          </SimpleTooltip>
-        </div>
+      {onDisabledCallbacksChange && (
+        <>
+          <div className="space-y-4">
+            <div className="flex items-center space-x-2">
+              <BanIcon className="w-5 h-5 text-destructive" />
+              <span className="text-base font-semibold text-foreground">
+                {t("teams.loggingSettings.disabledCallbacks.title")}
+              </span>
+              <SimpleTooltip content={t("teams.loggingSettings.disabledCallbacks.tooltip")}>
+                <Info className="size-4 text-muted-foreground cursor-help" />
+              </SimpleTooltip>
+            </div>
 
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-foreground">
-            {t("teams.loggingSettings.disabledCallbacks.label")}
-          </label>
-          <Select multiple value={disabledCallbacks} onValueChange={handleDisabledCallbacksChange}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder={t("teams.loggingSettings.disabledCallbacks.placeholder")}>
-                {(selected: string[]) =>
-                  selected.length === 0 ? t("teams.loggingSettings.disabledCallbacks.placeholder") : selected.join(", ")
-                }
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {allCallbacks.map((callbackName) => {
-                const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
-                return (
-                  <SelectItem key={callbackName} value={callbackName}>
-                    <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
-                      <div className="flex items-center space-x-2">
-                        <Logo
-                          src={callbackInfo[callbackName]?.logo}
-                          label={callbackName}
-                          className="w-4 h-4 object-contain"
-                        />
-                        <span>{callbackName}</span>
-                      </div>
-                    </SimpleTooltip>
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-          <div className="text-xs text-muted-foreground">{t("teams.loggingSettings.disabledCallbacks.help")}</div>
-        </div>
-      </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground">
+                {t("teams.loggingSettings.disabledCallbacks.label")}
+              </label>
+              <Select multiple value={disabledCallbacks} onValueChange={handleDisabledCallbacksChange}>
+                <SelectTrigger className="w-full">
+                  <SelectValue placeholder={t("teams.loggingSettings.disabledCallbacks.placeholder")}>
+                    {(selected: string[]) =>
+                      selected.length === 0
+                        ? t("teams.loggingSettings.disabledCallbacks.placeholder")
+                        : selected.join(", ")
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {allCallbacks.map((callbackName) => {
+                    const descriptionKey = callbackInfo[callbackName]?.descriptionKey;
+                    return (
+                      <SelectItem key={callbackName} value={callbackName}>
+                        <SimpleTooltip content={descriptionKey ? t(descriptionKey) : undefined} side="right">
+                          <div className="flex items-center space-x-2">
+                            <Logo
+                              src={callbackInfo[callbackName]?.logo}
+                              label={callbackName}
+                              className="w-4 h-4 object-contain"
+                            />
+                            <span>{callbackName}</span>
+                          </div>
+                        </SimpleTooltip>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <div className="text-xs text-muted-foreground">{t("teams.loggingSettings.disabledCallbacks.help")}</div>
+            </div>
+          </div>
 
-      <Separator className="my-6" />
+          <Separator className="my-6" />
+        </>
+      )}
 
       {/* Logging Integrations Section */}
       <div className="flex justify-between items-center">

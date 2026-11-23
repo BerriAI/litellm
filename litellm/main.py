@@ -84,6 +84,12 @@ from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
 )
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     bill_first_round_on_failure,
     maybe_run_chat_completion_agentic_loop,
@@ -145,7 +151,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
     convert_model_response_to_streaming,
 )
-from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
@@ -436,6 +442,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
 
 
 class _ForwardedCompletionParams(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
+
+
+class _EmbeddingResponseFields(ExtraItemsTypedDict, total=False, extra_items=object):
     pass
 
 
@@ -1399,6 +1409,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (
     bridge_reasoning_effort,
+    serves_only_responses,
     str_keyed_mapping,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
@@ -1575,6 +1586,13 @@ def _dispatch_metadata(ctx: CompletionDispatchContext) -> Mapping[str, object] |
 
 def _dispatch_client_http(ctx: CompletionDispatchContext) -> HTTPHandler | AsyncHTTPHandler | None:
     return ctx.client
+
+
+def _completion_supports_httpx_timeout(custom_llm_provider: str) -> bool:
+    return (
+        supports_httpx_timeout(custom_llm_provider)
+        or ProviderConfigManager.get_custom_llm_handler(custom_llm_provider) is None
+    )
 
 
 def _dispatch_client_azure(
@@ -3488,6 +3506,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     model: Final = ctx.model
     model_response: Final = ctx.model_response
     optional_params: Final = ctx.optional_params
+    timeout: Final = ctx.timeout
 
     maritalk_key: Final = api_key or litellm.maritalk_key or get_secret("MARITALK_API_KEY") or litellm.api_key
 
@@ -3505,6 +3524,7 @@ def _complete_maritalk(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
         encoding=_get_encoding(),
         api_key=maritalk_key,
         logging_obj=logging,
+        timeout=timeout,
         custom_llm_provider="maritalk",
         custom_prompt_dict=custom_prompt_dict,
     )
@@ -5860,7 +5880,9 @@ def completion(
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
     # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
+    # Responses API config (get_provider_responses_api_config -> None). A route
+    # with no chat endpoint bridges anyway, since its native Responses config
+    # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
@@ -6243,8 +6265,11 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        may_bridge_to_responses_api: Final = not skip_responses_api_bridge or serves_only_responses(
+            model, custom_llm_provider
+        )
         bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+            responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
         allowed_openai_params: Final[list[str] | None] = (
             [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
@@ -6346,7 +6371,9 @@ def completion(
             kwargs,
             custom_llm_provider,
             global_timeout=get_configured_request_timeout(),
-            supports_httpx_timeout=supports_httpx_timeout,
+            supports_httpx_timeout=supports_httpx_timeout
+            if mock_response is not None or mock_tool_calls or mock_timeout
+            else _completion_supports_httpx_timeout,
         )
         streams: Final = stream is True
 
@@ -6579,7 +6606,7 @@ def completion(
         replay_as_stream: Final = (
             partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
         )
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
@@ -7085,7 +7112,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
         response: EmbeddingResponse | None = None
         if isinstance(init_response, dict):
-            response = EmbeddingResponse(**init_response)
+            response = EmbeddingResponse(
+                **_EmbeddingResponseFields(**_REQUEST_KWARGS_ADAPTER.validate_python(init_response))
+            )
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
@@ -8532,11 +8561,14 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    completion_kwargs: Final = bridged_audio_output_request(kwargs, _model, custom_llm_provider)
+    if isinstance(completion_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(completion_kwargs, "/v1/completions")
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **completion_kwargs,
         **_ForwardedCompletionParams(**optional_params),
     )
     if kwargs.get("acompletion", False) is True:
@@ -8918,8 +8950,7 @@ def transcription(
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)
 
-    if max_retries is None:
-        max_retries = openai.DEFAULT_MAX_RETRIES
+    resolved_max_retries: Final = openai.DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
     model_response: Final = litellm.utils.TranscriptionResponse()
 
@@ -9020,7 +9051,7 @@ def transcription(
             api_key=api_key,
             api_version=azure_api_version,
             azure_ad_token=azure_ad_token,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
@@ -9053,7 +9084,7 @@ def transcription(
             client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             api_base=api_base,
             api_key=static_api_key,
             provider_config=provider_config,
@@ -9097,7 +9128,7 @@ def transcription(
                 else None
             ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
@@ -9131,28 +9162,33 @@ def transcription(
                 timeout=timeout,
             )
     elif provider_config is not None:
-        response = base_llm_http_handler.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=(
-                client
-                if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                else None
-            ),
-            timeout=timeout,
-            max_retries=max_retries,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            custom_llm_provider=custom_llm_provider,
-            headers={},
-            provider_config=provider_config,
-            shared_session=shared_session,
-        )
+        try:
+            response = base_llm_http_handler.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=resolved_max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                headers={},
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
+        except BaseLLMException as exc:
+            if custom_llm_provider != "gnani":
+                raise
+            raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=exc)
     else:
         raise litellm.UnsupportedEndpointError(
             message=f"{custom_llm_provider}/{model} does not support audio transcription.",
@@ -9522,6 +9558,27 @@ def speech(
             timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
+            _is_async=aspeech or False,
+            stream=stream_audio,
+        )
+    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
             stream=stream_audio,
         )

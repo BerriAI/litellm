@@ -160,8 +160,8 @@ def _as_input_text_part(part: object) -> object:
     return part
 
 
-_RequestInputT: Final = TypeVar("_RequestInputT")
-_StreamEventT: Final = TypeVar("_StreamEventT", bound=BaseModel)
+_RequestInputT = TypeVar("_RequestInputT")
+_StreamEventT = TypeVar("_StreamEventT", bound=BaseModel)
 
 
 def _provider_mapped_params(
@@ -170,9 +170,19 @@ def _provider_mapped_params(
     model: str,
     drop_params: bool,
     declared_reasoning_efforts: Collection[str] | None,
+    allowed_openai_params: Collection[str],
 ) -> Mapping[str, object]:
     from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedResponsesParams
 
+    if isinstance(config, MapsAllowedResponsesParams):
+        return config.map_openai_params_for_deployment(
+            params,
+            model,
+            drop_params,
+            declared_reasoning_efforts=declared_reasoning_efforts,
+            allowed_openai_params=allowed_openai_params,
+        )
     if (
         declared_reasoning_efforts is not None
         and isinstance(config, OpenAIResponsesAPIConfig)
@@ -364,6 +374,7 @@ class ResponsesAPIRequestUtils:
                 model,
                 should_drop_params,
                 declared_reasoning_efforts,
+                allowed_openai_param_names(allowed_openai_params),
             ),
             strict=True,
         )
@@ -1449,6 +1460,7 @@ class ResponseAPILoggingUtils:
             reasoning_tokens: Final = _output_token_detail(output_tokens_details, "reasoning_tokens")
             image_tokens: Final = _output_token_detail(output_tokens_details, "image_tokens")
             audio_tokens: Final = _output_token_detail(output_tokens_details, "audio_tokens")
+            video_tokens: Final = _output_token_detail(output_tokens_details, "video_tokens")
             reported_text_tokens: Final = _output_token_detail(output_tokens_details, "text_tokens")
             completion_tokens_details = CompletionTokensDetailsWrapper(
                 reasoning_tokens=reasoning_tokens,
@@ -1459,9 +1471,10 @@ class ResponseAPILoggingUtils:
                     completion_tokens=completion_tokens,
                     text_tokens=reported_text_tokens,
                     reasoning_tokens=reasoning_tokens or 0,
-                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0),
+                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0) + (video_tokens or 0),
                 ),
                 audio_tokens=audio_tokens,
+                video_tokens=video_tokens,
             )
 
         extra_usage_fields: Final = _UsageExtraFields(

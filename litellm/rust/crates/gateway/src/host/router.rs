@@ -1,38 +1,47 @@
 use std::{sync::Arc, time::Duration};
 
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
-    Error,
+    Error, RoutingCache,
     routing::{self, RouteAttempt},
 };
+use litellm_router_core::HostStep;
 use litellm_router_core::{
-    Attempt, AttemptError, AttemptFailure, ConfigError, Deployment, InMemoryRouterCache,
-    RouterEvent, RouterHost, RoutingContext, SelectStage, Served,
+    Attempt, AttemptError, AttemptFailure, ConfigError, Deployment, RouterEvent, RouterHost,
+    RoutingContext, SelectStage, Served,
 };
 
-use crate::Gateway;
+use crate::{Gateway, host::NativeRows};
+
+/// Whether [`NativeRouterHost`] answers `step` as the proxy does. `admit` leaves to Python every
+/// call that would make a step it does not.
+pub fn answers(step: &HostStep) -> bool {
+    match step {
+        HostStep::Pick(..)
+        | HostStep::PreCallFacts
+        | HostStep::HealthStates
+        | HostStep::FallbackParams(_) => false,
+    }
+}
 
 /// router-core's host for one inference call: each attempt runs the request's route, and the
 /// rest is answered from the gateway's own state.
 pub struct NativeRouterHost<'a, A> {
     pub(super) gateway: &'a Gateway,
-    pub(super) identity: &'a AuthenticatedRequest,
+    pub(super) identity: &'a Authenticated<NativeRows>,
     pub(super) route: &'a A,
 }
 
 impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
     type Response = A::Outcome;
     type Failure = Error;
-    type Cache = InMemoryRouterCache;
+    type Cache = RoutingCache;
 
     async fn attempt(
         &self,
         attempt: &Attempt,
     ) -> Result<Served<A::Outcome>, AttemptFailure<Error>> {
-        self.route
-            .run(attempt)
-            .await
-            .map_err(|error| routing::attempt_failure(attempt, error))
+        routing::attempt(self.gateway, self.route, attempt).await
     }
 
     async fn select(
@@ -48,10 +57,10 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
     }
 
     async fn allow_fallback(&self, target: &str) -> Result<bool, AttemptError> {
-        Ok(routing::allows(self.gateway, self.identity, target).await)
+        Ok(routing::allows(self.gateway, self.identity, target))
     }
 
-    fn cache(&self) -> &InMemoryRouterCache {
+    fn cache(&self) -> &RoutingCache {
         self.gateway.routing()
     }
 

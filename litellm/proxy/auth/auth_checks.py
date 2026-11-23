@@ -58,6 +58,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import LiteLLM_TeamRebuiltFromToken
 from litellm.proxy._types import (
     MODEL_LIST_ROUTES,
+    REQUIRED_CUSTOMER_HEADERS_ADAPTER,
+    REQUIRED_CUSTOMER_HEADERS_SETTING,
     UI_TEAM_ID,
     CallInfo,
     ConfigGeneralSettings,
@@ -338,6 +340,7 @@ typed_general_settings: Final = _typed_request_body
 
 
 _TRACE_ID_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_REQUEST_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str]]] = TypeAdapter(Mapping[str, str])
 
 
 def _metadata_mapping_has_trace_id(metadata: Mapping[str, object]) -> bool:
@@ -361,6 +364,80 @@ def _team_metadata_requires_trace_id(team_object: LiteLLM_TeamTable) -> bool:
     return (
         team_object.metadata.get("require_trace_id")  # pyright: ignore[reportUnknownMemberType]  # narrowed to dict
         is True
+    )
+
+
+def _scope_required_customer_headers(scope: object) -> tuple[str, ...]:
+    if not _metadata_is_mapping(scope):
+        return ()
+    return REQUIRED_CUSTOMER_HEADERS_ADAPTER.validate_python(
+        _TRACE_ID_METADATA_ADAPTER.validate_python(scope).get(REQUIRED_CUSTOMER_HEADERS_SETTING) or ()
+    )
+
+
+def _metadata_is_mapping(metadata: object) -> bool:
+    return isinstance(metadata, Mapping)
+
+
+class _MetadataScope(Protocol):
+    @property
+    def metadata(self) -> object: ...
+
+
+def _scope_metadata(scope: _MetadataScope | None) -> object:
+    return scope.metadata if scope is not None else None
+
+
+def _required_customer_headers(scopes: tuple[object, object, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(map(_scope_required_customer_headers, scopes)))
+
+
+def _missing_customer_header(headers: Mapping[str, str], required: tuple[str, ...]) -> str | None:
+    present: Final = frozenset(name.lower() for name, value in headers.items() if value.strip())
+    return next((header for header in required if header.lower() not in present), None)
+
+
+def _is_pass_through_route(route: str, request: Request | None) -> bool:
+    return RouteChecks.check_route_access(
+        route=route,
+        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
+    ) or request_dispatched_to_pass_through_endpoint(request)
+
+
+def _route_requires_customer_headers(route: str, request: Request | None) -> bool:
+    return (
+        RouteChecks.runs_inference_checks(route) or _is_pass_through_route(route, request)
+    ) and not RouteChecks.is_info_route(route)
+
+
+async def missing_required_customer_header(
+    request: Request | None,
+    route: str,
+    authenticated: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+) -> str | None:
+    """The first header this route's required-customer-header policy needs that the request lacks, or None."""
+    from litellm.proxy import proxy_server
+
+    if not _route_requires_customer_headers(route, request):
+        return None
+    team: Final = (
+        await get_team_object(
+            team_id=authenticated.team_id, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache
+        )
+        if authenticated.team_id is not None and authenticated.team_id != UI_TEAM_ID
+        else None
+    )
+    return _missing_customer_header(
+        _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+        _required_customer_headers(
+            (
+                getattr(proxy_server, "general_settings", None),
+                _scope_metadata(team),
+                _scope_metadata(authenticated),
+            )
+        ),
     )
 
 
@@ -1445,10 +1522,7 @@ async def common_checks(
                         code=status.HTTP_400_BAD_REQUEST,
                     )
 
-    pass_through_route: Final = RouteChecks.check_route_access(
-        route=route,
-        allowed_routes=LiteLLMRoutes.passthrough_routes_wildcard.value,
-    ) or request_dispatched_to_pass_through_endpoint(request)
+    pass_through_route: Final = _is_pass_through_route(route, request)
     headers_only: Final = (
         RouteChecks.check_route_access(
             route=route,
@@ -1496,6 +1570,33 @@ async def common_checks(
             type=ProxyErrorTypes.bad_request_error,
             param="trace_id",
             code=status.HTTP_400_BAD_REQUEST,
+        )
+
+    required_customer_headers: Final = (
+        _required_customer_headers(
+            (
+                general_settings,  # pyright: ignore[reportUnknownArgumentType]  # validated to Mapping[str, object] inside
+                _scope_metadata(team_object),
+                _scope_metadata(valid_token),
+            )
+        )
+        if _route_requires_customer_headers(route, request)
+        else ()
+    )
+    missing_customer_header: Final = (
+        _missing_customer_header(
+            _REQUEST_HEADERS_ADAPTER.validate_python(safe_get_request_headers(request=request)),
+            required_customer_headers,
+        )
+        if required_customer_headers
+        else None
+    )
+    if missing_customer_header is not None:
+        raise ProxyException(
+            message=f"Missing required customer header {missing_customer_header}",
+            type=ProxyErrorTypes.auth_error,
+            param=missing_customer_header,
+            code=status.HTTP_403_FORBIDDEN,
         )
 
     await can_agent_call_model(
@@ -1604,12 +1705,12 @@ async def common_checks(
                 return
 
             await _user_multi_budget_check(user_object)
-            if user_object.max_budget is None:
+            user_budget: Final = user_object.effective_max_budget()
+            if user_budget is None:
                 return
 
             from litellm.proxy.proxy_server import get_current_spend
 
-            user_budget: Final = user_object.max_budget
             user_spend: Final = await get_current_spend(
                 counter_key=user_counter(user_object.user_id),
                 fallback_spend=user_object.spend or 0.0,
@@ -2005,8 +2106,11 @@ def resolve_effective_team_member_budget(
     member_budget: LiteLLM_BudgetTable | None,
     team_default_budget: LiteLLM_BudgetTable | None,
     now: datetime,
+    membership: LiteLLM_TeamMembership | None = None,
 ) -> float | None:
     if member_budget is not None and member_budget.max_budget is not None:
+        if membership is not None:
+            return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
     if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
@@ -3617,11 +3721,24 @@ class AccessGroupNotFoundError(HTTPException):
         )
 
 
+async def _find_team_retrying_a_lost_connection(
+    team_id: str, prisma_client: PrismaClient, *, use_writer: bool
+) -> LiteLLM_TeamTableCachedObj | None:
+    teams: Final = TeamRepository(prisma_client)
+    try:
+        return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+    except NativeDatabaseFailure as error:
+        if error.kind != "unreachable":
+            raise
+        verbose_proxy_logger.warning("Team read lost its database connection, retrying once: %s", error)
+    return await teams.find_with_model_aliases(team_id, use_writer=use_writer)
+
+
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: bool | None = None, *, use_writer: bool = False
 ) -> LiteLLM_TeamTableCachedObj | None:
     response: LiteLLM_TeamTableCachedObj | None = await bounded_db_lookup(
-        TeamRepository(prisma_client).find_with_model_aliases(team_id, use_writer=use_writer), name="team"
+        _find_team_retrying_a_lost_connection(team_id, prisma_client, use_writer=use_writer), name="team"
     )
 
     if response is None and team_id_upsert:
@@ -7395,6 +7512,7 @@ async def _check_team_member_budget(
             member_budget=member_budget_row,
             team_default_budget=team_default_budget,
             now=now,
+            membership=loaded_membership,
         )
 
         if team_member_budget is not None:
