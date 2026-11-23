@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -310,6 +311,48 @@ async def test_post_call_success_hook_drops_token_data_when_a_callback_rewrites_
 
     choice = served["choices"][0]
     assert choice["message"]["tool_calls"][0]["function"]["arguments"] == '{"city": "[MASKED]"}'
+    assert choice["provider_specific_fields"]["token_ids"] is None
+    assert choice["logprobs"] is None
+
+
+class _InPlaceMessageFieldMaskingLogger(CustomLogger):
+    def __init__(self, field: str) -> None:
+        super().__init__()
+        self.field = field
+
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        message = response["choices"][0]["message"]
+        message[self.field] = json.loads(_masked(json.dumps(message[self.field])))
+        return response
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("reasoning_content", "The user wants Paris."),
+        ("thinking_blocks", [{"type": "thinking", "thinking": "The user wants Paris.", "signature": "sig"}]),
+        ("refusal", "I will not say Paris."),
+        ("audio", {"id": "audio_1", "data": "", "expires_at": 1, "transcript": "Paris"}),
+        ("function_call", {"name": "lookup", "arguments": '{"city": "Paris"}'}),
+    ],
+    ids=["reasoning_content", "thinking_blocks", "refusal", "audio", "function_call"],
+)
+async def test_post_call_success_hook_drops_token_data_when_a_callback_rewrites_any_answer_field(
+    proxy_logging, make_user_api_key_auth, monkeypatch, field, value
+):
+    monkeypatch.setattr(litellm, "callbacks", [_InPlaceMessageFieldMaskingLogger(field)])
+    response = _vllm_chat_response("The capital of France is Lyon.").model_dump()
+    response["choices"][0]["message"][field] = value
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "capital of France?"}]},
+        response=response,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    choice = served["choices"][0]
+    assert "Paris" not in json.dumps(choice["message"][field])
     assert choice["provider_specific_fields"]["token_ids"] is None
     assert choice["logprobs"] is None
 

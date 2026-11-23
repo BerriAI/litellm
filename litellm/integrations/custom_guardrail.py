@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
 
 import httpx
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -332,15 +332,21 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 
 
 _TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
-_JSON_FIELDS: Final = TypeAdapter(dict[str, JsonValue])
+_RESPONSE_ITEMS: Final = TypeAdapter(list[object])
 
 
-def _without_token_data(value: JsonValue, depth: int = 0) -> JsonValue:
-    if isinstance(value, list) and depth < DEFAULT_MAX_RECURSE_DEPTH:
-        return [_without_token_data(item, depth + 1) for item in value]
-    if isinstance(value, dict) and depth < DEFAULT_MAX_RECURSE_DEPTH:
-        return {key: _without_token_data(item, depth + 1) for key, item in value.items() if key not in _TOKEN_DATA_KEYS}
-    return value
+def _without_token_data(value: object, depth: int = 0) -> object:
+    match value:
+        case list() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return [_without_token_data(item, depth + 1) for item in _RESPONSE_ITEMS.validate_python(value)]
+        case dict() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return {
+                key: _without_token_data(item, depth + 1)
+                for key, item in _REQUEST_FIELDS.validate_python(value).items()
+                if key not in _TOKEN_DATA_KEYS
+            }
+        case _:
+            return value
 
 
 def _response_fingerprint(response: object) -> str | None:
@@ -351,9 +357,7 @@ def _response_fingerprint(response: object) -> str | None:
             if isinstance(response, BaseModel)
             else _REQUEST_FIELDS.validate_python(response)
         )
-        content: Final = _JSON_FIELDS.validate_python(
-            {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
-        )
+        content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
         if not content:
             return None
         return hashlib.sha256(
