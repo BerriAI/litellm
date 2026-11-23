@@ -316,35 +316,12 @@ def _multipart_file_parts(content_type: str, body: bytes) -> tuple[tuple[str, by
 
 
 @pytest.mark.asyncio
-async def test_aimage_edit_sends_image_references_to_openai_as_a_json_body() -> None:
-    """regression: image references with no uploaded file reach OpenAI as application/json, the list unchanged."""
+async def test_aimage_edit_sends_image_and_mask_references_to_openai_unchanged() -> None:
+    """regression: image and mask references with no uploaded file reach OpenAI as the same application/json body."""
     captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
     client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
 
     response: Final = await litellm.aimage_edit(
-        image=None,
-        images=[dict(reference) for reference in _IMAGE_REFERENCES],
-        model="openai/gpt-image-1",
-        prompt="add a hat",
-        api_key="sk-test",
-        api_base="https://edit.example/v1",
-        client=client,
-    )
-
-    body: Final = _sent_json_body(captured)
-    assert body["images"] == list(_IMAGE_REFERENCES)
-    assert body["prompt"] == "add a hat"
-    assert body["model"] == "gpt-image-1"
-    assert [image.b64_json for image in response.data] == ["aW1n"]
-
-
-@pytest.mark.asyncio
-async def test_aimage_edit_sends_a_mask_reference_to_openai_unchanged() -> None:
-    """regression: a JSON mask reference reaches OpenAI as the same JSON object instead of crashing the upload."""
-    captured: Final[dict[str, object]] = {}  # mutable-ok: the MockTransport callback records the request
-    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(_capture_image_edit_request(captured)))
-
-    await litellm.aimage_edit(
         image=None,
         images=[dict(reference) for reference in _IMAGE_REFERENCES],
         mask=dict(_MASK_REFERENCE),
@@ -355,9 +332,13 @@ async def test_aimage_edit_sends_a_mask_reference_to_openai_unchanged() -> None:
         client=client,
     )
 
-    body: Final = _sent_json_body(captured)
-    assert body["mask"] == _MASK_REFERENCE
-    assert body["images"] == list(_IMAGE_REFERENCES)
+    assert _sent_json_body(captured) == {
+        "model": "gpt-image-1",
+        "prompt": "add a hat",
+        "images": list(_IMAGE_REFERENCES),
+        "mask": _MASK_REFERENCE,
+    }
+    assert [image.b64_json for image in response.data] == ["aW1n"]
 
 
 @pytest.mark.asyncio

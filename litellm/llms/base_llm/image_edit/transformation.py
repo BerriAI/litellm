@@ -163,7 +163,6 @@ class BaseImageEditConfig(ABC):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
     ) -> bool:
-        """Whether this request's body is sent as JSON rather than multipart/form-data."""
         return not self.use_multipart_form_data()
 
     def get_error_class(
