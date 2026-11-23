@@ -25,7 +25,7 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from copy import deepcopy
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, Protocol, TypeAlias, Union, cast, get_args
 
 from litellm._internal_context import is_resent_failure
 from litellm._logging import redact_string
@@ -38,6 +38,7 @@ import dotenv
 import httpx
 import openai
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import TypedDict as ExtraItemsTypedDict
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -78,6 +79,12 @@ from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
     calculate_request_duration,
     get_audio_file_for_health_check,
+)
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
 )
 from litellm.litellm_core_utils.chat_completion_agentic_loop import (
     maybe_run_chat_completion_agentic_loop,
@@ -124,7 +131,7 @@ from litellm.llms.base_llm.base_model_iterator import (
     MockResponseIterator,
     convert_model_response_to_streaming,
 )
-from litellm.llms.base_llm.chat.transformation import with_attribution_headers
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, with_attribution_headers
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
     NativeOutputFallback,
@@ -238,6 +245,7 @@ from .llms.anthropic.chat import AnthropicChatCompletion
 from .llms.azure.audio_transcriptions import AzureAudioTranscription
 from .llms.azure.azure import AzureChatCompletion, check_dynamic_azure_params
 from .llms.azure.chat.o_series_handler import AzureOpenAIO1ChatCompletion
+from .llms.azure.common_utils import default_azure_api_version
 from .llms.azure.completion.handler import AzureTextCompletion
 from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
@@ -388,6 +396,10 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
             return assert_never(control)
+
+
+class _EmbeddingResponseFields(ExtraItemsTypedDict, total=False, extra_items=object):
+    pass
 
 
 ####### COMPLETION ENDPOINTS ################
@@ -1364,7 +1376,11 @@ def _complete_azure(ctx: CompletionDispatchContext) -> _CompletionDispatchResult
     api_base = api_base or litellm.api_base or get_secret("AZURE_API_BASE")
 
     api_version = (
-        api_version or litellm.api_version or get_secret_str("AZURE_API_VERSION") or litellm.AZURE_DEFAULT_API_VERSION
+        api_version
+        or litellm.api_version
+        or default_azure_api_version(
+            api_base if isinstance(api_base, str) else None, get_secret_str("AZURE_API_VERSION")
+        )
     )
 
     api_key = (
@@ -6557,7 +6573,9 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
 
         response: EmbeddingResponse | None = None
         if isinstance(init_response, dict):
-            response = EmbeddingResponse(**init_response)
+            response = EmbeddingResponse(
+                **_EmbeddingResponseFields(**_REQUEST_KWARGS_ADAPTER.validate_python(init_response))
+            )
         elif isinstance(init_response, EmbeddingResponse):  ## CACHING SCENARIO
             response = init_response
         elif asyncio.iscoroutine(init_response):
@@ -6797,8 +6815,7 @@ def embedding(
             api_version = (
                 api_version
                 or litellm.api_version
-                or get_secret_str("AZURE_API_VERSION")
-                or litellm.AZURE_DEFAULT_API_VERSION
+                or default_azure_api_version(api_base, get_secret_str("AZURE_API_VERSION"))
             )
 
             azure_ad_token: Final = optional_params.pop("azure_ad_token", None) or get_secret_str("AZURE_AD_TOKEN")
@@ -8004,11 +8021,14 @@ def text_completion(
     if model is None:
         raise ValueError("model is not set. Set either via 'model' or 'engine' param.")
     kwargs["text_completion"] = True
+    completion_kwargs: Final = bridged_audio_output_request(kwargs, _model, custom_llm_provider)
+    if isinstance(completion_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(completion_kwargs, "/v1/completions")
     response = completion(
         model=model,
         messages=messages,
         *args,
-        **kwargs,
+        **completion_kwargs,
         **optional_params,
     )
     if kwargs.get("acompletion", False) is True:
@@ -8289,6 +8309,12 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         )
 
 
+def _raise_transcription_error(exc: BaseLLMException, model: str, custom_llm_provider: str) -> NoReturn:
+    if custom_llm_provider != "gnani":
+        raise exc
+    raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=exc)
+
+
 @client
 def transcription(
     model: str,
@@ -8333,8 +8359,7 @@ def transcription(
     if litellm_logging_obj:
         litellm_logging_obj.model_call_details["client"] = str(client)
 
-    if max_retries is None:
-        max_retries = openai.DEFAULT_MAX_RETRIES
+    resolved_max_retries: Final = openai.DEFAULT_MAX_RETRIES if max_retries is None else max_retries
 
     model_response: Final = litellm.utils.TranscriptionResponse()
 
@@ -8412,7 +8437,7 @@ def transcription(
             api_key=api_key,
             api_version=api_version,
             azure_ad_token=azure_ad_token,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             litellm_params=litellm_params_dict,
             custom_llm_provider=custom_llm_provider,
         )
@@ -8445,7 +8470,7 @@ def transcription(
             client=client,
             timeout=timeout,
             logging_obj=litellm_logging_obj,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             api_base=api_base,
             api_key=static_api_key,
             provider_config=provider_config,
@@ -8489,7 +8514,7 @@ def transcription(
                 else None
             ),
             timeout=timeout,
-            max_retries=max_retries,
+            max_retries=resolved_max_retries,
             logging_obj=litellm_logging_obj,
             api_base=api_base,
             api_key=api_key,
@@ -8523,28 +8548,31 @@ def transcription(
                 timeout=timeout,
             )
     elif provider_config is not None:
-        response = base_llm_http_handler.audio_transcriptions(
-            model=model,
-            audio_file=file,
-            optional_params=optional_params,
-            litellm_params=litellm_params_dict,
-            model_response=model_response,
-            atranscription=atranscription,
-            client=(
-                client
-                if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
-                else None
-            ),
-            timeout=timeout,
-            max_retries=max_retries,
-            logging_obj=litellm_logging_obj,
-            api_base=api_base,
-            api_key=api_key,
-            custom_llm_provider=custom_llm_provider,
-            headers={},
-            provider_config=provider_config,
-            shared_session=shared_session,
-        )
+        try:
+            response = base_llm_http_handler.audio_transcriptions(
+                model=model,
+                audio_file=file,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=model_response,
+                atranscription=atranscription,
+                client=(
+                    client
+                    if client is not None and (isinstance(client, HTTPHandler) or isinstance(client, AsyncHTTPHandler))
+                    else None
+                ),
+                timeout=timeout,
+                max_retries=resolved_max_retries,
+                logging_obj=litellm_logging_obj,
+                api_base=api_base,
+                api_key=api_key,
+                custom_llm_provider=custom_llm_provider,
+                headers={},
+                provider_config=provider_config,
+                shared_session=shared_session,
+            )
+        except BaseLLMException as exc:
+            _raise_transcription_error(exc, model=model, custom_llm_provider=custom_llm_provider)
 
     # Store duration in _hidden_params for cost calculation without
     # exposing it in the response body (see sync path comment above).
@@ -8902,6 +8930,26 @@ def speech(
             timeout=http_timeout,
             extra_headers=extra_headers,
             client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "gradium" and text_to_speech_provider_config is not None:
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        response = base_llm_http_handler.text_to_speech_handler(  # rebind-ok: set per provider branch  # pyright: ignore[reportUnknownMemberType]  # untyped shared TTS handler, as for every provider branch
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=extra_headers,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
+            client=client,  # pyright: ignore[reportUnknownArgumentType]  # speech() takes these untyped
             _is_async=aspeech or False,
         )
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
