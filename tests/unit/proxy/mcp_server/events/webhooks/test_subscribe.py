@@ -69,6 +69,20 @@ def _params(ttl_ms: int | None = 600_000, url: str = HOOK, secret: str = SECRET)
 
 
 @pytest.mark.asyncio
+async def test_a_new_subscription_reserves_its_id_before_upstream_creation() -> None:
+    store: Final = MemoryStore()
+    upstream: Final = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    prepared: Final = await prepare_subscription(
+        context(), _params(), None, SETTINGS, runtime((server(),), upstream=upstream), _request(store), _Client()
+    )
+    assert isinstance(prepared, Ok)
+    result: Final = await reserve_subscription(prepared.ok, SETTINGS)
+    assert isinstance(result, Ok) and result.ok.reserved
+    assert store.rows[SID].status == "pending"
+    assert not any(method == "events/subscribe" for method, *_ in upstream.calls)
+
+
+@pytest.mark.asyncio
 async def test_a_reservation_past_the_cap_backs_itself_out() -> None:
     capped: Final = EventsSettings(enabled=True, public_base_url="https://gw", max_subscriptions_per_key=1)
     store: Final = MemoryStore()
