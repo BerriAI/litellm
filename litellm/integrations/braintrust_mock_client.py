@@ -11,8 +11,11 @@ Usage:
 import os
 import time
 from collections.abc import AsyncIterable, Iterable
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlparse
+
+import httpx
+from httpx._types import RequestFiles
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import (
@@ -20,6 +23,10 @@ from litellm.integrations.mock_client_factory import (
     MockResponse,
     create_mock_client_factory,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 # Use factory for should_use_mock and MockResponse
 # Braintrust uses both HTTPHandler (sync) and AsyncHTTPHandler (async)
@@ -76,17 +83,17 @@ def _is_braintrust_url(url: str) -> bool:
 
 
 def _mock_http_handler_post(
-    self,
+    self: "HTTPHandler",
     url,
-    data=None,
+    data: dict[str, object] | str | bytes | None = None,
     json=None,
-    params=None,
-    headers=None,
-    timeout=None,
-    stream=False,
-    files=None,
+    params: dict[str, object] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | httpx.Timeout | None = None,
+    stream: bool = False,
+    files: dict[str, object] | RequestFiles | None = None,
     content: str | bytes | Iterable[bytes] | AsyncIterable[bytes] | None = None,
-    logging_obj=None,
+    logging_obj: "LiteLLMLoggingObject | None" = None,
 ):
     """Monkey-patched HTTPHandler.post that intercepts Braintrust calls with endpoint-specific responses."""
     # Only mock Braintrust API calls
