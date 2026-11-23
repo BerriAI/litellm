@@ -7,7 +7,11 @@ private ones per file.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Protocol, TypeVar
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, TypeVar
+
+if TYPE_CHECKING:
+    from litellm.proxy.db.prisma_client import PrismaTransaction
 
 RowT_co = TypeVar("RowT_co", covariant=True)
 
@@ -15,6 +19,11 @@ RowT_co = TypeVar("RowT_co", covariant=True)
 class DatabaseClient(Protocol):
     @property
     def db(self) -> object: ...
+
+
+@dataclass(frozen=True, slots=True)
+class TransactionDatabase:
+    db: "PrismaTransaction"
 
 
 class TableActions(Protocol[RowT_co]):
