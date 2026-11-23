@@ -261,7 +261,7 @@ class CohereV2ModelResponseIterator:
             return None
         return {"id": None, "type": "function", "function": {"name": None, "arguments": "{}"}, "index": index}
 
-    def _parse_tool_plan_delta(self, chunk: dict) -> dict | None:
+    def _parse_tool_plan_delta(self, chunk: dict) -> dict[str, object] | None:
         """Parse tool-plan-delta events to extract tool plan."""
         data: Final = chunk.get("data", {})
         delta: Final = data.get("delta", {})
@@ -271,7 +271,7 @@ class CohereV2ModelResponseIterator:
             return {"tool_plan": tool_plan}
         return None
 
-    def _parse_citation_start(self, chunk: dict) -> dict | None:
+    def _parse_citation_start(self, chunk: dict) -> dict[str, object] | None:
         """Parse citation-start events to extract citations."""
         data: Final = chunk.get("data", {})
         delta: Final = data.get("delta", {})
