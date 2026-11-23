@@ -1,4 +1,5 @@
 from collections.abc import Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import chain
 from typing import Final, cast  # noqa: TID251  # narrows untyped request dicts at the session boundary
 
@@ -51,21 +52,46 @@ def _text_document_data(block: Mapping[str, object]) -> str | None:
             return None
 
 
+@dataclass(frozen=True, slots=True)
+class _DroppedBreakpoint:
+    cache_control: object
+
+
 def _text_document_content(content: object, drop_citations: bool) -> object:
     items: Final = as_object_list(content)
     if items is None:
         return content
-    blocks: Final = list(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
-    return blocks if blocks or not items else [_empty_turn_placeholder(items)]
+    blocks, orphan = _with_breakpoints(
+        tuple(chain.from_iterable(_content_blocks(item, drop_citations) for item in items))
+    )
+    if blocks or not items:
+        return list(blocks)
+    return [_with_cache_control({"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}, orphan)]
 
 
-def _empty_turn_placeholder(items: Sequence[object]) -> Mapping[str, object]:
-    cache_controls: Final = tuple(block["cache_control"] for block in _blocks(items) if "cache_control" in block)
-    return {
-        "type": "text",
-        "text": EMPTY_TEXT_PLACEHOLDER,
-        **({"cache_control": cache_controls[-1]} if cache_controls else {}),
-    }
+def _with_breakpoints(stream: Sequence[object]) -> tuple[tuple[object, ...], object | None]:
+    kept: Final = tuple(index for index, item in enumerate(stream) if not isinstance(item, _DroppedBreakpoint))
+    if not kept:
+        return (), _last_breakpoint(stream)
+    return (
+        tuple(
+            _with_cache_control(stream[index], _last_breakpoint(stream[start:end]))
+            for index, start, end in zip(kept, (0, *kept[1:]), (*kept[1:], len(stream)))
+        ),
+        None,
+    )
+
+
+def _last_breakpoint(items: Sequence[object]) -> object | None:
+    breakpoints: Final = tuple(item.cache_control for item in items if isinstance(item, _DroppedBreakpoint))
+    return breakpoints[-1] if breakpoints else None
+
+
+def _with_cache_control(item: object, cache_control: object | None) -> object:
+    block: Final = as_str_mapping(item)
+    if cache_control is None or block is None or "cache_control" in block:
+        return item
+    return {**block, "cache_control": cache_control}
 
 
 def _content_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
@@ -75,9 +101,10 @@ def _content_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
     )
     if block is None or nested is None:
         return _document_blocks(item, drop_citations)
-    return (
-        {**block, "content": list(chain.from_iterable(_document_blocks(inner, drop_citations) for inner in nested))},
+    blocks, orphan = _with_breakpoints(
+        tuple(chain.from_iterable(_document_blocks(inner, drop_citations) for inner in nested))
     )
+    return (_with_cache_control({**block, "content": list(blocks)}, orphan),)
 
 
 def _document_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
@@ -94,8 +121,8 @@ def _document_blocks(item: object, drop_citations: bool) -> tuple[object, ...]:
         if isinstance(value := block.get(key), str) and value
     )
     text: Final = "\n\n".join(part for part in (*metadata, data) if part)
-    if not text:
-        return ()
+    if not text.strip():
+        return (_DroppedBreakpoint(block["cache_control"]),) if "cache_control" in block else ()
     return (
         {
             "type": "text",
@@ -123,9 +150,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         model: str,
         messages: Sequence[Mapping[str, object]],
-        anthropic_messages_optional_request_params: Mapping[str, object],
+        anthropic_messages_optional_request_params: dict[str, object],  # mutable-ok: base pops max_tokens in place
         litellm_params: GenericLiteLLMParams,
-        headers: Mapping[str, str],
+        headers: dict[str, str],  # mutable-ok: the base transformer takes the caller's headers dict
     ) -> dict[str, object]:  # mutable-ok: the base request transformer requires a JSON dict
         documents: Final = tuple(chain.from_iterable(_documents(message.get("content")) for message in messages))
         has_text_documents: Final = any(_text_document_data(document) is not None for document in documents)
@@ -151,9 +178,9 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             super().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # the base transformer uses legacy untyped containers
                 model=model,
                 messages=normalized,
-                anthropic_messages_optional_request_params=dict(anthropic_messages_optional_request_params),
+                anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
                 litellm_params=litellm_params,
-                headers=dict(headers),
+                headers=headers,
             )
         )
 

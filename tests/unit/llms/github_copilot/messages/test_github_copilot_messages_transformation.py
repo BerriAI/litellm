@@ -97,7 +97,7 @@ def test_other_document_sources_keep_the_existing_wire_format(source: dict[str, 
     assert result["messages"] == messages
 
 
-@pytest.mark.parametrize("text", ["<html>Keep <script> and whitespace.\n</html>", "  \n  "])
+@pytest.mark.parametrize("text", ["<html>Keep <script> and whitespace.\n</html>", "  \n  indented\n  "])
 def test_plain_document_text_is_not_parsed_or_base64_encoded(text: str) -> None:
     messages: Final = [{"role": "user", "content": [{"type": "document", "source": {"type": "text", "data": text}}]}]
     result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
@@ -111,19 +111,21 @@ def test_plain_document_text_is_not_parsed_or_base64_encoded(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("document_fields", "expected"),
+    ("data", "document_fields", "expected"),
     [
-        ({}, [{"type": "text", "text": "What is in this file?"}]),
+        ("", {}, [{"type": "text", "text": "What is in this file?"}]),
+        (" \n\t ", {}, [{"type": "text", "text": "What is in this file?"}]),
         (
+            "",
             {"title": "empty.txt"},
             [{"type": "text", "text": "Title: empty.txt"}, {"type": "text", "text": "What is in this file?"}],
         ),
     ],
 )
 def test_empty_text_document_never_becomes_an_empty_text_block(
-    document_fields: dict[str, object], expected: list[dict[str, object]]
+    data: str, document_fields: dict[str, object], expected: list[dict[str, object]]
 ) -> None:
-    document: Final = {"type": "document", "source": {"type": "text", "data": ""}, **document_fields}
+    document: Final = {"type": "document", "source": {"type": "text", "data": data}, **document_fields}
     messages: Final = [{"role": "user", "content": [document, {"type": "text", "text": "What is in this file?"}]}]
     result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
         model="claude-sonnet-5.5",
@@ -154,6 +156,60 @@ def test_turn_of_only_empty_text_documents_keeps_non_empty_content(cache_fields:
         {"role": "user", "content": [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, **cache_fields}]},
         *messages[1:],
     ]
+
+
+_CACHED: Final = {"cache_control": {"type": "ephemeral"}}
+_CACHED_EMPTY_DOCUMENT: Final = {"type": "document", "source": {"type": "text", "data": ""}, **_CACHED}
+_QUESTION: Final = {"type": "text", "text": "What is in this file?"}
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ([_QUESTION, _CACHED_EMPTY_DOCUMENT], [{**_QUESTION, **_CACHED}]),
+        ([_CACHED_EMPTY_DOCUMENT, _QUESTION], [{**_QUESTION, **_CACHED}]),
+        (
+            [{**_QUESTION, "cache_control": {"type": "ephemeral", "ttl": "1h"}}, _CACHED_EMPTY_DOCUMENT],
+            [{**_QUESTION, "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        ),
+        (
+            [{"type": "tool_result", "tool_use_id": "tool_1", "content": [_CACHED_EMPTY_DOCUMENT]}, _QUESTION],
+            [{"type": "tool_result", "tool_use_id": "tool_1", "content": [], **_CACHED}, _QUESTION],
+        ),
+    ],
+)
+def test_dropped_empty_document_keeps_its_cache_breakpoint(
+    content: list[dict[str, object]], expected: list[dict[str, object]]
+) -> None:
+    result: Final = GithubCopilotAnthropicMessagesConfig().transform_anthropic_messages_request(
+        model="claude-sonnet-5.5",
+        messages=[{"role": "user", "content": content}],
+        anthropic_messages_optional_request_params={"max_tokens": 128},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert result["messages"] == [{"role": "user", "content": expected}]
+
+
+@pytest.mark.parametrize(
+    "content",
+    ["Hello", [{"type": "document", "source": {"type": "text", "data": "Source"}}, _QUESTION]],
+)
+def test_request_params_are_left_for_the_shared_handler_as_the_anthropic_transformer_leaves_them(
+    content: object,
+) -> None:
+    def params_after(config: AnthropicMessagesConfig) -> dict[str, object]:
+        params: Final[dict[str, object]] = {"max_tokens": 32000, "stream": True}
+        config.transform_anthropic_messages_request(
+            model="claude-sonnet-5.5",
+            messages=[{"role": "user", "content": content}],
+            anthropic_messages_optional_request_params=params,
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        return params
+
+    assert params_after(GithubCopilotAnthropicMessagesConfig()) == params_after(AnthropicMessagesConfig())
 
 
 def test_anthropic_keeps_text_documents_and_their_citations() -> None:
