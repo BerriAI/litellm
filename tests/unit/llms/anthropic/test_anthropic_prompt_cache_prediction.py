@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Final
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -48,6 +49,7 @@ _MODEL: Final = "claude-sonnet-5"
 _KEY: Final = "test-provider-key"
 _CALLER: Final = "test-caller-hash"
 _DEPLOYMENT: Final = "test-native-deployment"
+_GOOGLE_METADATA_IDENTITY: Final = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
 
 
 def _body() -> dict[str, JsonValue]:
@@ -319,6 +321,41 @@ async def test_an_observation_under_the_wire_key_warms_a_deployment_with_an_admi
     await _observe(cache, {"x-api-key": _KEY, "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION})
 
     assert await routing.is_warm(deployment, _CALLER, cache, now=1010.0) is True
+
+
+@pytest.mark.asyncio
+async def test_warmth_check_never_fetches_a_google_id_token_and_reads_one_a_request_fetched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-native",
+                "litellm_params": {
+                    "model": f"anthropic/{_MODEL}",
+                    "api_key": f"oidc/google/https://warmth.example.test/{uuid4().hex}",
+                },
+                "model_info": {"id": _DEPLOYMENT},
+            }
+        ]
+    )
+    deployment: Final = router.get_deployment(_DEPLOYMENT)
+    assert deployment is not None
+    routing: Final = AnthropicCacheRouting.from_body({**_body(), "max_tokens": 16})
+    assert routing is not None
+    cache: Final = DualCache()
+    await _observe(cache, {"x-api-key": _KEY, "anthropic-version": DEFAULT_ANTHROPIC_API_VERSION})
+
+    with respx.mock() as upstream:
+        metadata: Final = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(return_value=httpx.Response(200, text=_KEY))
+        before_any_request: Final = await routing.is_warm(deployment, _CALLER, cache, now=1010.0)
+        fetches_before_any_request: Final = metadata.call_count
+        _ = await aresolve_prediction_target(deployment.litellm_params)
+        after_a_request: Final = await routing.is_warm(deployment, _CALLER, cache, now=1010.0)
+
+    assert (before_any_request, fetches_before_any_request) == (False, 0)
+    assert after_a_request is True and metadata.call_count == 1
 
 
 @pytest.mark.parametrize("inline_key", [None, _KEY])

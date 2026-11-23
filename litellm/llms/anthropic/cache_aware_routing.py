@@ -23,6 +23,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     lookup,
     parse_prompt,
     resolve_prediction_target,
+    resolve_prediction_target_without_fetch,
     supported_prediction_headers,
 )
 from litellm.llms.anthropic.prompt_cache_pricing import price_cache_tokens
@@ -103,7 +104,7 @@ class AnthropicCacheRouting:
         return isinstance(resolve_prediction_target(deployment.litellm_params), NativePredictionTarget)
 
     async def is_warm(self, deployment: Deployment, caller: str, cache: DualCache, now: float) -> bool:
-        target: Final = await aresolve_prediction_target(deployment.litellm_params)
+        target: Final = resolve_prediction_target_without_fetch(deployment.litellm_params)
         if not isinstance(target, NativePredictionTarget):
             return False
         scope: Final = cache_scope(caller, deployment.model_info.id or "", target.api_key, target.model)

@@ -881,6 +881,24 @@ async def aresolve_api_key_secret_reference(
     )
 
 
+def resolve_api_key_secret_reference_without_fetch(
+    api_key: str | None, model: object, llm_provider: object, upstream: Mapping[str, object]
+) -> str | None:
+    if not isinstance(api_key, AdminApiKeySecretReference):
+        return api_key
+    return _secret_behind_api_key_reference(
+        api_key, model, llm_provider, upstream, resolve_oidc=_resolved_without_a_google_fetch
+    )
+
+
+def _resolved_without_a_google_fetch(reference: str) -> str | UnresolvableSecretReference:
+    if not reference.startswith(GOOGLE_OIDC_SECRET_PREFIX):
+        return resolve_api_key_oidc_reference(reference)
+    return cached_oidc_token(reference) or UnresolvableSecretReference(
+        kind=oidc_reference_kind(reference), reason="no Google ID token has been fetched yet", retryable=True
+    )
+
+
 _OIDC_TOKEN_FETCH_EXECUTOR: Final = ThreadPoolExecutor(thread_name_prefix="litellm-oidc-token-fetch")
 _PASS_THROUGH_CALL_TYPES: Final = frozenset(
     {CallTypes.allm_passthrough_route.value, CallTypes.llm_passthrough_route.value}

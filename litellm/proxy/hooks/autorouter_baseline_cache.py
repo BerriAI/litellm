@@ -29,6 +29,7 @@ from litellm.llms.anthropic.prompt_cache_prediction import (
     count_prompt_tokens,
     parse_cache_plan,
     prepare_native_baseline_body,
+    resolve_baseline_prediction_target,
     supported_baseline_recipient,
     supported_prediction_headers,
 )
@@ -84,7 +85,7 @@ class CapturedBaselineObservation(LiteLLMBaseModel):
 class BaselineCacheContext:
     collector: AutoRouterBaselineCache
     capture: CapturedBaselineObservation
-    target: NativePredictionTarget | UnsupportedPredictionTarget
+    baseline_params: LiteLLM_Params
     baseline_deployment_id: str
     baseline_body: Mapping[str, JsonValue] | None = field(default=None, repr=False)
     selected_body_digest: str | None = field(default=None, repr=False)
@@ -161,7 +162,7 @@ class AutoRouterBaselineCache(CustomLogger):
             deployment: Final = router.registry().deployment(request.route.baseline_deployment_id) if router else None
             if deployment is None:
                 return
-            target: Final = await _baseline_target(deployment.litellm_params)
+            target: Final = resolve_baseline_prediction_target(deployment.litellm_params)
             prices: Final = _PRICES.validate_python(
                 _effective_model_info(router, request.route.baseline_deployment_id, request.route.baseline_model)
             )
@@ -214,7 +215,7 @@ class AutoRouterBaselineCache(CustomLogger):
             logging_obj.baseline_cache_context = BaselineCacheContext(
                 self,
                 capture,
-                target,
+                deployment.litellm_params,
                 request.route.baseline_deployment_id,
                 prepare_native_baseline_body(projected, target.model)
                 if projected is not None and isinstance(target, NativePredictionTarget)
@@ -350,7 +351,7 @@ async def _capture_native(
                 }
             )
         )
-    target: Final = context.target
+    target: Final = await _baseline_target(context.baseline_params)
     if isinstance(target, UnsupportedPredictionTarget) or not supported_baseline_recipient(target, wire):
         return capture.with_observation(
             original.model_copy(

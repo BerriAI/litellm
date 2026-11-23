@@ -316,10 +316,16 @@ async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metada
     monkeypatch.delenv("GCE_METADATA_HOST", raising=False)
     audience: Final = f"https://baseline.example.test/{uuid4().hex}"
     released: Final = threading.Event()
+    sent: Final[list[str]] = []
 
     def identity(request: httpx.Request) -> httpx.Response:
+        sent.append("google")
         _ = released.wait(timeout=5)
         return httpx.Response(200, text="test-selected")
+
+    def messages(request: httpx.Request) -> httpx.Response:
+        sent.append("anthropic")
+        return _upstream(request)
 
     async def count(model: str, api_key: str, body: Mapping[str, JsonValue]) -> int | None:
         return await _count(model, api_key, body) if api_key == "test-selected" else None
@@ -330,7 +336,7 @@ async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metada
         )
     )
     with respx.mock() as upstream:
-        _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=_upstream)
+        _ = upstream.post("https://api.anthropic.com/v1/messages").mock(side_effect=messages)
         _ = upstream.get(_GOOGLE_METADATA_IDENTITY).mock(side_effect=identity)
         while_fetching: Final = _Rig(monkeypatch, count=count, models=models)
         await _call(while_fetching.router, while_fetching.logging())
@@ -339,6 +345,7 @@ async def test_baseline_lookup_does_not_hold_the_request_on_a_slow_google_metada
         after_fetch: Final = _Rig(monkeypatch, count=count, models=models)
         await _call(after_fetch.router, after_fetch.logging())
         counted: Final = _observation(await after_fetch.capture.payload())
+    assert sent == ["anthropic", "google", "anthropic"]
     assert uncounted.observation.plan is None and uncounted.observation.reason == "provider_credentials_timeout"
     assert counted.observation.plan is not None and counted.observation.plan.total_tokens == 6000
 

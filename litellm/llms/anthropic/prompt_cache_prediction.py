@@ -37,7 +37,11 @@ from litellm.router_strategy.auto_router.baseline_request import (
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router import GenericLiteLLMParams, LiteLLM_Params
 from litellm.types.utils import API_KEY_UPSTREAM_PARAMS, AdminApiKeySecretReference, ModelResponse
-from litellm.utils import aresolve_api_key_secret_reference, supports_thinking_cache_preservation
+from litellm.utils import (
+    aresolve_api_key_secret_reference,
+    resolve_api_key_secret_reference_without_fetch,
+    supports_thinking_cache_preservation,
+)
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _HEADERS: Final = TypeAdapter(dict[str, str])
@@ -653,22 +657,46 @@ async def aresolve_baseline_prediction_target(
     return await _with_secret_behind_api_key_reference(params, resolve_baseline_prediction_target(params))
 
 
+def resolve_prediction_target_without_fetch(
+    params: LiteLLM_Params,
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
+    target: Final = resolve_prediction_target(params)
+    if isinstance(target, UnsupportedPredictionTarget) or not isinstance(params.api_key, AdminApiKeySecretReference):
+        return target
+    try:
+        return _with_provider_secret(
+            target,
+            resolve_api_key_secret_reference_without_fetch(
+                params.api_key, model=params.model, llm_provider="anthropic", upstream=_secret_upstream(params)
+            ),
+        )
+    except (AuthenticationError, ServiceUnavailableError):
+        return UnsupportedPredictionTarget("unsupported_provider_credentials")
+
+
 async def _with_secret_behind_api_key_reference(
     params: LiteLLM_Params, target: NativePredictionTarget | UnsupportedPredictionTarget
 ) -> NativePredictionTarget | UnsupportedPredictionTarget:
     if isinstance(target, UnsupportedPredictionTarget) or not isinstance(params.api_key, AdminApiKeySecretReference):
         return target
     try:
-        secret: Final = await aresolve_api_key_secret_reference(
-            params.api_key,
-            model=params.model,
-            llm_provider="anthropic",
-            upstream=MappingProxyType(
-                {"model": params.model, **params.model_dump(include=set(API_KEY_UPSTREAM_PARAMS))}
+        return _with_provider_secret(
+            target,
+            await aresolve_api_key_secret_reference(
+                params.api_key, model=params.model, llm_provider="anthropic", upstream=_secret_upstream(params)
             ),
         )
     except (AuthenticationError, ServiceUnavailableError):
         return UnsupportedPredictionTarget("unsupported_provider_credentials")
+
+
+def _secret_upstream(params: LiteLLM_Params) -> Mapping[str, object]:
+    return MappingProxyType({"model": params.model, **params.model_dump(include=set(API_KEY_UPSTREAM_PARAMS))})
+
+
+def _with_provider_secret(
+    target: NativePredictionTarget, secret: str | None
+) -> NativePredictionTarget | UnsupportedPredictionTarget:
     if secret is None or not _supported_provider_key(secret):
         return UnsupportedPredictionTarget("unsupported_provider_credentials")
     return replace(target, api_key=secret)
