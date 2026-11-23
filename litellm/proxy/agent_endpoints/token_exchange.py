@@ -1,10 +1,14 @@
 import base64
 from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final, NoReturn
 
-from pydantic import TypeAdapter, ValidationError
+import httpx
+from pydantic import SecretStr, TypeAdapter, ValidationError
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.mcp_server.faults.traversal import iter_exception_tree
 from litellm.proxy.mcp_server.outbound_credentials.adapter import raise_public, to_subject
 from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok
 from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider import build_token_exchanger
@@ -30,6 +34,46 @@ _REQUIRED_FIELDS: Final = ("token_exchange_endpoint", "client_id", "client_secre
 _BLOCK: Final = TypeAdapter(Mapping[str, object])
 _ITEMS: Final = TypeAdapter(tuple[object, ...])
 _EXCHANGER: Final = build_token_exchanger()
+_REJECTIONS: Final = MappingProxyType(
+    {
+        401: "unauthorized: agent '{}' rejected the exchanged token",
+        403: "forbidden: agent '{}' refused the request made with the exchanged token",
+    }
+)
+
+
+class ExchangedTokenRejected(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code: Final = status_code
+        self.message: Final = message
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangedAgentToken:
+    header: Mapping[str, str] = field(repr=False)
+    subject_token: SecretStr
+    server: ServerSpec
+    config: TokenExchangeConfig
+    tenant_id: str
+    exchanger: TokenExchanger = field(repr=False)
+
+    async def rejection(self, error: BaseException) -> ExchangedTokenRejected | None:
+        status: Final = _rejected_status(error)
+        if status is None:
+            return None
+        if status == 401:
+            await self.exchanger.invalidate(
+                self.subject_token.get_secret_value(), self.server, self.config, tenant_id=self.tenant_id
+            )
+        return ExchangedTokenRejected(status, _REJECTIONS[status].format(self.server.server_id))
+
+
+def _rejected_status(error: BaseException) -> int | None:
+    statuses: Final = (
+        link.response.status_code for link in iter_exception_tree(error) if isinstance(link, httpx.HTTPStatusError)
+    )
+    return next((status for status in statuses if status in _REJECTIONS), None)
 
 
 def has_token_exchange(litellm_params: Mapping[str, object]) -> bool:
@@ -97,7 +141,7 @@ async def exchange_agent_token(
     request_headers: Mapping[str, str],
     user_api_key_auth: UserAPIKeyAuth,
     exchanger: TokenExchanger = _EXCHANGER,
-) -> Mapping[str, str]:
+) -> ExchangedAgentToken:
     from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
 
     config: Final = _token_exchange_config(litellm_params)
@@ -118,6 +162,13 @@ async def exchange_agent_token(
     match await exchanger.exchange(subject_token, server, config, tenant_id=tenant_id):
         case Ok(token):
             name, value = config.header(token.access_token)
-            return {name: value}
+            return ExchangedAgentToken(
+                header=MappingProxyType({name: value}),
+                subject_token=SecretStr(subject_token),
+                server=server,
+                config=config,
+                tenant_id=tenant_id,
+                exchanger=exchanger,
+            )
         case Error(err):
             _raise_challenge(err)

@@ -58,7 +58,7 @@ async def _exchange(
     caller: UserAPIKeyAuth | None = None,
     exchanger: OboTokenExchanger | None = None,
 ) -> Mapping[str, str]:
-    return await exchange_agent_token(
+    exchanged = await exchange_agent_token(
         {"token_exchange": dict(block), "model": "agent"},
         agent_id,
         "https://agent.example.com",
@@ -66,6 +66,7 @@ async def _exchange(
         caller or _jwt_caller(),
         exchanger or OboTokenExchanger(idp),
     )
+    return exchanged.header
 
 
 async def test_the_callers_token_is_exchanged_for_the_agent_bearer_with_env_expanded_secrets(

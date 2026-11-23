@@ -14,7 +14,14 @@ import jwt
 import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey, generate_private_key
-from integration._support.client import JSON_OBJECT, Gateway, Scenario, gateway_from_environment, object_value
+from integration._support.client import (
+    JSON_OBJECT,
+    Gateway,
+    Scenario,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.compatibility._a2a_peers import Peer, legacy_send, peer, sse_frames
@@ -333,3 +340,80 @@ def test_an_agent_without_token_exchange_keeps_its_static_authorization(rig: _Ri
         _assert_answered(_send(rig, identity, "obo-static", {"Authorization": f"Bearer {caller}"}), "obo-static")
         assert _agent_authorizations(agent) == ("Bearer static-admin-token",)
         assert rig.exchanges() == ()
+
+
+def _task_call(rig: _Rig, identity: str, method: str, headers: Mapping[str, str]) -> httpx.Response:
+    return rig.proxy.client.post(
+        f"/a2a/{identity}",
+        json={"jsonrpc": "2.0", "id": method, "method": method, "params": {"id": "obo-task"}},
+        headers=dict(headers),
+    )
+
+
+def test_tasks_methods_reach_an_obo_agent_with_only_the_exchanged_bearer(rig: _Rig) -> None:
+    with peer("obotasks", "langgraph") as agent, rig.proxy.scenario() as scenario:
+        identity: Final = _agent(
+            rig,
+            scenario,
+            agent,
+            {"token_exchange": _block(rig, audience="api://agent-tasks")},
+            static_headers={"Authorization": "Bearer static-admin-token"},
+        )
+        caller: Final = rig.caller()
+        key: Final = scenario.key()
+        rig.exchanges()
+        for method in ("tasks/get", "tasks/cancel"):
+            refused = _task_call(rig, identity, method, {"Authorization": f"Bearer {key}"})
+            _assert_refused(refused, 401, key)
+        assert rig.exchanges() == ()
+        assert _agent_authorizations(agent) == ()
+        for method in ("tasks/get", "tasks/cancel"):
+            answered = _task_call(rig, identity, method, {"Authorization": f"Bearer {caller}"})
+            assert answered.status_code == 200, answered.text
+            result = object_value(JSON_OBJECT.validate_json(answered.content)["result"])
+            assert result["id"] == agent.marker + "-task", answered.text
+        assert [form["subject_token"] for form in rig.exchanges()] == [caller]
+        expected: Final = f"Bearer {_exchanged(caller, 'api://agent-tasks')}"
+        assert _agent_authorizations(agent) == (expected, expected)
+
+
+def _assert_rejected(response: httpx.Response, status: int, error_type: str, prefix: str, *secrets: str) -> None:
+    _assert_refused(response, status, *secrets)
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    assert string_value(error["message"]).startswith(prefix), response.text
+    assert object_value(error["data"]) == {"type": error_type, "param": None, "code": str(status)}, response.text
+
+
+def test_an_agent_rejecting_the_exchanged_token_answers_the_caller_with_its_status_and_re_exchanges(
+    rig: _Rig,
+) -> None:
+    with peer("oborejected", "langgraph") as agent, rig.proxy.scenario() as scenario:
+        identity: Final = _agent(rig, scenario, agent, {"token_exchange": _block(rig)})
+        caller: Final = rig.caller()
+        headers: Final = {"Authorization": f"Bearer {caller}"}
+        exchanged: Final = _exchanged(caller, "")
+        rig.exchanges()
+        agent.post_status = 401
+        rejected: Final = _send(rig, identity, "obo-401", headers)
+        _assert_rejected(rejected, 401, "authentication_error", "unauthorized: ", caller, exchanged)
+        agent.post_status = 200
+        _assert_answered(_send(rig, identity, "obo-after-401", headers), "obo-after-401")
+        assert [form["subject_token"] for form in rig.exchanges()] == [caller, caller]
+
+        agent.post_status = 401
+        streamed: Final = _send(rig, identity, "obo-stream-401", headers, "message/stream")
+        frames: Final = sse_frames(streamed.text)
+        assert len(frames) == 1, streamed.text
+        stream_error: Final = frames[0]["error"]
+        assert isinstance(stream_error, dict) and stream_error["code"] == -32000, streamed.text
+        assert stream_error["data"] == {"type": "authentication_error", "param": None, "code": "401"}, streamed.text
+        assert caller not in streamed.text and exchanged not in streamed.text and _CLIENT_SECRET not in streamed.text
+        rejected_task: Final = _task_call(rig, identity, "tasks/get", headers)
+        _assert_rejected(rejected_task, 401, "authentication_error", "unauthorized: ", caller, exchanged)
+        assert [form["subject_token"] for form in rig.exchanges()] == [caller]
+
+        agent.post_status = 403
+        forbidden: Final = _send(rig, identity, "obo-403", headers)
+        _assert_rejected(forbidden, 403, "permission_error", "forbidden: ", caller, exchanged)
+        assert len(rig.exchanges()) == 1
+        assert _agent_authorizations(agent) == (f"Bearer {exchanged}",) * 5
