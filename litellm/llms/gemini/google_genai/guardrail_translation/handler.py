@@ -57,8 +57,8 @@ def _write_part_text(part: object, text: str) -> None:
 
 
 def _content_text_parts(content: object) -> tuple[object, ...]:
-    parts: Final = _object_sequence(_field(content, "parts"))
-    if parts is None:
+    parts: Final = _field(content, "parts")
+    if not isinstance(parts, (list, tuple)):
         return ()
     return tuple(part for part in parts if _part_text(part) is not None)
 
@@ -79,12 +79,8 @@ def _system_instruction(data: Mapping[str, object]) -> object | None:
 
 def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
     contents: Final = data.get("contents")
-    content_list: Final[tuple[object, ...]] = (
-        (contents,)
-        if isinstance(contents, dict)
-        else _OBJECT_SEQUENCE.validate_python(contents)
-        if isinstance(contents, list)
-        else ()
+    content_list: Final = (
+        (contents,) if isinstance(contents, dict) else tuple(contents) if isinstance(contents, list) else ()
     )
     return (
         *_content_text_parts(_system_instruction(data)),
@@ -93,8 +89,8 @@ def _request_text_parts(data: Mapping[str, object]) -> tuple[object, ...]:
 
 
 def _response_text_parts(response: object) -> tuple[object, ...]:
-    candidates: Final = _object_sequence(_field(response, "candidates"))
-    if candidates is None:
+    candidates: Final = _field(response, "candidates")
+    if not isinstance(candidates, (list, tuple)):
         return ()
     return tuple(part for candidate in candidates for part in _content_text_parts(_field(candidate, "content")))
 
@@ -318,7 +314,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         context_key: str,
         context_value: object,
-    ) -> dict[str, object]:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
+    ) -> dict:  # mutable-ok: CustomGuardrail.apply_guardrail requires a plain dict request payload
         base: Final = request_data if request_data is not None else _EMPTY_REQUEST_DATA
         user_metadata: Final = self.transform_user_api_key_dict_to_metadata(user_api_key_dict)
         context_pairs: Final = ((context_key, context_value),) if context_key not in base else ()

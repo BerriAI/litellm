@@ -30,8 +30,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
-from typing_extensions import NotRequired, ReadOnly, TypedDict
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -50,17 +49,6 @@ _TOKEN_EXPIRY_BUFFER_SECONDS: Final = 60
 _DEFAULT_TTL_SECONDS: Final = 3600
 _OAUTH_BLOCK: Final = TypeAdapter(Mapping[str, object])
 _TOKEN_RESPONSE_BODY: Final = TypeAdapter(object)
-
-
-@with_config(ConfigDict(extra="allow", strict=True))
-class _TokenResponse(TypedDict):
-    """The fields of the OIDC token endpoint's success body that the token fetch reads."""
-
-    access_token: NotRequired[ReadOnly[str | None]]
-    expires_in: NotRequired[ReadOnly[object]]
-
-
-_TOKEN_RESPONSE: Final = TypeAdapter(_TokenResponse)
 
 
 def _resolve_secret(value: object) -> str | None:
@@ -294,14 +282,13 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
                 f"Databricks App OAuth token response returned non-object JSON (got {type(body).__name__})"
             )
 
-        token_response: Final = _TOKEN_RESPONSE.validate_python(body)
-        access_token: Final = token_response.get("access_token")
+        access_token: Final = body.get("access_token")
         if not access_token:
             raise ValueError("Databricks App OAuth token response missing 'access_token'")
 
-        raw_expires_in: Final = token_response.get("expires_in")
+        raw_expires_in: Final = body.get("expires_in")
         try:
-            expires_in = int(raw_expires_in) if isinstance(raw_expires_in, (int, float, str)) else _DEFAULT_TTL_SECONDS
+            expires_in = int(raw_expires_in) if raw_expires_in is not None else _DEFAULT_TTL_SECONDS
         except (TypeError, ValueError):
             expires_in = _DEFAULT_TTL_SECONDS
 

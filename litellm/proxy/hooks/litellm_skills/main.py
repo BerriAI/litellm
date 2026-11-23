@@ -36,16 +36,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import (
-    as_object_list,
-    has_attributes,
-    iter_items,
-    length_of,
-    require_attributes,
-    require_get,
-    set_item,
-    sum_of,
-)
+from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items, length_of, require_attributes
 from litellm.llms.litellm_proxy.skills.constants import LITELLM_SKILL_ID_PREFIX
 from litellm.llms.litellm_proxy.skills.prompt_injection import (
     SkillPromptInjectionHandler,
@@ -107,10 +98,6 @@ class _HasGet(Protocol):
     def get(self, key: str, default: str, /) -> object: ...
 
 
-class _HasAppend(Protocol):
-    def append(self, item: object, /) -> object: ...
-
-
 class _ExtraFields(Protocol):
     def __setitem__(self, key: str, value: object, /) -> None: ...
 
@@ -137,7 +124,6 @@ class _GeneratedFileEntry(TypedDict):
 
 _TOOL_CALL_ARGS_ADAPTER: Final = TypeAdapter(_CodeExecutionToolArgs)
 _EXEC_RESULT_FILES_ADAPTER: Final = TypeAdapter(Sequence[_GeneratedFileEntry])
-_SKILL_FILES_BY_ID_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bytes]], config=ConfigDict(strict=True))
 
 
 def _first_choice(response: _ChatCompletion) -> _ChatChoice:
@@ -201,9 +187,9 @@ class SkillsInjectionHook(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict[str, object],
+        data: dict,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict[str, object] | None:
+    ) -> Exception | str | dict | None:
         """
         Process skills from container.skills before the LLM call.
 
@@ -217,14 +203,12 @@ class SkillsInjectionHook(CustomLogger):
         if call_type not in ["completion", "acompletion", "anthropic_messages"]:
             return data
 
-        container_value: Final = data.get("container")
-        container: Final = _dict_or_none(container_value)
-        if not container_value or container is None:
+        container: Final = data.get("container")
+        if not container or not isinstance(container, dict):
             return data
 
-        skills_value: Final = container.get("skills")
-        skills: Final = as_object_list(skills_value)
-        if not skills_value or skills is None:
+        skills: Final = container.get("skills")
+        if not skills or not isinstance(skills, list):
             return data
 
         verbose_proxy_logger.debug("SkillsInjectionHook: Processing %s skills", len(skills))
@@ -267,10 +251,10 @@ class SkillsInjectionHook(CustomLogger):
 
     def _process_for_messages_api(
         self,
-        data: dict[str, object],
+        data: dict,
         litellm_skills: list[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Process skills for messages API (Anthropic format tools).
 
@@ -290,9 +274,7 @@ class SkillsInjectionHook(CustomLogger):
 
         for skill in litellm_skills:
             # Convert skill to Anthropic-style tool
-            require_attributes(tools, _HasAppend, "append").append(
-                self.prompt_handler.convert_skill_to_anthropic_tool(skill)
-            )
+            tools.append(self.prompt_handler.convert_skill_to_anthropic_tool(skill))
 
             # Extract skill content from file if available
             content = self.prompt_handler.extract_skill_content(skill)
@@ -320,12 +302,12 @@ class SkillsInjectionHook(CustomLogger):
         # Add litellm_code_execution tool if we have skill files
         if all_skill_files:
             code_exec_tool: Final = get_litellm_code_execution_tool_anthropic()
-            data["tools"] = sum_of(data.get("tools", []), [code_exec_tool])
+            data["tools"] = data.get("tools", []) + [code_exec_tool]
 
             # Store skill files in litellm_metadata for automatic code execution
             data["litellm_metadata"] = data.get("litellm_metadata", {})
-            set_item(data["litellm_metadata"], "_skill_files", all_skill_files)
-            set_item(data["litellm_metadata"], "_litellm_code_execution_enabled", True)
+            data["litellm_metadata"]["_skill_files"] = all_skill_files
+            data["litellm_metadata"]["_litellm_code_execution_enabled"] = True
 
         # Remove container (not supported by underlying providers)
         data.pop("container", None)
@@ -341,9 +323,9 @@ class SkillsInjectionHook(CustomLogger):
 
     def _process_non_anthropic_model(
         self,
-        data: dict[str, object],
+        data: dict,
         litellm_skills: list[LiteLLM_SkillsTable],
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
 
@@ -359,7 +341,7 @@ class SkillsInjectionHook(CustomLogger):
 
         for skill in litellm_skills:
             # Convert skill to OpenAI-style tool
-            require_attributes(tools, _HasAppend, "append").append(self.prompt_handler.convert_skill_to_tool(skill))
+            tools.append(self.prompt_handler.convert_skill_to_tool(skill))
 
             # Extract skill content from file if available
             content = self.prompt_handler.extract_skill_content(skill)
@@ -388,13 +370,13 @@ class SkillsInjectionHook(CustomLogger):
                 get_litellm_code_execution_tool,
             )
 
-            data["tools"] = sum_of(data.get("tools", []), [get_litellm_code_execution_tool()])
+            data["tools"] = data.get("tools", []) + [get_litellm_code_execution_tool()]
 
             # Store skill files in litellm_metadata for automatic code execution
             # Using litellm_metadata instead of metadata to avoid conflicts with user metadata
             data["litellm_metadata"] = data.get("litellm_metadata", {})
-            set_item(data["litellm_metadata"], "_skill_files", all_skill_files)
-            set_item(data["litellm_metadata"], "_litellm_code_execution_enabled", True)
+            data["litellm_metadata"]["_skill_files"] = all_skill_files
+            data["litellm_metadata"]["_litellm_code_execution_enabled"] = True
 
         # Remove container for non-Anthropic (they don't support it)
         data.pop("container", None)
@@ -456,7 +438,7 @@ class SkillsInjectionHook(CustomLogger):
 
     async def async_post_call_success_deployment_hook(
         self,
-        request_data: dict[str, object],
+        request_data: dict,
         response: LLMResponseTypes,
         call_type: CallTypes | None,
     ) -> LLMResponseTypes | None:
@@ -478,19 +460,17 @@ class SkillsInjectionHook(CustomLogger):
         )
 
         # Check if code execution is enabled for this request
-        litellm_metadata: Final[object] = request_data.get("litellm_metadata") or {}
-        metadata: Final[object] = request_data.get("metadata") or {}
+        litellm_metadata: Final = request_data.get("litellm_metadata") or {}
+        metadata: Final = request_data.get("metadata") or {}
 
-        code_exec_enabled: Final = require_get(litellm_metadata).get("_litellm_code_execution_enabled") or require_get(
-            metadata
-        ).get("_litellm_code_execution_enabled")
+        code_exec_enabled: Final = litellm_metadata.get("_litellm_code_execution_enabled") or metadata.get(
+            "_litellm_code_execution_enabled"
+        )
         if not code_exec_enabled:
             return None
 
         # Get skill files
-        skill_files_by_id: Final = _SKILL_FILES_BY_ID_ADAPTER.validate_python(
-            require_get(litellm_metadata).get("_skill_files") or require_get(metadata).get("_skill_files", {})
-        )
+        skill_files_by_id: Final = litellm_metadata.get("_skill_files") or metadata.get("_skill_files", {})
         all_skill_files: Final[dict[str, bytes]] = {}
         for files_dict in skill_files_by_id.values():
             all_skill_files.update(files_dict)
@@ -529,7 +509,7 @@ class SkillsInjectionHook(CustomLogger):
 
     def _extract_tool_calls(self, response: object) -> Sequence[Mapping[str, object]]:
         """Extract tool calls from response, handling both formats."""
-        tool_calls: Final[list[Mapping[str, object]]] = []
+        tool_calls: Final = []
 
         # Get content - handle both dict and object responses
         response_mapping: Final = _dict_or_none(response)
@@ -622,7 +602,7 @@ class SkillsInjectionHook(CustomLogger):
                 if isinstance(current_response, dict)
                 else getattr(current_response, "content", [])
             )
-            content_blocks: list[object] = []
+            content_blocks = []
             for block in raw_content or []:
                 if isinstance(block, dict):
                     content_blocks.append(block)
@@ -647,7 +627,7 @@ class SkillsInjectionHook(CustomLogger):
                 return self._attach_files_to_response(current_response, generated_files)
 
             # Process tool calls
-            tool_results: list[Mapping[str, object]] = []
+            tool_results = []
             for tc in tool_calls:
                 tool_name = tc.get("name", "")
                 tool_id = tc.get("id", "")

@@ -18,25 +18,6 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _DECODED_JSON: Final = TypeAdapter(object)
 
 
-def _cohere_rerank_request(model: str, optional_rerank_params: Mapping[str, object]) -> dict[str, object]:
-    if "query" not in optional_rerank_params:
-        raise ValueError("query is required for Cohere rerank")
-    if "documents" not in optional_rerank_params:
-        raise ValueError("documents is required for Cohere rerank")
-    rerank_request: Final = RerankRequest.model_validate(
-        {
-            "model": model,
-            "query": optional_rerank_params["query"],
-            "documents": optional_rerank_params["documents"],
-            "top_n": optional_rerank_params.get("top_n", None),
-            "rank_fields": optional_rerank_params.get("rank_fields", None),
-            "return_documents": optional_rerank_params.get("return_documents", None),
-            "max_chunks_per_doc": optional_rerank_params.get("max_chunks_per_doc", None),
-        }
-    )
-    return rerank_request.model_dump(exclude_none=True)
-
-
 class CohereRerankConfig(BaseRerankConfig):
     """
     Reference: https://docs.cohere.com/v2/reference/rerank
@@ -55,7 +36,7 @@ class CohereRerankConfig(BaseRerankConfig):
             return ensure_api_route(api_base, "v1/rerank")
         return "https://api.cohere.ai/v1/rerank"
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
+    def get_supported_cohere_rerank_params(self, model: str) -> list:
         return [
             "query",
             "documents",
@@ -79,7 +60,7 @@ class CohereRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Map Cohere rerank params
 
@@ -131,8 +112,21 @@ class CohereRerankConfig(BaseRerankConfig):
         optional_rerank_params: dict,
         headers: dict,
         litellm_params: dict | None = None,
-    ) -> dict[str, object]:
-        return _cohere_rerank_request(model, optional_rerank_params)
+    ) -> dict:
+        if "query" not in optional_rerank_params:
+            raise ValueError("query is required for Cohere rerank")
+        if "documents" not in optional_rerank_params:
+            raise ValueError("documents is required for Cohere rerank")
+        rerank_request: Final = RerankRequest(
+            model=model,
+            query=optional_rerank_params["query"],
+            documents=optional_rerank_params["documents"],
+            top_n=optional_rerank_params.get("top_n", None),
+            rank_fields=optional_rerank_params.get("rank_fields", None),
+            return_documents=optional_rerank_params.get("return_documents", None),
+            max_chunks_per_doc=optional_rerank_params.get("max_chunks_per_doc", None),
+        )
+        return rerank_request.model_dump(exclude_none=True)
 
     def transform_rerank_response(
         self,
@@ -157,5 +151,5 @@ class CohereRerankConfig(BaseRerankConfig):
 
         return RerankResponse.model_validate(_JSON_OBJECT.validate_python(raw_response_json))
 
-    def get_error_class(self, error_message: str, status_code: int, headers: object) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CohereError(message=error_message, status_code=status_code)

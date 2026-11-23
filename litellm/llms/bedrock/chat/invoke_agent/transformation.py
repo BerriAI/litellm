@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -60,7 +59,6 @@ else:
 
 
 _UNMODELED_ERROR_FRAME_STATUS: Final = 500
-_EVENT_HEADER_VALUE: Final = TypeAdapter(str, config=ConfigDict(strict=True))
 
 
 def _unmodeled_error_frame_message(response_dict: BedrockEventStreamResponseDict) -> str:
@@ -90,7 +88,7 @@ def _exception_event_error(
 
 
 class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
-    def __init__(self, **kwargs: object):
+    def __init__(self, **kwargs):
         BaseConfig.__init__(self, **kwargs)
         BaseAWSLLM.__init__(self, **kwargs)
 
@@ -106,11 +104,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
+        non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         This is a base invoke agent model mapping. For Invoke Agent - define a bedrock provider specific config that extends this class.
         """
@@ -122,7 +120,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         """
@@ -160,7 +158,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict[str, object], bytes | None]:
+    ) -> tuple[dict, bytes | None]:
         return self._sign_request(
             service_name="bedrock",
             headers=headers,
@@ -194,10 +192,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        headers: Mapping[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
         # use the last message content as the query
         query: Final[str] = convert_content_list_to_str(messages[-1])
         return {
@@ -272,10 +270,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             raise BedrockError(status_code=undecoded.status_code, message=undecoded.message, headers=undecoded.headers)
         return events
 
-    def _parse_message_from_event(self, event: "EventStreamMessage", parser) -> str | None:
+    def _parse_message_from_event(self, event, parser) -> str | None:
         """Extract message content from an AWS event, adapted from AWSEventStreamDecoder."""
         try:
-            response_dict: Final = bedrock_event_stream_response(event)
+            response_dict: Final = event.to_response_dict()
             verbose_logger.debug("Response dict: %s", response_dict)
 
             # Use the same response shape parsing as the existing decoder
@@ -297,17 +295,17 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
             verbose_logger.debug("Error parsing message from event: %s", e)
             return None
 
-    def _extract_headers_from_event(self, event: "EventStreamMessage") -> InvokeAgentEventHeaders:
+    def _extract_headers_from_event(self, event) -> InvokeAgentEventHeaders:
         """Extract headers from an AWS event for categorization."""
         try:
-            response_dict: Final = bedrock_event_stream_response(event)
+            response_dict: Final = event.to_response_dict()
             headers: Final = response_dict.get("headers", {})
 
             # Extract the event-type and content-type headers that we care about
             return InvokeAgentEventHeaders(
-                event_type=_EVENT_HEADER_VALUE.validate_python(headers.get(":event-type", "")),
-                content_type=_EVENT_HEADER_VALUE.validate_python(headers.get(":content-type", "")),
-                message_type=_EVENT_HEADER_VALUE.validate_python(headers.get(":message-type", "")),
+                event_type=headers.get(":event-type", ""),
+                content_type=headers.get(":content-type", ""),
+                message_type=headers.get(":message-type", ""),
             )
         except Exception as e:
             verbose_logger.debug("Error extracting headers: %s", e)
@@ -320,7 +318,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
 
     def _extract_response_content(self, events: InvokeAgentEventList) -> str:
         """Extract the final response content from parsed events."""
-        response_parts: Final[list[str]] = []
+        response_parts: Final = []
 
         for event in events:
             headers = event.get("headers", {})
@@ -408,7 +406,7 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         if not metadata:
             return
 
-        usage: Final[InvokeAgentUsage | dict[str, int] | None] = metadata.get("usage", {})
+        usage: Final[InvokeAgentUsage | dict | None] = metadata.get("usage", {})
         if not usage:
             return
 
@@ -467,10 +465,10 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: Mapping[str, object],
+        request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -513,11 +511,11 @@ class AmazonInvokeAgentConfig(BaseConfig, BaseAWSLLM):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, object]:
+    ) -> dict:
         return headers
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
