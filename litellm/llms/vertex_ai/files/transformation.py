@@ -1526,6 +1526,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             allow_integer_enums=False,
             allow_parameters_json_schema=False,
             allowed_openai_params=allowed_openai_param_names(openai_request_body.get("allowed_openai_params")),
+            allow_unsupported_n=True,
         )
         return vertex_params
 

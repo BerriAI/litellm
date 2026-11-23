@@ -626,7 +626,7 @@ def gemini_image_candidate_count(
     request_params: Mapping[str, object],
     drop_params: bool,
     allowed_openai_params: Sequence[str],
-    llm_provider: str | None,
+    llm_provider: str,
 ) -> Literal["forward", "drop"] | UnsupportedParamsError:
     n: Final = request_params.get("n")
     modalities: Final = request_params.get("modalities")
@@ -640,9 +640,9 @@ def gemini_image_candidate_count(
         return "drop"
     return UnsupportedParamsError(
         message=(
-            f"n={n} with modalities {modalities} is not supported for {model}. Gemini returns one candidate per "
-            "request when modalities asks for image output, so send n=1 or separate requests, or set drop_params "
-            "to drop n."
+            f"n={n} with image output in modalities is not supported for {model}. Gemini returns one candidate "
+            "per request when modalities asks for image output, so send n=1 or separate requests, or set "
+            "drop_params to drop n."
         ),
         model=model,
         llm_provider=llm_provider,
@@ -993,10 +993,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @classmethod
     def get_config(cls):
         return super().get_config()
-
-    @property
-    def custom_llm_provider(self) -> str | None:
-        return "vertex_ai"
 
     def get_json_schema_from_pydantic_object(self, response_format: type["BaseModel"] | dict | None) -> dict | None:
         """
@@ -2195,6 +2191,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         allow_parameters_json_schema: bool = True,
         *,
         allowed_openai_params: Sequence[str] = (),
+        allow_unsupported_n: bool = False,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params, model=model, route=self._route, drop_params=drop_params
@@ -2205,9 +2202,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
         candidate_params: Final = _CANDIDATE_COUNT_PARAMS.validate_python(typed_request_params)
         candidate_count: Final = gemini_image_candidate_count(
-            model, candidate_params, drop_params, allowed_openai_params, self.custom_llm_provider
+            model, candidate_params, drop_params, allowed_openai_params, self._route
         )
-        if isinstance(candidate_count, UnsupportedParamsError):
+        if isinstance(candidate_count, UnsupportedParamsError) and not allow_unsupported_n:
             raise candidate_count
         pins_fit: Final = self._schema_pins_fit(
             typed_request_params, model, allow_integer_enums, allow_parameters_json_schema
