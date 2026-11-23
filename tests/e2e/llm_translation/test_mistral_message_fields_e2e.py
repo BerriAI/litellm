@@ -18,6 +18,7 @@ from openai.types.chat import (
 )
 from proxy_client import ProxyClient
 from sdk_clients import NO_PROXY_CACHE, SdkClients
+from typing_extensions import ReadOnly
 
 pytestmark = pytest.mark.e2e
 
@@ -49,20 +50,20 @@ TOOL_SUBJECT: Final = Subject(
 
 
 class _CopilotAssistantMessage(ChatCompletionAssistantMessageParam):
-    cot_id: str
-    cot_summary: str
+    cot_id: ReadOnly[str]
+    cot_summary: ReadOnly[str]
 
 
 class _UserMessageWithMetadata(ChatCompletionUserMessageParam):
-    metadata: dict[str, str]
+    metadata: ReadOnly[dict[str, str]]
 
 
 class _NamedToolMessage(ChatCompletionToolMessageParam):
-    name: str
+    name: ReadOnly[str]
 
 
 class _PrefixAssistantMessage(ChatCompletionAssistantMessageParam):
-    prefix: bool
+    prefix: ReadOnly[bool]
 
 
 def _register(
