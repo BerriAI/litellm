@@ -102,6 +102,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     prepare_metadata_fields,
     raise_on_invalid_key_expiry_alert_days,
     raise_on_invalid_key_logging_config,
+    raise_on_invalid_key_metadata,
     raise_on_logging_credential_change,
     reset_key_spend_fn,
     update_key_fn,
@@ -112,6 +113,53 @@ from litellm.proxy.proxy_server import app, budget_windows_absent_cache_key
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.cache_invalidation import PythonCaches
 from litellm.rust_bridge._native import NativeRedisStoreError
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1, [], {}))
+def test_key_lens_policy_rejects_non_boolean_values(value: object) -> None:
+    with pytest.raises(HTTPException) as error:
+        raise_on_invalid_key_metadata({"lens_enabled": value})
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "metadata.lens_enabled must be a boolean or null"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", (True, False, None))
+async def test_lens_only_key_update_preserves_stored_integration_credentials_and_metadata(enabled: bool | None) -> None:
+    stored_metadata: Final = {
+        "cost_center": "engineering",
+        "logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_secret_key": "litellm_enc::stored-value"}}],
+        "lens_enabled": True,
+    }
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=enabled),
+        LiteLLM_VerificationToken(token="key-hash", metadata=stored_metadata),
+    )
+    assert prepared == {"metadata": {**stored_metadata, "lens_enabled": enabled}}
+
+
+@pytest.mark.asyncio
+async def test_typed_lens_update_wins_over_metadata_while_preserving_metadata_replacement_semantics() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", lens_enabled=False, metadata={"lens_enabled": True, "cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"lens_enabled": False, "cost_center": "new"}}
+
+
+@pytest.mark.asyncio
+async def test_omitting_typed_lens_update_preserves_existing_metadata_replacement_contract() -> None:
+    prepared: Final = await prepare_key_update_data(
+        UpdateKeyRequest(key="key-hash", metadata={"cost_center": "new"}),
+        LiteLLM_VerificationToken(token="key-hash", metadata={"lens_enabled": False, "unrelated": "stored"}),
+    )
+    assert prepared == {"metadata": {"cost_center": "new"}}
+
+
+@pytest.mark.parametrize("value", ("false", 0, 1))
+def test_typed_lens_key_update_rejects_coerced_values(value: object) -> None:
+    with pytest.raises(ValidationError):
+        UpdateKeyRequest.model_validate({"key": "key-hash", "lens_enabled": value})
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
