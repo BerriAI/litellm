@@ -2127,6 +2127,23 @@ class TestVertexClaudeBatch:
             _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "model": "vertex_ai/claude-zeta-9"}, [entry])
         assert exc_info.value.status_code == 400
 
+    def test_claude_responses_row_drops_service_tier_under_its_own_drop_params(self, config):
+        entry: Final = _responses_entry(
+            {
+                "model": "claude-sonnet-4-6",
+                "input": "Hello!",
+                "max_output_tokens": 50,
+                "service_tier": "priority",
+                "drop_params": True,
+            },
+            custom_id="r1",
+        )
+
+        (row,) = _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+
+        assert row["request"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+        assert "service_tier" not in row["request"]
+
     def test_claude_deployment_wins_over_a_gemini_body_model(self, config):
         entry: Final = _claude_chat_entry("r1", "hi", max_tokens=10, model="gemini-2.5-flash")
 
@@ -2276,6 +2293,24 @@ class TestVertexClaudeBatch:
         assert "stream" not in row["request"]
         assert "stream_options" not in row["request"]
 
+    def test_claude_row_extra_body_keys_litellm_builds_follow_drop_params(
+        self, config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        monkeypatch.setattr(litellm, "drop_params", False)
+        entry: Final = _claude_chat_entry(
+            "r1", "hi", max_tokens=10, extra_body={"messages": [{"role": "user", "content": "unchecked"}], "top_k": 3}
+        )
+
+        with pytest.raises(VertexAIError, match=r"line 1 .*extra_body can't set messages") as exc_info:
+            _uploaded_rows(config, CLAUDE_DEPLOYMENT, [entry])
+        (row,) = _uploaded_rows(config, {**CLAUDE_DEPLOYMENT, "drop_params": True}, [entry])
+
+        assert exc_info.value.status_code == 400
+        assert row["request"]["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        assert row["request"]["top_k"] == 3
+
     def test_claude_row_merges_extra_body_into_the_request(self, config):
         (row,) = _uploaded_rows(
             config, CLAUDE_DEPLOYMENT, [_claude_chat_entry("r1", "hi", max_tokens=10, extra_body={"top_k": 3})]
@@ -2381,6 +2416,77 @@ class TestVertexClaudeBatch:
         (row,) = (json.loads(line) for line in body.splitlines())
         assert row["custom_id"] == "a"
         assert row["response"]["body"]["choices"][0]["message"]["content"] == "first"
+
+
+def _image_edit_entry(**body: object) -> Mapping[str, object]:
+    assistant_turn: Final = {
+        "role": "assistant",
+        "content": "Here is your cat.",
+        "images": [
+            {
+                "image_url": {"url": "data:image/png;base64,Y2F0"},
+                "index": 0,
+                "type": "image_url",
+                "provider_specific_fields": {"thought_signature": "sig-cat"},
+            }
+        ],
+        "provider_specific_fields": {"thought_signatures": ["sig-text", {"bad": 1}, "sig-cat"]},
+    }
+    return {
+        "custom_id": "request-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gemini-3.1-flash-image",
+            "messages": [
+                {"role": "user", "content": "Draw a cat"},
+                assistant_turn,
+                {"role": "user", "content": "Make the chair blue"},
+            ],
+            **body,
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("entry_body", "deployment_params"),
+    [
+        pytest.param({"drop_params": True}, {}, id="line-drop-params"),
+        pytest.param({}, {"drop_params": True}, id="deployment-drop-params"),
+    ],
+)
+def test_batch_line_drops_a_malformed_history_signature_under_drop_params(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    entry_body: Mapping[str, object],
+    deployment_params: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    (row,) = _uploaded_rows(
+        config,
+        {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.1-flash-image", **deployment_params},
+        [_image_edit_entry(**entry_body)],
+    )
+
+    model_turn: Final = row["request"]["contents"][1]
+    assert [part.get("thoughtSignature") for part in model_turn["parts"]] == ["sig-text", "sig-cat"]
+
+
+def test_batch_line_with_a_malformed_history_signature_is_refused_without_drop_params(
+    config: VertexAIFilesConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(VertexAIError, match="thought_signatures") as exc_info:
+        _uploaded_rows(
+            config,
+            {"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-3.1-flash-image"},
+            [_image_edit_entry()],
+        )
+    assert exc_info.value.status_code == 400
 
 
 def _chat_entry(model: str, knobs: Mapping[str, object]) -> Mapping[str, object]:
@@ -2497,6 +2603,23 @@ def test_a_json_schema_row_with_defs_holds_no_key_bigquery_refuses() -> None:
         "response_json_schema"
     ] == {"type": "object", "properties": {"capital": city, "largest": city}, "required": ["capital", "largest"]}
 
+
+
+def test_a_json_schema_row_builds_with_a_const_beside_a_union_whose_branch_is_a_ref() -> None:
+    schema: Final = {
+        "type": "object",
+        "properties": {"source": {"anyOf": [{"$ref": "#/$defs/Ledger"}, {"type": "null"}], "const": "ledger-7"}},
+        "$defs": {"Ledger": {"type": "string", "enum": ["ledger-7", "ledger-9"]}},
+    }
+    (row,) = _wrap_entries(
+        [
+            _chat_entry(
+                "gemini-2.5-flash",
+                {"response_format": {"type": "json_schema", "json_schema": {"name": "a", "schema": schema}}},
+            )
+        ]
+    )
+    assert not any("$" in key for key in _keys_anywhere(row))
 
 _GEMINI_DEPLOYMENT: Final = MappingProxyType({"gcs_bucket_name": "my-bucket", "model": "vertex_ai/gemini-2.5-flash"})
 _ANNOTATED_ANSWER_SCHEMA: Final = MappingProxyType(
@@ -2724,3 +2847,45 @@ def test_drop_params_keeps_json_schema_literals_whole_while_dropping_annotations
         "type": "object",
         "properties": {"answer": answer},
     }
+
+
+_SYSTEM_VIDEO_MESSAGES: Final = (
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "be terse"},
+            {"type": "video_url", "video_url": {"url": "gs://my-bucket/clip.mp4"}},
+        ],
+    },
+    {"role": "user", "content": "hi"},
+)
+
+
+def test_a_gemini_batch_row_with_a_system_video_answers_400_without_drop_params(config, monkeypatch) -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"messages": list(_SYSTEM_VIDEO_MESSAGES)}))
+
+    with pytest.raises(VertexAIError, match=r"line 1 .*system instructions take text only") as exc_info:
+        _uploaded_rows(config, _GEMINI_DEPLOYMENT, [entry])
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("deployment", "body"),
+    [({**_GEMINI_DEPLOYMENT, "drop_params": True}, {}), (_GEMINI_DEPLOYMENT, {"drop_params": True})],
+    ids=["deployment", "request"],
+)
+def test_drop_params_drops_a_system_video_from_a_gemini_batch_row(
+    config: VertexAIFilesConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    deployment: Mapping[str, object],
+    body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    entry: Final = dict(_chat_entry("gemini-2.5-flash", {"messages": list(_SYSTEM_VIDEO_MESSAGES), **body}))
+
+    (row,) = TypeAdapter(tuple[dict[str, object]]).validate_python(_uploaded_rows(config, deployment, [entry]))
+
+    assert _request_of(row)["system_instruction"] == {"parts": [{"text": "be terse"}]}
