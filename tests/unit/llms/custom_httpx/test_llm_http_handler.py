@@ -22,6 +22,7 @@ from litellm.integrations.code_interpreter_interception.handler import (
     LITELLM_CODE_EXECUTION_TOOL_NAME,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.integrations.websearch_interception.handler import WebSearchInterceptionLogger
 from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -67,7 +68,7 @@ from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.integrations.custom_logger import WEBSEARCH_INTERCEPTION_PREFIX
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
+from litellm.types.utils import CallTypes, ImageObject, ImageResponse, ModelResponse, TranscriptionResponse
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
@@ -505,9 +506,15 @@ def _reasoning_answer_without_a_search(request: httpx.Request) -> httpx.Response
 
 
 def _web_search_stream_kwargs(affinity: bool, converted_by_the_client_hook: bool) -> dict[str, object]:
-    logging_obj: Final = Mock()
-    logging_obj.dynamic_success_callbacks = []
-    logging_obj.async_success_handler = AsyncMock()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "say hello"}],
+        stream=True,
+        call_type=CallTypes.responses.value,
+        start_time=time.time(),
+        litellm_call_id="web-search-stream",
+        function_id="web-search-stream",
+    )
     return {
         "model": "gpt-4o",
         "input": "say hello",
@@ -583,6 +590,36 @@ async def test_async_web_search_stream_answered_without_a_search_carries_the_dep
 
     assert isinstance(streamed, MockResponsesAPIStreamingIterator)
     _assert_streamed_ids_carry_the_deployment([event async for event in streamed], affinity)
+
+
+class _DeploymentSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.request_data: dict[str, object] | None = None
+        self.called = asyncio.Event()
+
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict, response: object, call_type: CallTypes | None
+    ) -> None:
+        self.request_data = request_data
+        self.called.set()
+
+
+@pytest.mark.asyncio
+async def test_web_search_stream_hands_the_request_to_post_success_hooks(monkeypatch: pytest.MonkeyPatch):
+    recorder: Final = _DeploymentSuccessRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder])
+
+    streamed: Final = await BaseLLMHTTPHandler().async_response_api_handler(
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(_reasoning_answer_without_a_search)),
+        **_web_search_stream_kwargs(affinity=True, converted_by_the_client_hook=True),
+    )
+    _ = [event async for event in streamed]
+    await asyncio.wait_for(recorder.called.wait(), timeout=5)
+
+    assert recorder.request_data is not None
+    assert recorder.request_data["tools"] == [{"type": "web_search"}]
+    assert recorder.request_data["include"] == ["reasoning.encrypted_content"]
 
 
 class _LookupLoop(CustomLogger):
