@@ -5,10 +5,10 @@ JSON-based provider configuration loader for OpenAI-compatible providers.
 import json
 import os
 import platform
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol
+from typing import Annotated, Final, Protocol, TypeAlias
 
 from pydantic import Field, TypeAdapter
 
@@ -26,13 +26,21 @@ _MODEL_BASE_URLS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 _MODEL_SPECIAL_HANDLING_ADAPTER: Final = TypeAdapter(Mapping[str, Mapping[str, bool]])
 _STR_ADAPTER: Final = TypeAdapter(str)
 _STR_TUPLE_ADAPTER: Final = TypeAdapter(tuple[str, ...])
-_FIXED_VALUE_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, bool | int | float])
+AcceptedValue: TypeAlias = bool | int | float | str
+_ACCEPTED_VALUES_ADAPTER: Final = TypeAdapter(Mapping[str, tuple[AcceptedValue, ...]])
+_MODEL_UNRESTRICTED_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, frozenset[str]])
 _API_KEY_ENV_ADAPTER: Final[TypeAdapter[str | tuple[str, ...]]] = TypeAdapter(
     str | Annotated[tuple[str, ...], Field(min_length=1)]
 )
 
 _VERSION_PLACEHOLDER: Final = "{version}"
 _PYTHON_PLACEHOLDER: Final = "{python}"
+
+
+def _matching_model_key(keys: Collection[str], name: str) -> str | None:
+    if name in keys:
+        return name
+    return next((key for key in keys if key.endswith("/*") and name.startswith(key.removesuffix("*"))), None)
 
 
 class _ProviderEntries(Protocol):
@@ -69,9 +77,14 @@ class SimpleProviderConfig:
             if "responses_unsupported_params" in data
             else ()
         )
-        self.fixed_value_params: Final[Mapping[str, bool | int | float]] = (
-            _FIXED_VALUE_PARAMS_ADAPTER.validate_python(data["fixed_value_params"])
-            if "fixed_value_params" in data
+        self.accepted_values: Final[Mapping[str, tuple[AcceptedValue, ...]]] = (
+            _ACCEPTED_VALUES_ADAPTER.validate_python(data["accepted_values"])
+            if "accepted_values" in data
+            else MappingProxyType({})
+        )
+        self.model_unrestricted_params: Final[Mapping[str, frozenset[str]]] = (
+            _MODEL_UNRESTRICTED_PARAMS_ADAPTER.validate_python(data["model_unrestricted_params"])
+            if "model_unrestricted_params" in data
             else MappingProxyType({})
         )
         self.supported_endpoints: Sequence[str] = data.get("supported_endpoints", [])
@@ -101,18 +114,19 @@ class SimpleProviderConfig:
         return self.model_base_urls.get(model.removeprefix(f"{self.slug}/"), self.base_url)
 
     def special_handling_for(self, model: str) -> Mapping[str, bool]:
-        name: Final = model.removeprefix(f"{self.slug}/")
-        model_overrides: Final = self.model_special_handling.get(name) or next(
-            (
-                overrides
-                for pattern, overrides in self.model_special_handling.items()
-                if pattern.endswith("/*") and name.startswith(pattern.removesuffix("*"))
-            ),
-            None,
-        )
-        if model_overrides is None:
+        key: Final = _matching_model_key(self.model_special_handling, model.removeprefix(f"{self.slug}/"))
+        if key is None:
             return self.special_handling
-        return MappingProxyType({**self.special_handling, **model_overrides})
+        return MappingProxyType({**self.special_handling, **self.model_special_handling[key]})
+
+    def accepted_values_for(self, model: str) -> Mapping[str, tuple[AcceptedValue, ...]]:
+        key: Final = _matching_model_key(self.model_unrestricted_params, model.removeprefix(f"{self.slug}/"))
+        if key is None:
+            return self.accepted_values
+        unrestricted: Final = self.model_unrestricted_params[key]
+        return MappingProxyType(
+            {param: values for param, values in self.accepted_values.items() if param not in unrestricted}
+        )
 
     def get_attribution_headers(self) -> Mapping[str, str]:
         if not self.user_agent:

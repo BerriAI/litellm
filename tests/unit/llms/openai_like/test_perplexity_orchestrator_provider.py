@@ -250,6 +250,59 @@ def test_a_value_the_orchestrator_rejects_answers_400_or_drops_under_drop_params
     assert kept.get(param, accepted) == accepted
 
 
+def test_flex_service_tier_answers_400_or_drops_on_claude_while_auto_passes_and_openai_models_keep_it():
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("anthropic/claude-haiku-5-5", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as rejection:
+            litellm.completion(
+                model=HAIKU, messages=[{"role": "user", "content": "hi"}], service_tier="flex", api_key="pplx-test-key"
+            )
+        assert route.call_count == 0
+
+        litellm.completion(
+            model=HAIKU,
+            messages=[{"role": "user", "content": "hi"}],
+            service_tier="flex",
+            drop_params=True,
+            api_key="pplx-test-key",
+        )
+        dropped: Final = json.loads(route.calls.last.request.content)
+
+        litellm.completion(
+            model=HAIKU, messages=[{"role": "user", "content": "hi"}], service_tier="auto", api_key="pplx-test-key"
+        )
+        auto: Final = json.loads(route.calls.last.request.content)
+
+        litellm.completion(
+            model=GPT_LUNA, messages=[{"role": "user", "content": "hi"}], service_tier="flex", api_key="pplx-test-key"
+        )
+        openai_flex: Final = json.loads(route.calls.last.request.content)
+
+    assert rejection.value.status_code == 400
+    assert "service_tier" not in dropped
+    assert auto["service_tier"] == "auto"
+    assert openai_flex["service_tier"] == "flex"
+
+
+@pytest.mark.parametrize(("param", "value"), [("n", 2), ("frequency_penalty", 0.5), ("service_tier", "flex")])
+def test_allowed_openai_params_sends_a_value_the_orchestrator_would_otherwise_reject_on_chat(param: str, value: object):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/chat/completions").respond(
+            200, json=_chat_response("anthropic/claude-haiku-5-5", {"prompt_tokens": 4, "completion_tokens": 1})
+        )
+        litellm.completion(
+            model=HAIKU,
+            messages=[{"role": "user", "content": "hi"}],
+            allowed_openai_params=[param],
+            api_key="pplx-test-key",
+            **{param: value},
+        )
+
+    assert json.loads(route.calls.last.request.content)[param] == value
+
+
 def test_auto_routing_keeps_the_callers_cache_marker_on_chat_and_responses():
     marked_text: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}
     with respx.mock() as upstream:
@@ -394,6 +447,23 @@ def test_a_responses_field_the_orchestrator_rejects_answers_400_or_drops_under_d
     assert kept.get(param) == accepted
 
 
+@pytest.mark.parametrize(("param", "value"), [("store", True), ("background", True), ("service_tier", "flex")])
+def test_allowed_openai_params_sends_a_value_the_orchestrator_would_otherwise_reject_on_responses(
+    param: str, value: object
+):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
+        with pytest.raises(litellm.UnsupportedParamsError):
+            litellm.responses(model=HAIKU, input="hi", api_key="pplx-test-key", **{param: value})
+        assert route.call_count == 0
+
+        litellm.responses(
+            model=HAIKU, input="hi", allowed_openai_params=[param], api_key="pplx-test-key", **{param: value}
+        )
+
+    assert json.loads(route.calls.last.request.content)[param] == value
+
+
 def test_responses_request_goes_to_the_orchestrator_responses_route():
     with respx.mock() as upstream:
         route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/responses").respond(200, json=_RESPONSES_RESPONSE)
@@ -440,6 +510,33 @@ async def test_messages_request_keeps_the_one_hour_cache_ttl_and_bills_it_at_the
         + 4500 * row["cache_creation_input_token_cost_above_1hr"]
         + 20 * row["output_cost_per_token"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "sent_thinking_type"),
+    [
+        ("perplexity_orchestrator/anthropic/claude-haiku-5-5", "adaptive"),
+        ("perplexity_orchestrator/anthropic/claude-opus-4-6", "enabled"),
+    ],
+)
+async def test_messages_thinking_enabled_reaches_an_adaptive_only_claude_model_as_adaptive_thinking(
+    model: str, sent_thinking_type: str
+):
+    with respx.mock() as upstream:
+        route: Final = upstream.post(f"{ORCHESTRATOR_BASE}/messages").respond(
+            200, json=_messages_response({"input_tokens": 10, "output_tokens": 20})
+        )
+        await litellm.anthropic.messages.acreate(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=32000,
+            thinking={"type": "enabled", "budget_tokens": 31999},
+            api_key="pplx-test-key",
+            client=AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()),
+        )
+
+    assert json.loads(route.calls.last.request.content)["thinking"]["type"] == sent_thinking_type
 
 
 def test_chat_cost_above_the_long_context_threshold_uses_the_tier_rates_for_every_token_class():

@@ -5834,6 +5834,16 @@ def _map_params_with_provider_config(
             drop_params=drop_params,
             reasoning_drop_logger=reasoning_drop_logger,
         )
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
+
+    if isinstance(provider_config, MapsAllowedOpenAIParams):
+        return provider_config.map_openai_params_allowing(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
     return provider_config.map_openai_params(
         non_default_params=non_default_params,
         optional_params=optional_params,

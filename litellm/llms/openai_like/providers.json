@@ -313,13 +313,17 @@
         "rejects_json_object_response_format": true
       }
     },
-    "fixed_value_params": {
-      "n": 1,
-      "frequency_penalty": 0,
-      "presence_penalty": 0,
-      "logprobs": false,
-      "store": false,
-      "background": false
+    "accepted_values": {
+      "n": [1],
+      "frequency_penalty": [0],
+      "presence_penalty": [0],
+      "logprobs": [false],
+      "store": [false],
+      "background": [false],
+      "service_tier": ["auto", "default"]
+    },
+    "model_unrestricted_params": {
+      "openai/*": ["service_tier"]
     },
     "provider_info": {
       "supports_function_calling": true,
