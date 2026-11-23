@@ -22,6 +22,32 @@ pub fn shape_anthropic_messages_request(
     request: MessagesRequest,
     options: MessagesShapeOptions,
 ) -> Result<MessagesRequest, Error> {
+    shape_messages_request(request, options, true)
+}
+
+pub fn shape_anthropic_messages_request_keeping_tool_use_ids(
+    request: MessagesRequest,
+    options: MessagesShapeOptions,
+) -> Result<MessagesRequest, Error> {
+    shape_messages_request(request, options, false)
+}
+
+pub fn with_sanitized_tool_use_ids(request: MessagesRequest) -> MessagesRequest {
+    MessagesRequest {
+        messages: map_messages(
+            request.messages,
+            sanitize_tool_use_ids,
+            sanitize_raw_tool_use_ids,
+        ),
+        ..request
+    }
+}
+
+fn shape_messages_request(
+    request: MessagesRequest,
+    options: MessagesShapeOptions,
+    rewrites_tool_use_ids: bool,
+) -> Result<MessagesRequest, Error> {
     let messages = if options.presanitized {
         map_messages(
             request.messages,
@@ -31,8 +57,8 @@ pub fn shape_anthropic_messages_request(
     } else {
         map_messages(
             request.messages,
-            sanitize_anthropic_messages,
-            sanitize_raw_anthropic_message,
+            |messages| sanitize_anthropic_messages(messages, rewrites_tool_use_ids),
+            |message| sanitize_raw_anthropic_message(message, rewrites_tool_use_ids),
         )
     };
     Ok(MessagesRequest {
@@ -54,15 +80,28 @@ pub fn shape_anthropic_messages_request(
     })
 }
 
-fn sanitize_anthropic_messages(messages: Vec<Message>) -> Vec<Message> {
-    strip_provider_specific_fields(flatten_unencrypted_web_search_results(
-        sanitize_tool_use_ids(strip_empty_content_blocks(messages)),
-    ))
+fn sanitize_anthropic_messages(
+    messages: Vec<Message>,
+    rewrites_tool_use_ids: bool,
+) -> Vec<Message> {
+    let stripped = strip_empty_content_blocks(messages);
+    let identified = if rewrites_tool_use_ids {
+        sanitize_tool_use_ids(stripped)
+    } else {
+        stripped
+    };
+    strip_provider_specific_fields(flatten_unencrypted_web_search_results(identified))
 }
 
-fn sanitize_raw_anthropic_message(message: Value) -> Option<Value> {
+fn sanitize_raw_anthropic_message(message: Value, rewrites_tool_use_ids: bool) -> Option<Value> {
     strip_empty_raw_content_blocks(message)
-        .and_then(sanitize_raw_tool_use_ids)
+        .and_then(|stripped| {
+            if rewrites_tool_use_ids {
+                sanitize_raw_tool_use_ids(stripped)
+            } else {
+                Some(stripped)
+            }
+        })
         .and_then(flatten_unencrypted_raw_web_search_results)
         .and_then(strip_raw_provider_specific_fields)
 }
@@ -223,7 +262,7 @@ mod tests {
         #[case] expected: Value,
     ) {
         assert_eq!(
-            serde_json::to_value(sanitize_anthropic_messages(messages(history))).unwrap(),
+            serde_json::to_value(sanitize_anthropic_messages(messages(history), true)).unwrap(),
             expected
         );
     }
@@ -387,6 +426,71 @@ mod tests {
         )
         .unwrap();
         assert_eq!(serde_json::to_value(shaped).unwrap()["messages"], expected);
+    }
+
+    type Shaping = fn(MessagesRequest, MessagesShapeOptions) -> Result<MessagesRequest, Error>;
+
+    #[rstest]
+    #[case::shared_shaping_rewrites(shape_anthropic_messages_request, "functions_Bash_0")]
+    #[case::keeping_shaping_keeps(
+        shape_anthropic_messages_request_keeping_tool_use_ids,
+        "functions.Bash:0"
+    )]
+    fn only_the_keeping_shaping_sends_tool_use_ids_unchanged(
+        #[case] shape: Shaping,
+        #[case] id: &str,
+    ) {
+        let shaped = shape(
+            request(json!({"model": "kimi-k2", "messages": [
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}, "provider_specific_fields": {"x": 1}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": 5},
+                    {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+                ]}
+            ]})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(shaped).unwrap()["messages"],
+            json!([
+                {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}
+            ])
+        );
+    }
+
+    #[test]
+    fn sanitizing_tool_use_ids_rewrites_parsed_and_unparsed_messages_and_nothing_else() {
+        let sanitized = with_sanitized_tool_use_ids(request(json!({"model": "m", "messages": [
+            {"role": "assistant", "content": [
+                {"type": "text", "text": ""},
+                {"type": "server_tool_use", "id": "srv.1", "name": "web_search", "input": {}}
+            ]},
+            {"role": "user", "content": [
+                {"type": "text", "text": 5},
+                {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+            ]}
+        ]})));
+        assert_eq!(
+            serde_json::to_value(sanitized).unwrap()["messages"],
+            json!([
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "server_tool_use", "id": "srv_1", "name": "web_search", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "text", "text": 5},
+                    {"type": "tool_result", "tool_use_id": "functions_Bash_0", "content": "ok"}
+                ]}
+            ])
+        );
     }
 
     #[test]

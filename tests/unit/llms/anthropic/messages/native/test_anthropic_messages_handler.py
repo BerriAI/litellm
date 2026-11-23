@@ -363,6 +363,121 @@ async def _async_return(value):
     return value
 
 
+def _replayed_tool_round(tool_use_id: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "run ls"},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {"command": "ls"}}],
+        },
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "README.md"}]},
+    ]
+
+
+_ANTHROPIC_MESSAGE: Final = {
+    "id": "msg_1",
+    "type": "message",
+    "role": "assistant",
+    "model": "kimi-k2",
+    "content": [{"type": "text", "text": "done"}],
+    "stop_reason": "end_turn",
+    "stop_sequence": None,
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "api_base", "base_env", "sent_id"),
+    [
+        pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param(
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions_Bash_0", id="claude-custom-base"
+        ),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
+        pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_BASE_URL", "functions.Bash:0", id="anthropic-base-url-env"),
+        pytest.param("anthropic/kimi-k2", None, None, "functions_Bash_0", id="anthropics-own-api"),
+        pytest.param(
+            "anthropic/my-sonnet",
+            "https://example.services.ai.azure.com/anthropic",
+            None,
+            "functions_Bash_0",
+            id="foundry",
+        ),
+    ],
+)
+async def test_replayed_tool_use_ids_are_rewritten_only_for_an_upstream_that_enforces_anthropics_pattern(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_base: str | None, base_env: str | None, sent_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+    if base_env is not None:
+        monkeypatch.setenv(base_env, "http://kimi.test")
+
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post(url__regex=r"/v1/messages").mock(
+            return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=16,
+            messages=_replayed_tool_round("functions.Bash:0"),
+            model=model,
+            api_base=api_base,
+            api_key="sk-test",
+        )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == _replayed_tool_round(sent_id)
+
+
+@pytest.mark.asyncio
+async def test_a_chat_bridged_backend_gets_and_returns_its_own_tool_call_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        chat: Final = upstream.post("http://kimi.test/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "kimi-k2",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "tool_calls",
+                            "message": {
+                                "role": "assistant",
+                                "content": None,
+                                "tool_calls": [
+                                    {
+                                        "id": "functions.Bash:1",
+                                        "type": "function",
+                                        "function": {"name": "Bash", "arguments": '{"command": "pwd"}'},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        response: Final = await python_messages.anthropic_messages(
+            max_tokens=64,
+            messages=_replayed_tool_round("functions.Bash:0"),
+            model="hosted_vllm/kimi-k2",
+            api_base="http://kimi.test/v1",
+            api_key="sk-test",
+            tools=[{"name": "Bash", "input_schema": {"type": "object", "properties": {"command": {"type": "string"}}}}],
+        )
+
+    sent: Final = json.loads(chat.calls.last.request.content)
+    assert [call["id"] for call in sent["messages"][1]["tool_calls"]] == ["functions.Bash:0"]
+    assert sent["messages"][2]["tool_call_id"] == "functions.Bash:0"
+    assert [block["id"] for block in response["content"] if block["type"] == "tool_use"] == ["functions.Bash:1"]
+
+
 def test_anthropic_messages_handler_custom_llm_provider():
     """
     Test that litellm.completion is called when a custom LLM provider is given.

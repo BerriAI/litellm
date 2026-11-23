@@ -18,7 +18,10 @@ use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
-    handler::shape_anthropic_messages_request,
+    handler::{
+        shape_anthropic_messages_request, shape_anthropic_messages_request_keeping_tool_use_ids,
+        with_sanitized_tool_use_ids,
+    },
     thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::{
@@ -133,7 +136,10 @@ impl MessagesDialect for AnthropicMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        shape_anthropic_messages_request(request, options)
+        if is_claude_model(&request.model) {
+            return shape_anthropic_messages_request(request, options);
+        }
+        shape_anthropic_messages_request_keeping_tool_use_ids(request, options)
     }
 
     fn tool_custom_field(&self, model: &str) -> ToolCustomField {
@@ -160,7 +166,11 @@ impl MessagesDialect for AnthropicMessagesConfig {
         if !serves_anthropic_api_versions(url) {
             return Ok(request);
         }
-        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+        drop_sampling_params_removed_by_requested_version(
+            with_sanitized_tool_use_ids(request),
+            headers,
+            drop_params,
+        )
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -1260,6 +1270,52 @@ mod tests {
         assert_eq!(
             versioned_body(ANTHROPIC_URL, version, fields, true),
             Ok(body(expected))
+        );
+    }
+
+    #[rstest]
+    #[case::other_model_on_a_custom_host_keeps(
+        "kimi-k2",
+        "http://127.0.0.1:8000/v1/messages",
+        "functions.Bash:0"
+    )]
+    #[case::claude_on_a_custom_host_rewrites(
+        "claude-sonnet-4-5",
+        "http://127.0.0.1:8000/v1/messages",
+        "functions_Bash_0"
+    )]
+    #[case::other_model_on_anthropics_api_rewrites("kimi-k2", ANTHROPIC_URL, "functions_Bash_0")]
+    #[case::other_model_on_foundry_rewrites(
+        "my-sonnet",
+        "https://example.services.ai.azure.com/anthropic/v1/messages",
+        "functions_Bash_0"
+    )]
+    fn tool_use_ids_are_rewritten_only_for_upstreams_that_enforce_anthropics_id_pattern(
+        #[case] model: &str,
+        #[case] url: &str,
+        #[case] id: &str,
+    ) {
+        let shaped = ANTHROPIC_MESSAGES_CONFIG
+            .shape_request(
+                request(json!({"model": model, "messages": [
+                    {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+                    {"role": "user", "content": [
+                        {"type": "text", "text": 5},
+                        {"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}
+                    ]}
+                ]})),
+                MessagesShapeOptions::default(),
+            )
+            .unwrap();
+        let sent = ANTHROPIC_MESSAGES_CONFIG
+            .request_body(shaped, &headers(&[]), url, false)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(sent).unwrap()["messages"],
+            json!([
+                {"role": "assistant", "content": [{"type": "tool_use", "id": id, "name": "Bash", "input": {}}]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": id, "content": "ok"}]}
+            ])
         );
     }
 

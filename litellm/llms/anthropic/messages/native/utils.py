@@ -6,15 +6,19 @@ from typing import TYPE_CHECKING, Final, cast, get_type_hints
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 
 from litellm._logging import verbose_logger
-from litellm.exceptions import UnsupportedParamsError
+from litellm.exceptions import BadRequestError, UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
     flatten_unencrypted_web_search_results_in_anthropic_messages,
     sanitize_tool_use_ids_in_anthropic_messages,
     strip_empty_content_blocks_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.api_versions import serves_anthropic_api_versions
 from litellm.llms.anthropic.messages.utils import is_reasoning_auto_summary_enabled
+from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
 from litellm.types.llms.anthropic import (
     MESSAGE_THREAD_NOT_FOUND_ERROR_CODE,
     MESSAGE_THREAD_UNSUPPORTED_ERROR_CODE,
@@ -26,6 +30,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ChatCompletionSystemMessage
+from litellm.types.utils import LlmProviders, LlmProvidersSet
+from litellm.utils import ProviderConfigManager
 
 if TYPE_CHECKING:
     from litellm.exceptions import ContentPolicyViolationError
@@ -252,11 +258,42 @@ def anthropic_system_to_openai_message(system: object) -> ChatCompletionSystemMe
     return ChatCompletionSystemMessage(role="system", content=system)
 
 
-def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, object]]:
+def normalize_native_messages(
+    messages: Sequence[object], *, rewrites_tool_use_ids: bool = True
+) -> list[dict[str, object]]:
     """Apply the block rewrites every /v1/messages request gets before it reaches a provider."""
+    stripped: Final = strip_empty_content_blocks_from_anthropic_messages(messages)
     return flatten_unencrypted_web_search_results_in_anthropic_messages(
-        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+        sanitize_tool_use_ids_in_anthropic_messages(stripped) if rewrites_tool_use_ids else stripped
     )
+
+
+def provider_messages_config(
+    model: str, custom_llm_provider: str | None, api_base: str | None
+) -> BaseAnthropicMessagesConfig | None:
+    provider_config: Final = (
+        ProviderConfigManager.get_provider_anthropic_messages_config(
+            model=model,
+            provider=LlmProviders(custom_llm_provider),
+        )
+        if custom_llm_provider is not None and custom_llm_provider in LlmProvidersSet
+        else None
+    )
+    return provider_config if provider_config is not None and provider_config.serves_api_base(model, api_base) else None
+
+
+def _rewrites_tool_use_ids(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
+    if "claude" in model.lower():
+        return True
+    try:
+        resolved_model, provider, _, _ = get_llm_provider(
+            model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        )
+    except BadRequestError:
+        return True
+    if provider == LlmProviders.ANTHROPIC.value:
+        return serves_anthropic_api_versions(AnthropicModelInfo.resolve_anthropic_api_base(api_base))
+    return provider_messages_config(resolved_model, provider, api_base) is not None
 
 
 def prepare_native_messages(
@@ -270,7 +307,13 @@ def prepare_native_messages(
     api_base: str | None = None,
     presanitized: bool = False,
 ) -> tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None]:
-    normalized: Final = messages if presanitized else normalize_native_messages(messages)
+    normalized: Final = (
+        messages
+        if presanitized
+        else normalize_native_messages(
+            messages, rewrites_tool_use_ids=_rewrites_tool_use_ids(model, custom_llm_provider, api_base)
+        )
+    )
     return cast(  # cast-ok: legacy normalizers and injection preserve the JSON message and system shapes
         tuple[list[dict[str, JsonValue]], str | list[dict[str, JsonValue]] | None],
         AnthropicCacheControlHook.maybe_inject_cache_control(

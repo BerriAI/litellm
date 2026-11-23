@@ -317,6 +317,34 @@ def test_translate_streaming_openai_chunk_to_anthropic_content_block():
     }
 
 
+def test_translate_streaming_openai_chunk_keeps_the_providers_tool_call_id():
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                content=None,
+                role="assistant",
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="functions.Bash:0",
+                        function=Function(arguments="", name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+            ),
+        )
+    ]
+
+    block_type, content_block_start = (
+        LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(choices=choices)
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start == {"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}
+
+
 def test_translate_streaming_openai_chunk_strips_gemini_thought_from_tool_call_id():
     """Gemini embeds thought signatures in OpenAI tool ids; Anthropic SSE should expose a clean id."""
     base = "call_3e9417b7925e49aca9a71dc1885e"
@@ -1591,8 +1619,8 @@ def test_translate_openai_content_to_anthropic_strips_gemini_thought_from_tool_c
     assert result[0]["provider_specific_fields"] == {"signature": sig}
 
 
-def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids():
-    """Cross-provider ids like ``functions.Bash:0`` must be normalized for Anthropic replay."""
+def test_translate_openai_content_to_anthropic_keeps_the_providers_tool_call_id():
+    """Kimi on vLLM stops calling tools when its ``functions.Bash:0`` comes back rewritten."""
     openai_choices = [
         Choices(
             message=Message(
@@ -1617,7 +1645,7 @@ def test_translate_openai_content_to_anthropic_sanitizes_colon_dot_tool_call_ids
 
     assert len(result) == 1
     assert result[0]["type"] == "tool_use"
-    assert result[0]["id"] == "functions_Bash_0"
+    assert result[0]["id"] == "functions.Bash:0"
 
 
 def test_translate_openai_response_to_anthropic_text_and_tool_calls():

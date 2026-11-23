@@ -158,7 +158,6 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     eager_input_streaming_flag,
     is_empty_unsigned_thinking_block,
-    normalize_anthropic_tool_use_id,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.context_management import (
@@ -1549,13 +1548,11 @@ class LiteLLMAnthropicMessagesAdapter:
                         tool_name_mapping.get(truncated_name, truncated_name) if tool_name_mapping else truncated_name
                     )
 
-                    # Strip Gemini thought-signature suffix and normalize id chars
-                    # (e.g. ``functions.Bash:0`` from cross-provider clients).
                     raw_id = tool_call.id or ""
                     tool_use_block = AnthropicResponseContentBlockToolUse.model_validate(
                         {
                             "type": "tool_use",
-                            "id": normalize_anthropic_tool_use_id(raw_id),
+                            "id": raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0],
                             "name": original_name,
                             "input": parse_tool_call_arguments(
                                 tool_call.function.arguments,
@@ -1795,7 +1792,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 thought_sig = self._streamed_tool_call_signature(raw_id, choice.delta.tool_calls[0])
                 tool_block: dict[str, object] = {
                     "type": "tool_use",
-                    "id": normalize_anthropic_tool_use_id(raw_id),
+                    "id": raw_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0],
                     "name": tool_name,
                     "input": {},
                 }
