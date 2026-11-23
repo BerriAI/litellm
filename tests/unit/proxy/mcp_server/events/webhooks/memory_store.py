@@ -184,6 +184,9 @@ class MemoryStore:
         self.rows[subscription_id] = current.model_copy(update={"status": "terminated"})
         return True
 
+    async def enqueue_current(self, row: SubscriptionRow, delivery: QueuedDelivery) -> bool:
+        raise NotImplementedError("Inbound callbacks use the PostgreSQL receiver fixture")
+
     async def enqueue(self, delivery: QueuedDelivery) -> bool:
         if self.fail_enqueue:
             raise ConnectionError("database unavailable")
