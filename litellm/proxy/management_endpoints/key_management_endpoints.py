@@ -136,11 +136,13 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
+    semantic_cache_metadata_changed,
     set_object_metadata_field,
     team_member_has_permission,
     user_api_key_has_admin_view,
     validate_budget_duration,
     validate_finite_spend,
+    validate_semantic_cache_metadata,
 )
 from litellm.proxy.management_endpoints.key_budget_change import (
     KeyBudgetAdminOnly,
@@ -1623,6 +1625,10 @@ async def _common_key_generation_helper(
     validate_budget_duration(data.budget_duration)
     if prisma_client is not None:
         await validate_scalar_budget_attachment(prisma_client, data.budget_id)
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    if semantic_cache_metadata_changed(requested_metadata, None):
+        _enforce_key_semantic_cache_admin(user_api_key_dict, team_table)
+        validate_semantic_cache_metadata(requested_metadata)
     raise_on_invalid_key_metadata(data.metadata)
     raise_on_logging_credential_change(data.metadata, None, user_api_key_dict)
 
@@ -3256,6 +3262,51 @@ async def _check_customer_header_team_change(
         )
 
 
+def _enforce_key_semantic_cache_admin(caller: UserAPIKeyAuth, team: LiteLLM_TeamTable | None) -> None:
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN or (team is not None and is_team_admin(caller, team)):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Only proxy admins or the key's team admins can change metadata.cache_params."},
+    )
+
+
+async def _check_key_semantic_cache_update(
+    data: UpdateKeyRequest | RegenerateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    caller: UserAPIKeyAuth,
+    prisma_client: PrismaClient | None,
+) -> None:
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    requested_metadata: Final = attribute_or_none(data, "metadata")
+    stored_metadata: Final = attribute_or_none(existing_key_row, "metadata")
+    if "metadata" not in data.model_fields_set or not semantic_cache_metadata_changed(
+        requested_metadata, stored_metadata
+    ):
+        return
+    if caller.user_role == LitellmUserRoles.PROXY_ADMIN:
+        validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+        return
+    existing_team: Final = existing_key_row.team_id
+    target_team: Final = data.team_id if "team_id" in data.model_fields_set else existing_team
+    for team_id in dict.fromkeys((existing_team, target_team)):
+        _enforce_key_semantic_cache_admin(
+            caller,
+            (
+                await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    check_db_only=True,
+                )
+                if team_id is not None
+                else None
+            ),
+        )
+    validate_semantic_cache_metadata(requested_metadata, stored_metadata)
+
+
 async def prepare_key_update_data(
     data: UpdateKeyRequest | RegenerateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3265,6 +3316,7 @@ async def prepare_key_update_data(
     user_api_key_dict: UserAPIKeyAuth | None = None,
 ):
     if user_api_key_dict is not None:
+        await _check_key_semantic_cache_update(data, existing_key_row, user_api_key_dict, prisma_client)
         raise_on_logging_credential_change(data.metadata, existing_key_row, user_api_key_dict)
         await _check_customer_header_team_change(data, existing_key_row, user_api_key_dict, prisma_client)
     if data.router_settings is not None or (

@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/CustomerUsageSummary";
 import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
 import { ErrorState } from "@/components/shared/ErrorState";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
@@ -94,7 +94,7 @@ function CustomerOrganizations() {
   };
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Building2 />
@@ -173,6 +173,6 @@ function CustomerOrganizations() {
           onClose={() => setEditingOrganizationId(null)}
         />
       )}
-    </Page>
+    </>
   );
 }
