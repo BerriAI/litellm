@@ -8,6 +8,8 @@ methods; richer repositories live in their own modules.
 """
 
 from collections.abc import Sequence
+from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, Generic, NamedTuple, Protocol
 
@@ -18,7 +20,18 @@ from litellm.repositories.prisma_protocols import RowT_co, TableActions
 from litellm.rust_bridge._native import RustAgentIdentityRepository, RustAuditLogRepository
 
 if TYPE_CHECKING:
+    from prisma import Prisma
     from prisma import models as prisma_models  # noqa: F401  # used by quoted base-class subscripts
+
+
+@dataclass(frozen=True)
+class RepositoryTransaction:
+    """Use an already-open writer transaction for table access and nested repository operations."""
+
+    db: "Prisma"
+
+    def tx(self) -> "nullcontext[Prisma]":
+        return nullcontext(self.db)
 
 
 class _PrismaReaderClientView(Protocol):
