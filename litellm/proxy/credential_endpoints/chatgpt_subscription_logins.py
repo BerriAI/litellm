@@ -525,6 +525,16 @@ async def _save_chatgpt_login_once(
     return saved
 
 
+class CredentialInfoLookup(Protocol):
+    async def has_info_value(self, info_key: str, value: str) -> bool: ...
+
+
+async def key_hash_owns_chatgpt_login(rows: CredentialInfoLookup | None, key_hash: str) -> bool:
+    if owned_chatgpt_subscription_logins(None, key_hash):
+        return True
+    return rows is not None and await rows.has_info_value(CHATGPT_OWNER_KEY_HASH_KEY, key_hash)
+
+
 class CredentialRepoints(Protocol):
     async def repoint_info_value(self, info_key: str, previous_value: str, new_value: str) -> int: ...
 

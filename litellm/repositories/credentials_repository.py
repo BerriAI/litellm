@@ -125,6 +125,11 @@ class CredentialsRepository:
         )
         return updated_rows > 0
 
+    async def has_info_value(self, info_key: str, value: str) -> bool:
+        from prisma import Json
+
+        return await self.table.count(where={"credential_info": {"path": [info_key], "equals": Json(value)}}) > 0
+
     async def repoint_info_value(self, info_key: str, previous_value: str, new_value: str) -> int:
         return await self.prisma_client.db.execute_raw(
             'UPDATE "LiteLLM_CredentialsTable" '

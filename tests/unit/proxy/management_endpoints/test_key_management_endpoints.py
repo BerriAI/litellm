@@ -695,6 +695,7 @@ async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, capl
     mock_prisma_client = AsyncMock()
     mock_prisma_client.jsonify_object = lambda data: data
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
 
     async def _insert_data_side_effect(*args, **kwargs):
         if kwargs.get("table_name") == "user":
@@ -1596,6 +1597,7 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
     mock_prisma_client.db.litellm_verificationtoken = MagicMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -1629,6 +1631,7 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
     )
     mock_prisma_client.insert_data = mock_insert_data
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_verificationtoken = MagicMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -1668,7 +1671,7 @@ async def test_check_custom_key_allowed_when_disabled(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123")
+        await _check_custom_key_allowed("sk-custom-key-123", None)
 
     assert exc_info.value.status_code == 403
     assert "disabled" in str(exc_info.value.detail).lower()
@@ -1684,7 +1687,7 @@ async def test_check_custom_key_allowed_when_enabled(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": False})
 
     # Should not raise
-    await _check_custom_key_allowed("sk-custom-key-123")
+    await _check_custom_key_allowed("sk-custom-key-123", None)
 
 
 @pytest.mark.asyncio
@@ -1697,7 +1700,7 @@ async def test_check_custom_key_allowed_when_unset(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     # Should not raise
-    await _check_custom_key_allowed("sk-custom-key-123")
+    await _check_custom_key_allowed("sk-custom-key-123", None)
 
 
 @pytest.mark.asyncio
@@ -1719,10 +1722,36 @@ async def test_a_deleted_keys_value_that_still_owns_a_chatgpt_login_cannot_be_re
     )
 
     with pytest.raises(HTTPException) as refused:
-        await _check_custom_key_allowed(deleted_key)
+        await _check_custom_key_allowed(deleted_key, None)
 
     assert refused.value.status_code == 409
-    await _check_custom_key_allowed("sk-another-key-123456")
+    await _check_custom_key_allowed("sk-another-key-123456", None)
+
+
+class _StoredLoginOwners:
+    def __init__(self, owner_key_hashes: frozenset[str]) -> None:
+        self.owner_key_hashes: Final = owner_key_hashes
+
+    async def has_info_value(self, info_key: str, value: str) -> bool:
+        from litellm.llms.chatgpt.subscription_login import CHATGPT_OWNER_KEY_HASH_KEY
+
+        return info_key == CHATGPT_OWNER_KEY_HASH_KEY and value in self.owner_key_hashes
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_keys_value_is_refused_when_only_the_database_has_its_chatgpt_login(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _check_custom_key_allowed
+
+    deleted_key: Final = "sk-deleted-key-123456"
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(litellm, "credential_list", [])
+    stored: Final = _StoredLoginOwners(frozenset({hash_token(deleted_key)}))
+
+    with pytest.raises(HTTPException) as refused:
+        await _check_custom_key_allowed(deleted_key, stored)
+
+    assert refused.value.status_code == 409
+    await _check_custom_key_allowed("sk-another-key-123456", stored)
 
 
 @pytest.mark.asyncio
@@ -1740,7 +1769,7 @@ async def test_check_custom_key_allowed_honours_the_config_file(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1774,7 +1803,7 @@ async def test_check_custom_key_allowed_coerces_a_non_bool_config_value(monkeypa
 
     rejected = False
     try:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
     except HTTPException as e:
         rejected = e.status_code == 403
 
@@ -1801,7 +1830,7 @@ async def test_check_custom_key_allowed_config_file_beats_the_stored_ui_row(monk
     apply_runtime_general_settings_flags({"disable_custom_api_keys": False})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1823,12 +1852,12 @@ async def test_check_custom_key_allowed_picks_up_a_ui_write_without_the_serving_
     general_settings.load_yaml({})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
-    await _check_custom_key_allowed("sk-custom-key-123456")
+    await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     apply_runtime_general_settings_flags({"disable_custom_api_keys": True})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1843,7 +1872,7 @@ async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     # Should not raise — None means auto-generate
-    await _check_custom_key_allowed(None)
+    await _check_custom_key_allowed(None, None)
 
 
 @pytest.mark.asyncio

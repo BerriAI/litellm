@@ -119,7 +119,8 @@ from litellm.proxy.common_utils.timezone_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
 from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
-    owned_chatgpt_subscription_logins,
+    CredentialInfoLookup,
+    key_hash_owns_chatgpt_login,
     repoint_chatgpt_logins_to_key,
 )
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
@@ -638,7 +639,13 @@ def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
     return param.param_value
 
 
-async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
+def _primary_credential_rows(prisma_client: PrismaClient | None) -> CredentialsRepository | None:
+    from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+
+    return None if prisma_client is None else CredentialsRepository(WriterPinnedClient(prisma_client.db))
+
+
+async def _check_custom_key_allowed(custom_key_value: str | None, credential_rows: CredentialInfoLookup | None) -> None:
     """Raise 403 if custom API keys are disabled, and 409 if the value is a deleted key's that owns a ChatGPT login."""
     if custom_key_value is None:
         return
@@ -652,7 +659,7 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
             status_code=403,
             detail={"error": "Custom API key values are disabled by your administrator. Keys must be auto-generated."},
         )
-    if owned_chatgpt_subscription_logins(None, hash_token(custom_key_value)):
+    if await key_hash_owns_chatgpt_login(credential_rows, hash_token(custom_key_value)):
         raise HTTPException(
             status_code=409,
             detail={
@@ -1902,7 +1909,7 @@ async def _common_key_generation_helper(
     )
 
     # Reject custom key values if disabled by admin
-    await _check_custom_key_allowed(data.key)
+    await _check_custom_key_allowed(data.key, _primary_credential_rows(prisma_client))
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
@@ -6450,7 +6457,9 @@ async def check_encryption_endpoint(
 async def get_new_token(data: RegenerateKeyRequest | None) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
-        await _check_custom_key_allowed(data.new_key)
+        from litellm.proxy.proxy_server import prisma_client
+
+        await _check_custom_key_allowed(data.new_key, _primary_credential_rows(prisma_client))
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
