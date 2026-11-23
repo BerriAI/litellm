@@ -126,11 +126,12 @@ async def list_event_types(
         raise HTTPException(status_code=404, detail="No events-enabled MCP server with this id")
     descriptors: Final = await runtime.descriptors(await runtime.prepare_target(context, server.server, allowed))
     grant: Final = await runtime.grant(server.server.server_id, caller)
-    settings: Final = events_settings()
+    webhooks_enabled: Final = services.store is not None and events_settings().public_base_url is not None
     return tuple(
         item.model_copy(update={"delivery": modes})
         for item in descriptors
-        if publishable(item, server.config, grant) and (modes := offered_modes(item, server.server, settings, context))
+        if publishable(item, server.config, grant)
+        and (modes := offered_modes(item, server.server, webhooks_enabled, context))
     )
 
 

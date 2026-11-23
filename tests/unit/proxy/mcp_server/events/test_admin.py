@@ -187,3 +187,15 @@ async def test_admin_catalog_removes_webhook_mode_when_there_is_no_public_origin
         response = await client.get("/events/types", params={"server_id": "srv-ci"})
     assert response.status_code == 200
     assert response.json()[0]["delivery"] == ["poll", "push"]
+
+
+@pytest.mark.parametrize(("with_store", "modes"), ((False, ["poll", "push"]), (True, ["poll", "push", "webhook"])))
+async def test_catalog_requires_storage_to_offer_webhooks(
+    monkeypatch: pytest.MonkeyPatch, with_store: bool, modes: list[str]
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setitem(proxy_server.general_settings, "mcp_events_public_base_url", "https://gateway.example")
+    async with _client(ALICE, _store() if with_store else None, Callback()) as client:
+        response = await client.get("/events/types", params={"server_id": "srv-ci"})
+    assert response.status_code == 200 and response.json()[0]["delivery"] == modes
