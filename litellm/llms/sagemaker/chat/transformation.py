@@ -175,7 +175,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.iter_bytes(response.iter_bytes())
+        completion_stream: Final = custom_stream_decoder.iter_bytes(
+            response.iter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,
@@ -224,7 +226,9 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
             raise SagemakerError(status_code=response.status_code, message=response.text)
 
         custom_stream_decoder: Final = AWSEventStreamDecoder(model="", is_messages_api=True)
-        completion_stream: Final = custom_stream_decoder.aiter_bytes(response.aiter_bytes())
+        completion_stream: Final = custom_stream_decoder.aiter_bytes(
+            response.aiter_bytes(), response_headers=response.headers
+        )
 
         streaming_response: Final = CustomStreamWrapper(
             completion_stream=completion_stream,

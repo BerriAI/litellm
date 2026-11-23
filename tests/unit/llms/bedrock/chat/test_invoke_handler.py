@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import binascii
 import datetime
@@ -29,6 +30,7 @@ from litellm.llms.bedrock.chat.invoke_handler import (
 )
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -952,6 +954,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
 
     response: Final = MagicMock(status_code=200, headers={})
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -964,6 +967,7 @@ async def test_moonshot_invoke_async_stream_yields_openai_shaped_chunks(_aws_tes
     )
 
     _assert_moonshot_stream_content([chunk async for chunk in stream])
+    response.aclose.assert_awaited_once()
 
 
 def _truncated_frame() -> bytes:
@@ -988,7 +992,6 @@ def _assert_no_events_error(error: BedrockError, body: bytes) -> None:
     assert f"{len(body)} bytes received" in error.message
     assert "application/vnd.amazon.eventstream" in error.message
     assert "req-empty-1" in error.message
-    assert f"first bytes={body[:200]!r}" in error.message
 
 
 @pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
@@ -1015,6 +1018,50 @@ async def test_aiter_bytes_raises_when_a_200_body_decodes_to_no_events(body: byt
     _assert_no_events_error(exc_info.value, body)
 
 
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+def _assert_not_an_event_stream_error(error: BedrockError, body: bytes, content_type: str) -> None:
+    assert error.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in error.message
+    assert f"content-type='{content_type}'" in error.message
+    assert f"{len(body)} bytes received" in error.message
+    assert "req-empty-1" in error.message
+    assert "Service Unavailable" not in error.message
+
+
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+def test_iter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(body: bytes, content_type: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=response_headers))
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_aiter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(
+    body: bytes, content_type: str
+) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=response_headers)]
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
 def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
     stream: Final = decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM, _truncated_frame()]))
@@ -1026,7 +1073,6 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
-    assert "first bytes=" not in exc_info.value.message
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:
@@ -1073,6 +1119,7 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1492,6 +1539,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
 
     response: Final = MagicMock(status_code=200, headers=_event_stream_headers())
     response.aiter_bytes = _aiter_bytes
+    response.aclose = AsyncMock()
     client: Final = AsyncHTTPHandler()
     client.post = AsyncMock(return_value=response)
 
@@ -1505,6 +1553,7 @@ async def test_async_converse_stream_with_an_exception_event_frame_raises_instea
         _ = [chunk async for chunk in stream]
 
     _assert_exception_event_surfaced_with_its_modeled_status(exc_info.value, event_type)
+    response.aclose.assert_awaited_once()
 
 
 def test_converse_stream_made_only_of_unknown_events_raises_instead_of_an_empty_turn(
@@ -1879,3 +1928,22 @@ async def test_converse_stream_thinking_merges_into_content_with_think_tags() ->
         "Hi I am Anthropic, I am a helpful assistant"
     )
     assert [getattr(chunk.choices[0].delta, "reasoning_content", None) for chunk in chunks] == [None] * len(chunks)
+
+
+@pytest.mark.asyncio
+async def test_aws_event_stream_decoder_aiter_bytes_closes_its_source_on_aclose() -> None:
+    source_closed: Final = asyncio.Event()
+
+    async def _byte_source() -> AsyncIterator[bytes]:
+        try:
+            yield _bedrock_event_stream_frame({"type": "message_start", "message": {"id": "msg_1"}})
+            for _ in range(20):
+                yield _bedrock_event_stream_frame({"type": "ping"})
+        finally:
+            source_closed.set()
+
+    source: Final = _byte_source()
+    stream: Final = AWSEventStreamDecoder(model="us.anthropic.claude-sonnet-4-6").aiter_bytes(source)
+    await anext(stream)
+    await aclose_if_supported(stream)
+    assert source_closed.is_set()

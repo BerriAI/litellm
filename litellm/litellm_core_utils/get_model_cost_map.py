@@ -103,12 +103,9 @@ class GetModelCostMap:
         return cls._loaded_catalog
 
     @classmethod
-    def loaded_model_cost_map_entry(cls, key: str) -> Mapping[str, object] | None:
-        """The loaded catalog's entry for ``key``, else for the key that differs from it only in case."""
-        exact: Final = cls._loaded_catalog.get(key)
-        if exact is not None:
-            return exact
-        return cls._loaded_catalog.get(cls._loaded_catalog_keys_by_casefold.get(key.casefold(), key))
+    def loaded_model_cost_map_key(cls, key: str) -> str | None:
+        """``key`` as the loaded catalog spells it, matched exactly first and then ignoring case."""
+        return key if key in cls._loaded_catalog else cls._loaded_catalog_keys_by_casefold.get(key.casefold())
 
     @classmethod
     def loaded_model_cost_map_fields(cls) -> frozenset[str]:
