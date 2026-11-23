@@ -104,7 +104,7 @@ async def _pages(
     )
     page: Final = ListEventsResult.model_validate(raw)
     events: Final = collected + page.events
-    if not page.next_cursor:
+    if page.next_cursor is None:
         return {"events": [item.model_dump(by_alias=True, mode="json") for item in events]}
     return await _pages(session, max_pages - 1, timeout, page.next_cursor, events)
 

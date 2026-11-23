@@ -55,8 +55,9 @@ async def test_a_hung_upstream_times_out_instead_of_hanging_the_poll() -> None:
 
 
 @pytest.mark.asyncio
-async def test_listing_follows_upstream_pages() -> None:
-    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two", "c.three")))
+@pytest.mark.parametrize("cursor", ("1", ""))
+async def test_listing_follows_upstream_pages(cursor: str) -> None:
+    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two", "c.three")), second_page_cursor=cursor)
     async with events_client(upstream) as client:
         listed: Final = await list_all(client, 10, 5.0)
     assert [item.name for item in listed] == ["a.one", "b.two", "c.three"]
