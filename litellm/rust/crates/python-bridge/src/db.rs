@@ -188,23 +188,15 @@ impl NativeDatabase {
     }
 
     fn set_writer_password(&self, password: String) {
-        self.pools.writer().set_connect_options(
-            self.writer_endpoint
-                .with_password(SecretValue::new(password))
-                .connect_options(),
-        );
+        self.pools.set_writer_password(SecretValue::new(password));
     }
 
     fn set_reader_password(&self, password: String) -> PyResult<()> {
-        let (Some(endpoint), Some(pool)) = (&self.reader_endpoint, self.pools.reader_pool()) else {
-            return Err(PyValueError::new_err("no read replica is configured"));
-        };
-        pool.set_connect_options(
-            endpoint
-                .with_password(SecretValue::new(password))
-                .connect_options(),
-        );
-        Ok(())
+        if self.pools.set_reader_password(SecretValue::new(password)) {
+            Ok(())
+        } else {
+            Err(PyValueError::new_err("no read replica is configured"))
+        }
     }
 
     fn health_check<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {

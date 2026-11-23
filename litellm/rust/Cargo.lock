@@ -4044,6 +4044,7 @@ dependencies = [
  "litellm-circuit-breaker",
  "litellm-error",
  "litellm-secret-value",
+ "openssl",
  "rstest",
  "serde",
  "sqlx",
@@ -5605,6 +5606,23 @@ dependencies = [
  "mime",
  "spin 0.9.9",
  "version_check",
+]
+
+[[package]]
+name = "native-tls"
+version = "0.2.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "465500e14ea162429d264d44189adc38b199b62b1c21eea9f69e4b73cb03bbf2"
+dependencies = [
+ "libc",
+ "log",
+ "openssl",
+ "openssl-probe",
+ "openssl-sys",
+ "schannel",
+ "security-framework",
+ "security-framework-sys",
+ "tempfile",
 ]
 
 [[package]]
@@ -7637,6 +7655,7 @@ dependencies = [
  "indexmap 2.14.0",
  "log",
  "memchr",
+ "native-tls",
  "percent-encoding",
  "rustls 0.23.42",
  "rustls-native-certs",
