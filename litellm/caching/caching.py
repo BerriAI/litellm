@@ -102,13 +102,50 @@ def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
     return vars(embedding_response)
 
 
+def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    return mapping if isinstance(raw_extra_body, dict) else None
+
+
+def _concrete_sequence(value: object) -> Sequence[object] | None:
+    if not isinstance(value, (list, tuple)):
+        return None
+    return cast(Sequence[object], value)  # cast-ok: isinstance leaves the item type unknown
+
+
+def _extra_body_pair(item: object) -> tuple[str, object] | None:
+    pair: Final = item if isinstance(item, str) else _concrete_sequence(item)
+    if pair is None or len(pair) != 2:
+        return None
+    key: Final = pair[0]
+    return (key, pair[1]) if isinstance(key, str) else None
+
+
+def _extra_body_from_pairs(raw_extra_body: object) -> Mapping[str, object] | None:
+    items: Final = _concrete_sequence(raw_extra_body)
+    if items is None:
+        return None
+    pairs: Final = tuple(pair for pair in map(_extra_body_pair, items) if pair is not None)
+    return dict(pairs) if len(pairs) == len(items) else None
+
+
+def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
+    mapping: Final = as_str_mapping(raw_extra_body)
+    extra_body: Final = mapping if mapping is not None else _extra_body_from_pairs(raw_extra_body)
+    if extra_body is None:
+        return {}
+    token_ids_keyed_separately: Final = isinstance(raw_extra_body, dict)
+    return {
+        key: value
+        for key, value in extra_body.items()
+        if key not in _ALWAYS_KEYED_PROVIDER_PARAMS or (not token_ids_keyed_separately and value)
+    }
+
+
 def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
-    raw_extra_body: Final = kwargs.get("extra_body")
-    if not isinstance(raw_extra_body, dict):
+    extra_body: Final = _extra_body_mapping(kwargs.get("extra_body"))
+    if extra_body is None:
         return ""
-    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
-        Mapping[str, object], raw_extra_body
-    )
     return "".join(
         f"extra_body.{param}: {extra_body[param]}"
         for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
@@ -625,6 +662,8 @@ class Cache:
                 and kwargs[param] is not None
             ):
                 yield param, kwargs[param]
+            elif param == "extra_body" and (forwarded := _extra_body_beyond_always_keyed_params(kwargs[param])):
+                yield param, forwarded
 
     def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
         is_semantic_cache: Final = self._is_semantic_cache()
