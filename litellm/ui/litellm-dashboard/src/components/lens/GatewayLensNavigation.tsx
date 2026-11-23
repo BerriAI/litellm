@@ -16,6 +16,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { z } from "zod";
+import { navMenuButtonClassName, navMenuClassName } from "@/components/shared/sidebarStyles";
 import {
   Combobox,
   ComboboxContent,
@@ -25,6 +26,7 @@ import {
   ComboboxTrigger,
 } from "@/components/ui/combobox";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar } from "@/components/ui/sidebar";
+import { cn } from "@/lib/cva.config";
 
 export const LENS_FRAME_CHANNEL = "litellm-lens:v1";
 
@@ -92,9 +94,11 @@ export function GatewayLensNavigation({ collapsed }: { collapsed: boolean }) {
     navigation.select(selection);
     setOpenMobile(false);
   };
+  const menuClassName = collapsed ? navMenuClassName : undefined;
+  const buttonClassName = collapsed ? navMenuButtonClassName : undefined;
   return (
-    <nav aria-label={t("lensWorkspace.frameTitle")} className="flex flex-col gap-2 px-3 pb-3">
-      <SidebarMenu>
+    <nav aria-label={t("lensWorkspace.frameTitle")} className={cn("flex flex-col px-3 pb-3", menuClassName ?? "gap-2")}>
+      <SidebarMenu className={menuClassName}>
         {!collapsed && selectedAgent !== null && (
           <SidebarMenuItem>
             <Combobox
@@ -133,6 +137,7 @@ export function GatewayLensNavigation({ collapsed }: { collapsed: boolean }) {
                 aria-description={status}
                 title={status}
                 tooltip={label}
+                className={buttonClassName}
                 onClick={() => select({ type: "tab", value })}
               >
                 <Icon aria-hidden />
@@ -142,10 +147,11 @@ export function GatewayLensNavigation({ collapsed }: { collapsed: boolean }) {
           );
         })}
       </SidebarMenu>
-      <SidebarMenu>
+      <SidebarMenu className={menuClassName}>
         <SidebarMenuItem>
           <SidebarMenuButton
             tooltip={t("lensWorkspace.docs")}
+            className={buttonClassName}
             render={<a href="https://docs.litellm.ai/docs/proxy/lens" target="_blank" rel="noreferrer" />}
           >
             <BookOpen aria-hidden />
@@ -155,6 +161,7 @@ export function GatewayLensNavigation({ collapsed }: { collapsed: boolean }) {
         <SidebarMenuItem>
           <SidebarMenuButton
             tooltip={bookCallLabel}
+            className={buttonClassName}
             render={
               <a
                 href="https://calendly.com/d/dtr8-nnr-3yy/litellm-product-team-feedback"
