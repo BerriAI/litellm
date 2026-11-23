@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast, get_type_hints
 
 import httpx
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -21,6 +21,7 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     LiteLLMResponsesTransformationHandler,
 )
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
+from litellm.exceptions import UnsupportedParamsError
 from litellm.integrations.anthropic_cache_control_hook import (
     CARRY_UNMATCHED_MESSAGE_POINTS,
     AnthropicCacheControlHook,
@@ -31,15 +32,27 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
     is_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
 )
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.bridged_audio_output import (
+    AudioOnlyModel,
+    AudioRequested,
+    bridged_audio_output_request,
+    raise_audio_output_refusal,
+)
+from litellm.litellm_core_utils.core_helpers import (
+    allowed_openai_param_names,
+    drops_unsupported_params,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
+from litellm.llms.azure_ai.common_utils import is_foundry_v1_model_router
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
@@ -83,7 +96,7 @@ if TYPE_CHECKING:
 else:
     MCPTool = Any
 
-from .streaming_iterator import BaseResponsesAPIStreamingIterator
+from .streaming_iterator import BaseResponsesAPIStreamingIterator, ResponsesWsFrameCheck
 
 __all__ = (
     "acancel_responses",
@@ -222,6 +235,7 @@ async def aresponses_api_with_mcp(
         mcp_tools_with_litellm_proxy,
         other_tools,
     ) = await LiteLLM_Proxy_MCP_Handler.split_mcp_tools(tools)
+    raise_if_mcp_tool_choice_forces_a_gateway_server(tool_choice, mcp_tools_with_litellm_proxy, model)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
     # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
@@ -465,25 +479,104 @@ def _bridges_to_chat_completions(
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
 
 
-def _bridge_kwargs(
-    kwargs: Mapping[str, object],
-    responses_api_provider_config: BaseResponsesAPIConfig | None,
-    allowed_openai_params: Sequence[str] | None,
-) -> Mapping[str, object]:
-    if responses_api_provider_config is None:
-        return MappingProxyType(
-            {key: value for key, value in kwargs.items() if key not in _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED}
-        )
-    forwarded_keys: Final = frozenset(
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+def follows_a_bridged_model_router_turn(
+    model: str, custom_llm_provider: str | None, api_base: str | None, previous_response_id: object
+) -> bool:
+    return (
+        custom_llm_provider == "azure_ai"
+        and is_foundry_v1_model_router(model, api_base)
+        and answered_by_the_chat_bridge(previous_response_id)
+    )
+
+
+_RESPONSES_REQUEST_FIELDS: Final = frozenset(get_type_hints(ResponsesAPIOptionalRequestParams))
+
+
+@dataclass(frozen=True, slots=True)
+class _UntranslatableResponsesFields:
+    fields: tuple[str, ...]
+
+
+def _chat_completion_request_fields(allowed_openai_params: Sequence[str] | None) -> frozenset[str]:
+    return frozenset(
         (
             *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
             *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
-            *(allowed_openai_params or ()),
+            *allowed_openai_param_names(allowed_openai_params),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
-    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+
+
+_ADDITIONAL_DROP_PARAMS: Final = TypeAdapter(list[str])
+
+
+def _explicitly_dropped_fields(kwargs: Mapping[str, object]) -> frozenset[str]:
+    try:
+        return frozenset(_ADDITIONAL_DROP_PARAMS.validate_python(kwargs.get("additional_drop_params")))
+    except ValidationError:
+        return frozenset()
+
+
+def _bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+) -> Mapping[str, object] | _UntranslatableResponsesFields:
+    forwarded_keys: Final = _chat_completion_request_fields(allowed_openai_params)
+    if responses_api_provider_config is not None:
+        return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+    candidate_keys: Final = _RESPONSES_REQUEST_FIELDS.difference(forwarded_keys, _explicitly_dropped_fields(kwargs))
+    untranslatable: Final = tuple(sorted(key for key in candidate_keys if kwargs.get(key) is not None))
+    if untranslatable and not drops_unsupported_params(kwargs.get("drop_params")):
+        return _UntranslatableResponsesFields(untranslatable)
+    dropped_keys: Final = _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED.union(untranslatable)
+    return MappingProxyType({key: value for key, value in kwargs.items() if key not in dropped_keys})
+
+
+def _raise_untranslatable_responses_fields(
+    failure: _UntranslatableResponsesFields, model: str, custom_llm_provider: str | None
+) -> NoReturn:
+    fields: Final = list(failure.fields)
+    raise UnsupportedParamsError(
+        status_code=400,
+        model=model,
+        llm_provider=custom_llm_provider,
+        message=(
+            f"{custom_llm_provider} does not support parameters: {fields}, for model={model}. "
+            "The Responses API to chat completions bridge cannot translate them. "
+            "To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n "
+            f"If you want to use these params dynamically send allowed_openai_params={fields} in your request."
+        ),
+    )
+
+
+def _chat_completions_bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+    model: str,
+    custom_llm_provider: str | None,
+) -> Mapping[str, object]:
+    bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+    if isinstance(bridge_kwargs, _UntranslatableResponsesFields):
+        _raise_untranslatable_responses_fields(bridge_kwargs, model, custom_llm_provider)
+    chat_kwargs: Final = bridged_audio_output_request(bridge_kwargs, model, custom_llm_provider)
+    if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
+        raise_audio_output_refusal(chat_kwargs, "/v1/responses")
+    return chat_kwargs
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
@@ -599,10 +692,12 @@ def provider_stores_the_conversation(model: str, custom_llm_provider: str | None
     first MCP round runs as an internal call that writes no spend log at all.
     """
     api_base: Final = _api_base_kwarg(kwargs)
+    provider: Final = custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1]
     return not _will_bridge_to_chat_completions(
         model,
-        custom_llm_provider or litellm.get_llm_provider(model=model, api_base=api_base)[1],
-        bool(kwargs.get("use_chat_completions_api")),
+        provider,
+        bool(kwargs.get("use_chat_completions_api"))
+        or follows_a_bridged_model_router_turn(model, provider, api_base, kwargs.get("previous_response_id")),
         kwargs.get("model_info"),
         api_base,
     )
@@ -777,14 +872,18 @@ async def aresponses(
             litellm_logging_obj, LiteLLMLoggingObj
         ) and litellm_logging_obj.should_run_prompt_management_hooks(prompt_id=prompt_id, non_default_params=kwargs):
             client_input: Final = ResponsesAPIRequestUtils.responses_input_to_chat_messages(input)
+            hook_api_base: Final = _api_base_kwarg(kwargs)
             with _prompt_management_sees_a_provisional_message_list(
                 kwargs,
                 bridged=_will_bridge_to_chat_completions(
                     model,
                     custom_llm_provider,
-                    bool(kwargs.get("use_chat_completions_api")),
+                    bool(kwargs.get("use_chat_completions_api"))
+                    or follows_a_bridged_model_router_turn(
+                        model, custom_llm_provider, hook_api_base, previous_response_id
+                    ),
                     kwargs.get("model_info"),
-                    _api_base_kwarg(kwargs),
+                    hook_api_base,
                 ),
             ):
                 _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input, tools)
@@ -1340,7 +1439,6 @@ def responses(
         _stripped_model, _from_chat_completions_prefix = _normalize_openai_chat_completions_responses_model(model)
         model = _stripped_model
         local_vars["model"] = model
-        use_chat_completions_api = use_chat_completions_api or _from_chat_completions_prefix
 
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
@@ -1351,6 +1449,17 @@ def responses(
                 ),
             )
             local_vars["custom_llm_provider"] = custom_llm_provider
+
+        use_chat_completions_api = (
+            use_chat_completions_api
+            or _from_chat_completions_prefix
+            or follows_a_bridged_model_router_turn(
+                model,
+                custom_llm_provider,
+                _api_base_kwarg(cast("Mapping[str, object]", kwargs)),  # cast-ok: kwargs is the untyped request dict
+                previous_response_id,
+            )
+        )
 
         input, model, custom_llm_provider, deployment_model_info = _apply_prompt_management_to_responses_call(
             input=input,
@@ -1516,8 +1625,11 @@ def responses(
             return _file_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
-            bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
+            chat_kwargs: Final = _chat_completions_bridge_kwargs(
+                kwargs, responses_api_provider_config, allowed_openai_params, model, custom_llm_provider
+            )
             return litellm_completion_transformation_handler.response_api_handler(
+                (previous_response_id,) if previous_response_id else (),
                 model=model,
                 input=input,
                 responses_api_request=response_api_optional_params,
@@ -1528,7 +1640,7 @@ def responses(
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **bridge_kwargs,
+                **chat_kwargs,
             )
 
         # Get optional parameters for the responses API
@@ -1953,7 +2065,7 @@ async def alist_input_items(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> dict:
+) -> dict[str, object]:
     """Async: List input items for a response"""
     local_vars: Final = locals()
     try:
@@ -2009,7 +2121,7 @@ def list_input_items(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> dict | Coroutine[object, object, dict]:
+) -> dict[str, object] | Coroutine[object, object, dict[str, object]]:
     """List input items for a response"""
     local_vars: Final = locals()
     try:
@@ -2510,6 +2622,7 @@ async def _aresponses_websocket(
     api_base: str | None = None,
     api_key: str | None = None,
     timeout: float | None = None,
+    responses_ws_frame_check: ResponsesWsFrameCheck | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -2602,5 +2715,6 @@ async def _aresponses_websocket(
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
         request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
+        frame_check=responses_ws_frame_check,
         **remaining_kwargs,
     )

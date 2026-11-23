@@ -3,9 +3,18 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Coroutine, Mapping, Sequence
+from collections.abc import (
+    AsyncGenerator,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Coroutine,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from datetime import datetime
-from functools import lru_cache
+from functools import lru_cache, partial
 from itertools import chain
 from types import MappingProxyType
 from typing import (
@@ -58,6 +67,13 @@ from litellm.litellm_core_utils.bug_report import (
     should_report_bug,
     strip_bug_report_notice,
 )
+from litellm.litellm_core_utils.cloud_storage_security import (
+    file_id_embeds_s3_uri_matching,
+    is_managed_s3_uri,
+    media_file_ids,
+    names_an_unlisted_s3_bucket,
+    s3_media_uris,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_or_create_metadata_bucket,
     independent_snapshot,
@@ -74,6 +90,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
     guardrail_entries,
     guardrail_information_cost,
+    is_str_keyed_dict,
     object_mapping,
 )
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
@@ -88,14 +105,14 @@ from litellm.litellm_core_utils.streaming_handler import (
     backfill_missing_cache_usage_fields,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy, MalformedField, drop_policy, resolve_tool_fields
-from litellm.proxy._types import LiteLLMRoutes, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
     can_key_call_resolved_model,
     is_model_cost_zero,
     request_skips_budget_checks,
     tag_max_budget_check_for_tags,
 )
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe, get_request_route
+from litellm.proxy.auth.auth_utils import check_response_size_is_safe, client_side_s3_bucket_check, get_request_route
 from litellm.proxy.bug_report_config import build_proxy_bug_report
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
@@ -126,6 +143,10 @@ from litellm.proxy.common_utils.sse_keepalive import (
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedResourceAccessChecker,
+    is_base64_encoded_unified_file_id,
+)
 from litellm.proxy.route_llm_request import (
     route_request,
 )
@@ -338,11 +359,22 @@ def should_return_raw_model_name(request_data: dict[str, object]) -> bool:
 _should_return_raw_model_name: Final = should_return_raw_model_name
 
 
-def _apply_client_disconnect_metadata(target_metadata: dict[str, object] | None) -> None:
-    if target_metadata is None:
+def _apply_client_disconnect_metadata(target_metadata: object) -> None:
+    if not is_str_keyed_dict(target_metadata):
         return
     target_metadata["client_disconnected"] = True
     target_metadata["error_information"] = dict(_CLIENT_DISCONNECTED_ERROR_INFORMATION)
+
+
+def _apply_client_disconnect_to_logged_metadata(params: dict[str, object]) -> None:
+    if params.get("metadata") is None:
+        params["metadata"] = {}  # rebind-ok: the spend logger reads the marker from this shared request dict
+    metadata: Final = params["metadata"]
+    if is_str_keyed_dict(metadata):
+        _apply_client_disconnect_metadata(metadata)
+    litellm_metadata: Final = params.get("litellm_metadata")
+    if is_str_keyed_dict(litellm_metadata) and litellm_metadata:
+        _apply_client_disconnect_metadata(litellm_metadata)
 
 
 async def _record_streaming_client_disconnect_if_needed(
@@ -362,34 +394,13 @@ async def _record_streaming_client_disconnect_if_needed(
 
     logging_obj: Final = request_data.get("litellm_logging_obj")
     if logging_obj is not None:
-        litellm_params: Final = logging_obj.model_call_details.setdefault("litellm_params", {})
-        _lp_metadata = litellm_params.get("metadata")
-        if _lp_metadata is None:
-            _lp_metadata = {}
-            litellm_params["metadata"] = _lp_metadata
-        _apply_client_disconnect_metadata(_lp_metadata)
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details.setdefault("litellm_params", {}))
+        _apply_client_disconnect_to_logged_metadata(logging_obj.model_call_details)
 
-        _mcd_metadata = logging_obj.model_call_details.get("metadata")
-        if _mcd_metadata is None:
-            _mcd_metadata = {}
-            logging_obj.model_call_details["metadata"] = _mcd_metadata
-        _apply_client_disconnect_metadata(_mcd_metadata)
-
-    _rd_metadata = request_data.get("metadata")
-    if _rd_metadata is None:
-        _rd_metadata = {}
-        request_data["metadata"] = _rd_metadata
-    _apply_client_disconnect_metadata(_rd_metadata)
-
-    _rd_litellm_params = request_data.get("litellm_params")
-    if _rd_litellm_params is None:
-        _rd_litellm_params = {}
-        request_data["litellm_params"] = _rd_litellm_params
-    _rd_lp_metadata = _rd_litellm_params.get("metadata")
-    if _rd_lp_metadata is None:
-        _rd_lp_metadata = {}
-        _rd_litellm_params["metadata"] = _rd_lp_metadata
-    _apply_client_disconnect_metadata(_rd_lp_metadata)
+    _apply_client_disconnect_to_logged_metadata(request_data)
+    if request_data.get("litellm_params") is None:
+        request_data["litellm_params"] = {}
+    _apply_client_disconnect_to_logged_metadata(request_data["litellm_params"])
 
     verbose_proxy_logger.debug(
         "Recorded streaming client disconnect with error_code=499 for litellm_call_id=%s",
@@ -456,7 +467,10 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
     logging object) would never reach spend tracking. Assemble the partial
     response from the wrapper's collected chunks and dispatch success logging
     for it; dispatch_success_handlers dedups against a natural end-of-stream
-    dispatch via has_dispatched_final_stream_success.
+    dispatch via has_dispatched_final_stream_success. A Responses API partial
+    already carries the usage of every deployment the stream went through, so
+    it replaces the partial usage a failed earlier attempt left on the logging
+    object instead of being overridden by it.
 
     Awaited directly by the shielded cleanup rather than scheduled with
     create_task: the client is already gone so the extra latency is harmless,
@@ -478,12 +492,13 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: dict, respons
         # A natural end-of-stream success event already fired and released the
         # slot; do not bill again, and let the caller skip the slot release.
         return True
-    partial_responses_event: Final = partial_responses_incomplete_event_on_disconnect(response)
+    partial_responses_event: Final = await asyncio.to_thread(partial_responses_incomplete_event_on_disconnect, response)
     if partial_responses_event is not None:
         verbose_proxy_logger.debug(
             "Billing partial streamed Responses API spend after client disconnect, litellm_call_id=%s",
             sanitize_for_log(logging_obj.litellm_call_id),
         )
+        logging_obj.model_call_details.pop("combined_usage_object", None)
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
     chunks: Final[object] = getattr(response, "chunks", None)
     if not isinstance(chunks, list) or not chunks:
@@ -854,6 +869,81 @@ def _request_model(data: Mapping[str, object]) -> str | list[str] | None:
         return _REQUEST_MODEL.validate_python(data.get("model"), strict=True)
     except ValidationError:
         return None
+
+
+async def _key_may_read_unified_file_id(
+    managed_files: ManagedResourceAccessChecker, user_api_key_dict: UserAPIKeyAuth, unified_file_id: str
+) -> bool:
+    try:
+        return await managed_files.can_user_call_unified_file_id(unified_file_id, user_api_key_dict)
+    except HTTPException:
+        return False
+
+
+async def _leading_readable_file_ids(
+    managed_files: ManagedResourceAccessChecker, user_api_key_dict: UserAPIKeyAuth, unified_file_ids: Iterable[str]
+) -> AsyncIterator[str]:
+    for file_id in unified_file_ids:
+        if not await _key_may_read_unified_file_id(managed_files, user_api_key_dict, file_id):
+            return
+        yield file_id
+
+
+async def _unified_file_ids_the_key_may_read(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    managed_files: object,
+    is_refused: Callable[[str], bool],
+) -> frozenset[str]:
+    if not isinstance(managed_files, ManagedResourceAccessChecker):
+        return frozenset()
+    file_ids_hiding_a_refused_uri: Final = filter(
+        partial(file_id_embeds_s3_uri_matching, matches=is_refused),
+        filter(is_base64_encoded_unified_file_id, media_file_ids(data)),
+    )
+    return frozenset(
+        [
+            file_id
+            async for file_id in _leading_readable_file_ids(
+                managed_files, user_api_key_dict, file_ids_hiding_a_refused_uri
+            )
+        ]
+    )
+
+
+def _unlisted_s3_uri_check(general_settings: Mapping[str, object]) -> Callable[[str], bool]:
+    if general_settings.get("allow_client_side_credentials") is True:
+        return lambda _: False
+    return partial(names_an_unlisted_s3_bucket, is_listed=client_side_s3_bucket_check(general_settings))
+
+
+async def refuse_s3_media_the_key_may_not_read(
+    data: Mapping[str, object],
+    user_api_key_dict: UserAPIKeyAuth,
+    general_settings: Mapping[str, object],
+    managed_files: object,
+) -> None:
+    if not s3_media_uris(data) or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    is_unlisted: Final = _unlisted_s3_uri_check(general_settings)
+    readable_file_ids: Final = await _unified_file_ids_the_key_may_read(
+        data, user_api_key_dict, managed_files, lambda uri: is_managed_s3_uri(uri) or is_unlisted(uri)
+    )
+    s3_uris: Final = s3_media_uris(data, readable_file_ids)
+    managed_uris: Final = tuple(filter(is_managed_s3_uri, s3_uris))
+    if managed_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs under LiteLLM-managed storage can only be sent by a proxy admin key "
+            f"({', '.join(managed_uris)}). Use a LiteLLM managed file id that this key's user or team created.",
+        )
+    unlisted_uris: Final = tuple(filter(is_unlisted, s3_uris))
+    if unlisted_uris:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Raw s3:// URIs can only name a bucket listed in `general_settings.allowed_client_side_s3_buckets` "
+            f"({', '.join(unlisted_uris)}). Ask the proxy admin to list the bucket there.",
+        )
 
 
 async def _enforce_guardrail_added_tag_budgets(
@@ -2277,6 +2367,13 @@ class ProxyBaseLLMRequestProcessing:
                 type=ProxyErrorTypes.bad_request_error,
                 param="model",
                 code=status.HTTP_400_BAD_REQUEST,
+            )
+        if route_type != "call_mcp_tool":
+            await refuse_s3_media_the_key_may_not_read(
+                self.data,
+                user_api_key_dict,
+                general_settings,
+                proxy_logging_obj.get_proxy_hook("managed_files"),
             )
         self.data = await add_litellm_data_to_request(
             data=self.data,

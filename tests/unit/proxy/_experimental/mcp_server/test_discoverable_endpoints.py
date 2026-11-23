@@ -6056,11 +6056,35 @@ _LAPTOP_LOOPBACK_REDIRECT: Final = "http://127.0.0.1:33418/"
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("opt_in", [None, "false"])
+@pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
+async def test_register_bridge_keeps_client_callback_without_gateway_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+    opt_in: str | None,
+    auth_type_value: Literal["oauth_delegate", "true_passthrough"],
+) -> None:
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    if opt_in is None:
+        monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", opt_in)
+    response, upstream, persisted = await _bridge_register_response(
+        _bridge_server(auth_type=MCPAuth(auth_type_value)),
+        {"client_name": "backend", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
+    )
+
+    assert upstream.post.call_args.kwargs["json"]["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    assert upstream.post.call_args.kwargs["json"]["client_name"] == "backend"
+    assert json.loads(response.body.decode("utf-8"))["redirect_uris"] == [_LAPTOP_LOOPBACK_REDIRECT]
+    persisted.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("auth_type_value", ["oauth_delegate", "true_passthrough"])
 async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_laptop_loopback(
     monkeypatch: pytest.MonkeyPatch, auth_type_value: Literal["oauth_delegate", "true_passthrough"]
 ) -> None:
-    """A laptop MCP client (VS Code) registers with its own loopback redirect. With PROXY_BASE_URL set
+    """A laptop MCP client (VS Code) registers with its own loopback redirect. With explicit opt-in
     the gateway must not relay that registration upstream: it registers its one shared client bound
     to the gateway /callback, keeps it, and hands the caller a client bound to the caller's loopback.
     Relaying the loopback is the customer failure on upstreams that restrict redirect domains."""
@@ -6069,6 +6093,7 @@ async def test_register_bridge_with_proxy_base_url_registers_gateway_client_not_
     from litellm.types.mcp import MCPAuth
 
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     response, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(auth_type=MCPAuth(auth_type_value)),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6090,6 +6115,7 @@ async def test_register_bridge_without_database_still_relays_client_registration
     """A database-free gateway cannot keep the shared client past this process, so even with
     PROXY_BASE_URL set it relays the caller's own registration instead of stranding the next authorize."""
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6107,6 +6133,7 @@ async def test_register_bridge_without_proxy_base_url_still_relays_client_regist
     """Without PROXY_BASE_URL the gateway cannot keep a shared client, so the relay arm remains the
     fallback and the caller's own redirect goes upstream as before."""
     monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.setenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", "true")
     _, mock_async_client, mock_persist = await _bridge_register_response(
         _bridge_server(),
         {"client_name": "Visual Studio Code", "redirect_uris": [_LAPTOP_LOOPBACK_REDIRECT]},
@@ -6154,6 +6181,7 @@ async def test_authorize_clientless_bridge_loads_shared_client_before_choosing_t
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import authorize_with_server
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -6215,6 +6243,7 @@ async def test_token_clientless_bridge_loads_shared_client_before_choosing_the_a
     client and the gateway /callback, and with none yet it relays the caller's own client and redirect."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server: Final = _bridge_server(url="https://mcp.example.com/mcp")
@@ -9942,6 +9971,7 @@ async def test_hydrate_config_server_applies_stored_dcr_client(monkeypatch, lega
     """On restart a config server's in-memory object has no client_id; hydration overlays the
     persisted DCR client from the server-scoped store, decrypting the encrypted-at-rest blob, so the
     refresh_token grant can authenticate as the registered client instead of re-authenticating."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
@@ -10001,6 +10031,7 @@ async def test_reuse_config_server_reads_store_with_real_crypto(monkeypatch):
     """A config-declared server (rowless) keeps its DCR client in the store, so the reuse read
     resolves it from the store and decrypts the encrypted-at-rest client, mirroring the write path so
     a re-authorize reuses the client instead of re-minting one."""
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     import litellm.proxy.common_utils.encrypt_decrypt_utils as enc
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
     from litellm.proxy._experimental.mcp_server.db import encrypt_credentials
@@ -14044,6 +14075,7 @@ def test_persisted_client_remains_usable_for_its_issuer(issuer, url, monkeypatch
         _PersistedDcrCredentials,
     )
 
+    monkeypatch.delenv("LITELLM_MCP_DCR_GATEWAY_CLIENT", raising=False)
     monkeypatch.setenv("LITELLM_SALT_KEY", "test-registration-binding")
     server = _issuer_anchored_oauth_server(issuer).model_copy(update={"url": url, "client_id": None})
     credentials = _PersistedDcrCredentials(
@@ -14834,11 +14866,23 @@ async def test_saved_refresh_metadata_is_bound_to_the_callers_stored_grant(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "prior_scopes, expected", [(["tools.read"], "tools.read tools.write"), (None, "tools.write"), ([], "tools.write")]
+    "prior_scopes, scope, expected",
+    [
+        (["tools.read"], "tools.write", "tools.read tools.write"),
+        (None, "tools.write", "tools.write"),
+        ([], "tools.write", "tools.write"),
+        (["logs_read_data", "dashboards_read"], "mcp_all", "mcp_all"),
+        (["logs_read_data", "dashboards_read"], "openid mcp_all", "openid mcp_all"),
+        (["tools.read"], "mcp_allowed", "tools.read mcp_allowed"),
+    ],
 )
-async def test_managed_authorize_retains_the_callers_previous_grant(
-    jwt_oauth_identity, monkeypatch, prior_scopes, expected
-):
+async def test_managed_authorize_retains_the_previous_grant_except_for_a_wildcard_request(
+    jwt_oauth_identity: tuple["JWTHandler", "RSAPrivateKey"],
+    monkeypatch: pytest.MonkeyPatch,
+    prior_scopes: list[str] | None,
+    scope: str,
+    expected: str,
+) -> None:
     from types import SimpleNamespace
     from urllib.parse import parse_qs, urlsplit
 
@@ -14864,7 +14908,7 @@ async def test_managed_authorize_retains_the_callers_previous_grant(
         server,
         "scope-client",
         "http://127.0.0.1:9/cb",
-        scope="tools.write",
+        scope=scope,
         code_challenge="challenge",
         code_challenge_method="S256",
     )
@@ -15133,6 +15177,7 @@ async def test_connect_requires_the_requested_vendor_grant(monkeypatch, granted,
 
 
 _SLACK_SCOPES: Final = frozenset(("channels:read", "chat:write", "files:write"))
+_DATADOG_EXPANSION: Final = ("logs_read_index_data", "dashboards_read", "mcp_read", "mcp_write")
 _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
 
 
@@ -15151,6 +15196,10 @@ _COMMA_NAMED_SCOPES: Final = frozenset(("files:read", "files:read,write"))
         (("read", "write"), ("read", "write"), frozenset[str](), True),
         ((), ("read",), frozenset(("read",)), False),
         ((), (), frozenset[str](), True),
+        (_DATADOG_EXPANSION, ("mcp_all",), frozenset[str](), True),
+        (("channels:read,chat:write",), ("mcp_all", "channels:read"), _SLACK_SCOPES, True),
+        ((), ("mcp_all",), frozenset[str](), False),
+        (_DATADOG_EXPANSION, ("mcp_all", "admin"), frozenset[str](), False),
     ],
 )
 def test_grant_covers_scopes_splits_a_lone_token_only_into_known_scopes(

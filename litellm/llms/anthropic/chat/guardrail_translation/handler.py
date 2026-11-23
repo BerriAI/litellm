@@ -13,7 +13,7 @@ Pattern Overview:
 """
 
 import json
-from collections.abc import Mapping, MutableSequence, Sequence
+from collections.abc import Iterable, Mapping, MutableSequence, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from itertools import chain, repeat
@@ -27,8 +27,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
+    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
+    truncate_tool_name,
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
@@ -197,6 +199,60 @@ def _is_client_tool_use(block: Mapping[str, object]) -> bool:
     )
 
 
+def _tool_use_name(block: object) -> str | None:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") != "tool_use":
+        return None
+    return anthropic_tool_name(fields)
+
+
+def _tool_use_names(message: object) -> tuple[str, ...]:
+    return tuple(name for name in map(_tool_use_name, list_field(message, "content")) if name is not None)
+
+
+@dataclass(frozen=True, slots=True)
+class _OriginalToolNames:
+    """Caller tool names over the guardrail's limit, keyed by the shortened name the guardrail sees."""
+
+    declared: Mapping[str, str]
+    used: Mapping[str, str]
+
+
+def _restorable_names(names: Iterable[str]) -> Mapping[str, str]:
+    listed: Final = tuple(names)
+    taken: Final = frozenset(listed)
+    shortened: Final = tuple(
+        (truncate_tool_name(name), name) for name in listed if len(name) > OPENAI_MAX_TOOL_NAME_LENGTH
+    )
+    return MappingProxyType({alias: name for alias, name in shortened if alias not in taken})
+
+
+def _original_tool_names(request: Mapping[str, object]) -> _OriginalToolNames:
+    return _OriginalToolNames(
+        declared=_restorable_names(chain.from_iterable(map(anthropic_tool_names, list_field(request, "tools")))),
+        used=_restorable_names(chain.from_iterable(map(_tool_use_names, list_field(request, "messages")))),
+    )
+
+
+def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[str, str]) -> None:
+    for message in messages:
+        for block in list_field(message, "content"):
+            if (name := _tool_use_name(block)) is not None and name in original_names and isinstance(block, dict):
+                block["name"] = original_names[name]
+
+
+def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
+    if "function" not in tool:
+        return tool
+    function: Final = tool["function"]
+    fields: Final = as_str_mapping(function)
+    name: Final = None if fields is None else fields.get("name")
+    original: Final = original_names.get(name) if isinstance(name, str) else None
+    if original is None:
+        return tool
+    return {**tool, "function": {**function, "name": original}}
+
+
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
     if not isinstance(system, list):
         return
@@ -296,6 +352,11 @@ class _AnthropicSSEDelta(TypedDict, total=False):
 
 class _AnthropicSSEEvent(TypedDict, total=False):
     delta: ReadOnly[_AnthropicSSEDelta]
+
+
+def _mapping_type(value: object) -> object:
+    mapping: Final = as_str_mapping(value)
+    return mapping.get("type") if mapping is not None else None
 
 
 class AnthropicMessagesHandler(BaseTranslation):
@@ -411,6 +472,17 @@ class AnthropicMessagesHandler(BaseTranslation):
         open_index, max_index = self._content_block_state(responses_so_far)
         new_index: Final = (max_index + 1) if max_index is not None else 0
         chunks: list[bytes] = []
+        if open_index is not None and self._is_unsigned_thinking_block(responses_so_far, open_index):
+            chunks.append(
+                _sse(
+                    "content_block_delta",
+                    {
+                        "type": "content_block_delta",
+                        "index": open_index,
+                        "delta": {"type": "signature_delta", "signature": ""},
+                    },
+                )
+            )
         if open_index is not None:
             chunks.append(_sse("content_block_stop", {"type": "content_block_stop", "index": open_index}))
         chunks += [
@@ -442,6 +514,18 @@ class AnthropicMessagesHandler(BaseTranslation):
             _sse("message_stop", {"type": "message_stop"}),
         ]
         return chunks
+
+    @staticmethod
+    def _is_unsigned_thinking_block(responses_so_far: Sequence[object], index: int) -> bool:
+        events: Final = tuple(
+            event
+            for event in chain.from_iterable(map(AnthropicMessagesHandler._iter_sse_events, responses_so_far))
+            if event.get("index") == index
+        )
+        return any(
+            event.get("type") == "content_block_start" and _mapping_type(event.get("content_block")) == "thinking"
+            for event in events
+        ) and not any(_mapping_type(event.get("delta")) == "signature_delta" for event in events)
 
     @staticmethod
     def _content_block_state(
@@ -624,6 +708,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             model: Final = data.get("model")
             if model:
                 inputs["model"] = model
+            original_tool_names: Final = _original_tool_names(
+                cast(Mapping[str, object], data)  # cast-ok: Anthropic request body
+            )
             guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -638,7 +725,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
                 for tool in guardrailed_tools:
-                    converted_tool, mcp_server = anthropic_config.map_tool_helper(tool)
+                    converted_tool, mcp_server = anthropic_config.map_tool_helper(
+                        _with_original_name(tool, original_tool_names.declared)
+                    )
                     if converted_tool is not None:
                         anthropic_tools.append(converted_tool)
                     # Note: MCP servers are handled separately in the main transformation
@@ -671,6 +760,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     ),
                     hoisted_system_message=hoisted_system_message,
                     preserve_system_messages=has_midturn_system_message,
+                    original_tool_names=original_tool_names.used,
                 )
             else:
                 if guardrailed_texts and len(guardrailed_texts) != len(scanned):
@@ -835,6 +925,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         structured_messages: list,  # mutable-ok: API message payload
         hoisted_system_message: object = None,
         preserve_system_messages: bool = False,
+        *,
+        original_tool_names: Mapping[str, str],
     ) -> None:
         """Write a guardrail's structured-message rewrite back without losing corrections."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -898,6 +990,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 for block in content:
                     if isinstance(block, dict) and block.get("type") == "thinking":
                         block.pop("cache_control", None)
+        _restore_tool_use_names(
+            cast(Sequence[object], converted),  # cast-ok: Anthropic message payload
+            original_tool_names,
+        )
         data["messages"] = converted
 
     @staticmethod
