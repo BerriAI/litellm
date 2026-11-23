@@ -266,21 +266,21 @@ class PrismaEventStore:
         eligible: Final = [state for state in LIVE_STATUSES if state in from_statuses]
         async with self._client.tx() as tx:
             # The receiver takes FOR SHARE on this row before it inserts a delivery.
-            previous: Final = await tx.query_first(
+            locked: Final = await tx.query_raw(
                 'SELECT cursor FROM "LiteLLM_MCPEventSubscription" WHERE id = $1 FOR UPDATE',
                 subscription_id,
                 model=ActivatedCursor,
             )
-            if previous is None:
+            if not locked:
                 return None
-            pending: Final = await tx.query_first(
+            pending: Final = await tx.query_raw(
                 'SELECT $2::text AS cursor FROM "LiteLLM_MCPEventDelivery" '
                 "WHERE subscription_id = $1 AND delivered_at IS NULL LIMIT 1",
                 subscription_id,
-                previous.cursor,
+                locked[0].cursor,
                 model=ActivatedCursor,
             )
-            watermark: Final = pending or ActivatedCursor(cursor=activation.cursor)
+            watermark: Final = pending[0] if pending else ActivatedCursor(cursor=activation.cursor)
             updated: Final = await tx.litellm_mcpeventsubscription.update_many(
                 where={"id": subscription_id, "status": {"in": eligible}},  # bounded-ok: at most the three live states
                 data={
