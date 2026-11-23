@@ -78,7 +78,7 @@ async def acreate_skill(
     extra_body: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill:
     """
     Async: Create a new skill
@@ -271,7 +271,7 @@ async def alist_skills(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ListSkillsResponse:
     """
     Async: List all skills
@@ -452,7 +452,7 @@ async def aget_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Skill:
     """
     Async: Get a skill by ID
@@ -616,7 +616,7 @@ async def adelete_skill(
     extra_query: Mapping[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteSkillResponse:
     """
     Async: Delete a skill by ID

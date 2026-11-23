@@ -139,7 +139,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
         return None
 
     @staticmethod
-    def _get_provider_specific_entry(model_info: dict) -> dict:
+    def _get_provider_specific_entry(model_info: Mapping[str, object]) -> dict:
         provider_specific_entry = model_info.get("provider_specific_entry")
         if not isinstance(provider_specific_entry, dict):
             provider_specific_entry = {}
@@ -152,7 +152,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
 
         return provider_specific_entry
 
-    def _get_context_window(self, model_info: dict) -> int | None:
+    def _get_context_window(self, model_info: Mapping[str, object]) -> int | None:
         provider_specific_entry: Final = self._get_provider_specific_entry(model_info)
         recipe_options = provider_specific_entry.get("recipe_options")
         if not isinstance(recipe_options, dict):
@@ -169,7 +169,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
                 return parsed
         return None
 
-    def _get_default_model_info(self, model: str) -> dict:
+    def _get_default_model_info(self, model: str) -> dict[str, object]:
         return {
             "key": "lemonade/" + model,
             "litellm_provider": "lemonade",
@@ -240,7 +240,7 @@ class LemonadeChatConfig(OpenAILikeChatConfig):
     ) -> tuple[str | None, str | None]:
         return self._get_openai_compatible_provider_info(api_base, api_key)
 
-    def _get_auth_headers(self, api_key: str | None) -> dict:
+    def _get_auth_headers(self, api_key: str | None) -> dict[str, str]:
         if api_key is None or api_key == self._DEFAULT_API_KEY:
             return {}
         return {"Authorization": f"Bearer {api_key}"}

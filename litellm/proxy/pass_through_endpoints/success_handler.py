@@ -258,7 +258,7 @@ class PassThroughEndpointLogging:
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | list[dict[str, object]] | None,
+        response_body: Mapping[str, object] | list[dict[str, object]] | None,
         request_body: dict,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
@@ -550,7 +550,7 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | list[dict[str, object]] | None,
+        response_body: Mapping[str, object] | list[dict[str, object]] | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -561,7 +561,7 @@ class PassThroughEndpointLogging:
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
         finalize_before_dispatch: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
@@ -790,8 +790,8 @@ class PassThroughEndpointLogging:
         self,
         logging_obj: LiteLLMLoggingObj,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-        kwargs: dict,
-    ):
+        kwargs: dict[str, object],
+    ) -> dict[str, object]:
         """
         Helper function to set the cost per request in the logging object
 

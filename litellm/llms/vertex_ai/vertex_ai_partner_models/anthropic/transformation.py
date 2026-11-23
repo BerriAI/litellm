@@ -72,7 +72,7 @@ def _client_betas(value: object, field: str, drop_params: bool) -> frozenset[str
 
 
 class VertexAIError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: object):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
@@ -112,7 +112,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def _add_context_management_beta_headers(self, beta_set: set, context_management: dict) -> None:
+    def _add_context_management_beta_headers(self, beta_set: set[str], context_management: dict) -> None:
         """
         Add context_management beta headers to the beta_set.
 
@@ -149,8 +149,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         params: Final = _NON_DEFAULT_PARAMS.validate_python(optional_params)
         outbound_headers: Final = _NON_DEFAULT_PARAMS.validate_python(headers)
@@ -260,8 +260,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -291,10 +291,10 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

@@ -54,7 +54,7 @@ class LangGraphConfig(BaseConfig):
     It provides a streaming and non-streaming API for running agents.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
     def _get_openai_compatible_provider_info(

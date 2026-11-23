@@ -55,7 +55,7 @@ def _popped_azure_ad_token(extra_body: object) -> str | None:
 async def aget_assistants(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[Assistant]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -393,7 +393,7 @@ def create_assistants(
 async def adelete_assistant(
     custom_llm_provider: Literal["openai", "azure"],
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AssistantDeleted:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -543,7 +543,7 @@ def delete_assistant(
 ### THREADS ###
 
 
-async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs) -> Thread:
+async def acreate_thread(custom_llm_provider: Literal["openai", "azure"], **kwargs: object) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
     kwargs["acreate_thread"] = True
@@ -715,7 +715,7 @@ async def aget_thread(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Thread:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -868,7 +868,7 @@ async def a_add_message(
     attachments: list[Attachment] | None = None,
     metadata: dict | None = None,
     client=None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIMessage:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1038,7 +1038,7 @@ async def aget_messages(
     custom_llm_provider: Literal["openai", "azure"],
     thread_id: str,
     client: AsyncOpenAI | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AsyncCursorPage[OpenAIMessage]:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###
@@ -1206,7 +1206,7 @@ async def arun_thread(
     stream: bool | None = None,
     tools: Iterable[AssistantToolParam] | None = None,
     client: object | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Run:
     loop: Final = asyncio.get_event_loop()
     ### PASS ARGS TO GET ASSISTANTS ###

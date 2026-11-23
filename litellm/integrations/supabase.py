@@ -5,9 +5,24 @@ import os
 import subprocess
 import sys
 import traceback
-from typing import Final
+from collections.abc import Callable, Iterable, Mapping
+from typing import Final, Protocol
 
 import litellm
+
+
+class _SupabaseQuery(Protocol):
+    def execute(self) -> Iterable[object]: ...
+
+
+class _SupabaseTable(Protocol):
+    def insert(self, json: Mapping[str, object]) -> _SupabaseQuery: ...
+
+    def upsert(self, json: Mapping[str, object], *, on_conflict: str) -> _SupabaseQuery: ...
+
+
+class _SupabaseClient(Protocol):
+    def table(self, table_name: str) -> _SupabaseTable: ...
 
 
 class Supabase:
@@ -28,9 +43,16 @@ class Supabase:
             raise ValueError(
                 "LiteLLM Error, trying to use Supabase but url or key not passed. Create a table and set `litellm.supabase_url=<your-url>` and `litellm.supabase_key=<your-key>`"
             )
-        self.supabase_client = supabase.create_client(self.supabase_url, self.supabase_key)
+        self.supabase_client: _SupabaseClient = supabase.create_client(self.supabase_url, self.supabase_key)
 
-    def input_log_event(self, model, messages, end_user, litellm_call_id, print_verbose):
+    def input_log_event(
+        self,
+        model: object,
+        messages: object,
+        end_user: object,
+        litellm_call_id: object,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         try:
             print_verbose(f"Supabase Logging - Enters input logging function for model {model}")
             supabase_data_obj: Final = {
@@ -47,15 +69,15 @@ class Supabase:
 
     def log_event(
         self,
-        model,
-        messages,
-        end_user,
+        model: object,
+        messages: object,
+        end_user: object,
         response_obj,
         start_time,
         end_time,
-        litellm_call_id,
-        print_verbose,
-    ):
+        litellm_call_id: object,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         try:
             print_verbose(f"Supabase Logging - Enters logging function for model {model}, response_obj: {response_obj}")
 

@@ -4,7 +4,8 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -30,6 +31,52 @@ from litellm.types.utils import (
 )
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageStartUsage(TypedDict, total=False):
+    input_tokens: ReadOnly[int | float | None]
+    cache_read_input_tokens: ReadOnly[int | float | None]
+    cache_creation_input_tokens: ReadOnly[int | float | None]
+    cache_creation: ReadOnly[object]
+    inference_geo: ReadOnly[str | None]
+    speed: ReadOnly[object]
+    output_tokens: ReadOnly[int | float | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageStartMessage(TypedDict, total=False):
+    model: ReadOnly[str | None]
+    usage: ReadOnly[_MessageStartUsage | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageStartEvent(TypedDict, total=False):
+    message: ReadOnly[_MessageStartMessage | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageDeltaDelta(TypedDict, total=False):
+    stop_reason: ReadOnly[str | None]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageDeltaUsage(TypedDict, total=False):
+    output_tokens: ReadOnly[int | float | None]
+    server_tool_use: ReadOnly[object]
+    cache_read_input_tokens: ReadOnly[int | float | None]
+    inference_geo: ReadOnly[str | None]
+    speed: ReadOnly[object]
+
+
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
+class _MessageDeltaEvent(TypedDict, total=False):
+    delta: ReadOnly[_MessageDeltaDelta | None]
+    usage: ReadOnly[_MessageDeltaUsage | None]
+
+
+_MESSAGE_START_EVENT: Final = TypeAdapter(_MessageStartEvent)
+_MESSAGE_DELTA_EVENT: Final = TypeAdapter(_MessageDeltaEvent)
 
 
 def split_sse_chunk_into_events(chunk: str | bytes) -> list[str]:
@@ -295,7 +342,7 @@ def _sse_data_payload(event_str: str) -> str | None:
     return None
 
 
-def extract_sse_data(event_str: str) -> dict | None:
+def extract_sse_data(event_str: str) -> dict[str, object] | None:
     """Parse the JSON object from the ``data:`` line of an Anthropic SSE event."""
     payload: Final = _sse_data_payload(event_str)
     decoded: Final = None if payload is None else loads_json_object(payload)
@@ -336,7 +383,7 @@ def build_usage_only_response_from_chunks(
                 continue
             event_type = data.get("type")
             if event_type == "message_start":
-                message = data.get("message") or {}
+                message = _MESSAGE_START_EVENT.validate_python(data).get("message") or {}
                 if not resolved_model or resolved_model == "unknown":
                     resolved_model = message.get("model") or resolved_model
                 usage = message.get("usage") or {}
@@ -349,16 +396,17 @@ def build_usage_only_response_from_chunks(
                     cache_creation_1h = _cc.get("ephemeral_1h_input_tokens")
                 if usage.get("inference_geo") is not None:
                     inference_geo = usage.get("inference_geo")
-                if isinstance(usage.get("speed"), str):
-                    speed_from_stream = usage.get("speed")
+                if isinstance(speed_value := usage.get("speed"), str):
+                    speed_from_stream = speed_value
                 if usage.get("output_tokens") is not None:
                     output_tokens = usage.get("output_tokens")
                 found_usage = True
             elif event_type == "message_delta":
-                _delta_stop = (data.get("delta") or {}).get("stop_reason")
+                delta_event = _MESSAGE_DELTA_EVENT.validate_python(data)
+                _delta_stop = (delta_event.get("delta") or {}).get("stop_reason")
                 if _delta_stop:
                     stop_reason = _delta_stop
-                usage = data.get("usage") or {}
+                usage = delta_event.get("usage") or {}
                 if usage.get("output_tokens") is not None:
                     output_tokens = usage.get("output_tokens")
                 _stu = usage.get("server_tool_use")
@@ -371,8 +419,8 @@ def build_usage_only_response_from_chunks(
                     cache_read = usage.get("cache_read_input_tokens")
                 if usage.get("inference_geo") is not None:
                     inference_geo = usage.get("inference_geo")
-                if isinstance(usage.get("speed"), str):
-                    speed_from_stream = usage.get("speed")
+                if isinstance(speed_value := usage.get("speed"), str):
+                    speed_from_stream = speed_value
                 found_usage = True
     if not found_usage:
         return None
@@ -382,7 +430,7 @@ def build_usage_only_response_from_chunks(
     # build usage via the same AnthropicConfig.calculate_usage path the success
     # cases use, so prompt_tokens are cache-inclusive and cache / server_tool_use /
     # inference_geo tokens are priced instead of left at $0
-    usage_object: Final[dict] = {
+    usage_object: Final[dict[str, object]] = {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
     }
@@ -396,7 +444,7 @@ def build_usage_only_response_from_chunks(
             "ephemeral_1h_input_tokens": cache_creation_1h or 0,
         }
     if web_search_requests is not None or tool_search_requests is not None:
-        _server_tool_use: Final[dict] = {}
+        _server_tool_use: Final[dict[str, int]] = {}
         if web_search_requests is not None:
             _server_tool_use["web_search_requests"] = web_search_requests
         if tool_search_requests is not None:

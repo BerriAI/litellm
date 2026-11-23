@@ -1,7 +1,7 @@
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 
@@ -14,6 +14,11 @@ from litellm.utils import ModelResponse, get_secret
 
 from ..common_utils import AWSEventStreamDecoder
 from .transformation import SagemakerChatConfig
+
+if TYPE_CHECKING:
+    from botocore.credentials import Credentials
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class SagemakerChatHandler(BaseAWSLLM):
@@ -50,12 +55,12 @@ class SagemakerChatHandler(BaseAWSLLM):
 
     def _prepare_request(
         self,
-        credentials,
+        credentials: "Credentials",
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         optional_params: dict,
         aws_region_name: str,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ):
         ensure_optional_import("botocore")
         from botocore.auth import SigV4Auth
@@ -93,13 +98,13 @@ class SagemakerChatHandler(BaseAWSLLM):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable,
-        encoding,
-        logging_obj,
+        encoding: object,
+        logging_obj: "LiteLLMLoggingObj",
         optional_params: dict,
         litellm_params: dict,
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
-        logger_fn=None,
+        logger_fn: object = None,
         acompletion: bool = False,
         headers: dict = {},
         client: HTTPHandler | AsyncHTTPHandler | None = None,

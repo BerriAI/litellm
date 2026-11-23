@@ -65,14 +65,14 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Get the complete URL for the API call, including the /rerank suffix if necessary.
         """
         return ensure_api_route(self.get_api_base(model=model, api_base=api_base), "rerank")
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -84,7 +84,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
@@ -122,7 +122,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -146,8 +146,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: OptionalRerankParams | dict,
-        headers: dict,
-        litellm_params: dict | None = None,
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for HuggingFace rerank")
@@ -172,8 +172,8 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         logging_obj: LoggingClass,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         try:
             raw_response_json: Final[HuggingFaceRerankResponseList] = raw_response.json()
@@ -218,7 +218,7 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
         should_return_documents = request_data.get("return_text", False) or request_data.get("return_documents", False)
         original_documents: Final = request_data.get("texts", [])
 
-        results: Final = []
+        results: Final[list[RerankResponseResult]] = []
         for item in raw_response_json:
             # Extract required fields with defaults to handle None values
             index = item.get("index")
@@ -254,7 +254,9 @@ class HuggingFaceRerankConfig(BaseRerankConfig):
             meta=rerank_meta,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return HuggingFaceError(message=error_message, status_code=status_code)
 
     def get_api_credentials(

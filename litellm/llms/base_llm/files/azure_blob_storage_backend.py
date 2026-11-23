@@ -8,7 +8,7 @@ to reuse all authentication and Azure Storage operations.
 
 import time
 from pathlib import Path
-from typing import Final
+from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote, urlparse
 
 from litellm._logging import verbose_logger
@@ -17,6 +17,45 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.litellm_core_utils.path_utils import safe_filename
 
 from .storage_backend import BaseFileStorageBackend
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+class _StreamDownloader(Protocol):
+    async def readall(self) -> bytes: ...
+
+
+class _FileClient(Protocol):
+    async def create_file(self) -> object: ...
+
+    async def append_data(self, data: bytes, offset: int, length: int | None = None) -> object: ...
+
+    async def flush_data(self, offset: int, *, position: int) -> object: ...
+
+    async def download_file(self) -> _StreamDownloader: ...
+
+
+class _DirectoryClient(Protocol):
+    async def exists(self) -> bool: ...
+
+    async def create_directory(self) -> object: ...
+
+    def get_file_client(self, file: str) -> _FileClient: ...
+
+
+class _FileSystemClient(Protocol):
+    async def exists(self) -> bool: ...
+
+    async def create_file_system(self) -> object: ...
+
+    def get_directory_client(self, directory: str) -> _DirectoryClient: ...
+
+    def get_file_client(self, file_path: str) -> _FileClient: ...
+
+
+class _ServiceClient(Protocol):
+    def get_file_system_client(self, file_system: str) -> _FileSystemClient: ...
 
 
 def _safe_basename(original_filename: str) -> str:
@@ -86,13 +125,13 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         # Do nothing - this class is used for file storage, not logging
         return
 
-    async def async_log_success_event(self, *args, **kwargs):
+    async def async_log_success_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
         # Do nothing - this class is used for file storage, not logging
 
-    async def async_log_failure_event(self, *args, **kwargs):
+    async def async_log_failure_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
@@ -161,7 +200,12 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     async def _upload_file_with_account_key(self, file_content: bytes, full_path: str) -> str:
         """Upload file using Azure SDK with account key authentication."""
         # Reuse the logger's service client method
-        service_client: Final = await self.get_service_client()
+        return await self._upload_file_with_service_client(await self.get_service_client(), file_content, full_path)
+
+    async def _upload_file_with_service_client(
+        self, service_client: _ServiceClient, file_content: bytes, full_path: str
+    ) -> str:
+        """Create, append and flush the file through the Data Lake service client."""
         file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
 
         # Create filesystem (container) if it doesn't exist
@@ -222,7 +266,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{full_path}"
         return blob_url
 
-    async def _append_data_bytes(self, client, base_url: str, file_content: bytes):
+    async def _append_data_bytes(self, client: "AsyncHTTPHandler", base_url: str, file_content: bytes):
         """Append binary data to file using REST API."""
         from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 
@@ -274,7 +318,10 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     async def _download_file_with_account_key(self, file_path: str) -> bytes:
         """Download file using Azure SDK with account key."""
         # Reuse the logger's service client method
-        service_client: Final = await self.get_service_client()
+        return await self._download_file_with_service_client(await self.get_service_client(), file_path)
+
+    async def _download_file_with_service_client(self, service_client: _ServiceClient, file_path: str) -> bytes:
+        """Read the whole file through the Data Lake service client."""
         file_system_client: Final = service_client.get_file_system_client(file_system=self.azure_storage_file_system)
         # Ensure filesystem exists (should already exist, but check for safety)
         if not await file_system_client.exists():

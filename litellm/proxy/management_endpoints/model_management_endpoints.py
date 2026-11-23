@@ -2512,7 +2512,7 @@ async def _get_team_deployments(
         return []
 
     # Confirm team_id in model_info (defensive check)
-    result: Final = []
+    result: Final[list[_ProxyModelRow]] = []
     for row in response:
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None and model_info.get("team_id") == team_id:
@@ -4180,8 +4180,8 @@ async def clear_cache() -> ReconcileOutcome:
 
             # Get current models and filter out DB models
             current_models: Final = llm_router.registry().all().copy()
-            config_models: Final = []
-            db_model_ids: Final = []
+            config_models: Final[list[object]] = []
+            db_model_ids: Final[list[object]] = []
 
             for model in as_object_list(current_models) or ():
                 deployment = decoded_json_object(model)

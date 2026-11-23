@@ -23,6 +23,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import ChatCompletionToolParam
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 GUARDRAIL_NAME: Final = "mcp_end_user_permission"
@@ -83,8 +84,8 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
 
         verbose_proxy_logger.debug("MCP guardrail: end user restricted to MCP servers: %s", allowed_mcp_servers)
 
-        filtered_tools: Final = []
-        removed_tools: Final = []
+        filtered_tools: Final[list[ChatCompletionToolParam]] = []
+        removed_tools: Final[list[str | None]] = []
 
         for tool in tools:
             tool_name = self._get_tool_name_from_definition(tool)

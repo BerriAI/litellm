@@ -264,7 +264,7 @@ async def _renew_reservation_lease(
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -674,7 +674,7 @@ async def release_unbound_budget_reservation(budget_reservation: Mapping[str, ob
 
 
 async def _get_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -850,7 +850,7 @@ async def _get_end_user_budget_counter(
 
 
 async def _get_tag_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -932,8 +932,8 @@ def _model_access_group_counter(group: str, budget: ModelAccessGroupBudget | Non
 
 
 def _dedupe_tags(tags: list[str]) -> list[str]:
-    seen: Final = set()
-    deduped_tags: Final = []
+    seen: Final[set[str]] = set()
+    deduped_tags: Final[list[str]] = []
     for tag in tags:
         if tag in seen:
             continue
@@ -1333,7 +1333,7 @@ def estimate_request_input_cost(
 
 
 def _estimate_request_input_cost_for_model(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model: str,
     llm_router: Router | None,
@@ -1353,7 +1353,7 @@ def _estimate_request_input_cost_for_model(
 
 
 def _input_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     input_tokens: int | None,
@@ -1373,7 +1373,7 @@ def _input_cost_for_cost_info(
 
 
 def _estimate_request_max_cost_for_model(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model: str,
     llm_router: Router | None,
@@ -1408,7 +1408,7 @@ def _estimate_request_max_cost_for_model(
 
 
 def _max_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     requested_output_tokens: int,
@@ -1503,7 +1503,7 @@ def _prompt_cost(rates: _HoldRates, *, input_tokens: int, cached_tokens: int) ->
 
 
 def _estimate_image_generation_cost(
-    request_body: dict,
+    request_body: Mapping[str, object],
     model_info: Mapping[str, object],
 ) -> float | None:
     """
@@ -1637,7 +1637,7 @@ def _get_deployment_tiered_pricing_tables(
 
 
 def _get_request_models(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     path_params: Mapping[str, object] | None = None,

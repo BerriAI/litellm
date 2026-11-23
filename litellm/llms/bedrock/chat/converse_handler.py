@@ -1,6 +1,6 @@
 import json
 from collections.abc import Iterator, Mapping
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -33,13 +33,16 @@ from ..common_utils import (
 )
 from .invoke_handler import AWSEventStreamDecoder, make_call
 
+if TYPE_CHECKING:
+    from botocore.awsrequest import HTTPHeaders
+
 _REQUEST_IDENTITY: Final = TypeAdapter(Mapping[str, object])
 
 
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: "HTTPHeaders | Mapping[str, str]",
     data: str,
     model: str,
     messages: list,
@@ -123,13 +126,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_base: str,
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
-        stream,
+        stream: object,
         optional_params: dict,
         litellm_params: dict,
         credentials: Credentials | None,
-        logger_fn=None,
+        logger_fn: object = None,
         headers={},
         client: AsyncHTTPHandler | None = None,
         fake_stream: bool = False,
@@ -198,13 +201,13 @@ class BedrockConverseLLM(BaseAWSLLM):
         api_base: str,
         model_response: ModelResponse,
         timeout: float | httpx.Timeout | None,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
-        stream,
+        stream: object,
         optional_params: dict,
         litellm_params: dict,
         credentials: Credentials | None,
-        logger_fn=None,
+        logger_fn: object = None,
         headers: dict = {},
         client: AsyncHTTPHandler | None = None,
         api_key: str | None = None,
@@ -295,15 +298,15 @@ class BedrockConverseLLM(BaseAWSLLM):
         model: str,
         messages: list,
         api_base: str | None,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        encoding,
+        encoding: object,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         acompletion: bool,
         timeout: float | httpx.Timeout | None,
         litellm_params: dict,
-        logger_fn=None,
+        logger_fn: object = None,
         extra_headers: dict | None = None,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
         api_key: str | None = None,

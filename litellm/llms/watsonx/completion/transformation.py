@@ -108,18 +108,18 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         temperature: float | None = None,
         max_new_tokens: int | None = None,
         min_new_tokens: int | None = None,
-        length_penalty: dict | None = None,
+        length_penalty: Mapping[str, object] | None = None,
         stop_sequences: list[str] | None = None,
         top_k: int | None = None,
         top_p: float | None = None,
         repetition_penalty: float | None = None,
         truncate_input_tokens: int | None = None,
         include_stop_sequences: bool | None = None,
-        return_options: dict | None = None,
+        return_options: Mapping[str, object] | None = None,
         random_seed: int | None = None,
-        moderations: dict | None = None,
+        moderations: Mapping[str, object] | None = None,
         stream: bool | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
@@ -166,7 +166,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -206,7 +206,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             optional_params["extra_body"] = extra_body
         return optional_params
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
         """
@@ -216,7 +216,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
             "token": "watsonx_token",
         }
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -264,8 +264,8 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> dict:
         provider: Final = model.split("/")[0]
         prompt: Final = await aconvert_watsonx_messages_to_prompt(
@@ -278,8 +278,8 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> dict:
         """Sync version of transform_request"""
         provider: Final = model.split("/")[0]
@@ -294,10 +294,10 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -353,7 +353,7 @@ class IBMWatsonXAIConfig(IBMWatsonXMixin, BaseConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         url = self._get_base_url(api_base=api_base)

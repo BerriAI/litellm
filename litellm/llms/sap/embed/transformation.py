@@ -2,6 +2,7 @@
 Translates from OpenAI's `/v1/embeddings` to IBM's `/text/embeddings` route.
 """
 
+from collections.abc import Mapping
 from functools import cached_property
 from typing import Final, Literal
 
@@ -79,7 +80,7 @@ class EmbeddingRequest(LiteLLMBaseModel):
     input: EmbeddingInput
 
 
-def validate_dict(data: dict, model) -> dict:
+def validate_dict(data: Mapping[str, object], model: type[LiteLLMBaseModel]) -> dict[str, object]:
     return model(**data).model_dump(exclude_unset=True, by_alias=True)
 
 
@@ -90,7 +91,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         self.token_creator, self.base_url, self.resource_group = get_token_creator()
 
     @property
-    def headers(self) -> dict:
+    def headers(self) -> dict[str, str]:
         access_token: Final = self.token_creator()
         # headers for completions and embeddings requests
         headers: Final = {
@@ -126,10 +127,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
                         )
             return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
 
-    def get_error_class(self, error_message, status_code, headers):
+    def get_error_class(self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers):
         return GenAIHubOrchestrationError(status_code, error_message)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         if "text-embedding-3" in model:
             return ["encoding_format", "dimensions"]
         else:
@@ -139,14 +140,14 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
-    def validate_environment(self, headers: dict, *args, **kwargs) -> dict:
+    def validate_environment(self, headers: Mapping[str, object], *args: object, **kwargs: object) -> dict[str, str]:
         return self.headers
 
     def get_complete_url(
@@ -154,8 +155,8 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         url: Final = join_api_base(self.deployment_url, "v2/embeddings")
@@ -165,10 +166,10 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
-        model_dict: Final = {}
+        optional_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
+        model_dict: Final[dict[str, object]] = {}
         model_dict["name"] = model
         model_dict["version"] = optional_params.get("version", "latest")
         model_dict["params"] = optional_params.get("parameters", {})
@@ -178,7 +179,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         max_retries: Final = optional_params.get("max_retries", None)
         if max_retries is not None:
             model_dict["max_retries"] = max_retries
-        input_dict: Final = {"text": input}
+        input_dict: Final[dict[str, object]] = {"text": input}
         input_type: Final = optional_params.get("type")
         if input_type is not None:
             input_dict["type"] = input_type
@@ -198,8 +199,8 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         return EmbeddingResponse.model_validate(raw_response.json()["final_result"])

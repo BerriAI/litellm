@@ -44,7 +44,7 @@ def _is_anthropic_call_type(call_type: str) -> bool:
     return call_type in _ANTHROPIC_CALL_TYPES
 
 
-def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
+def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict[str, object]]:
     """
     Build retrieval tool definitions in the target request schema.
 
@@ -97,9 +97,9 @@ def _content_to_text(content: object) -> str:
 
 
 def _normalize_messages_for_compression(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     call_type: str,
-) -> tuple[list[dict], list[dict[str, object]]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """
     Normalize each original message to a text-surrogate content for scoring.
 
@@ -113,7 +113,7 @@ def _normalize_messages_for_compression(
 
     original_messages: Final[list[dict[str, object]]] = [dict(m) for m in messages]
 
-    normalized_messages: Final[list[dict]] = []
+    normalized_messages: Final[list[dict[str, object]]] = []
     for msg in original_messages:
         normalized_messages.append(
             {
@@ -124,7 +124,7 @@ def _normalize_messages_for_compression(
     return normalized_messages, original_messages
 
 
-def _extract_last_user_message(messages: list[dict]) -> str:
+def _extract_last_user_message(messages: Sequence[Mapping[str, object]]) -> str:
     """Return the text content of the last user message."""
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -163,7 +163,7 @@ def _extract_tool_result_ids(content: object) -> set[str]:
 
 
 def _extract_anthropic_tool_exchange_spans(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
 ) -> tuple[list[set[int]], str | None]:
     """
     Return atomic 2-message spans for Anthropic tool exchanges.
@@ -266,14 +266,14 @@ def _combine_scores(
 
 
 def _select_kept_indices_for_budget(
-    normalized_messages: list[dict],
-    original_messages: list[dict],
+    normalized_messages: Sequence[Mapping[str, object]],
+    original_messages: Sequence[dict[str, object]],
     combined_scores: list[float],
     compression_target: int,
     model: str,
     initial_kept_indices: set[int],
     tool_exchange_spans: list[set[int]],
-) -> tuple[set[int], dict[int, dict]]:
+) -> tuple[set[int], dict[int, dict[str, object]]]:
     kept_indices: Final = set(initial_kept_indices)
     current_tokens = 0
     for i in kept_indices:
@@ -286,7 +286,7 @@ def _select_kept_indices_for_budget(
     # A unit is either:
     # 1) a single message index, or
     # 2) an Anthropic tool-exchange span that must be kept/dropped atomically.
-    truncated_overrides: Final[dict[int, dict]] = {}  # idx -> truncated message dict
+    truncated_overrides: Final[dict[int, dict[str, object]]] = {}  # idx -> truncated message dict
     span_id_by_index: Final[dict[int, int]] = {}
     for span_id, span in enumerate(tool_exchange_spans):
         for idx in span:
@@ -352,7 +352,7 @@ def _get_dropped_tool_span_indices(kept_indices: set[int], tool_exchange_spans: 
 
 
 def compress(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     model: str,
     call_type: CallTypes | str = CallTypes.completion,
     compression_trigger: int = 200_000,

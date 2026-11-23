@@ -68,10 +68,10 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param in {"max_tokens", "max_completion_tokens"}:
                 optional_params["maxOutputTokens"] = value
@@ -123,9 +123,9 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         input_prompt: Final = self._convert_messages_to_prompt(messages=messages)
         request_data: Final[dict[str, object]] = {"inputPrompt": input_prompt}
 
@@ -147,7 +147,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
 
         return request_data
 
-    def _build_media_source(self, optional_params: dict) -> dict | None:
+    def _build_media_source(self, optional_params: dict) -> dict[str, object] | None:
         direct_source: Final = optional_params.get("mediaSource") or optional_params.get("media_source")
         if isinstance(direct_source, dict):
             return direct_source
@@ -179,7 +179,7 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
             role = message.get("role", "user")
             content = message.get("content", "")
             if isinstance(content, list):
-                text_fragments = []
+                text_fragments: list[str] = []
                 for item in content:
                     if isinstance(item, dict):
                         item_type = item.get("type")
@@ -203,10 +203,10 @@ class AmazonTwelveLabsPegasusConfig(AmazonInvokeConfig, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

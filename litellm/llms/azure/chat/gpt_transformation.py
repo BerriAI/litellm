@@ -93,13 +93,13 @@ class AzureOpenAIConfig(BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
     ) -> None:
@@ -332,10 +332,10 @@ class AzureOpenAIConfig(BaseConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -344,7 +344,7 @@ class AzureOpenAIConfig(BaseConfig):
             "Azure OpenAI handler.py has custom logic for transforming response, as it uses the OpenAI SDK."
         )
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         return {"token": "azure_ad_token"}
 
     def map_special_auth_params(self, non_default_params: dict, optional_params: dict):

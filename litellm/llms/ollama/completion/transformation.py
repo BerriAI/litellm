@@ -1,7 +1,7 @@
 import json
 import re
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from httpx._models import Headers, Response
@@ -233,7 +233,7 @@ class OllamaConfig(BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["num_predict"] = value
@@ -259,7 +259,7 @@ class OllamaConfig(BaseConfig):
 
         return optional_params
 
-    def _supports_function_calling(self, ollama_model_info: dict) -> bool:
+    def _supports_function_calling(self, ollama_model_info: Mapping[str, object]) -> bool:
         """
         Check if the 'template' field in the ollama_model_info contains a 'tools' or 'function' key.
         """
@@ -480,7 +480,7 @@ class OllamaConfig(BaseConfig):
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return headers
 
     def get_complete_url(
@@ -506,7 +506,7 @@ class OllamaConfig(BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ):
+    ) -> "OllamaTextCompletionResponseIterator":
         return OllamaTextCompletionResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -515,7 +515,12 @@ class OllamaConfig(BaseConfig):
 
 
 class OllamaTextCompletionResponseIterator(BaseModelResponseIterator):
-    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+    def __init__(
+        self,
+        streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
+        sync_stream: bool,
+        json_mode: bool | None = False,
+    ) -> None:
         super().__init__(streaming_response, sync_stream, json_mode)
         self.response_id: Final[str] = generate_id()
         self.started_reasoning_content: bool = False

@@ -28,7 +28,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.dynamoai import (
     DynamoAIRequest,
     DynamoAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponseStream
+from litellm.types.utils import CallTypesLiteral, GuardrailStatus, LLMResponseTypes, ModelResponseStream
 
 GUARDRAIL_NAME: Final = "dynamoai"
 
@@ -89,7 +89,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         messages: list[dict[str, object]],
         event_type: GuardrailEventHooks,
         text_type: str = "input",
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> DynamoAIResponse:
         """
         Call DynamoAI Guardrails API to analyze messages for policy violations.
@@ -382,7 +382,7 @@ class DynamoAIGuardrails(CustomGuardrail):
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs on response from LLM API call
