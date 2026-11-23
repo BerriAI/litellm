@@ -31,7 +31,7 @@ use litellm_callbacks_parallel_request_limiter::{
 };
 use litellm_config::{Config, Environment};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core as auth_core;
+use litellm_gateway_auth_core::{self as auth_core, StoredKey};
 use litellm_gateway_inference::{RateLimited, call_type};
 use litellm_redis_client::RedisClient;
 use litellm_redis_store::{Remote, rate_limits::RateLimits};
@@ -217,26 +217,31 @@ impl KeyLimits {
     }
 }
 
-/// Who Python says the caller is: its `api_key` and its `user_id`.
+/// Who Python says the caller is: its `api_key`, its `user_id` and the team its key is in.
 pub(crate) struct Caller {
     pub(crate) api_key: Option<String>,
     user_id: Option<&'static str>,
+    team_id: Option<String>,
     pub(crate) limits: KeyLimits,
 }
 
 impl Caller {
     /// A key is named by the hash its row is stored under, as Python's `api_key` is, and the
-    /// master key by Python's alias for it. The master key holds no limit.
+    /// master key by Python's alias for it. The master key holds no limit. A key's team holds
+    /// none either, since a team with one is declined when the key is authenticated, but the
+    /// tokens a call uses are still charged to it, as Python charges them.
     pub(crate) fn of(identity: &Authenticated<NativeRows>) -> Self {
         match &**identity {
             auth_core::Caller::MasterKey => Self {
                 api_key: Some(MASTER_KEY_ALIAS.to_owned()),
                 user_id: Some(PROXY_ADMIN_NAME),
+                team_id: None,
                 limits: KeyLimits::default(),
             },
             auth_core::Caller::Key(key) => Self {
                 api_key: identity.hash().map(ToString::to_string),
                 user_id: None,
+                team_id: key.key.record().team_id.clone(),
                 limits: key.key.limits().clone(),
             },
         }
@@ -246,6 +251,7 @@ impl Caller {
         TargetFacts {
             user_api_key_hash: self.api_key.clone(),
             user_api_key_user_id: self.user_id.map(str::to_owned),
+            user_api_key_team_id: self.team_id.clone(),
             ..TargetFacts::default()
         }
     }
@@ -388,6 +394,7 @@ impl KeyLimiter {
         } = &caller.limits;
         let auth = Map::from_iter([
             ("api_key".to_owned(), json!(caller.api_key)),
+            ("team_id".to_owned(), json!(caller.team_id)),
             ("rpm_limit".to_owned(), json!(rpm)),
             ("tpm_limit".to_owned(), json!(tpm)),
             (

@@ -17,8 +17,9 @@ use crate::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// The auth core found a model list of the caller's that does not reach the model.
-    #[error("operation is not permitted")]
+    /// The auth core found a model list of the caller's that does not reach the model. It is
+    /// answered in the status, `type`, `param` and words the proxy answers it in.
+    #[error(transparent)]
     ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
@@ -177,7 +178,9 @@ impl From<litellm_host_http::Error<InferenceError>> for Error {
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
-            Self::ModelAccess(_) => StatusCode::FORBIDDEN,
+            Self::ModelAccess(denial) => {
+                StatusCode::from_u16(denial.status()).unwrap_or(StatusCode::FORBIDDEN)
+            }
             Self::BodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::InvalidBody(_) | Self::UnknownModel { .. } => StatusCode::BAD_REQUEST,
             Self::NoDeployments(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -207,7 +210,15 @@ impl Error {
         let status = self.status();
         let (kind, code) = match self {
             Self::Refused(refusal) => (refusal.kind.clone(), refusal.code.clone()),
+            Self::ModelAccess(denial) => (
+                Some(denial.error_type().to_owned()),
+                Some(denial.status().to_string()),
+            ),
             _ => (None, None),
+        };
+        let param = match self {
+            Self::ModelAccess(denial) => denial.param(),
+            _ => None,
         };
         json!({"error": {
             "message": self.message(),
@@ -215,14 +226,23 @@ impl Error {
                 || json!(MessagesErrorType::for_status(status.as_u16())),
                 Value::from,
             ),
-            "param": null,
+            "param": param,
             "code": code.map_or_else(|| json!(status.as_u16()), Value::from),
         }})
     }
 
     /// The Anthropic error envelope Python's `AnthropicExceptionMapping` builds: an upstream
-    /// body already in that shape passes through, any other has its message extracted.
+    /// body already in that shape passes through, any other has its message extracted. A model
+    /// denial names the proxy's own `type` beside the one its status gives, as Python does for
+    /// an exception that carries one.
     pub fn body(&self, request_id: Option<&str>) -> Value {
+        if let Self::ModelAccess(denial) = self {
+            let mut denied = envelope(self.status(), &denial.to_string());
+            if let Some(Value::Object(detail)) = denied.get_mut("error") {
+                detail.insert("litellm_error_type".to_owned(), denial.error_type().into());
+            }
+            return Value::Object(with_request_id(denied, request_id));
+        }
         let raw = match self {
             Self::Route(error) if let Some((_, body)) = error.upstream_response() => {
                 body.to_owned()
@@ -248,7 +268,7 @@ impl Error {
     fn message(&self) -> String {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
-            Self::ModelAccess(_) => self.to_string(),
+            Self::ModelAccess(denial) => denial.to_string(),
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
@@ -352,6 +372,42 @@ mod tests {
 
     fn invalid_json() -> Error {
         BodyError::Json(serde_json::from_str::<Value>("{").unwrap_err()).into()
+    }
+
+    fn refused_by_the_team() -> Error {
+        AuthzDenial::ModelAccess {
+            list: litellm_gateway_auth_core::authz::DeniedList::Team,
+            model: "gpt".to_owned(),
+        }
+        .into()
+    }
+
+    #[rstest]
+    fn a_model_the_caller_may_not_call_is_answered_as_the_proxy_answers_it() {
+        let refused = refused_by_the_team();
+        let message = "The requested model 'gpt' is not available for this API key, or the model name is invalid. Check the models available to you and try again.";
+
+        assert_eq!(
+            (
+                refused.status().as_u16(),
+                refused.openai_body(),
+                refused.body(None)
+            ),
+            (
+                403,
+                json!({"error": {
+                    "message": message,
+                    "type": "team_model_access_denied",
+                    "param": "model",
+                    "code": "403",
+                }}),
+                json!({"type": "error", "error": {
+                    "type": "permission_error",
+                    "message": message,
+                    "litellm_error_type": "team_model_access_denied",
+                }}),
+            )
+        );
     }
 
     fn unknown_model() -> Error {

@@ -1,0 +1,140 @@
+# A virtual key in a team is served natively when the team's row holds a model list and nothing
+# else the proxy enforces. The key's list and the team's both have to reach the model, and a
+# model either does not reach goes to Python, which answers it 403 with the type of the list that
+# refused. A team that holds anything the native app does not honor sends its keys to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: claude-a
+        access_groups: [haiku]
+    - model_name: claude-down
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+teams:
+  open: {}
+  claude-only: {models: [claude]}
+  by-access-group: {models: [haiku]}
+  budgeted: {models: [claude], max_budget: 5.0}
+  limited: {models: [claude], rpm_limit: 10}
+  blocked: {models: [claude], blocked: true}
+  with-metadata: {models: [claude], metadata: {guardrails: [pii]}}
+
+keys:
+  sk-open: []
+  sk-team: []
+  sk-narrower: [claude-down]
+  sk-inherits: [all-team-models]
+  sk-access-group: []
+  sk-budgeted: []
+  sk-limited: []
+  sk-blocked: []
+  sk-with-metadata: []
+  sk-teamless-inherits: [all-team-models]
+
+key_teams:
+  sk-open: open
+  sk-team: claude-only
+  sk-narrower: claude-only
+  sk-inherits: claude-only
+  sk-access-group: by-access-group
+  sk-budgeted: budgeted
+  sk-limited: limited
+  sk-blocked: blocked
+  sk-with-metadata: with-metadata
+
+requests:
+  - name: a team with no model list
+    headers: {authorization: Bearer sk-open}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model on the team's list
+    headers: {authorization: Bearer sk-team}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model off the team's list
+    headers: {authorization: Bearer sk-team}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a model on the key's list and off the team's
+    headers: {authorization: Bearer sk-narrower}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a model on the team's list and off the key's
+    headers: {authorization: Bearer sk-narrower}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a key that takes its team's list, for a model on it
+    headers: {authorization: Bearer sk-inherits}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key that takes its team's list, for a model off it
+    headers: {authorization: Bearer sk-inherits}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a key that takes its team's list and is in no team
+    headers: {authorization: Bearer sk-teamless-inherits}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model in an access group on the team's list
+    headers: {authorization: Bearer sk-access-group}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model outside the access group on the team's list
+    headers: {authorization: Bearer sk-access-group}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a team with a budget
+    headers: {authorization: Bearer sk-budgeted}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a team with a rate limit
+    headers: {authorization: Bearer sk-limited}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a blocked team
+    headers: {authorization: Bearer sk-blocked}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a team with metadata
+    headers: {authorization: Bearer sk-with-metadata}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

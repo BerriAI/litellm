@@ -87,6 +87,7 @@ pub async fn served(
         keys: Some(Arc::new(AuthStore::new(
             keys::memory_cache(),
             database.database(),
+            database.teams(),
         ))),
         ..AppState::build(&config, &Environment::default())
             .await

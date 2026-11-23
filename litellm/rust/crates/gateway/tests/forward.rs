@@ -610,7 +610,7 @@ async fn an_admitted_virtual_key_is_looked_up_once() {
     let (python, mut received) = python().await;
     let provider = provider().await;
     let held = keys::Held::holding("sk-virtual", serde_json::json!({})).await;
-    let keys = AuthStore::new(keys::memory_cache(), held.database());
+    let keys = AuthStore::new(keys::memory_cache(), held.database(), held.teams());
     let gateway = holding_keys(python, &serving(&provider, ""), Some(keys)).await;
 
     let response = post_as(gateway, "/v1/messages", "Bearer sk-virtual").await;

@@ -23,12 +23,17 @@ impl Rows for Held {
 
 /// A key whose row is stored under `stored` and says `is_proxy_admin`.
 pub(crate) fn key(stored: &str, is_proxy_admin: bool) -> Caller<Held> {
+    held(KeyRecord {
+        token: Some(KeyHash::new(stored)),
+        is_proxy_admin,
+        ..KeyRecord::default()
+    })
+}
+
+/// A key whose row is `record`.
+pub(crate) fn held(record: KeyRecord) -> Caller<Held> {
     Caller::Key(Box::new(KeyContext {
-        key: KeyRecord {
-            token: Some(KeyHash::new(stored)),
-            is_proxy_admin,
-            ..KeyRecord::default()
-        },
+        key: record,
         end_user: (),
         owner: None,
         team: TeamGrant::NoTeam,

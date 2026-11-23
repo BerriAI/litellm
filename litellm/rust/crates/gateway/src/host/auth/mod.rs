@@ -11,6 +11,7 @@
 #[macro_use]
 mod key;
 mod store;
+mod team;
 
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -37,18 +38,19 @@ use serde_json::Value;
 pub use key::Key;
 pub use store::AuthStore;
 pub(crate) use store::KEY_TTL;
+pub use team::Team;
 
-/// The rows the native host hands the core: a key's, and none of the objects it does not read
-/// yet. `Infallible` is a row this host does not read, so no identity that needs one exists. The
-/// end user's is `()`, since the key path asks for it on every request and a request that names
-/// no end user reads none.
+/// The rows the native host hands the core: a key's and its team's, and none of the objects it
+/// does not read yet. `Infallible` is a row this host does not read, so no identity that needs
+/// one exists. The end user's is `()`, since the key path asks for it on every request and a
+/// request that names no end user reads none.
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRows;
 
 impl Rows for NativeRows {
     type Key = Key;
     type User = Infallible;
-    type Team = Infallible;
+    type Team = Team;
     type EndUser = ();
     type ObjectPermission = Infallible;
     type Project = Infallible;
@@ -258,23 +260,42 @@ impl AuthHost for NativeAuthHost {
         declined("resolve_user_identity")
     }
 
-    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<Infallible>>, Error> {
-        declined("cached_team")
+    /// The core asks for the cached team to bring the key's own copy of the team's values up to
+    /// date. This host reads none of that copy, since [`Self::key_team`] reads the team itself, so
+    /// it has nothing to refresh.
+    async fn cached_team(&self, _: &str) -> Result<Option<CachedTeam<Team>>, Error> {
+        Ok(None)
     }
 
-    async fn key_team(&self, _: &str) -> Result<Option<Infallible>, Error> {
-        declined("key_team")
+    /// A team with no row is declined: the proxy then judges the key by its own copy of the
+    /// team's values, which this host does not read.
+    async fn key_team(&self, team_id: &str) -> Result<Option<Team>, Error> {
+        let Some(store) = &self.keys else {
+            return declined("key_team");
+        };
+        match Box::pin(store.team(team_id)).await {
+            Ok(Some(team)) => team::read(&team).map(Some).or_else(declined),
+            Ok(None) => declined("team_id"),
+            Err(litellm_auth_store::Error::Row { column }) => declined(column),
+            Err(error @ litellm_auth_store::Error::Database(_)) => {
+                tracing::warn!(
+                    error = %litellm_error::Report::new(&error),
+                    "a key's team was not read from the database"
+                );
+                Err(Error::HostFailed)
+            }
+        }
     }
 
-    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<Infallible>, Error> {
+    async fn team(&self, _: &str, _: bool) -> Result<TeamRead<Team>, Error> {
         declined("team")
     }
 
-    async fn granting_team(&self, _: &str) -> Result<TeamRead<Infallible>, Error> {
+    async fn granting_team(&self, _: &str) -> Result<TeamRead<Team>, Error> {
         declined("granting_team")
     }
 
-    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<Infallible>, Error> {
+    async fn team_by_alias(&self, _: &str) -> Result<AliasRead<Team>, Error> {
         declined("team_by_alias")
     }
 
@@ -354,11 +375,11 @@ impl AuthHost for NativeAuthHost {
         Ok(false)
     }
 
-    async fn team_model_access(&self, team: &Infallible, _: &str) -> Result<ModelAccess, Error> {
-        match *team {}
+    async fn team_model_access(&self, _: &Team, _: &str) -> Result<ModelAccess, Error> {
+        declined("team_model_access")
     }
 
-    /// A key this host read has no team and no owner, so no membership budgets it.
+    /// A key this host read has no owner, so no membership budgets it.
     async fn team_member_budget(&self, _: &Key, _: Option<&Infallible>) -> Result<(), Error> {
         Ok(())
     }
@@ -393,8 +414,9 @@ impl AuthHost for NativeAuthHost {
         declined("finish_jwt")
     }
 
-    async fn with_team(&self, _: &Key, team: &Infallible) -> Result<Key, Error> {
-        match *team {}
+    /// Never asked, since [`Self::cached_team`] hands the core no team to refresh a key from.
+    async fn with_team(&self, key: &Key, _: &Team) -> Result<Key, Error> {
+        Ok(key.clone())
     }
 }
 
@@ -414,9 +436,12 @@ mod tests {
         routing::get,
     };
     use jiff::Timestamp;
-    use litellm_auth_store::KeyDatabase;
+    use litellm_auth_store::{KeyDatabase, TeamDatabase};
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
-    use litellm_gateway_auth_core::Caller;
+    use litellm_gateway_auth_core::{
+        Caller,
+        authz::{Layer, ModelList},
+    };
     use litellm_redis_store::cache_invalidation::CacheInvalidation;
     use litellm_redis_testing::{RedisServer, eventually};
     use rstest::rstest;
@@ -462,8 +487,8 @@ mod tests {
     }
 
     /// The store a gateway with no coordination Redis reads `database` through.
-    fn memory_only(database: KeyDatabase) -> Arc<AuthStore> {
-        Arc::new(AuthStore::new(keys::memory_cache(), database))
+    fn memory_only(keys: KeyDatabase, teams: TeamDatabase) -> Arc<AuthStore> {
+        Arc::new(AuthStore::new(keys::memory_cache(), keys, teams))
     }
 
     async fn authenticate(
@@ -471,9 +496,12 @@ mod tests {
         keys: Option<KeyDatabase>,
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
-        auth(config, keys.map(memory_only))
-            .authenticate_parts(&parts(header))
-            .await
+        auth(
+            config,
+            keys.map(|keys| memory_only(keys, keys::unreachable_teams())),
+        )
+        .authenticate_parts(&parts(header))
+        .await
     }
 
     /// What `token` gets as a bearer from `auth`.
@@ -489,10 +517,11 @@ mod tests {
     /// What `token` gets as a bearer from a gateway that reads its keys from `database`.
     async fn presenting(
         database: KeyDatabase,
+        teams: TeamDatabase,
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         bearing(
-            &auth(&with_master_key(), Some(memory_only(database))),
+            &auth(&with_master_key(), Some(memory_only(database, teams))),
             token,
         )
         .await
@@ -510,7 +539,7 @@ mod tests {
     /// it.
     async fn authenticate_holding(columns: Columns) -> Result<Authenticated<NativeRows>, Rejected> {
         let held = holding(columns).await;
-        presenting(held.database(), VIRTUAL_KEY).await
+        presenting(held.database(), held.teams(), VIRTUAL_KEY).await
     }
 
     #[rstest]
@@ -617,6 +646,11 @@ mod tests {
         None,
         &["*", "all-proxy-models"]
     )]
+    #[case::taking_the_models_of_a_team_it_is_not_in(
+        json!({"models": ["all-team-models"]}),
+        None,
+        &["all-team-models"]
+    )]
     #[case::empty_json_columns(json!({"budget_limits": null, "aliases": {}, "metadata": {}}), None, &[])]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_that_holds_only_what_the_native_app_honors_is_a_caller_named_by_its_stored_hash(
@@ -649,14 +683,12 @@ mod tests {
     #[case::key_type(json!({"key_type": "management"}))]
     #[case::soft_budget_cooldown(json!({"soft_budget_cooldown": true}))]
     #[case::a_model_pattern(json!({"models": ["claude", "anthropic/*"]}))]
-    #[case::the_team_models(json!({"models": ["all-team-models"]}))]
     #[case::no_default_models(json!({"models": ["no-default-models"]}))]
     #[case::aliases(json!({"aliases": {"a": "b"}}))]
     #[case::config(json!({"config": {"a": 1}}))]
     #[case::router_settings(json!({"router_settings": {"a": 1}}))]
     #[case::user_id(json!({"user_id": "user"}))]
     #[case::an_empty_user_id(json!({"user_id": ""}))]
-    #[case::team_id(json!({"team_id": "team"}))]
     #[case::the_ui_team(json!({"team_id": "litellm-dashboard"}))]
     #[case::agent_id(json!({"agent_id": "agent"}))]
     #[case::project_id(json!({"project_id": "project"}))]
@@ -728,6 +760,144 @@ mod tests {
         assert_eq!(key.key.priority().map(|class| &**class), Some("prod"));
     }
 
+    /// What [`VIRTUAL_KEY`] gets as a key of the team `team`, once `change` ran on that team's row.
+    async fn authenticate_in_team(
+        change: &'static str,
+    ) -> Result<Authenticated<NativeRows>, Rejected> {
+        let held = holding(json!({"team_id": "team"})).await;
+        held.execute(change).await;
+        presenting(held.database(), held.teams(), VIRTUAL_KEY).await
+    }
+
+    #[rstest]
+    #[case::as_created("SELECT 1", ModelList::Every)]
+    #[case::that_takes_the_proxys_models(
+        r#"UPDATE "LiteLLM_TeamTable" SET models = ARRAY['all-proxy-models']"#,
+        ModelList::Every
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_in_a_team_is_a_caller_with_the_teams_list_as_a_layer(
+        #[case] change: &'static str,
+        #[case] team: ModelList<'static>,
+    ) {
+        let caller = authenticate_in_team(change).await.unwrap();
+
+        let layers: Vec<_> = crate::host::layers(&caller).collect();
+        assert_eq!(layers, [Layer::Key(ModelList::Every), Layer::Team(team)]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_teams_model_list_is_the_one_its_row_holds() {
+        let change = r#"UPDATE "LiteLLM_TeamTable" SET models = ARRAY['claude', 'haiku']"#;
+        let caller = authenticate_in_team(change).await.unwrap();
+        let team = ["claude".to_owned(), "haiku".to_owned()];
+
+        let layers: Vec<_> = crate::host::layers(&caller).collect();
+        assert_eq!(
+            layers,
+            [
+                Layer::Key(ModelList::Every),
+                Layer::Team(ModelList::read(&team))
+            ]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_router_gets_the_keys_list_and_its_teams_as_their_rows_hold_them() {
+        let held = holding(json!({"team_id": "team", "models": ["haiku"]})).await;
+        held.execute(r#"UPDATE "LiteLLM_TeamTable" SET models = ARRAY['all-proxy-models']"#)
+            .await;
+
+        let caller = presenting(held.database(), held.teams(), VIRTUAL_KEY)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            crate::host::allowed_models(&caller),
+            ["haiku", "all-proxy-models"]
+        );
+    }
+
+    #[rstest]
+    #[case::a_budget(r#"UPDATE "LiteLLM_TeamTable" SET max_budget = 1"#)]
+    #[case::no_row(r#"DELETE FROM "LiteLLM_ProjectTable"; DELETE FROM "LiteLLM_TeamTable""#)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_key_whose_team_holds_what_the_native_app_does_not_honor_is_not_native(
+        #[case] change: &'static str,
+    ) {
+        let refused = authenticate_in_team(change).await;
+
+        assert!(
+            matches!(refused, Err(Rejected::NotNative)),
+            "{:?}",
+            refused.err()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_is_read_once_and_again_only_after_it_is_evicted() {
+        let held = holding(json!({"team_id": "team"})).await;
+        let cache = keys::memory_cache();
+        let store = AuthStore::new(cache.clone(), held.database(), held.teams());
+        let auth = auth(&with_master_key(), Some(Arc::new(store)));
+
+        let read = bearing(&auth, VIRTUAL_KEY).await.is_ok();
+        held.execute(r#"UPDATE "LiteLLM_TeamTable" SET max_budget = 1"#)
+            .await;
+        let kept = bearing(&auth, VIRTUAL_KEY).await.is_ok();
+        cache.delete_local("team_id:team").unwrap();
+        let reread = bearing(&auth, VIRTUAL_KEY).await;
+
+        assert_eq!((read, kept), (true, true));
+        assert!(
+            matches!(reread, Err(Rejected::NotNative)),
+            "{:?}",
+            reread.err()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_another_pod_blocks_stops_being_served_from_this_pods_memory() {
+        let redis = RedisServer::start().await.unwrap();
+        let held = holding(json!({"team_id": "team"})).await;
+        let config = coordinated(&redis, false);
+        let gateway = pod_for(&config, &held).await;
+        let resources = crate::Resources::build(&config).unwrap();
+        let clients = crate::redis::connect(&config, &resources).await.unwrap();
+        let channel = CacheInvalidation::new(
+            clients.coordination.clone().unwrap(),
+            None,
+            tokio::runtime::Handle::current(),
+        );
+        let served = bearing(&gateway, VIRTUAL_KEY).await.is_ok();
+
+        held.execute(r#"UPDATE "LiteLLM_TeamTable" SET blocked = true"#)
+            .await;
+
+        let refused = eventually(async || {
+            channel
+                .broadcast_evictions(&["team_id:team".to_owned()])
+                .await;
+            bearing(&gateway, VIRTUAL_KEY).await.err()
+        })
+        .await;
+        assert!(served);
+        assert!(matches!(refused, Rejected::NotNative), "{refused:?}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_team_the_database_fails_to_read_is_unavailable_and_never_a_denial() {
+        let held = holding(json!({"team_id": "team"})).await;
+
+        let Err(refused) =
+            presenting(held.database(), keys::unreachable_teams(), VIRTUAL_KEY).await
+        else {
+            panic!("a key was authenticated with no database to read its team from");
+        };
+
+        assert!(matches!(refused, Rejected::Unavailable(_)), "{refused:?}");
+    }
+
     #[rstest]
     #[case::alone(json!({"blocked": true}))]
     #[case::of_a_team(json!({"blocked": true, "team_id": "team"}))]
@@ -746,7 +916,7 @@ mod tests {
     async fn a_key_the_database_does_not_hold_is_an_invalid_token() {
         let held = Held::holding("sk-another-credential", json!({})).await;
 
-        let refused = presenting(held.database(), VIRTUAL_KEY).await;
+        let refused = presenting(held.database(), held.teams(), VIRTUAL_KEY).await;
 
         assert!(
             matches!(refused, Err(Rejected::InvalidToken)),
@@ -776,7 +946,7 @@ mod tests {
     ) {
         let held = holding(json!({})).await;
 
-        let caller = presenting(held.database(), token).await;
+        let caller = presenting(held.database(), held.teams(), token).await;
 
         assert_eq!(
             caller.ok().map(|caller| *caller == Caller::MasterKey),
@@ -787,7 +957,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn a_database_that_fails_is_unavailable_and_never_a_denial() {
-        let Err(refused) = presenting(keys::unreachable(), VIRTUAL_KEY).await else {
+        let Err(refused) =
+            presenting(keys::unreachable(), keys::unreachable_teams(), VIRTUAL_KEY).await
+        else {
             panic!("a key was authenticated with no database to read it from");
         };
 
@@ -858,7 +1030,7 @@ mod tests {
 
     #[rstest]
     #[case::with_an_owner(json!({"user_id": "user"}))]
-    #[case::in_a_team(json!({"team_id": "team"}))]
+    #[case::in_a_project(json!({"project_id": "project"}))]
     #[case::with_a_budget(json!({"max_budget": 5.0}))]
     #[case::blocked(json!({"blocked": true}))]
     #[tokio::test(flavor = "multi_thread")]

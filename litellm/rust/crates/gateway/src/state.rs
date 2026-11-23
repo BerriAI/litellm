@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use axum::extract::FromRef;
 use futures_util::StreamExt;
-use litellm_auth_store::KeyDatabase;
+use litellm_auth_store::{KeyDatabase, TeamDatabase};
 use litellm_config::{Config, Environment};
 use litellm_db::Pools;
 use litellm_env::Lookup;
@@ -16,7 +16,7 @@ use litellm_redis_store::{
     spend_counters::SpendCounters,
     system_clock,
 };
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
+use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository, TeamRepository};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -90,20 +90,21 @@ impl AppState {
     }
 }
 
-/// Where the gateway reads a virtual key: through the auth cache Python's `UserApiKeyCache` is,
+/// Where the gateway reads a virtual key and its team: through the auth cache Python's `UserApiKeyCache` is,
 /// this process's memory in front of the database, with the coordination Redis between them when
 /// `enable_redis_auth_cache` attaches it. Every pod's evictions reach the memory whenever a
 /// coordination Redis carries them, as Python subscribes with the flag on or off.
 pub(crate) fn keys(config: &Config, redis: &RedisClients, database: Database) -> AuthStore {
-    let database = KeyDatabase::new(
+    let keys = KeyDatabase::new(
         Arc::new(KeyRepository::new(database.clone())),
-        Arc::new(ObjectPermissionRepository::new(database)),
+        Arc::new(ObjectPermissionRepository::new(database.clone())),
     );
+    let teams = TeamDatabase::new(Arc::new(TeamRepository::new(database)));
     let cache = Arc::new(auth_cache(config, redis, system_clock()));
     if let Some(client) = &redis.coordination {
         hear_evictions(&cache, client);
     }
-    AuthStore::new(cache, database)
+    AuthStore::new(cache, keys, teams)
 }
 
 /// Drops from this process's memory every key a pod evicts, Python or native, for as long as

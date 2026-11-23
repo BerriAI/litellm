@@ -12,7 +12,7 @@ use futures_util::{StreamExt, stream};
 use litellm_config::LitellmRole;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Rows, StoredKey,
+    Caller, Rows, StoredKey,
     authz::{self, AuthzDenial, Layer, ModelAsk},
 };
 use litellm_inference::Error as InferenceError;
@@ -223,15 +223,22 @@ pub fn allows<H: Host>(
 }
 
 /// A request for `model` by `identity`: an admin by the role the auth core gives it, never by
-/// the kind of credential it presented, with the `allowed_models` its host read, which the
-/// router narrows access groups by as Python's reads the key's `models`.
+/// the kind of credential it presented, in the team its key is in, which keeps it to that team's
+/// deployments and the ones no team owns, with the `allowed_models` its host read, which the
+/// router narrows access groups by as Python's reads the key's `models` and its team's.
 fn caller_request<R: Rows<Key: StoredKey>>(
     identity: &Authenticated<R>,
     allowed_models: Vec<String>,
     model: &str,
 ) -> RouterRequest {
+    let team_id = match &**identity {
+        Caller::MasterKey => None,
+        Caller::Key(context) => context.key.record().team_id.clone(),
+    };
     RouterRequest {
         model: model.to_owned(),
+        listing_team_id: team_id.clone(),
+        team_id,
         proxy_admin: identity.role() == LitellmRole::ProxyAdmin,
         allowed_models,
         ..RouterRequest::default()
@@ -478,13 +485,13 @@ pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
 mod tests {
     use std::sync::Arc;
 
-    use litellm_gateway_auth_core::Caller;
+    use litellm_gateway_auth_core::authn::key::KeyRecord;
     use litellm_router_core::DeploymentSpec;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
-    use crate::test_support::{Held, key};
+    use crate::test_support::{Held, held, key};
 
     #[rstest]
     #[case::the_master_key(Caller::MasterKey, true)]
@@ -497,6 +504,28 @@ mod tests {
         let request = caller_request(&Authenticated::from(caller), Vec::new(), "public/model");
 
         assert_eq!(request.proxy_admin, proxy_admin);
+    }
+
+    #[rstest]
+    #[case::the_master_key(Caller::MasterKey, None)]
+    #[case::a_key_in_no_team(key("stored", false), None)]
+    #[case::a_key_in_a_team(
+        held(KeyRecord { team_id: Some("team".to_owned()), ..KeyRecord::default() }),
+        Some("team")
+    )]
+    fn a_key_is_routed_as_the_team_it_is_in(
+        #[case] caller: Caller<Held>,
+        #[case] team_id: Option<&str>,
+    ) {
+        let request = caller_request(&Authenticated::from(caller), Vec::new(), "public/model");
+
+        assert_eq!(
+            (
+                request.team_id.as_deref(),
+                request.listing_team_id.as_deref()
+            ),
+            (team_id, team_id)
+        );
     }
 
     fn attempt(params: Value, router_timeout: Option<u64>) -> Attempt {

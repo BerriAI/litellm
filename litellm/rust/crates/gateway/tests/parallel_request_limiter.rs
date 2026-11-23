@@ -24,11 +24,12 @@ fn hash_token(token: &str) -> String {
 }
 
 const KEY: &str = "sk-limited";
-/// What the database holds for [`KEY`]: a plain row with these limits, and the owner the native
-/// app does not serve a key for.
+/// What the database holds for [`KEY`]: a plain row with these limits, the owner the native app
+/// does not serve a key for, and the team it is in, a plain row too.
 struct Holding {
     limits: KeyLimits,
     owner: Option<&'static str>,
+    team: Option<&'static str>,
 }
 
 impl Holding {
@@ -46,8 +47,14 @@ impl Holding {
             "max_parallel_requests": max_parallel_requests,
             "metadata": {"model_rpm_limit": **model_rpm, "model_tpm_limit": **model_tpm},
             "user_id": self.owner,
+            "team_id": self.team,
         });
-        keys::Held::holding(KEY, columns).await
+        let held = keys::Held::start().await;
+        if let Some(team) = self.team {
+            held.team(team, json!({})).await;
+        }
+        held.key(KEY, columns).await;
+        held
     }
 }
 
@@ -102,6 +109,7 @@ async fn configured(limits: KeyLimits, general_settings: &str) -> Served {
     let holding = Holding {
         limits,
         owner: None,
+        team: None,
     };
     support::served(holding.stored().await, general_settings, "").await
 }
@@ -142,6 +150,7 @@ async fn a_key_the_native_app_does_not_serve_counts_nothing_against_its_limits()
             ..KeyLimits::default()
         },
         owner: Some("owner"),
+        team: None,
     };
     let Served {
         app,
@@ -358,6 +367,27 @@ async fn a_served_call_charges_its_tokens_less_the_cached_reads_to_its_key_and_m
         (
             settled(&limiter, "api_key", &hash, 27.0).await,
             settled(&limiter, "model_per_key", &format!("{hash}:claude"), 27.0).await
+        ),
+        (Some(27.0), Some(27.0))
+    );
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_in_a_team_charges_its_tokens_to_its_team_too() {
+    let holding = Holding {
+        limits: KeyLimits::default(),
+        owner: None,
+        team: Some("team"),
+    };
+    let Served { app, limiter, .. } = support::served(holding.stored().await, "", "").await;
+
+    read_to_its_end(send(&app, complete()).await).await;
+
+    assert_eq!(
+        (
+            settled(&limiter, "api_key", &hash_token(KEY), 27.0).await,
+            settled(&limiter, "team", "team", 27.0).await
         ),
         (Some(27.0), Some(27.0))
     );

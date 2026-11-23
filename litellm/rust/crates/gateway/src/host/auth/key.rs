@@ -10,7 +10,9 @@ use litellm_gateway_auth_core::{
     authn::key::{KeyRecord, Keyed},
 };
 use litellm_python_compat::{Value, json};
-use litellm_redis_store::auth_cache::{Bag, CachedKey, CachedObjectPermission, Lists};
+use litellm_redis_store::auth_cache::{
+    Bag, CachedKey, CachedModelTable, CachedObjectPermission, Lists,
+};
 use serde::Deserialize;
 
 use crate::callbacks::parallel_request_limiter::{KeyLimits, ModelLimits};
@@ -28,14 +30,17 @@ macro_rules! carried {
 /// The key type the proxy gives a key generated without one, which reaches every route.
 const DEFAULT_KEY_TYPE: &str = "default";
 
-/// The `models` entries the proxy reads through a team or a user, which a key with neither does
-/// not have.
-const OWNER_MODELS: [&str; 2] = ["all-team-models", "no-default-models"];
+/// The `models` entry the proxy reads only on a user's list, and as a model's name on any other.
+/// The auth core reads it as reaching nothing wherever it is.
+const USER_ONLY: &str = "no-default-models";
 
-/// Whether the auth core's model rule reads a `models` entry as the proxy does: a name, an
-/// access group or `*`. A pattern like `anthropic/*` the proxy matches against providers is not read.
-fn is_read(model: &str) -> bool {
-    !OWNER_MODELS.contains(&model) && (model == "*" || !model.contains('*'))
+/// Whether a `models` list holds an entry the auth core's model rule does not read as the proxy
+/// does. It reads a name, an access group, `*`, `all-proxy-models` and `all-team-models`. A
+/// pattern like `anthropic/*`, which the proxy matches against providers, it does not.
+pub(super) fn unread_models(models: &[String]) -> bool {
+    models
+        .iter()
+        .any(|model| model == USER_ONLY || (model != "*" && model.contains('*')))
 }
 
 pub(super) trait Carried {
@@ -59,7 +64,14 @@ macro_rules! carried_when_held {
     };
 }
 
-carried_when_held!(String, i64, f64, Timestamp, CachedObjectPermission);
+carried_when_held!(
+    String,
+    i64,
+    f64,
+    Timestamp,
+    CachedObjectPermission,
+    CachedModelTable
+);
 
 impl<T> Carried for Vec<T> {
     fn is_carried(&self) -> bool {
@@ -91,7 +103,7 @@ impl<T: Carried> Carried for Option<T> {
     }
 }
 
-/// The team the core reads no team row for, so no step declines a key in it.
+/// The team the core reads no team row for, so no step reads or declines it.
 const UI_TEAM: &str = "litellm-dashboard";
 
 /// A virtual key the native host read, with what the host's own steps read of it.
@@ -282,7 +294,7 @@ fn held(key: &CachedKey) -> Held {
     let other_key_type = key_type
         .as_deref()
         .is_some_and(|key_type| key_type != DEFAULT_KEY_TYPE);
-    let unread_models = models.iter().any(|model| !is_read(model));
+    let unread_models = unread_models(models);
     let ui_team = team_id.as_deref() == Some(UI_TEAM);
     let unread = &unread.iter().any(|(_, value)| value.is_carried());
     Held {

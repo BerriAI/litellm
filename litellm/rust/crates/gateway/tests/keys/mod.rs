@@ -12,18 +12,21 @@ use std::{
     },
 };
 
-use litellm_auth_store::KeyDatabase;
+use litellm_auth_store::{KeyDatabase, TeamDatabase};
 use litellm_db::{Endpoint, Observer, PoolLimits, Pools, QueryEvent, SslMode};
 use litellm_db_testing::MigratedPostgres;
 use litellm_gateway_auth_core::Token;
 use litellm_redis_store::auth_cache::{AuthCache, Settings};
-use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository};
+use litellm_repositories::{Database, KeyRepository, ObjectPermissionRepository, TeamRepository};
 use litellm_secret_value::SecretValue;
 use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
 
 /// The table columns of a key generated with no parameters, as `/key/generate` stores it.
 const PLAIN: &str = include_str!("plain.json");
+
+/// The table columns of a team created with no parameters, as `/team/new` stores it.
+const PLAIN_TEAM: &str = include_str!("team.json");
 
 /// How many times the key view was read.
 #[derive(Default)]
@@ -72,6 +75,15 @@ impl Held {
         self.insert("LiteLLM_VerificationToken", &row).await;
     }
 
+    /// Stores the team `team_id`: a plain row with `columns` set on it.
+    pub async fn team(&self, team_id: &str, columns: Value) {
+        let mut row: Value = serde_json::from_str(PLAIN_TEAM).unwrap();
+        let fields = row.as_object_mut().unwrap();
+        fields.extend(json!({"team_id": team_id}).as_object().unwrap().clone());
+        fields.extend(columns.as_object().unwrap().clone());
+        self.insert("LiteLLM_TeamTable", &row).await;
+    }
+
     /// Stores `row` in `table`, each field in the column of its name.
     pub async fn insert(&self, table: &str, row: &Value) {
         #[expect(
@@ -108,6 +120,11 @@ impl Held {
         key_database(self.repositories())
     }
 
+    /// The team read the gateway makes behind its auth cache.
+    pub fn teams(&self) -> TeamDatabase {
+        TeamDatabase::new(Arc::new(TeamRepository::new(self.repositories())))
+    }
+
     /// How many times the key view was read through [`Self::repositories`].
     pub fn key_reads(&self) -> usize {
         self.reads.0.load(Ordering::SeqCst)
@@ -121,10 +138,19 @@ pub fn memory_cache() -> Arc<AuthCache> {
 
 /// A database nothing listens on, whose every read fails.
 pub fn unreachable() -> KeyDatabase {
-    key_database(connected(
+    key_database(nowhere())
+}
+
+/// The team read of a database nothing listens on.
+pub fn unreachable_teams() -> TeamDatabase {
+    TeamDatabase::new(Arc::new(TeamRepository::new(nowhere())))
+}
+
+fn nowhere() -> Database {
+    connected(
         "postgres://postgres:postgres@127.0.0.1:1/postgres",
         Arc::<KeyReads>::default(),
-    ))
+    )
 }
 
 fn key_database(database: Database) -> KeyDatabase {

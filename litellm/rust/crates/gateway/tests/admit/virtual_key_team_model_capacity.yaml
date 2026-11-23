@@ -1,0 +1,44 @@
+# `dynamic_rate_limiter_v3` shares a model's capacity among the teams that call it. The native
+# callback tells it of no team, so under it a key in a team goes to Python and a key in none is
+# still served natively.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        tpm: 100000
+        rpm: 10
+  litellm_settings:
+    callbacks: [dynamic_rate_limiter_v3]
+    priority_reservation:
+      prod: 0.9
+    priority_reservation_settings:
+      default_priority: 0.1
+      saturation_threshold: 0.6
+      saturation_check_cache_ttl: 10
+  general_settings:
+    master_key: gateway-key
+
+teams:
+  open: {}
+
+keys:
+  sk-team: []
+  sk-any: []
+
+key_teams:
+  sk-team: open
+
+requests:
+  - name: a key in a team
+    headers: {authorization: Bearer sk-team}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: team_model_capacity
+
+  - name: a key in no team
+    headers: {authorization: Bearer sk-any}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
