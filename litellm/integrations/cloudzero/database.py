@@ -18,10 +18,17 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, Protocol
 
 import polars as pl
+
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
+
+class _FrameRows(Protocol):
+    def to_dicts(self) -> Sequence[Mapping[str, object]]: ...
 
 
 class LiteLLMDatabase:
@@ -93,13 +100,15 @@ class LiteLLMDatabase:
             query += " LIMIT $3"
 
         try:
-            db_response: Final = await client.db.query_raw(query, *params)
+            from litellm.proxy.utils import query_raw_rows
+
+            db_response: Final = await query_raw_rows(client.db, query, *params)
             from litellm.proxy.spend_tracking.key_metadata_recovery import (
                 fill_missing_api_key_aliases,
             )
 
             usage_rows: Final = (
-                db_response.to_dicts()
+                require_attributes(db_response, _FrameRows, "to_dicts").to_dicts()
                 if isinstance(db_response, pl.DataFrame)
                 else db_response
                 if isinstance(db_response, list)

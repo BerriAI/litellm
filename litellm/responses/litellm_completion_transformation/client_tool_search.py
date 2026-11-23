@@ -12,6 +12,8 @@ from openai.types.responses.response_input_param import (
 )
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ALL_RESPONSES_API_TOOL_PARAMS,
@@ -26,8 +28,10 @@ from .tool_search import CLIENT_TOOL_SEARCH_FUNCTION_NAME, has_client_tool_searc
 __all__ = [
     "ClientToolSearchBridge",
     "bridge_client_tool_search",
+    "bridged_client_tool_search_input",
     "client_tool_search_chat_tool",
     "client_tool_search_loaded_tools",
+    "tools_loaded_by_client_tool_search",
 ]
 
 _DEFAULT_SEARCH_DESCRIPTION: Final = (
@@ -44,6 +48,9 @@ _DEFAULT_SEARCH_PARAMETERS: Final = MappingProxyType(
         "additionalProperties": False,
     }
 )
+
+
+_SEARCH_ITEM_TYPES: Final = frozenset(("tool_search_call", "tool_search_output"))
 
 
 class _ClientToolSearchItem(LiteLLMBaseModel):
@@ -78,11 +85,7 @@ class _LoadedTool:
     namespace: str | None
     namespace_description: str
     spec: Mapping[str, object]
-
-    @property
-    def callable_name(self) -> str:
-        name: Final = str(self.spec.get("name") or "")
-        return name if self.namespace is None else f"{self.namespace}__{name}"
+    callable_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,11 +106,14 @@ def client_tool_search_chat_tool(tool: Mapping[str, object]) -> ChatCompletionTo
 
 
 def _client_tool_search_item(item: object) -> _ClientToolSearchItem | None:
+    fields: Final = as_str_mapping(item)
+    if fields is not None and not (isinstance(kind := fields.get("type"), str) and kind in _SEARCH_ITEM_TYPES):
+        return None
     try:
         parsed: Final = _ClientToolSearchItem.model_validate(item)
     except ValidationError:
         return None
-    if parsed.type not in ("tool_search_call", "tool_search_output") or parsed.execution != "client":
+    if parsed.type not in _SEARCH_ITEM_TYPES or parsed.execution != "client":
         return None
     return parsed
 
@@ -143,20 +149,38 @@ def _without_deferral(spec: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in spec.items() if key != "defer_loading"}
 
 
-def _loaded_tools(tool: Mapping[str, object]) -> tuple[_LoadedTool, ...]:
+def _loaded_tools(tool: Mapping[str, object], deferred_names: frozenset[str] = frozenset()) -> tuple[_LoadedTool, ...]:
     spec: Final = _tool_spec(tool)
     if spec is None:
         return ()
     if spec.type != "namespace":
-        return (_LoadedTool(namespace=None, namespace_description="", spec=_without_deferral(tool)),)
+        # A loaded deferred tool keeps its deferral so its calls read back as namespace == name
+        deferred: Final = spec.defer_loading is True or spec.name in deferred_names
+        loaded_spec: Final = {**_without_deferral(tool), "defer_loading": True} if deferred else _without_deferral(tool)
+        return (_LoadedTool(namespace=None, namespace_description="", spec=loaded_spec, callable_name=spec.name),)
     return tuple(
-        _LoadedTool(namespace=spec.name, namespace_description=spec.description, spec=_without_deferral(member))
+        _LoadedTool(
+            namespace=spec.name,
+            namespace_description=spec.description,
+            spec=_without_deferral(member),
+            callable_name=chat_member_name(spec.name, str(member.get("name") or "")),
+        )
         for member in spec.tools
     )
 
 
-def _all_loaded_tools(tools: Iterable[Mapping[str, object]]) -> tuple[_LoadedTool, ...]:
-    return tuple(chain.from_iterable(map(_loaded_tools, tools)))
+def _all_loaded_tools(
+    tools: Iterable[Mapping[str, object]], deferred_names: frozenset[str] = frozenset()
+) -> tuple[_LoadedTool, ...]:
+    return tuple(chain.from_iterable(_loaded_tools(tool, deferred_names) for tool in tools))
+
+
+def _deferred_top_level_names(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(
+        spec.name
+        for tool in tools
+        if (spec := _tool_spec(tool)) is not None and spec.type != "namespace" and _is_deferred(tool)
+    )
 
 
 def _callable_names(tool: object) -> tuple[str, ...]:
@@ -165,7 +189,7 @@ def _callable_names(tool: object) -> tuple[str, ...]:
         return ()
     if spec.type != "namespace":
         return (spec.name,)
-    return tuple(f"{spec.name}__{member.get('name') or ''}" for member in spec.tools)
+    return tuple(chat_member_name(spec.name, str(member.get("name") or "")) for member in spec.tools)
 
 
 def _first_occurrences(loaded: Sequence[_LoadedTool], taken: frozenset[str]) -> tuple[_LoadedTool, ...]:
@@ -212,10 +236,10 @@ def _without_deferred(tool: ALL_RESPONSES_API_TOOL_PARAMS) -> ALL_RESPONSES_API_
     return _as_tool_param({**tool, "tools": eager_members})
 
 
-def _search_output_text(loaded: Sequence[_LoadedTool]) -> str:
-    if not loaded:
+def _search_output_text(loaded_names: Sequence[str]) -> str:
+    if not loaded_names:
         return "No tools matched the search."
-    return "Loaded these tools, which are now callable: " + ", ".join(tool.callable_name for tool in loaded)
+    return "Loaded these tools, which are now callable: " + ", ".join(loaded_names)
 
 
 def _search_arguments_json(arguments: object) -> str:
@@ -236,8 +260,20 @@ def _bridged_item(item: ResponseInputItemParam) -> ResponseInputItemParam | None
             arguments=_search_arguments_json(parsed.arguments),
         )
     return FunctionCallOutput(
-        type="function_call_output", call_id=parsed.call_id, output=_search_output_text(_all_loaded_tools(parsed.tools))
+        type="function_call_output",
+        call_id=parsed.call_id,
+        output=_search_output_text(tuple(chain.from_iterable(map(_callable_names, parsed.tools)))),
     )
+
+
+def bridged_client_tool_search_input(input: str | ResponseInputParam) -> str | ResponseInputParam:
+    return (
+        input if isinstance(input, str) else [bridged for item in input if (bridged := _bridged_item(item)) is not None]
+    )
+
+
+def tools_loaded_by_client_tool_search(input: object) -> tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]:
+    return _regrouped(_first_occurrences(_all_loaded_tools(client_tool_search_loaded_tools(input)), frozenset()))
 
 
 def bridge_client_tool_search(
@@ -256,13 +292,12 @@ def bridge_client_tool_search(
         if searches_on_client
         else existing
     )
-    loaded: Final = _all_loaded_tools((*loaded_earlier, *client_tool_search_loaded_tools(input)))
-    taken: Final = frozenset(chain.from_iterable(map(_callable_names, eager)))
-    bridged_input: Final = (
-        input if isinstance(input, str) else [bridged for item in input if (bridged := _bridged_item(item)) is not None]
+    loaded: Final = _all_loaded_tools(
+        (*loaded_earlier, *client_tool_search_loaded_tools(input)), _deferred_top_level_names(existing)
     )
+    taken: Final = frozenset(chain.from_iterable(map(_callable_names, eager)))
     return ClientToolSearchBridge(
-        input=bridged_input,
+        input=bridged_client_tool_search_input(input),
         tools=(*eager, *_regrouped(_first_occurrences(loaded, taken))),
         bridged=True,
     )

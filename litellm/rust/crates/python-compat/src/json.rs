@@ -1,0 +1,741 @@
+//! `json.dumps` with CPython's default options, and `json.loads` with its default decoder.
+//!
+//! Defaults are `ensure_ascii=True`, `allow_nan=True`, separators `(", ", ": ")`, and no key
+//! sorting on the way out, and `strict=True` with `NaN`, `Infinity` and `-Infinity` read as floats
+//! on the way in.
+
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    fmt::Write,
+    str::FromStr,
+};
+
+use num_bigint::BigInt;
+use serde_json::{Map, Number};
+
+use crate::{Error, MAX_DEPTH, Value, repr::float_repr};
+
+/// `json.dumps(value)`.
+pub fn dumps(value: &Value) -> Result<String, Error> {
+    dumps_with(value, DEFAULT_SEPARATORS)
+}
+
+/// `json.dumps(value, separators=(",", ":"))`.
+pub fn dumps_compact(value: &Value) -> Result<String, Error> {
+    dumps_with(value, COMPACT_SEPARATORS)
+}
+
+/// The item and key separators `json.dumps` writes between values.
+#[derive(Clone, Copy)]
+struct Separators {
+    item: &'static str,
+    key: &'static str,
+}
+
+const DEFAULT_SEPARATORS: Separators = Separators {
+    item: ", ",
+    key: ": ",
+};
+const COMPACT_SEPARATORS: Separators = Separators {
+    item: ",",
+    key: ":",
+};
+
+fn dumps_with(value: &Value, separators: Separators) -> Result<String, Error> {
+    let mut out = String::new();
+    write_value(&mut out, value, separators)?;
+    Ok(out)
+}
+
+/// The Python value `json.loads` returns for a JSON document.
+pub fn from_json(value: serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::None,
+        serde_json::Value::Bool(value) => Value::Bool(value),
+        serde_json::Value::Number(number) => {
+            if let Some(value) = number.as_i64() {
+                Value::Int(value.into())
+            } else if let Some(value) = number.as_u64() {
+                Value::Int(value.into())
+            } else {
+                Value::Float(number.as_f64().unwrap_or(f64::NAN))
+            }
+        }
+        serde_json::Value::String(text) => Value::Str(text),
+        serde_json::Value::Array(values) => {
+            Value::List(values.into_iter().map(from_json).collect())
+        }
+        serde_json::Value::Object(entries) => Value::Dict(
+            entries
+                .into_iter()
+                .map(|(key, value)| (Value::Str(key), from_json(value)))
+                .collect(),
+        ),
+    }
+}
+
+/// `str(value)` of what `json.loads` returns: a string's own contents, `None` for null, and
+/// `repr` for every other value.
+pub fn loaded_str(value: &serde_json::Value) -> String {
+    crate::repr::to_str(&from_json(value.clone()))
+}
+
+/// `left == right` between what `json.loads` returns for two scalars: `bool`, `int` and
+/// `float` compare by numeric value (`True == 1 == 1.0`), and other values compare as JSON.
+/// Containers compare as JSON, so a nested `[1]` is not equal to `[1.0]` here though Python
+/// says it is.
+pub fn loaded_equals(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (numeric(left), numeric(right)) {
+        (Some(Ok(a)), Some(Ok(b))) => a == b,
+        (Some(Err(a)), Some(Err(b))) => a == b,
+        (Some(Ok(int)), Some(Err(float))) | (Some(Err(float)), Some(Ok(int))) => {
+            int_equals_float(int, float)
+        }
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => left == right,
+    }
+}
+
+fn numeric(value: &serde_json::Value) -> Option<Result<i128, f64>> {
+    match value {
+        serde_json::Value::Bool(flag) => Some(Ok(i128::from(*flag))),
+        serde_json::Value::Number(number) => Some(
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+                .map_or_else(|| Err(number.as_f64().unwrap_or(f64::NAN)), Ok),
+        ),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn int_equals_float(int: i128, float: f64) -> bool {
+    float.is_finite() && float.fract() == 0.0 && float.abs() < 1.7e38 && float as i128 == int
+}
+
+/// `type(json.loads(text)).__name__`: the type [`crate::json::from_json`] gives the value,
+/// so an integer `serde_json` holds as `f64` (beyond `u64`) reads as `float`.
+pub fn type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "NoneType",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "int",
+        serde_json::Value::Number(_) => "float",
+        serde_json::Value::String(_) => "str",
+        serde_json::Value::Array(_) => "list",
+        serde_json::Value::Object(_) => "dict",
+    }
+}
+
+/// `json.loads(text)`. Integers keep full precision, and a repeated key keeps its first position
+/// with its last value, as `dict(pairs)` does. An escape that leaves a lone surrogate fails, since
+/// a Rust `String` cannot hold one.
+pub fn loads(text: &str) -> Result<Value, Error> {
+    let mut decoder = Decoder {
+        text,
+        bytes: text.as_bytes(),
+        pos: 0,
+        depth: 0,
+    };
+    decoder.skip_whitespace();
+    let value = decoder.value()?;
+    decoder.skip_whitespace();
+    if decoder.pos != decoder.bytes.len() {
+        return Err(decoder.error());
+    }
+    Ok(value)
+}
+
+/// CPython's `json.scanner` and `scanstring`, one pass over the bytes.
+struct Decoder<'a> {
+    text: &'a str,
+    bytes: &'a [u8],
+    pos: usize,
+    depth: usize,
+}
+
+impl Decoder<'_> {
+    fn error(&self) -> Error {
+        Error::InvalidJson(self.pos)
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.bytes.get(self.pos).copied()
+    }
+
+    fn eat(&mut self, token: &str) -> bool {
+        let found = self.bytes[self.pos..].starts_with(token.as_bytes());
+        if found {
+            self.pos += token.len();
+        }
+        found
+    }
+
+    fn expect(&mut self, token: &str) -> Result<(), Error> {
+        if self.eat(token) {
+            Ok(())
+        } else {
+            Err(self.error())
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.peek(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn value(&mut self) -> Result<Value, Error> {
+        match self.peek() {
+            Some(b'"') => self.string().map(Value::Str),
+            Some(b'[') => self.nested(Self::array),
+            Some(b'{') => self.nested(Self::object),
+            _ if self.eat("null") => Ok(Value::None),
+            _ if self.eat("true") => Ok(Value::Bool(true)),
+            _ if self.eat("false") => Ok(Value::Bool(false)),
+            _ if self.eat("NaN") => Ok(Value::Float(f64::NAN)),
+            _ if self.eat("Infinity") => Ok(Value::Float(f64::INFINITY)),
+            _ if self.eat("-Infinity") => Ok(Value::Float(f64::NEG_INFINITY)),
+            _ => self.number(),
+        }
+    }
+
+    fn nested(&mut self, parse: fn(&mut Self) -> Result<Value, Error>) -> Result<Value, Error> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(Error::TooDeep);
+        }
+        let value = parse(self)?;
+        self.depth -= 1;
+        Ok(value)
+    }
+
+    fn array(&mut self) -> Result<Value, Error> {
+        self.expect("[")?;
+        self.skip_whitespace();
+        let mut values = Vec::new();
+        if self.eat("]") {
+            return Ok(Value::List(values));
+        }
+        loop {
+            values.push(self.value()?);
+            self.skip_whitespace();
+            if self.eat("]") {
+                return Ok(Value::List(values));
+            }
+            self.expect(",")?;
+            self.skip_whitespace();
+        }
+    }
+
+    fn object(&mut self) -> Result<Value, Error> {
+        self.expect("{")?;
+        self.skip_whitespace();
+        let mut entries = Vec::new();
+        let mut positions = HashMap::<_, usize>::new();
+        if self.eat("}") {
+            return Ok(Value::Dict(entries));
+        }
+        loop {
+            if self.peek() != Some(b'"') {
+                return Err(self.error());
+            }
+            let key = self.string()?;
+            self.skip_whitespace();
+            self.expect(":")?;
+            self.skip_whitespace();
+            let value = self.value()?;
+            match positions.entry(key) {
+                Entry::Occupied(position) => entries[*position.get()].1 = value,
+                Entry::Vacant(position) => {
+                    entries.push((Value::Str(position.key().clone()), value));
+                    position.insert(entries.len() - 1);
+                }
+            }
+            self.skip_whitespace();
+            if self.eat("}") {
+                return Ok(Value::Dict(entries));
+            }
+            self.expect(",")?;
+            self.skip_whitespace();
+        }
+    }
+
+    /// `scanstring` with `strict=True`: control characters must be escaped.
+    fn string(&mut self) -> Result<String, Error> {
+        self.expect("\"")?;
+        let mut out = String::new();
+        loop {
+            let start = self.pos;
+            while self
+                .peek()
+                .is_some_and(|byte| byte != b'"' && byte != b'\\' && byte >= 0x20)
+            {
+                self.pos += 1;
+            }
+            out.push_str(&self.text[start..self.pos]);
+            match self.peek() {
+                Some(b'"') => {
+                    self.pos += 1;
+                    return Ok(out);
+                }
+                Some(b'\\') => {
+                    self.pos += 1;
+                    out.push(self.escape()?);
+                }
+                _ => return Err(self.error()),
+            }
+        }
+    }
+
+    fn escape(&mut self) -> Result<char, Error> {
+        let escaped = match self.peek() {
+            Some(b'"') => '"',
+            Some(b'\\') => '\\',
+            Some(b'/') => '/',
+            Some(b'b') => '\u{8}',
+            Some(b'f') => '\u{c}',
+            Some(b'n') => '\n',
+            Some(b'r') => '\r',
+            Some(b't') => '\t',
+            Some(b'u') => {
+                self.pos += 1;
+                return self.unicode_escape();
+            }
+            _ => return Err(self.error()),
+        };
+        self.pos += 1;
+        Ok(escaped)
+    }
+
+    /// `\uXXXX`, joining a high surrogate with the low one escaped right after it.
+    fn unicode_escape(&mut self) -> Result<char, Error> {
+        let unit = self.hex4()?;
+        let code = if (0xd800..0xdc00).contains(&unit) {
+            self.expect("\\u")?;
+            let low = self.hex4()?;
+            if !(0xdc00..0xe000).contains(&low) {
+                return Err(self.error());
+            }
+            0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
+        } else {
+            unit
+        };
+        char::from_u32(code).ok_or_else(|| self.error())
+    }
+
+    fn hex4(&mut self) -> Result<u32, Error> {
+        let digits = self
+            .text
+            .get(self.pos..self.pos + 4)
+            .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .ok_or_else(|| self.error())?;
+        self.pos += 4;
+        u32::from_str_radix(digits, 16).map_err(|_| self.error())
+    }
+
+    /// `NUMBER_RE`: `(-?(?:0|[1-9][0-9]*))(\.[0-9]+)?([eE][-+]?[0-9]+)?`, an `int` unless a
+    /// fraction or exponent matched.
+    fn number(&mut self) -> Result<Value, Error> {
+        let start = self.pos;
+        self.eat("-");
+        match self.peek() {
+            Some(b'0') => self.pos += 1,
+            Some(b'1'..=b'9') => self.digits(),
+            _ => return Err(Error::InvalidJson(start)),
+        }
+        let integer_end = self.pos;
+        if self.peek() == Some(b'.') && self.bytes.get(self.pos + 1).is_some_and(u8::is_ascii_digit)
+        {
+            self.pos += 1;
+            self.digits();
+        }
+        if matches!(self.peek(), Some(b'e' | b'E')) {
+            let exponent = self.pos;
+            self.pos += 1;
+            if matches!(self.peek(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+                self.digits();
+            } else {
+                self.pos = exponent;
+            }
+        }
+        let text = &self.text[start..self.pos];
+        if self.pos == integer_end {
+            BigInt::from_str(text)
+                .map(Value::Int)
+                .map_err(|_| Error::InvalidJson(start))
+        } else {
+            f64::from_str(text)
+                .map(Value::Float)
+                .map_err(|_| Error::InvalidJson(start))
+        }
+    }
+
+    fn digits(&mut self) {
+        while self.peek().is_some_and(|byte| byte.is_ascii_digit()) {
+            self.pos += 1;
+        }
+    }
+}
+
+/// `json.loads(json.dumps(value))` as a `serde_json` value: tuples become arrays and dict
+/// keys are coerced to strings as `json.dumps` does. Non-finite floats, which Python writes
+/// as `NaN` and `Infinity`, have no `serde_json` form and fail with [`Error::NonFiniteFloat`].
+pub fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
+    Ok(match value {
+        Value::None => serde_json::Value::Null,
+        Value::Bool(value) => serde_json::Value::Bool(*value),
+        Value::Int(value) => {
+            let text = value.to_string();
+            serde_json::Value::Number(
+                text.parse::<i64>()
+                    .map(Number::from)
+                    .or_else(|_| text.parse::<u64>().map(Number::from))
+                    .map_err(|_| Error::IntegerOutOfRange)?,
+            )
+        }
+        Value::Float(value) => {
+            serde_json::Value::Number(Number::from_f64(*value).ok_or(Error::NonFiniteFloat)?)
+        }
+        Value::Str(text) => serde_json::Value::String(text.clone()),
+        Value::List(values) | Value::Tuple(values) => {
+            serde_json::Value::Array(values.iter().map(to_json).collect::<Result<Vec<_>, _>>()?)
+        }
+        Value::Dict(entries) => serde_json::Value::Object(
+            entries
+                .iter()
+                .map(|(key, value)| Ok((json_key(key)?, to_json(value)?)))
+                .collect::<Result<Map<_, _>, Error>>()?,
+        ),
+        value @ (Value::Bytes(_) | Value::Set(_) | Value::Complex { .. }) => {
+            return Err(Error::NotJsonSerializable(value.type_name()));
+        }
+    })
+}
+
+fn write_value(out: &mut String, value: &Value, separators: Separators) -> Result<(), Error> {
+    match value {
+        Value::None => out.push_str("null"),
+        Value::Bool(true) => out.push_str("true"),
+        Value::Bool(false) => out.push_str("false"),
+        Value::Int(value) => {
+            let _ = write!(out, "{value}");
+        }
+        Value::Float(value) => out.push_str(&float_text(*value)),
+        Value::Str(text) => write_string(out, text),
+        Value::List(values) | Value::Tuple(values) => {
+            out.push('[');
+            for (index, value) in values.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(separators.item);
+                }
+                write_value(out, value, separators)?;
+            }
+            out.push(']');
+        }
+        Value::Dict(entries) => {
+            out.push('{');
+            for (index, (key, value)) in entries.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(separators.item);
+                }
+                write_string(out, &json_key(key)?);
+                out.push_str(separators.key);
+                write_value(out, value, separators)?;
+            }
+            out.push('}');
+        }
+        value @ (Value::Bytes(_) | Value::Set(_) | Value::Complex { .. }) => {
+            return Err(Error::NotJsonSerializable(value.type_name()));
+        }
+    }
+    Ok(())
+}
+
+/// `len(json.dumps(value))` for a value Rust serializes with serde, counted without building
+/// the text: Python's `", "` and `": "` separators, `ensure_ascii` escapes and float repr. A
+/// non-finite float counts as serde's `null`.
+pub fn dumps_len<T: serde::Serialize + ?Sized>(value: &T) -> Result<usize, serde_json::Error> {
+    let mut count = ByteCount(0);
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut count,
+        PythonFormatter,
+    ))?;
+    Ok(count.0)
+}
+
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// serde_json output in `json.dumps`'s default layout.
+struct PythonFormatter;
+
+impl serde_json::ser::Formatter for PythonFormatter {
+    fn begin_array_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(DEFAULT_SEPARATORS.item.as_bytes())
+        }
+    }
+
+    fn begin_object_key<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.begin_array_value(writer, first)
+    }
+
+    fn begin_object_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        writer.write_all(DEFAULT_SEPARATORS.key.as_bytes())
+    }
+
+    fn write_f64<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f64,
+    ) -> std::io::Result<()> {
+        writer.write_all(float_text(value).as_bytes())
+    }
+
+    fn write_f32<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f32,
+    ) -> std::io::Result<()> {
+        self.write_f64(writer, f64::from(value))
+    }
+
+    fn write_string_fragment<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        fragment: &str,
+    ) -> std::io::Result<()> {
+        let mut escaped = Vec::new();
+        write_string(&mut escaped, fragment);
+        writer.write_all(&escaped[1..escaped.len() - 1])
+    }
+}
+
+/// `json.encoder.JSONEncoder.iterencode`'s `floatstr` with `allow_nan=True`.
+pub fn float_text(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_owned()
+    } else if value.is_infinite() {
+        if value > 0.0 { "Infinity" } else { "-Infinity" }.to_owned()
+    } else {
+        float_repr(value)
+    }
+}
+
+/// Dict key coercion in `json.dumps`: scalars become their JSON text, other keys fail.
+fn json_key(key: &Value) -> Result<String, Error> {
+    Ok(match key {
+        Value::Str(text) => text.clone(),
+        Value::Int(value) => value.to_string(),
+        Value::Float(value) => float_text(*value),
+        Value::Bool(true) => "true".to_owned(),
+        Value::Bool(false) => "false".to_owned(),
+        Value::None => "null".to_owned(),
+        key => return Err(Error::InvalidJsonKey(key.type_name())),
+    })
+}
+
+/// Where [`write_string`] appends its output: a `String`, or a byte buffer for a caller that
+/// assembles JSON as bytes.
+pub trait Sink {
+    fn push_ascii(&mut self, text: &str);
+}
+
+impl Sink for String {
+    fn push_ascii(&mut self, text: &str) {
+        self.push_str(text);
+    }
+}
+
+impl Sink for Vec<u8> {
+    fn push_ascii(&mut self, text: &str) {
+        self.extend_from_slice(text.as_bytes());
+    }
+}
+
+/// `py_encode_basestring_ascii`: escape `"`, `\`, control characters, and everything outside
+/// printable ASCII as `\uXXXX`, with surrogate pairs above the BMP.
+pub fn write_string(out: &mut impl Sink, text: &str) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.push_ascii("\"");
+    let mut start = 0;
+    for (index, ch) in text.char_indices() {
+        let escaped = match ch {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            '\u{8}' => "\\b",
+            '\u{c}' => "\\f",
+            ' '..='~' => continue,
+            _ => "",
+        };
+        out.push_ascii(&text[start..index]);
+        start = index + ch.len_utf8();
+        if !escaped.is_empty() {
+            out.push_ascii(escaped);
+            continue;
+        }
+        let mut units = [0u16; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            let mut code = *b"\\u0000";
+            for (slot, shift) in code[2..].iter_mut().zip([12, 8, 4, 0]) {
+                *slot = HEX[usize::from((*unit >> shift) & 0xf)];
+            }
+            out.push_ascii(std::str::from_utf8(&code).unwrap_or_default());
+        }
+    }
+    out.push_ascii(&text[start..]);
+    out.push_ascii("\"");
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{dumps, dumps_compact, dumps_len, from_json, loads, type_name};
+    use crate::{Error, Value, repr::repr};
+
+    #[rstest]
+    #[case::null(serde_json::json!(null), "NoneType")]
+    #[case::boolean(serde_json::json!(true), "bool")]
+    #[case::int(serde_json::json!(1), "int")]
+    #[case::float(serde_json::json!(1.5), "float")]
+    #[case::text(serde_json::json!("a"), "str")]
+    #[case::list(serde_json::json!([1]), "list")]
+    #[case::object(serde_json::json!({"a": 1}), "dict")]
+    fn a_json_value_is_named_by_its_python_type(
+        #[case] value: serde_json::Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(type_name(&value), expected);
+    }
+
+    #[rstest]
+    #[case::separators(r#"{"a": [1, 2], "b": {"c": null}}"#)]
+    #[case::ensure_ascii(r#"{"m": "caf\u00e9 \ud834\udd1e \u007f"}"#)]
+    #[case::escapes(r#"["quote \" backslash \\ newline \n tab \t \u0001"]"#)]
+    #[case::python_float_repr(r#"[3.5e-05, 1e+16, 0.1, 2.0]"#)]
+    fn counts_what_json_dumps_writes(#[case] text: &str) {
+        let value: serde_json::Value = serde_json::from_str(text).expect("parses");
+        assert_eq!(
+            dumps_len(&value).expect("counts"),
+            dumps(&from_json(value)).expect("dumps").len()
+        );
+    }
+
+    // Expected value is CPython json.dumps(value, separators=(",", ":"))
+    #[test]
+    fn compact_dumps_drops_the_spaces() {
+        let value = loads(r#"{"a": [1, "\u00e9", null], "b": {"c": 1.5}}"#).expect("parses");
+        assert_eq!(
+            dumps_compact(&value).expect("dumps"),
+            r#"{"a":[1,"\u00e9",null],"b":{"c":1.5}}"#
+        );
+    }
+
+    // Expected values are the repr of CPython 3.14 json.loads(text)
+    #[rstest]
+    #[case::nan("NaN", "nan")]
+    #[case::infinity("Infinity", "inf")]
+    #[case::negative_infinity("-Infinity", "-inf")]
+    #[case::non_finite_in_a_list("[NaN, Infinity, -Infinity]", "[nan, inf, -inf]")]
+    #[case::beyond_u64("18446744073709551616", "18446744073709551616")]
+    #[case::exponent_overflow("1e400", "inf")]
+    #[case::upper_exponent("1E+2", "100.0")]
+    #[case::negative_zero_int("-0", "0")]
+    #[case::negative_zero_float("-0.0", "-0.0")]
+    #[case::repeated_key(r#"{"a": 1, "b": 2, "a": 3}"#, "{'a': 3, 'b': 2}")]
+    #[case::surrogate_pair(r#""😀""#, "'😀'")]
+    #[case::upper_hex_surrogate_pair(r#""😀""#, "'😀'")]
+    #[case::escapes(
+        r#"{"k": [true, false, null, 1.5, "é\/"]}"#,
+        "{'k': [True, False, None, 1.5, 'é/']}"
+    )]
+    #[case::delete_is_not_a_control_character("\"\x7f\"", "'\\x7f'")]
+    #[case::surrounding_whitespace(" \n[1]\t", "[1]")]
+    #[case::empty_containers("[{}, []]", "[{}, []]")]
+    fn loads_reads_like_python(#[case] text: &str, #[case] expected: &str) {
+        assert_eq!(repr(&loads(text).unwrap()), expected);
+    }
+
+    // CPython 3.14 json.loads raises JSONDecodeError on each
+    #[rstest]
+    #[case::lowercase_nan("nan")]
+    #[case::signed_nan("-NaN")]
+    #[case::plus_sign("+1")]
+    #[case::bare_minus("-")]
+    #[case::leading_zero("01")]
+    #[case::bare_point("1.")]
+    #[case::bare_exponent("1e")]
+    #[case::trailing_data("Infinity1")]
+    #[case::trailing_comma("[1,]")]
+    #[case::missing_comma("[1 2]")]
+    #[case::missing_colon(r#"{"a" 1}"#)]
+    #[case::unquoted_key("{1: 2}")]
+    #[case::raw_newline_in_string("\"a\nb\"")]
+    #[case::unknown_escape(r#""\x41""#)]
+    #[case::empty("")]
+    #[case::byte_order_mark("\u{feff}1")]
+    fn loads_rejects_what_python_rejects(#[case] text: &str) {
+        assert!(matches!(loads(text), Err(Error::InvalidJson(_))));
+    }
+
+    #[rstest]
+    fn a_lone_surrogate_is_a_known_limit() {
+        assert!(matches!(loads(r#""\ud800""#), Err(Error::InvalidJson(_))));
+    }
+
+    #[rstest]
+    fn loads_reads_back_the_non_finite_floats_dumps_writes() {
+        let written = dumps(&Value::List(vec![
+            Value::Float(f64::NAN),
+            Value::Float(f64::INFINITY),
+            Value::Float(f64::NEG_INFINITY),
+        ]))
+        .unwrap();
+
+        assert_eq!(repr(&loads(&written).unwrap()), "[nan, inf, -inf]");
+    }
+
+    #[rstest]
+    fn loads_rejects_nesting_past_max_depth() {
+        let text = format!(
+            "{}{}",
+            "[".repeat(crate::MAX_DEPTH + 1),
+            "]".repeat(crate::MAX_DEPTH + 1)
+        );
+
+        assert!(matches!(loads(&text), Err(Error::TooDeep)));
+    }
+}
