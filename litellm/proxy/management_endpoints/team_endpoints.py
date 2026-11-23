@@ -219,7 +219,6 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
 from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 from litellm.proxy.management_helpers.budget_limits_usage import build_budget_limits_usage
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
-    ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     enforce_all_proxy_mcp_servers_grant_is_admin_only,
     handle_update_object_permission_common,
@@ -3039,7 +3038,6 @@ async def update_team(
                     },
                 }
 
-        prepared_permission: ObjectPermissionUpsert | None = None
         if data.object_permission is not None:
             await enforce_all_proxy_mcp_servers_grant_is_admin_only(
                 requested_mcp_servers=data.object_permission.mcp_servers,
@@ -3047,13 +3045,17 @@ async def update_team(
                 is_proxy_admin=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
                 prisma_client=prisma_client,
             )
-            prepared_permission = await prepare_object_permission_upsert(
+            updated_kv.pop("object_permission", None)
+        prepared_permission: Final = (
+            await prepare_object_permission_upsert(
                 data.object_permission.model_dump(exclude_unset=True),
                 existing_team_row.object_permission_id,
                 prisma_client,
                 can_grant_apps=user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN,
             )
-            updated_kv.pop("object_permission", None)
+            if data.object_permission is not None
+            else None
+        )
 
         tx: Final = await writes.enter_async_context(prisma_client.tx()) if prepared_permission is not None else None
         transaction: Final = RepositoryTransaction(tx) if tx is not None else None
