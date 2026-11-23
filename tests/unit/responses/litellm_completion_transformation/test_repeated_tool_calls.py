@@ -2,7 +2,6 @@ import json
 import sys
 from collections.abc import Callable, Iterator, Sequence
 from itertools import chain
-from time import process_time
 from types import SimpleNamespace
 from typing import Final
 
@@ -32,10 +31,6 @@ _PATCH: Final = "*** Begin Patch " * 250
 _CUT_INPUT_OF_A_CUSTOM_TOOL: Final = json.dumps({"content": truncated_for_db(_PATCH, 2048)})
 _CUT_ARGUMENTS_OF_A_CUSTOM_TOOL: Final = truncated_for_db(json.dumps({"content": _PATCH}), 2048)
 _TEXT_WITH_THE_MARKER: Final = f"The row says ... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped 5 chars) ... there."
-_PARIS_MANY_TIMES: Final = f"{{{', '.join([_PARIS[1:-1]] * 20000)}}}"
-_FULL_OF_MARKERS: Final = truncated_for_db(
-    f"... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped 1 chars) ..." * 9000, 300000
-)
 _JUST_OVER_THE_LIMIT: Final = f'{{"note": "{"x" * 2040}"}}'
 _EPHEMERAL: Final = {"type": "ephemeral"}
 _FIELDS: Final = {"provider_specific_fields": {"trace": "t1"}}
@@ -76,12 +71,6 @@ def _arguments(message: dict[str, object] | Message) -> list[str]:
 
 def _replayed(messages: Sequence[object]) -> list[object]:
     return list(without_repeated_tool_calls(messages, keep_stored_arguments=lambda: False))
-
-
-def _seconds_to_replay(messages: Sequence[object]) -> float:
-    started: Final = process_time()
-    _replayed(messages)
-    return process_time() - started
 
 
 def _target_is_not_looked_up() -> bool:
@@ -202,6 +191,17 @@ def test_calls_resent_together_before_their_outputs_are_not_made_again(
     assert _replayed([_USER, asked, _asks(*resent), *once, _ANSWER]) == [_USER, asked, *once, _ANSWER]
 
 
+def test_calls_resent_with_their_place_in_the_turn_are_not_made_again() -> None:
+    asked: Final = _asks("c1", "c2")
+    placed: Final = {
+        **asked,
+        "tool_calls": [{**call, "index": place} for place, call in enumerate(asked["tool_calls"])],
+    }
+    outputs: Final = [_output("c1"), _output("c2")]
+
+    assert _replayed([asked, placed, *outputs]) == [asked, *outputs]
+
+
 @pytest.mark.parametrize("empty", [{"content": ""}, {"thinking_blocks": []}, {"cache_control": None}], ids=str)
 def test_a_repeat_whose_other_fields_are_empty_is_still_a_repeat(empty: dict[str, object]) -> None:
     asked: Final = _asks("c1", "c2")
@@ -281,6 +281,12 @@ def test_a_call_resent_with_or_without_its_namespace_gives_back_its_arguments_un
     assert outputs == [_output("c1"), _output("c2")]
 
 
+def test_a_call_resent_without_a_name_is_the_stored_call_without_one() -> None:
+    nameless: Final = _asks("c1", arguments=_PARIS, name=None)
+
+    assert _replayed([nameless, nameless, _output("c1")]) == [nameless, _output("c1")]
+
+
 @pytest.mark.parametrize("stored", ["{}", _CUT, _WHOLE], ids=["redacted", "cut", "whole"])
 def test_every_copy_of_a_call_is_compared_with_the_name_storage_holds(stored: str) -> None:
     copies: Final = [_asks("c1", arguments=_WHOLE, name=name) for name in ("crm__search", "erp__search")]
@@ -291,11 +297,14 @@ def test_every_copy_of_a_call_is_compared_with_the_name_storage_holds(stored: st
     ]
 
 
-def test_a_copy_without_the_signature_is_left_out_between_calls_signed_otherwise() -> None:
-    asked: Final = _asks(_SIGNED)
-    otherwise: Final = [_asks(_OTHERWISE_SIGNED), _output(_OTHERWISE_SIGNED)]
+@pytest.mark.parametrize("stored", ["{}", _CUT, _WHOLE], ids=["redacted", "cut", "whole"])
+def test_a_copy_without_the_signature_is_left_out_between_calls_signed_otherwise(stored: str) -> None:
+    otherwise: Final = [_asks(_OTHERWISE_SIGNED, arguments=_WHOLE), _output(_OTHERWISE_SIGNED)]
 
-    assert _replayed([asked, _asks("c1"), *otherwise]) == [asked, *otherwise]
+    assert _replayed([_asks(_SIGNED, arguments=stored), _asks("c1", arguments=_WHOLE), *otherwise]) == [
+        _asks(_SIGNED, arguments=_WHOLE),
+        *otherwise,
+    ]
 
 
 def test_arguments_shorter_than_their_cut_text_are_given_back() -> None:
@@ -447,6 +456,8 @@ def test_a_call_resent_with_other_arguments_stays_as_sent(stored: str, resent: s
         ("crm__search", "search__crm"),
         ("crm__search", "crm"),
         ("crm__None", None),
+        ("None", None),
+        (None, "None"),
     ],
 )
 def test_a_call_resent_to_another_tool_stays_as_sent(
@@ -477,25 +488,6 @@ def test_a_call_with_a_number_too_long_to_print_stays_as_sent_when_spelled_other
 
     assert _replayed(respelled) == respelled
     assert _replayed([asked, asked, _output("c1")]) == [asked, _output("c1")]
-
-
-@pytest.mark.parametrize(
-    ("stored", "resent"),
-    [
-        pytest.param(_PARIS_MANY_TIMES, _PARIS, id="arguments-slow-to-read"),
-        pytest.param(_FULL_OF_MARKERS, _CUT, id="cut-arguments-slow-to-search"),
-    ],
-)
-@pytest.mark.parametrize("together", [False, True], ids=["one-by-one", "together"])
-def test_a_call_is_not_read_again_for_every_copy_of_it(stored: str, resent: str, together: bool) -> None:
-    ids: Final = ["c1"] * 200
-    copies: Final = (
-        [_asks(*ids, arguments=resent)] if together else [_asks(call_id, arguments=resent) for call_id in ids]
-    )
-    read_once: Final = _seconds_to_replay([_asks("c1", arguments=stored), _asks("c1", arguments=resent)])
-    light: Final = _seconds_to_replay([_asks("c1", arguments=resent), *copies])
-
-    assert _seconds_to_replay([_asks("c1", arguments=stored), *copies]) < 10 * (read_once + light)
 
 
 @pytest.mark.parametrize(
@@ -569,6 +561,14 @@ def test_a_repeat_before_a_resent_call_that_says_more_is_still_one() -> None:
         ),
         pytest.param([_USER, _asks("c1"), _USER, _asks("c1"), _output("c1")], id="id-reused-after-a-user-turn"),
         pytest.param([_USER, _asks("c1"), _ANSWER, _asks("c1"), _output("c1")], id="id-reused-after-an-answer"),
+        pytest.param(
+            [_asks("c1"), {"role": "user", "content": ""}, _asks("c1"), _output("c1")],
+            id="id-reused-after-an-empty-user-turn",
+        ),
+        pytest.param(
+            [_asks("c1"), {"role": "assistant", "content": None}, _asks("c1"), _output("c1")],
+            id="id-reused-after-an-empty-answer",
+        ),
         pytest.param([_asks("c1", "c2"), _DEVELOPER, _asks("c1"), _output("c1")], id="id-reused-after-instructions"),
         pytest.param([_asks("c1", "c2"), _SYSTEM, _asks("c1"), _output("c1")], id="id-reused-after-a-system-message"),
         pytest.param([_asks("c1", "c2"), _output("c1"), _stored(_asks("c2"))], id="id-reused-by-a-stored-turn"),

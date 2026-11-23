@@ -15,8 +15,8 @@ from litellm.litellm_core_utils.db_truncation import is_truncation_of, was_trunc
 from litellm.litellm_core_utils.prompt_templates.factory import is_same_tool_call, tool_call_id_prefix
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 
-_FieldsT: Final = TypeVar("_FieldsT")
-_MessageT: Final = TypeVar("_MessageT")
+_FieldsT = TypeVar("_FieldsT")
+_MessageT = TypeVar("_MessageT")
 _FIELDS_OF_LONE_CALLS: Final = frozenset({"role", "tool_calls"})
 _FIELDS_OF_A_CALL: Final = frozenset({"id", "type", "function", "index"})
 _FIELDS_OF_A_FUNCTION: Final = frozenset({"name", "arguments"})
