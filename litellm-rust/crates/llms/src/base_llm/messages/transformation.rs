@@ -25,6 +25,14 @@ pub trait BaseMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error>;
 
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        true
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
@@ -74,8 +82,14 @@ pub trait BaseMessagesConfig: Sync {
         headers
     }
 
-    fn request_for_url(&self, request: MessagesRequest, _url: &str) -> MessagesRequest {
-        request
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        _url: &str,
+        _headers: &Headers,
+        _drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        Ok(request)
     }
 
     /// The JSON that goes on the wire, for a host whose body differs from the typed request:

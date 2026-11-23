@@ -15,10 +15,13 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Final, NamedTuple, Protocol, Union, cast
 
+import anyio
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import TypeAdapter, ValidationError
 from starlette.exceptions import WebSocketException
+from starlette.requests import ClientDisconnect
 
 import litellm
 from litellm._internal_context import service_target
@@ -74,6 +77,7 @@ from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module expo
     get_team_member_default_budget,
     get_team_membership,
     get_team_object,
+    get_team_object_from_cache,
     get_user_object,
     get_user_role,
     is_mcp_discovery_request,
@@ -268,6 +272,7 @@ _CLAUDE_MODEL_ROUTES: Final = frozenset(
     f"/{prefix}{endpoint}" for prefix in ("", "v1/") for endpoint in ("messages", "chat/completions", "responses")
 )
 _CLAUDE_MODEL_NORMALIZED: Final = "litellm.claude_model_normalized"
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(dict[str, object])
 
 
 async def _normalize_claude_model(
@@ -1992,6 +1997,212 @@ async def _read_request_body_deferring_parse_failure(
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
+PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES: Final = 64 * 1024
+PREFLIGHT_FAILURE_JSON_BODY_TIMEOUT_SECONDS: Final = 1.0
+
+
+def _preflight_failure_model(
+    body: Mapping[str, object], route: str, request: Request, team_id: str | None
+) -> str | Sequence[str] | None:
+    from litellm.proxy.proxy_server import llm_router
+
+    try:
+        return _get_model_from_request_context(dict(body), route, request, llm_router, team_id)
+    except Exception:  # noqa: BLE001  # logging enrichment must never replace the existing preflight rejection
+        return None
+
+
+async def _preflight_failure_request_data(
+    request: Request, route: str, cached_key: UserAPIKeyAuth
+) -> Mapping[str, object]:
+    from litellm.proxy.common_request_processing import resolve_litellm_call_id
+    from litellm.proxy.litellm_pre_call_utils import key_and_team_logging_fields
+    from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.utils import (
+        _call_type_for_route,  # pyright: ignore[reportPrivateUsage]  # share proxy failure route classification
+    )
+
+    body: Final = await _small_preflight_failure_json(request)
+    model: Final = _preflight_failure_model(body, route, request, cached_key.team_id)
+    call_type: Final = _call_type_for_route(route, method=request.method)
+    _seed_request_destinations(cached_key, request)
+    seed_request_identity(cached_key, model=model)
+    return {
+        **{key: value for key, value in body.items() if key != "model"},
+        **({"model": model} if model is not None else {}),
+        "litellm_call_id": resolve_litellm_call_id(request.headers.get("x-litellm-call-id")),
+        "call_type": call_type,
+        **key_and_team_logging_fields(user_api_key_dict=cached_key, proxy_config=proxy_config),
+    }
+
+
+async def _small_preflight_failure_json(request: Request) -> Mapping[str, object]:
+    declared: Final = request.headers.get("content-length", "")
+    content_type: Final = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if (
+        not declared.isdecimal()
+        or len(declared) > 10
+        or not 0 < int(declared) <= PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES
+        or request.headers.get("transfer-encoding") is not None
+        or content_type != "application/json"
+    ):
+        return {}
+    buffered: Final = bytearray()
+    try:
+        with anyio.fail_after(PREFLIGHT_FAILURE_JSON_BODY_TIMEOUT_SECONDS):
+            async for chunk in request.stream():
+                if len(buffered) + len(chunk) > PREFLIGHT_FAILURE_JSON_BODY_MAX_BYTES:
+                    return {}
+                buffered.extend(chunk)
+        parsed: Final = _GENERAL_SETTINGS_ADAPTER.validate_json(buffered)
+    except (ValidationError, RuntimeError, ClientDisconnect, TimeoutError):
+        return {}
+    return {
+        **({"model": parsed["model"]} if isinstance(parsed.get("model"), str) else {}),
+        **{
+            slot: {
+                name: value
+                for name, value in _GENERAL_SETTINGS_ADAPTER.validate_python(metadata).items()
+                if name in ("tags", "session_id", "trace_user_id", "trace_id", "trace_name")
+            }
+            for slot in ("metadata", "litellm_metadata")
+            if isinstance(metadata := parsed.get(slot), dict)
+        },
+    }
+
+
+def _is_bodyless_get(request: Request) -> bool:
+    return (
+        request.scope.get("method") == "GET"
+        and request.headers.get("content-length", "0") == "0"
+        and request.headers.get("transfer-encoding") is None
+    )
+
+
+def _team_fields_newer_than_key(key: UserAPIKeyAuth, team: LiteLLM_TeamTableCachedObj) -> Mapping[str, object]:
+    if team.last_refreshed_at is None or key.last_refreshed_at is None:
+        return MappingProxyType({})
+    if team.last_refreshed_at <= key.last_refreshed_at:
+        return MappingProxyType({})
+    key_fields: Final = type(key).model_fields
+    return MappingProxyType(
+        {f"team_{name}": value for name, value in team.__dict__.items() if f"team_{name}" in key_fields}
+    )
+
+
+async def _cached_team_fields_for_key(
+    key: UserAPIKeyAuth, user_api_key_cache: UserApiKeyCache, parent_otel_span: Span | None
+) -> Mapping[str, object] | None:
+    if key.team_id is None or key.team_id == UI_TEAM_ID:
+        return MappingProxyType({})
+    try:
+        team: Final = await get_team_object_from_cache(
+            key=f"team_id:{key.team_id}", user_api_key_cache=user_api_key_cache, parent_otel_span=parent_otel_span
+        )
+        return None if team is None else _team_fields_newer_than_key(key, team)
+    except Exception:  # noqa: BLE001  # an unreadable team entry is treated like a team cache miss
+        return None
+
+
+def _refused_by_team_limit(rejection: HTTPException) -> bool:
+    from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+
+    return isinstance(rejection, ProxyRateLimitError) and rejection.descriptor_key == "team"
+
+
+async def _reject_from_headers_before_reading_body(
+    request: Request, api_key: str | None, custom_litellm_key_header: str | None, route: str
+) -> None:
+    """Refuse a request its headers already condemn, a blocked key or an exhausted key limit, before reading its body.
+
+    Only a key already in the cache is considered, so a miss changes nothing and the full auth path still runs.
+    The limit is only checked where a body is declared and the route is metered, because model listing, token
+    counting and other GET discovery routes never reach the limiter and must keep answering an exhausted key.
+    A retry flood of large payloads against a limited key used to buffer every payload just to answer 429.
+    """
+    if not RouteChecks.is_llm_api_route(route=route):
+        return
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_request_processing import proxy_exception_from_http_exception
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.proxy_server import prisma_client, proxy_logging_obj, user_api_key_cache
+    from litellm.proxy.spend_tracking.budget_reservation import (
+        _is_unbilled_route,  # pyright: ignore[reportPrivateUsage]  # share the unbilled route classification
+    )
+
+    configured_header: Final = proxy_server.general_settings_view().get("litellm_key_header_name")
+    bearer_token: Final = (
+        get_api_key_from_custom_header(request=request, custom_litellm_key_header_name=configured_header)
+        if isinstance(configured_header, str) and configured_header in request.headers
+        else _get_bearer_token_or_received_api_key(custom_litellm_key_header)
+        if isinstance(custom_litellm_key_header, str)
+        else get_bearer_token(api_key=api_key)
+        if isinstance(api_key, str)
+        else ""
+    )
+    if not bearer_token:
+        return
+    hashed_token: Final = hash_token(bearer_token)
+    try:
+        cached_key: Final = IdentityStore.key_from_principal(
+            await IdentityStore(prisma_client, user_api_key_cache, check_cache_only=True).resolve(
+                hashed_token=hashed_token
+            )
+        )
+    except Exception:  # noqa: BLE001  # any cache miss defers to the full auth path below
+        return
+    parent_otel_span: Final[Span | None] = getattr(request.state, "parent_otel_span", None)
+    if cached_key.blocked is True:
+        request_data: Final = dict(await _preflight_failure_request_data(request, route, cached_key))
+        await UserAPIKeyAuthExceptionHandler.handle_authentication_error(
+            e=ProxyException(
+                message="Authentication Error, Key is blocked. Update via `/key/unblock` if you're an admin.",
+                type=ProxyErrorTypes.auth_error,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            ),
+            request=request,
+            request_data=request_data,
+            route=route,
+            parent_otel_span=parent_otel_span,
+            api_key=bearer_token,
+            resolved_identity=cached_key,
+            dispatched_call_type=str(request_data["call_type"]) if request_data["call_type"] is not None else None,
+        )
+        return
+    if _is_unbilled_route(route) or _is_bodyless_get(request):
+        return
+    limiter: Final = proxy_logging_obj.get_proxy_hook("parallel_request_limiter")
+    if not isinstance(limiter, PROXY_MaxParallelRequestsHandler_v3):
+        return
+    team_fields: Final = await _cached_team_fields_for_key(cached_key, user_api_key_cache, parent_otel_span)
+    rate_limited: Final = cached_key.model_copy(
+        update={
+            **(team_fields or {}),
+            "api_key": cached_key.api_key or hashed_token,
+            "parent_otel_span": parent_otel_span,
+            "request_route": normalize_request_route(route),
+        }
+    )
+    try:
+        await limiter.raise_if_over_limit_before_body(rate_limited)
+    except HTTPException as rejection:
+        if team_fields is None and _refused_by_team_limit(rejection):
+            return
+        failure_data: Final = dict(await _preflight_failure_request_data(request, route, rate_limited))
+        transformed: Final = await proxy_logging_obj.post_call_failure_hook(  # pyright: ignore[reportUnknownMemberType]  # bare dict in sig
+            request_data=failure_data,
+            original_exception=rejection,
+            user_api_key_dict=rate_limited,
+            route=route,
+            dispatched_call_type=str(failure_data["call_type"]) if failure_data["call_type"] is not None else None,
+        )
+        failure: Final = transformed if transformed is not None else rejection
+        if isinstance(failure, ProxyException):
+            raise failure
+        raise proxy_exception_from_http_exception(failure, dict(failure.headers or {}))
+
+
 async def _record_unparsable_body_failure(
     user_api_key_dict: UserAPIKeyAuth,
     body_parse_exception: ProxyException,
@@ -2676,17 +2887,8 @@ async def user_api_key_auth_builder(
                     check_cache_only=True,
                 )
 
-                if (
-                    team_obj.last_refreshed_at is not None
-                    and valid_token.last_refreshed_at is not None
-                    and team_obj.last_refreshed_at > valid_token.last_refreshed_at
-                ):
-                    team_obj_dict: Final = team_obj.__dict__
-
-                    for k, v in team_obj_dict.items():
-                        field_name = f"team_{k}"
-                        if field_name in valid_token.__fields__:
-                            setattr(valid_token, field_name, v)
+                for field_name, value in _team_fields_newer_than_key(valid_token, team_obj).items():
+                    setattr(valid_token, field_name, value)
             except Exception as e:
                 verbose_logger.debug(e)  # moving from .warning to .debug as it spams logs when team missing from cache.
 
@@ -4210,9 +4412,12 @@ async def user_api_key_auth(
     # close, and the trace never reaches the backend.
     _ensure_parent_otel_span_on_request_state(request)
 
+    route: Final[str] = get_request_route(request=request)
+    await _reject_from_headers_before_reading_body(
+        request=request, api_key=api_key, custom_litellm_key_header=custom_litellm_key_header, route=route
+    )
     request_data, body_parse_exception = await _read_request_body_deferring_parse_failure(request=request)
     phase_event("litellm.request.body_parsed")
-    route: Final[str] = get_request_route(request=request)
     ## CHECK IF ROUTE IS ALLOWED
 
     # Run the whole auth phase inside a live ``auth`` span so the DB lookups it

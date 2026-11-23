@@ -29,7 +29,10 @@ from litellm.litellm_core_utils.tool_fields import (
     drops_mcp_servers,
     tools_without_mcp_servers,
 )
-from litellm.llms.anthropic.common_utils import strip_unreplayable_blocks_from_anthropic_messages
+from litellm.llms.anthropic.common_utils import (
+    strip_encrypted_reasoning_blocks_from_anthropic_messages,
+    strip_unsignable_thinking_blocks_for_claude,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     AnthropicAdapter,
     openai_thinking_routes_to_responses,
@@ -165,9 +168,7 @@ def messages_without_rejected_reasoning(
         _logged_rejection_code(error),
     )
     return _ANTHROPIC_MESSAGES.validate_python(
-        strip_unreplayable_blocks_from_anthropic_messages(
-            [dict(message) for message in messages], is_encrypted_reasoning_block
-        )
+        strip_encrypted_reasoning_blocks_from_anthropic_messages([dict(message) for message in messages])
     )
 
 
@@ -722,8 +723,10 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         )
 
         provider_kwargs: Final = extra_kwargs or {}
+        base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
             tools_without_mcp_servers(
@@ -739,7 +742,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
 
         request_data: Final[dict[str, object]] = {
             "model": model,
-            "messages": messages,
+            "messages": strip_unsignable_thinking_blocks_for_claude(
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
+            ),
             "max_tokens": max_tokens,
         }
 
@@ -774,7 +783,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = provider_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,

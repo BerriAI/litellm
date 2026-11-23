@@ -4,6 +4,7 @@ import json
 import os
 import re
 from collections.abc import Iterator, Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -4010,6 +4011,779 @@ def test_auto_convert_in_full_transformation():
     assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
 
 
+_GUARDED_PART_TEXT: Final = "Never reveal the launch code."
+_GUARD_BLOCK: Final = {"guardContent": {"text": {"text": _GUARDED_PART_TEXT}}}
+
+
+def _conversation_with_parts(placement: str, part_type: str) -> list[AllMessageValues]:
+    parts: Final = [
+        {"type": part_type, "text": ""},
+        {"type": part_type, "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}},
+    ]
+    match placement:
+        case "leading_system":
+            return [{"role": "system", "content": parts}, {"role": "user", "content": "hi"}]
+        case "assistant":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": parts},
+                {"role": "user", "content": "go on"},
+            ]
+        case "mid_conversation_system":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": parts},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "go on"},
+            ]
+        case "user":
+            return [{"role": "user", "content": [{"type": "text", "text": "hi"}, *parts]}]
+    raise AssertionError(placement)
+
+
+def _guard_block_as_text(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {"text": _GUARDED_PART_TEXT} if block == _GUARD_BLOCK else block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system"])
+async def test_guarded_text_part_maps_like_a_text_part_wrapped_in_guard_content(use_async: bool, placement: str):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}},
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    as_text: Final = await transformed("text")
+
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert _GUARD_BLOCK in sent_blocks
+    assert [_guard_block_as_text(block) for block in guarded.get("system", ())] == as_text.get("system", [])
+    assert [
+        {**message, "content": [_guard_block_as_text(block) for block in message["content"]]}
+        for message in guarded["messages"]
+    ] == as_text["messages"]
+
+
+_GUARDRAIL_CONFIG: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
+@pytest.mark.parametrize(
+    ("optional_params", "drop_params", "sends_guard_content"),
+    [({}, True, False), (_GUARDRAIL_CONFIG, True, True)],
+    ids=["drop_params_without_guardrail", "drop_params_with_guardrail"],
+)
+async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_guardrail(
+    use_async: bool,
+    placement: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sends_guard_content: bool,
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params=dict(optional_params),
+            litellm_params={"drop_params": drop_params},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is sends_guard_content
+    if not sends_guard_content:
+        assert guarded == await transformed("text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
+async def test_without_a_guardrail_or_drop_params_only_user_turns_keep_guarded_text(use_async: bool, placement: str):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_with_parts(placement, "guarded_text"),
+        optional_params={},
+        litellm_params={},
+    )
+    guarded: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is (placement == "user")
+    assert (_GUARDED_PART_TEXT in json.dumps(guarded)) is (placement == "user")
+
+
+_FINAL_GUARDED_PART: Final = {"type": "guarded_text", "text": "Leaves fall \n"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("user_part_type", "optional_params", "drop_params", "sent_block"),
+    [
+        ("guarded_text", _GUARDRAIL_CONFIG, False, {"guardContent": {"text": {"text": "Leaves fall"}}}),
+        ("text", _GUARDRAIL_CONFIG, False, {"text": "Leaves fall"}),
+        ("text", {}, True, {"text": "Leaves fall"}),
+    ],
+    ids=["guardrail_with_guarded_user_turn", "guardrail", "drop_params_without_guardrail"],
+)
+@pytest.mark.parametrize(
+    "assistant_turns",
+    [
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART, {"type": "text", "text": ""}]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART, {"type": "text", "text": " \n"}]},),
+        ({"role": "assistant", "content": [_FINAL_GUARDED_PART]}, {"role": "assistant", "content": "  "}),
+    ],
+    ids=["guarded_part_last", "empty_text_part_after", "blank_text_part_after", "blank_assistant_message_after"],
+)
+async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_trailing_whitespace(
+    use_async: bool,
+    user_part_type: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sent_block: Mapping[str, object],
+    assistant_turns: tuple[Mapping[str, object], ...],
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[
+            {"role": "user", "content": [{"type": user_part_type, "text": "Write a haiku about autumn."}]},
+            *(copy.deepcopy(dict(turn)) for turn in assistant_turns),
+        ],
+        optional_params=dict(optional_params),
+        litellm_params={"drop_params": drop_params},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][-1] == {"role": "assistant", "content": [sent_block]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("model", "content", "sent"),
+    [
+        (
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            [{"type": "text", "text": "Leaves fall "}, {"type": "guarded_text", "text": "softly \n"}],
+            [{"text": "Leaves fall "}, {"guardContent": {"text": {"text": "softly"}}}],
+        ),
+        (
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            [{"type": "guarded_text", "text": "Leaves fall "}, {"type": "text", "text": "softly \n"}],
+            [{"guardContent": {"text": {"text": "Leaves fall "}}}, {"text": "softly \n"}],
+        ),
+        ("us.anthropic.claude-haiku-4-5-20251001-v1:0", "Leaves fall \n", [{"text": "Leaves fall \n"}]),
+        (
+            "us.amazon.nova-pro-v1:0",
+            [{"type": "guarded_text", "text": "Leaves fall \n"}],
+            [{"guardContent": {"text": {"text": "Leaves fall \n"}}}],
+        ),
+    ],
+    ids=["claude_guarded_part_last", "claude_text_part_last", "claude_plain_text", "nova_guarded_part"],
+)
+async def test_only_a_guarded_part_that_ends_a_final_claude_assistant_turn_is_rstripped(
+    use_async: bool, model: str, content: str | list[dict[str, str]], sent: list[dict[str, object]]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=[
+            {"role": "user", "content": [{"type": "guarded_text", "text": "Write a haiku about autumn."}]},
+            {"role": "assistant", "content": content},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][-1] == {"role": "assistant", "content": sent}
+
+
+_LOOKUP_CALL: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+_LOOKUP_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("tool_results", "optional_params", "keeps_part"),
+    [
+        ([{"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}], {}, True),
+        ([], {}, True),
+        ([{"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}], {"tools": [_LOOKUP_TOOL]}, False),
+    ],
+    ids=["answered_without_tools", "unanswered_without_tools", "answered_with_tools"],
+)
+async def test_without_a_guardrail_or_drop_params_a_tool_call_turn_sent_as_text_keeps_its_guarded_part(
+    use_async: bool, tool_results: list[AllMessageValues], optional_params: Mapping[str, object], keeps_part: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Pick a city."},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": "Paris."}]},
+            {"role": "user", "content": "Look up the weather there."},
+            {
+                "role": "assistant",
+                "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}],
+                "tool_calls": [_LOOKUP_CALL],
+            },
+            *tool_results,
+        ],
+        optional_params=dict(optional_params),
+        litellm_params={},
+    )
+    sent: Final = json.dumps(
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+
+    assert (_GUARDED_PART_TEXT in sent) is keeps_part
+    assert "Paris." not in sent
+    assert "guardContent" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("optional_params", [{}, _GUARDRAIL_CONFIG], ids=["no_guardrail", "guardrail"])
+async def test_a_final_tool_call_turn_sent_as_text_sends_its_guarded_part_as_a_text_part_would_be_sent(
+    use_async: bool, optional_params: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {
+                    "role": "assistant",
+                    "content": [{"type": part_type, "text": "Let me check.  "}],
+                    "tool_calls": [_LOOKUP_CALL],
+                },
+            ],
+            optional_params=dict(optional_params),
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    assert await transformed("guarded_text") == await transformed("text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("optional_params", "guarded_text"),
+    [({}, "Checking the weather."), (_GUARDRAIL_CONFIG, ["Checking the weather."])],
+    ids=["no_guardrail", "guardrail_with_non_string_text"],
+)
+async def test_a_tool_call_turn_whose_guarded_parts_are_left_out_sends_only_its_tool_call(
+    use_async: bool, optional_params: Mapping[str, object], guarded_text: object
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(content: list[dict[str, object]] | None) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {"role": "assistant", "content": content, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ],
+            optional_params={**optional_params, "tools": [_LOOKUP_TOOL]},
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    with patch.object(litellm, "modify_params", True):
+        left_out: Final = await transformed([{"type": "guarded_text", "text": guarded_text}])
+        without_content: Final = await transformed(None)
+    assert left_out == without_content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_without_a_guardrail_or_drop_params_a_left_out_guarded_assistant_part_keeps_its_cache_point(
+    use_async: bool,
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[
+            {"role": "user", "content": "Pick a fruit."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "I pick"},
+                    {"type": "guarded_text", "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}},
+                ],
+            },
+            {"role": "user", "content": "Why?"},
+        ],
+        optional_params={},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][1] == {
+        "role": "assistant",
+        "content": [{"text": "I pick"}, {"cachePoint": {"type": "default"}}],
+    }
+
+
+def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:
+    guarded: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+    question: Final = {"role": "user", "content": [{"type": user_part_type, "text": "Look up the weather."}]}
+    tool_result: Final = {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}
+    match placement:
+        case "leading_system":
+            return [
+                {"role": "system", "content": guarded},
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+        case "assistant":
+            return [question, {"role": "assistant", "content": guarded, "tool_calls": [_LOOKUP_CALL]}, tool_result]
+        case "mid_conversation_system":
+            return [
+                question,
+                {"role": "system", "content": guarded},
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+        case "system_after_tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+                {"role": "system", "content": guarded},
+            ]
+        case "system_between_tool_call_and_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+                tool_result,
+            ]
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Checking."}, {"role": "system", "content": guarded}]
+        case "system_after_function_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking."},
+                {"role": "function", "name": "lookup", "content": "Sunny."},
+                {"role": "system", "content": guarded},
+            ]
+        case "system_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+            ]
+        case "assistant_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "assistant", "content": guarded},
+            ]
+    raise AssertionError(placement)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("placement", "user_part_type", "keeps_guard_content"),
+    [
+        ("assistant", "text", False),
+        ("mid_conversation_system", "text", False),
+        ("assistant", "guarded_text", True),
+        ("mid_conversation_system", "guarded_text", True),
+        ("leading_system", "text", True),
+        ("system_after_tool_result", "text", False),
+        ("system_between_tool_call_and_result", "text", False),
+        ("system_after_assistant", "text", False),
+        ("system_after_tool_result", "guarded_text", True),
+    ],
+)
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_no_user_turn_is_guarded(
+    use_async: bool, placement: str, user_part_type: str, keeps_guard_content: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, user_part_type),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
+    assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+    assert keeps_guard_content or not any("guardContent" in block for block in message_blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "placement",
+    [
+        "mid_conversation_system",
+        "system_after_tool_result",
+        "system_between_tool_call_and_result",
+        "system_after_function_result",
+    ],
+)
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_with_tool_history_without_tools(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert not any("guardContent" in block for block in message_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in message_blocks
+
+
+_BLOCKED_QUESTION: Final = "Tell me about hexblade in one sentence."
+_REPLY_RULE: Final = "Reply with only the word OK."
+
+
+def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
+    question: Final = {"role": "user", "content": _BLOCKED_QUESTION}
+    reply_rule: Final = {"role": "system", "content": [{"type": "text", "text": _REPLY_RULE}]}
+    match shape:
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Sure."}, reply_rule]
+        case "system_after_tool_result":
+            return [*_conversation_ending_in("tool_result"), reply_rule]
+        case "tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("tool_result")[1:],
+            ]
+        case "tool_result_right_after_a_plain_question_beside_a_guarded_one":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+                question,
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "guarded_tool_call_after_guarded_question":
+            guarded_call: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                {"role": "assistant", "content": guarded_call, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "system_after_assistant_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_assistant")[1:],
+            ]
+        case "system_after_tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_tool_result")[1:],
+            ]
+        case "system_after_guarded_assistant":
+            guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
+        case "user_turn":
+            return [question, {"role": "assistant", "content": "Sure."}, {"role": "user", "content": _REPLY_RULE}]
+        case "system_after_user_turn":
+            return [
+                question,
+                {"role": "assistant", "content": "Sure."},
+                {"role": "user", "content": "Be brief."},
+                reply_rule,
+            ]
+    raise AssertionError(shape)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("system_after_assistant", ()),
+        ("system_after_tool_result", ()),
+        ("system_after_guarded_assistant", ()),
+        ("system_after_assistant_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        ("system_after_tool_result_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        ("user_turn", (_REPLY_RULE,)),
+        ("system_after_user_turn", ("Be brief.", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+    ],
+)
+async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_system_turn(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert _sent_guarded_texts(request) == guarded_texts
+
+
+def _sent_guarded_texts(request: RequestObject) -> tuple[str, ...]:
+    message_blocks: Final = chain.from_iterable(message["content"] for message in request["messages"])
+    return tuple(block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("neutralizes_tool_blocks", [True, False], ids=["tool_results_rewritten", "dummy_tool_added"])
+async def test_trailing_system_turn_after_tool_history_without_tools_keeps_the_full_input_check(
+    use_async: bool, neutralizes_tool_blocks: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in("system_after_tool_result"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    with (
+        patch.object(litellm, "bedrock_neutralize_orphaned_tool_blocks", neutralizes_tool_blocks),
+        patch.object(litellm, "modify_params", True),
+    ):
+        request: Final = (
+            await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+        )
+    assert _sent_guarded_texts(request) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("tool_result", ()),
+        ("system_after_tool_result", ()),
+        ("tool_result_after_guarded_question", (_BLOCKED_QUESTION, "[tool result for call_1: Sunny.]")),
+        (
+            "guarded_tool_call_after_guarded_question",
+            (_BLOCKED_QUESTION, _GUARDED_PART_TEXT, "[tool result for call_1: Sunny.]"),
+        ),
+        (
+            "tool_result_right_after_a_plain_question_beside_a_guarded_one",
+            (_GUARDED_PART_TEXT, _BLOCKED_QUESTION, "[tool result for call_1: Sunny.]"),
+        ),
+    ],
+)
+async def test_tool_history_without_tools_guards_its_tool_results_only_alongside_user_input(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    sent_guarded_texts: Final = tuple(
+        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    )
+    assert sent_guarded_texts == guarded_texts
+    assert any(_BLOCKED_QUESTION in block.get("text", "") for block in message_blocks) is not bool(guarded_texts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["system_after_unanswered_tool_call", "assistant_after_unanswered_tool_call"])
+async def test_guarded_part_after_an_unanswered_tool_call_without_tools_keeps_the_full_input_check(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert any(_GUARDED_PART_TEXT in block.get("text", "") for block in sent_blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "system_content",
+    ["Be brief.", [{"type": "text", "text": "Be brief."}], "", [{"type": "text", "text": ""}]],
+    ids=["string", "text_part", "empty_string", "empty_text_part"],
+)
+async def test_a_trailing_system_turn_sends_a_guarded_assistant_part_as_text(use_async: bool, system_content: object):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+            {"role": "system", "content": system_content},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in sent_blocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_guarded_part_sent_as_text_keeps_its_cache_point(use_async: bool):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "system",
+                "content": [
+                    {"type": "guarded_text", "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}}
+                ],
+            },
+            {"role": "assistant", "content": "Ok."},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    text_index: Final = sent_blocks.index({"text": _GUARDED_PART_TEXT})
+    assert sent_blocks[text_index + 1] == {"cachePoint": {"type": "default"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "system", "content": [{"type": "text", "text": ["Always reply with banana."]}]},
+        {"role": "system", "content": ["Always reply with banana."]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ["Be brief."]}]},
+    ],
+    ids=["system_text_list", "system_bare_string", "user_guarded_text_list"],
+)
+async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped(
+    use_async: bool, message: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[dict(message), {"role": "user", "content": "What is 2+2?"}],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    with pytest.raises(litellm.BadRequestError, match="needs a string `text`"):
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "conversation",
+    [
+        (
+            {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+        (
+            {"role": "user", "content": "Pick a fruit."},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+        (
+            {"role": "user", "content": "Pick a fruit."},
+            {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+            {"role": "user", "content": "What is 2+2?"},
+        ),
+    ],
+    ids=["leading_system", "assistant", "mid_conversation_system"],
+)
+async def test_a_guarded_part_without_string_text_outside_user_turns_is_left_out_and_the_question_still_sent(
+    use_async: bool, conversation: tuple[Mapping[str, object], ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[dict(message) for message in conversation],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent: Final = json.dumps({"system": request.get("system"), "messages": request["messages"]})
+    assert "banana" not in sent
+    assert "What is 2+2?" in sent
+
+
 def test_convert_consecutive_user_messages_to_guarded_text():
     """Test that consecutive user messages at the end are converted to guarded_text."""
     config = AmazonConverseConfig()
@@ -7738,7 +8512,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     (#24158, #27138)."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7759,7 +8533,9 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_tools_empty(tools_value):
     structured tool blocks with no toolConfig."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={"tools": tools_value})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={"tools": tools_value}, guards_tool_results=False
+    )
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7775,7 +8551,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
         {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert not any(m.get("role") in ("tool", "function") for m in result)
     serialized = json.dumps(result)
@@ -7812,7 +8588,7 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         },
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
     text = rewritten["content"]
@@ -7828,6 +8604,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_tools_present():
     result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
         messages,
         optional_params={"tools": [{"type": "function", "function": {"name": "x"}}]},
+        guards_tool_results=False,
     )
 
     assert result is messages
@@ -7837,7 +8614,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
     """Plain conversation with no tool blocks is returned unchanged."""
     messages = [{"role": "user", "content": "hi"}]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert result is messages
 
@@ -7848,7 +8625,7 @@ def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
     messages = _orphaned_tool_history_messages()
 
     with caplog.at_level("WARNING"):
-        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert any("neutralizing orphaned tool blocks" in record.getMessage() for record in caplog.records)
 
@@ -7941,42 +8718,6 @@ def test_transform_request_tool_result_only_history(monkeypatch):
 
     _assert_no_structured_tool_blocks(result)
     assert "lookup result" in json.dumps(result)
-
-
-def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
-    """With guardrailConfig present, a neutralized tool result that becomes the
-    trailing user turn must be emitted as guardContent, not plain text, so
-    untrusted tool output does not bypass the guardrail (neutralize must run
-    before guarded-text conversion)."""
-    monkeypatch.setattr(litellm, "modify_params", False)
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
-        messages=[
-            {"role": "user", "content": "look it up"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
-        ],
-        optional_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}},
-        litellm_params={},
-        headers={},
-    )
-
-    _assert_no_structured_tool_blocks(result)
-    serialized = json.dumps(result)
-    assert "guardContent" in serialized
-    assert "secret tool output" in serialized
 
 
 def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypatch):
@@ -10914,3 +11655,84 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "toolConfig" not in request
     assert "toolChoice" not in json.dumps(request)
     assert "tool_choice" not in json.dumps(request)
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)
+
+
+_MISTRAL_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
+_REPLAYED_TOOL_CALL_IDS: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
+
+
+def _replayed_tool_history() -> list[AllMessageValues]:
+    return [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": tool_call_id, "type": "function", "function": {"name": f"tool_{n}", "arguments": "{}"}}
+                for n, tool_call_id in enumerate(_REPLAYED_TOOL_CALL_IDS)
+            ],
+        },
+        *(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": "ok"}
+            for tool_call_id in _REPLAYED_TOOL_CALL_IDS
+        ),
+        {"role": "user", "content": "Sum it up."},
+    ]
+
+
+async def _sent_tool_use_ids(model: str, use_async: bool) -> tuple[list[str], list[str]]:
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=_replayed_tool_history(),
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": f"tool_{n}", "parameters": {"type": "object"}}}
+                for n in range(len(_REPLAYED_TOOL_CALL_IDS))
+            ]
+        },
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    return (
+        [block["toolUse"]["toolUseId"] for block in blocks if "toolUse" in block],
+        [block["toolResult"]["toolUseId"] for block in blocks if "toolResult" in block],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral.mistral-large-3-675b-instruct", "us.mistral.pixtral-large-2502-v1:0"])
+async def test_converse_sends_mistral_tool_use_ids_as_nine_alphanumeric_characters(model: str, use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids(model, use_async)
+
+    assert tool_result_ids == tool_use_ids
+    assert all(_MISTRAL_TOOL_USE_ID.fullmatch(tool_use_id) for tool_use_id in tool_use_ids)
+    assert len(set(tool_use_ids)) == len(_REPLAYED_TOOL_CALL_IDS)
+    assert tool_use_ids[3] == "D681PevKs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_converse_keeps_tool_use_ids_for_a_model_that_is_not_mistral(use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids("us.anthropic.claude-haiku-5-5", use_async)
+
+    assert tool_use_ids == tool_result_ids == list(_REPLAYED_TOOL_CALL_IDS)

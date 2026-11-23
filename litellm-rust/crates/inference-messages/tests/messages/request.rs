@@ -279,6 +279,51 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
+#[rstest]
+#[case::claude_base_model(Some("anthropic/claude-sonnet-4-5"), json!([]))]
+#[case::open_base_model(Some("deepseek/deepseek-v4-pro"), json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[case::no_base_model(None, json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
+#[tokio::test]
+async fn unsigned_thinking_is_dropped_for_an_alias_whose_base_model_names_claude(
+    call: MessagesCall,
+    #[case] base_model: Option<&str>,
+    #[case] sent_thinking: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([
+        {"role": "user", "content": "plan it"},
+        {"role": "assistant", "content": [{"type": "thinking", "thinking": "plan", "signature": ""}]},
+        {"role": "user", "content": "go on"}
+    ]);
+
+    run_message(MessagesCall {
+        custom_llm_provider: Some("azure_ai".into()),
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            settings: MessagesSettings {
+                base_model: base_model.map(str::to_owned),
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(call, json!({"model": "prod-sonnet", "messages": history}))
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    let thinking: Vec<Value> = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|message| message["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "thinking")
+        .cloned()
+        .collect();
+    assert_eq!(Value::from(thinking), sent_thinking);
+}
+
 fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));
@@ -652,16 +697,6 @@ async fn reasoning_is_translated_by_the_model_capabilities(
     }]}]),
     json!([{"role": "assistant", "content": [{"type": "text", "text": "Web search results:\n\nTitle: T\nURL: https://e.x"}]}])
 )]
-#[case::unsigned_thinking_on_a_host_that_does_not_check_claude_signatures(
-    json!([{"role": "assistant", "content": [
-        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
-        {"type": "text", "text": "kept"}
-    ]}]),
-    json!([{"role": "assistant", "content": [
-        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
-        {"type": "text", "text": "kept"}
-    ]}])
-)]
 #[tokio::test]
 async fn replayed_history_is_cleaned_before_sending(
     call: MessagesCall,
@@ -681,6 +716,36 @@ async fn replayed_history_is_cleaned_before_sending(
     .await;
 
     assert_eq!(only_request(&upstream).await.json()["messages"], expected);
+}
+
+#[rstest]
+#[case::anthropic_compatible_host("anthropic")]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
+#[case::tencent("tencent")]
+#[tokio::test]
+async fn unsigned_thinking_is_replayed_to_a_host_that_does_not_check_claude_signatures(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let history = json!([{"role": "assistant", "content": [
+        {"type": "thinking", "thinking": "Read it first.", "signature": ""},
+        {"type": "text", "text": "kept"}
+    ]}]);
+
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        json!({"messages": history.clone()}),
+    ))
+    .await;
+
+    assert_eq!(only_request(&upstream).await.json()["messages"], history);
 }
 
 #[rstest]

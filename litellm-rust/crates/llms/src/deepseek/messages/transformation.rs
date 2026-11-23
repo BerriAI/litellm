@@ -59,6 +59,14 @@ impl BaseMessagesConfig for DeepSeekAnthropicMessagesConfig {
         Ok(complete_deepseek_anthropic_url(api_base, env_lookup))
     }
 
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        false
+    }
+
     fn transform_anthropic_messages_request(
         &self,
         request: MessagesRequest,
