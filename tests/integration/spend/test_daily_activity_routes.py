@@ -391,6 +391,9 @@ def _daily_tag_metrics(
 ) -> dict[str, JsonValue]:
     return {
         "spend": spend,
+        "customer_margin_spend": 0.0,
+        "cache_cost": 0.0,
+        "priced_cache_tokens": 0,
         "flat_cost": 0.0,
         "ptu_hours": 0.0,
         "prompt_tokens": prompt_tokens,
@@ -402,6 +405,7 @@ def _daily_tag_metrics(
         "prompt_caching_savings_spend": 0.0,
         "gateway_injected_caching_savings_spend": 0.0,
         "autorouter_savings_spend": 0.0,
+        "guardrail_spend": 0.0,
         "total_tokens": prompt_tokens + completion_tokens,
         "successful_requests": api_requests,
         "failed_requests": 0,

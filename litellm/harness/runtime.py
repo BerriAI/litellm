@@ -377,7 +377,7 @@ class _Turn:
         self.error_text: str | None = None
         self.before: Mapping[str, str] = MappingProxyType({})
         self.before_contents: Mapping[str, bytes] = MappingProxyType({})
-        self.usage_before: tuple[int, int, int, float] = (0, 0, 0, 0.0)
+        self.usage_before: tuple[int, int, int, float, int] = (0, 0, 0, 0.0, 0)
         self.deadline: float | None = None
 
     async def _begin(self) -> None:
@@ -479,7 +479,7 @@ class _Turn:
             return text
         return f"{text}\n\n{self.error_text}" if text else self.error_text
 
-    def _usage(self) -> tuple[Usage, float]:
+    def _usage(self) -> tuple[Usage, float | None]:
         now = self.session.usage_counters()
         before = self.usage_before
         usage = Usage(
@@ -487,7 +487,8 @@ class _Turn:
             output_tokens=now[1] - before[1],
             calls=now[2] - before[2],
         )
-        return usage, max(now[3] - before[3], 0.0)
+        cost: Final = None if now[4] != before[4] else max(now[3] - before[3], 0.0)
+        return usage, cost
 
     def _result(
         self,
@@ -720,14 +721,14 @@ class AsyncSession:
     detach = adetach
     stop = astop
 
-    def usage_counters(self) -> tuple[int, int, int, float]:
-        """(input_tokens, output_tokens, calls, cost) so far, from endpoint or handler."""
+    def usage_counters(self) -> tuple[int, int, int, float, int]:
+        """Token counts, calls, known cost subtotal and unpriced calls so far."""
         endpoint = self.ctx.endpoint
         if endpoint is not None:
             usage = endpoint.usage
-            return (usage.input_tokens, usage.output_tokens, usage.calls, usage.cost)
+            return (usage.input_tokens, usage.output_tokens, usage.calls, usage.costs.known, usage.costs.unknown_calls)
         ctx = self.ctx
-        return (ctx.input_tokens, ctx.output_tokens, ctx.calls, ctx.cost)
+        return (ctx.input_tokens, ctx.output_tokens, ctx.calls, ctx.costs.known, ctx.costs.unknown_calls)
 
     def record(self, result: Result) -> None:
         self.results.append(result)
@@ -759,8 +760,9 @@ class AsyncSession:
         return await self.handler.history(self.ctx)
 
     @property
-    def cost(self) -> float:
-        return sum(result.cost for result in self.results)
+    def cost(self) -> float | None:
+        costs: Final = tuple(result.cost for result in self.results)
+        return None if any(cost is None for cost in costs) else sum(cost for cost in costs if cost is not None)
 
     @property
     def usage(self) -> Usage:

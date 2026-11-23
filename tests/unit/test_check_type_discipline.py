@@ -1,4 +1,4 @@
-"""Tests for scripts/check_type_discipline.py.
+"""Tests for litellm/scripts/check_type_discipline.py.
 
 Each rule is exercised on a snippet that violates it and on one that does not, so a
 mutation that drops a rule, inverts a suppression, or breaks the comment scanner makes
@@ -16,7 +16,7 @@ from typing import Final
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / "scripts" / "check_type_discipline.py"
+_MODULE_PATH = _REPO_ROOT / "litellm/scripts" / "check_type_discipline.py"
 _spec = importlib.util.spec_from_file_location("check_type_discipline", _MODULE_PATH)
 checker = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = checker  # let the frozen dataclass resolve its own module
@@ -301,6 +301,39 @@ def test_unpack_after_global_declaration_is_flagged(tmp_path):
 
 def test_single_leading_underscore_is_not_exempt(tmp_path):
     assert "LIT010" in _codes(tmp_path, "_x = 1\n")
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "TypeVar('_T')",
+        "ParamSpec('_T')",
+        "TypeVarTuple('_T')",
+        "TypeAliasType('_T', int)",
+        "typing.TypeVar('_T')",
+        "typing_extensions.ParamSpec('_T')",
+    ),
+)
+def test_a_type_variable_stays_bare_and_a_final_one_trips(tmp_path: Path, declaration: str) -> None:
+    assert "LIT010" not in _codes(tmp_path, f"_T = {declaration}\n")
+    assert "LIT010" in _codes(tmp_path, f"_T: Final = {declaration}\n")
+    assert "LIT010" in _codes(tmp_path, f"_T: Final[object] = {declaration}\n")
+
+
+def test_a_final_type_variable_trips_in_a_class_body(tmp_path: Path) -> None:
+    assert "LIT010" in _codes(tmp_path, "class Box:\n    _T: Final = TypeVar('_T')\n")
+
+
+def test_a_final_type_variable_trips_on_the_config_surface(tmp_path: Path) -> None:
+    assert "LIT010" in _codes_at(tmp_path, ("litellm", "__init__.py"), "_T: Final = TypeVar('_T')\n")
+
+
+def test_rebinding_a_bare_type_variable_still_trips(tmp_path: Path) -> None:
+    assert "LIT010" in _codes(tmp_path, "_T = TypeVar('_T')\n_T = 1\n")
+
+
+def test_a_final_call_to_any_other_factory_stays_clean(tmp_path: Path) -> None:
+    assert "LIT010" not in _codes(tmp_path, "limit: Final = int('1')\n")
 
 
 def test_rebind_ok_suppresses_a_repeated_unpack(tmp_path):
@@ -1034,6 +1067,23 @@ def test_worker_count_fans_out_at_the_threshold():
 
 def test_worker_count_never_exceeds_the_cap():
     assert checker._worker_count(100_000) <= checker.MAX_WORKERS
+
+
+@pytest.mark.parametrize(
+    "source",
+    ("proxy/discovery_endpoints/skill_scanner_adapter", "ui", "ui/node_modules/dependency", "vscode-extension"),
+)
+def test_non_sdk_sources_are_outside_the_package_lint_scope(tmp_path: Path, source: str) -> None:
+    adapter: Final = tmp_path / "litellm" / source
+    adapter.mkdir(parents=True)
+    server: Final = adapter / "server.py"
+    server.write_text("value = []\n")
+    proxy: Final = tmp_path / "proxy.py"
+    proxy.write_text("value = []\n")
+
+    assert tuple(checker.collect_paths([str(tmp_path)])) == (proxy,)
+    assert tuple(checker.collect_paths([str(server)])) == ()
+    assert checker.scan_paths(tuple(checker.collect_paths([str(tmp_path)])))
 
 
 def test_scan_paths_below_the_threshold_returns_every_violation(tmp_path):

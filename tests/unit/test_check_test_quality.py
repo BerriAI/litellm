@@ -1,4 +1,4 @@
-"""Tests for scripts/check_test_quality.py.
+"""Tests for litellm/scripts/check_test_quality.py.
 
 Every rule is exercised on a snippet that violates it and on one that does not, so
 dropping a rule, widening it, or inverting the suppression check makes a test fail.
@@ -18,7 +18,7 @@ from typing import Final
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_MODULE_PATH = _REPO_ROOT / "scripts" / "check_test_quality.py"
+_MODULE_PATH = _REPO_ROOT / "litellm/scripts" / "check_test_quality.py"
 _spec = importlib.util.spec_from_file_location("check_test_quality", _MODULE_PATH)
 checker = importlib.util.module_from_spec(_spec)
 # @dataclass(slots=True) rebuilds its class through sys.modules[__module__], so the

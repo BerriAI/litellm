@@ -241,6 +241,27 @@ async def test_retry_exhausted_rows_are_requeued_and_land_on_the_next_flush():
 
 
 @pytest.mark.asyncio
+async def test_pending_rows_land_when_a_later_pass_carries_no_guardrail_results():
+    pending = PendingRollups()
+    down = _prisma()
+    down.db.litellm_dailyguardrailmetrics.upsert.side_effect = httpx.ConnectError("db down")
+    down.db.litellm_dailyguardrailusageunits.upsert.side_effect = httpx.ConnectError("db down")
+    sleep, _ = _fake_sleep()
+    await process_spend_logs_guardrail_usage(
+        down, [_payload("r1", usage={"topicPolicyUnits": 2})], sleep=sleep, pending=pending
+    )
+
+    recovered = _prisma()
+    await usage_tracking.retry_pending_guardrail_usage(recovered, sleep=sleep, pending=pending)
+
+    assert _units_upserts(recovered) == {
+        ("bedrock-guard", "2026-08-17", "team-a", "hashed-key-1", "topicPolicyUnits"): 2,
+    }
+    assert not pending.units
+    assert not pending.metrics
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_failures_are_never_requeued():
     """
     A post-send failure (the increment may have committed) must stay dropped:
@@ -654,3 +675,15 @@ async def test_one_failing_index_statement_does_not_drop_the_others_or_the_rollu
 
     assert prisma.db.litellm_spendlogguardrailindex.create_many.await_count == 3
     assert prisma.db.litellm_dailyguardrailmetrics.upsert.await_count == len(guardrail_ids)
+
+
+@pytest.mark.asyncio
+async def test_disabled_log_deliveries_do_not_enable_guardrail_analytics():
+    prisma = _prisma()
+    row = _payload("lean", usage={"topicPolicyUnits": 2})
+    row["accounting_payload"] = {"request_id": "lean"}
+    row["accounting_log_disabled"] = True
+    await process_spend_logs_guardrail_usage(prisma, [row], pending=PendingRollups())
+    prisma.db.litellm_dailyguardrailmetrics.upsert.assert_not_awaited()
+    prisma.db.litellm_spendlogguardrailindex.create_many.assert_not_awaited()
+    prisma.db.litellm_dailyguardrailusageunits.upsert.assert_not_awaited()

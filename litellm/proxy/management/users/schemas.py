@@ -9,3 +9,4 @@ class CurrentUserResponse(BaseModel):
     user_id: str
     user_role: LitellmUserRoles | None
     user_email: str | None
+    user_alias: str | None = None
