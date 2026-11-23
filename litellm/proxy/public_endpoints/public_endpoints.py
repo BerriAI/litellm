@@ -283,7 +283,7 @@ def _agent_create_fields() -> tuple[AgentCreateInfo, ...]:
     response_model=list[ModelGroupInfoProxy],
 )
 async def public_model_hub():
-    rows: Final = published_hub_rows()
+    rows: Final = await published_hub_rows()
     if isinstance(rows, NoModelsConfigured):
         raise HTTPException(status_code=400, detail=CommonProxyErrors.no_llm_router.value)
 

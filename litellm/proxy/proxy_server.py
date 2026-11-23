@@ -1015,6 +1015,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 )
 from litellm.proxy.prometheus_cleanup import mark_dead_workers, mark_worker_exit
 from litellm.proxy.public_endpoints import router as public_endpoints_router
+from litellm.proxy.public_endpoints.model_hub_rows import EVERY_MODEL_GROUP, is_public_model_group
 from litellm.proxy.public_endpoints.public_v1 import router as public_v1_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
 from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
@@ -4732,7 +4733,9 @@ def _public_wildcard_children(
     """Background-check entries for public models only a wildcard serves, and their ids; none without a DB to save to."""
     if router is None or not has_db or not public_names:
         return (), frozenset()
-    children: Final = public_wildcard_children(public_names, router, model_groups)
+    children: Final = public_wildcard_children(
+        (name for name in public_names if name != EVERY_MODEL_GROUP), router, model_groups
+    )
     return children, deployment_ids(children)
 
 
@@ -19272,6 +19275,22 @@ async def model_deprecations(
     )
 
 
+async def every_model_group_name(router: Router) -> tuple[str, ...]:
+    names: Final = await run_model_listing(
+        partial(
+            get_complete_model_list,
+            key_models=(),
+            team_models=(),
+            proxy_model_list=router.registry().names(),
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            return_wildcard_routes=False,
+            llm_router=router,
+        )
+    )
+    return tuple(names)
+
+
 def get_model_group_info(
     llm_router: Router, all_models_str: Sequence[str], model_group: str | None, team_id: str | None = None
 ) -> list[ModelGroupInfoProxy]:
@@ -19323,7 +19342,7 @@ def get_model_group_info(
     ## check for public model groups
     if litellm.public_model_groups is not None:
         for mg in model_groups:
-            if mg.model_group in litellm.public_model_groups:
+            if is_public_model_group(mg.model_group, llm_router, team_id):
                 mg.is_public_model_group = True
 
     return model_groups
@@ -19505,18 +19524,7 @@ async def model_group_info(
         LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
     )
     all_models_str: Final = (
-        await run_model_listing(
-            partial(
-                get_complete_model_list,
-                key_models=(),
-                team_models=(),
-                proxy_model_list=llm_router.registry().names(),
-                user_model=user_model,
-                infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-                return_wildcard_routes=False,
-                llm_router=llm_router,
-            )
-        )
+        await every_model_group_name(llm_router)
         if is_proxy_admin
         else await get_available_models_for_user(
             user_api_key_dict=user_api_key_dict,

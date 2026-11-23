@@ -205,8 +205,8 @@ MODEL_HUB_LIST_SPEC: Final[ListSpec[HubRow, ModelGroupInfoProxy]] = ListSpec(
 )
 
 
-def _published_rows() -> Sequence[HubRow]:
-    rows: Final = published_hub_rows()
+async def _published_rows() -> Sequence[HubRow]:
+    rows: Final = await published_hub_rows()
     if isinstance(rows, NoModelsConfigured):
         raise ManagementProblem(
             ProblemDetail(
@@ -261,7 +261,7 @@ async def public_model_hub_list(
 
         return await handle_list(
             spec=MODEL_HUB_LIST_SPEC,
-            executor=_executor(_published_rows(), prisma_client),
+            executor=_executor(await _published_rows(), prisma_client),
             request=request,
             caller=user_api_key_dict,
         )
@@ -310,7 +310,7 @@ async def public_model_hub_facet(
     try:
         return await handle_facet(
             spec=MODEL_HUB_LIST_SPEC,
-            executor=InMemoryListExecutor(rows=_published_rows(), cells=_cells),
+            executor=InMemoryListExecutor(rows=await _published_rows(), cells=_cells),
             request=request,
             caller=user_api_key_dict,
             field=MODEL_HUB_FACETS[facet],

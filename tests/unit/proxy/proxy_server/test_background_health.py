@@ -831,6 +831,38 @@ async def test_run_background_health_check_saves_public_wildcard_children_but_ke
     assert proxy_server.health_check_results["healthy_count"] == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("public_model_groups", "checked"),
+    [(["*"], ["explicit"]), (["*", "openai/gpt-5.5"], ["explicit", "openai/gpt-5.5"])],
+)
+async def test_run_background_health_check_checks_only_explicitly_published_wildcard_children(
+    monkeypatch: pytest.MonkeyPatch, public_model_groups: list[str], checked: list[str]
+):
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {"model_name": "*", "litellm_params": {"model": "*"}, "model_info": {"id": "catch-all"}},
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wildcard"}},
+        ]
+    )
+    saved: Final[dict[str, object]] = {}
+
+    def _record_save(_prisma: object, _manager: object, model_list: object, *_a: object, **_kw: object) -> None:
+        saved.update(model_list=model_list)
+
+    _one_cycle_with(monkeypatch, router, public_model_groups)
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_save)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    saved_names: Final = TypeAdapter(list[dict[str, object]]).validate_python(saved["model_list"])
+    assert sorted(str(m["model_name"]) for m in saved_names) == checked
+
+
 class _RegistryUnavailableRouter:
     def settings(self) -> RouterSettings:
         return RouterSettings()
