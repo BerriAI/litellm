@@ -3718,3 +3718,9 @@ if MCP_AVAILABLE:
 
         global_mcp_server_manager.invalidate_toolset_cache(toolset_id)
         return Response(status_code=status.HTTP_202_ACCEPTED)
+
+
+if MCP_AVAILABLE:
+    from litellm.proxy.mcp_server.events.admin import router as events_router
+
+    router.include_router(events_router)

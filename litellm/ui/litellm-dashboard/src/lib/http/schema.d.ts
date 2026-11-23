@@ -22680,6 +22680,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/mcp/events/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Subscriptions */
+        get: operations["list_subscriptions_v1_mcp_events_subscriptions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/mcp/events/types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Event Types
+         * @description List the event types one events-enabled MCP server publishes to this caller, under their upstream names.
+         */
+        get: operations["list_event_types_v1_mcp_events_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/mcp/make_public": {
         parameters: {
             query?: never;
@@ -35843,6 +35880,27 @@ export interface components {
             }[];
             /** Updated At */
             updated_at?: number | null;
+        };
+        /** EventType */
+        EventType: {
+            /** Meta */
+            _meta?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Delivery */
+            delivery: ("poll" | "push" | "webhook")[];
+            /** Description */
+            description?: string | null;
+            /** Inputschema */
+            inputSchema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Name */
+            name: string;
+            /** Payloadschema */
+            payloadSchema?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
         };
         /**
          * ExportType
@@ -51477,6 +51535,13 @@ export interface components {
             /** Fixed Cost */
             fixed_cost: number | null;
         };
+        /** SubscriptionList */
+        SubscriptionList: {
+            /** Next Offset */
+            next_offset?: number | null;
+            /** Subscriptions */
+            subscriptions: components["schemas"]["SubscriptionView"][];
+        };
         /** SubscriptionUsageResponse */
         SubscriptionUsageResponse: {
             /** Accounts */
@@ -51493,6 +51558,40 @@ export interface components {
             start_date: string;
             /** Subscription Providers */
             subscription_providers: string[];
+        };
+        /** SubscriptionView */
+        SubscriptionView: {
+            /** Arguments */
+            arguments: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** Callback Host */
+            callback_host: string;
+            /** Created At */
+            created_at: string | null;
+            /** Event Name */
+            event_name: string;
+            /** Failed Since */
+            failed_since: string | null;
+            /** Id */
+            id: string;
+            /** Last Delivery At */
+            last_delivery_at: string | null;
+            /** Last Error */
+            last_error: ("connection_refused" | "timeout" | "tls_error" | "http_4xx" | "http_5xx" | "challenge_failed") | null;
+            /** Refresh Before */
+            refresh_before: string | null;
+            /** Server Id */
+            server_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "active" | "suspended" | "terminated";
+            /** Team Id */
+            team_id: string | null;
+            /** User Id */
+            user_id: string | null;
         };
         /**
          * SuccessfulKeyUpdate
@@ -89942,6 +90041,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_subscriptions_v1_mcp_events_subscriptions_get: {
+        parameters: {
+            query?: {
+                server_id?: string | null;
+                status?: ("pending" | "active" | "suspended" | "terminated") | null;
+                key_alias?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_event_types_v1_mcp_events_types_get: {
+        parameters: {
+            query: {
+                server_id: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventType"][];
                 };
             };
             /** @description Validation Error */
