@@ -22,9 +22,9 @@ use crate::base_llm::ocr::{
     settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DROP_PARAMS_PARAM, DecodedOcrResponse, OCR_INLINE_MAX_BYTES,
-        OCR_POLL_RETRY_SECS, OCR_RESPONSE_MAX_BYTES, OcrConnection, OcrCredentialInputs,
-        OcrResponseContext, PreparedOcrRequest, ResolvedOcrCredentials,
-        decode_and_normalize_response, decode_response, drops_unsupported_params, response_format,
+        OCR_POLL_RETRY_SECS, OcrConnection, OcrCredentialInputs, OcrResponseContext,
+        PreparedOcrRequest, ResolvedOcrCredentials, decode_and_normalize_response, decode_response,
+        drops_unsupported_params, response_format,
     },
 };
 use litellm_llms_types::formats::ocr::{
@@ -366,7 +366,6 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 model,
                 response,
                 OcrSettings::default().document_intelligence_dpi,
-                OCR_RESPONSE_MAX_BYTES,
             )
         })
     }
@@ -393,7 +392,6 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
                 model,
                 decoded.data,
                 context.connection.settings.document_intelligence_dpi,
-                context.connection.max_response_bytes,
             )?
         })
     }
@@ -693,7 +691,6 @@ fn transform_completed_response(
     model: &str,
     response: AzureDocumentIntelligenceOperation,
     dpi: i64,
-    page_text_limit: usize,
 ) -> Result<LiteLLMOcrResponse, Error> {
     if response.status != Some(OperationStatus::Succeeded) {
         return Err(Error::OperationStatus(
@@ -727,7 +724,7 @@ fn transform_completed_response(
                     .flat_map(|page| page.spans.iter().flatten()),
             )
         })
-        .filter(|content| span_text_bytes(content, &result.pages) <= page_text_limit);
+        .filter(|content| span_text_bytes(content, &result.pages) <= content.text.len());
     let pages = result
         .pages
         .into_iter()
@@ -1646,7 +1643,7 @@ mod tests {
         assert_eq!(error.http_status_code(), Some(400));
     }
 
-    #[rstest]
+    #[test]
     fn text_elements_on_another_model_reach_azure() {
         let mapped = map_for_model(
             json!({"outputContentFormat": "markdown", "stringIndexType": "textElements"}),
@@ -1806,23 +1803,6 @@ mod tests {
             response.extra_fields.get(STRING_INDEX_TYPE_FIELD),
             reported.as_ref()
         );
-    }
-
-    #[rstest]
-    fn repeated_spans_past_the_response_cap_keep_line_joined_pages() {
-        let content = "a".repeat(1024 * 1024);
-        let repeats = OCR_RESPONSE_MAX_BYTES / content.len() + 1;
-        let pages = markdown_pages(json!({
-            "content": content,
-            "contentFormat": "markdown",
-            "stringIndexType": "unicodeCodePoint",
-            "pages": [{
-                "spans": vec![json!({"offset": 0, "length": content.len()}); repeats],
-                "lines": [{"content": "first"}, {"content": "second"}]
-            }]
-        }));
-
-        assert_eq!(pages, ["first\nsecond"]);
     }
 
     #[rstest]
