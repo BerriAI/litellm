@@ -67,6 +67,7 @@ fn without_stores(inference: Arc<Gateway>) -> AppState {
         inference,
         redis: RedisClients::default(),
         database: None,
+        keys: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
     }

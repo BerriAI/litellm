@@ -28,9 +28,8 @@ const LAYERED: [&str; 12] = [
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
     admit
-        .database
+        .stored_models
         .iter()
-        .chain(&admit.stored_models)
         .cloned()
         .chain(unhonored(&admit.config, &admit.environment))
         .next()
@@ -127,8 +126,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
     .map(|field| field.to_uppercase().into())
 }
 
-/// A database is `Admit::database`, whichever of `database_url` and the variables set it, and
-/// `STORE_MODEL_IN_DB` is `Admit::stored_models`. The other database settings only tune one. The JWT settings shape only a caller whose token is a JWT, and the public routes
+/// The database settings are read as the proxy reads them, and what the proxy holds in its
+/// database beyond keys is not checked. `STORE_MODEL_IN_DB` is `Admit::stored_models`. The JWT settings shape only a caller whose token is a JWT, and the public routes
 /// only one who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {

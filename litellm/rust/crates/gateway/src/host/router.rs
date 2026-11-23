@@ -54,7 +54,8 @@ impl<A: RouteAttempt> RouterHost for NativeRouterHost<'_, A> {
         .into())
     }
 
-    /// The master key is the only caller, and it may be served every model.
+    /// Every caller this host serves may be served every model, since a key that holds a model
+    /// list is declined when it is authenticated.
     async fn allow_fallback(&self, _target: &str) -> Result<bool, AttemptError> {
         Ok(true)
     }
