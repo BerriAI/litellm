@@ -31,6 +31,7 @@ from litellm.models.plugin_upload import (
 from litellm.models.skill_submission import SkillProposal, SkillSubmission, SkillSubmissionStore
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
+    _marketplace_caller,
     MANIFEST_FIELDS,
     build_plugin_manifest,
     delete_plugin,
@@ -38,7 +39,6 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     enable_plugin,
     get_installation_preference,
     get_plugin_downloads,
-    header_key_caller,
     list_visible_plugins,
     plugin_archive_source_matches,
     plugin_archive_url,
@@ -53,7 +53,6 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.skill_upload_archiv
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.claude_code_marketplace_auth import (
     marketplace_auth_required,
-    marketplace_key_header_present,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.deps.repositories import PluginUploadRepositoryDep, SkillSubmissionRepositoryDep
@@ -903,10 +902,9 @@ async def restore_skill_version(
 
 
 async def _visible_archive(request: Request, name: str, uploads: PluginUploadStore | None) -> VisibleSkillArchive:
-    anonymous_allowed: Final = litellm.public_skills_index is True and not marketplace_auth_required()
-    caller: Final = (
-        await header_key_caller(request) if marketplace_key_header_present(request) or not anonymous_allowed else None
-    )
+    caller: Final = await _marketplace_caller(request, None)
+    if caller is None and litellm.public_skills_index is not True:
+        raise HTTPException(401, "Authentication required")
     store: Final = _require_store(uploads)
     metadata: Final = await store.get_metadata(name)
     if metadata is None or not (await resolve_skill_visibility(caller)).allows(metadata):

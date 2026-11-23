@@ -385,6 +385,21 @@ async def test_download_policy_requires_publication_or_a_valid_grant(
         assert [entry["name"] for entry in index.json()["skills"]] == ([NAME] if enabled and not auth_required else [])
 
 
+@pytest.mark.parametrize("suffix", ("archive", "content"))
+async def test_download_policy_ignores_query_keys_when_marketplace_auth_is_required(
+    hub: HubClient, monkeypatch: pytest.MonkeyPatch, suffix: str,
+) -> None:
+    assert (await _upload(hub, _zip(FILES))).status_code == 200
+    _stored_upload(hub, enabled=True)
+    monkeypatch.setattr(litellm, "public_skills_index", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"claude_code_marketplace_auth_required": True})
+
+    # Regression: when auth is required, query-string keys must not bypass header auth.
+    response: Final = await hub.client.get(f"{HUB}/{NAME}/{suffix}?key={GRANTED_KEY}")
+    assert response.status_code == 401, response.text
+    assert hub.downloads.create.await_count == 0
+    assert hub.anonymous_counter.await_count == 0
+
 @pytest.mark.parametrize("key", (None, GRANTED_KEY))
 async def test_deleted_skill_is_not_served_when_download_cannot_be_recorded(hub: HubClient, key: str | None) -> None:
     assert (await _upload(hub, _zip(FILES))).status_code == 200
