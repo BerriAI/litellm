@@ -34,6 +34,11 @@ impl RoutingCache {
             outcomes: InMemoryRouterCache::default(),
         }
     }
+
+    /// Each counter's value, `None` for one nothing counted.
+    pub(crate) async fn counted(&self, counters: &[Counter]) -> Result<Vec<Option<Number>>, Error> {
+        self.usage.get_many(counters).await
+    }
 }
 
 fn cache_error(error: Error) -> litellm_cache::Error {
@@ -78,7 +83,7 @@ fn health(state: StoredHealth) -> HealthState {
     }
 }
 
-fn counter(window: &UsageWindow, kind: Kind) -> Counter {
+pub(crate) fn counter(window: &UsageWindow, kind: Kind) -> Counter {
     Counter {
         scope: Scope::GlobalRouter,
         deployment_id: window.deployment_id.clone(),

@@ -685,6 +685,7 @@ nadir_models: Set[str] = set()
 galadriel_models: Set[str] = set()
 nvidia_nim_models: Set[str] = set()
 nvidia_riva_models: Set[str] = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set[str] = set()
 sambanova_models: Set[str] = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
