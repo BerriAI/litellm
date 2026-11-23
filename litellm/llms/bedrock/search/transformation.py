@@ -176,7 +176,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
+    ) -> dict[str, object]:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
         """
         Set MCP transport headers. Per the MCP Streamable HTTP transport spec,
         the client MUST accept both application/json and text/event-stream, and
@@ -214,7 +214,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         query: str | list[str],  # mutable-ok: BaseSearchConfig accepts a list of queries
         optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
+    ) -> dict[str, object]:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
         """
         Transform Search request to an MCP tools/call request.
 

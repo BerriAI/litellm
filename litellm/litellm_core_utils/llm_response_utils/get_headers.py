@@ -46,7 +46,7 @@ def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> 
     if _response_headers is None:
         return {}
 
-    openai_headers: Final = {}
+    openai_headers: Final[dict[str, str]] = {}
     if "x-ratelimit-limit-requests" in _response_headers:
         openai_headers["x-ratelimit-limit-requests"] = _response_headers["x-ratelimit-limit-requests"]
     if "x-ratelimit-remaining-requests" in _response_headers:
@@ -61,14 +61,14 @@ def get_response_headers(_response_headers: Mapping[str, str] | None = None) -> 
     return {**llm_provider_headers, **openai_headers, **native_headers}
 
 
-def _get_llm_provider_headers(response_headers: Mapping[str, str]) -> dict:
+def _get_llm_provider_headers(response_headers: Mapping[str, str]) -> dict[str, str]:
     """
     Adds a llm_provider-{header} to all headers that are not already prefixed with llm_provider
 
     Forward all headers as llm_provider-{header}
 
     """
-    llm_provider_headers: Final = {}
+    llm_provider_headers: Final[dict[str, str]] = {}
     for k, v in response_headers.items():
         if "llm_provider" not in k:
             _key = "{}-{}".format("llm_provider", k)

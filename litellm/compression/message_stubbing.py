@@ -51,7 +51,7 @@ def extract_key(message: dict, fallback_index: int, used_keys: set[str]) -> str:
     return key
 
 
-def stub_message(message: dict, key: str) -> dict:
+def stub_message(message: dict, key: str) -> dict[str, object]:
     """
     Replace message content with a compact stub.
 

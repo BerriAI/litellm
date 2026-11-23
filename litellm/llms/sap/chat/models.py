@@ -83,7 +83,7 @@ class FunctionTool(LiteLLMBaseModel):
     parameters: dict = Field(default={"type": "object", "properties": {}})
     strict: bool = False
 
-    def model_dump(self, **kwargs: object) -> dict:
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
         kwargs["exclude_unset"] = False
         return super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
 
@@ -105,7 +105,7 @@ class ChatCompletionTool(LiteLLMBaseModel):
     function: FunctionTool
     cache_control: CacheControl | None = None
 
-    def model_dump(self, **kwargs: object) -> dict:
+    def model_dump(self, **kwargs: object) -> dict[str, object]:
         kwargs["exclude_unset"] = False
         result = super().model_dump(**kwargs)  # pyright: ignore[reportArgumentType]  # kwargs forwarded verbatim to pydantic model_dump
         if result.get("cache_control") is None:

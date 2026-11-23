@@ -491,7 +491,7 @@ def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str,
     }
 
 
-def _filter_embed_params(optional_params: dict) -> dict:
+def _filter_embed_params(optional_params: Mapping[str, object]) -> dict:
     """Map and filter optional_params to only include Gemini embedding fields."""
     params: Final = _STRING_KEYED_FIELDS.validate_python(optional_params)
     gemini_params: Final = {
@@ -511,7 +511,7 @@ def _filter_embed_params(optional_params: dict) -> dict:
 def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
 ) -> VertexAIBatchEmbeddingsRequestBody:
@@ -564,10 +564,10 @@ def transform_openai_input_gemini_content(
 def transform_openai_input_gemini_embed_content(
     input: GeminiEmbeddingInput,
     model: str,
-    optional_params: dict,
+    optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
 
@@ -595,7 +595,7 @@ def transform_openai_input_gemini_embed_content(
             )
         parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
 
-    request_body: Final[dict] = {
+    request_body: Final[dict[str, object]] = {
         **extra_body_fields(optional_params),
         "content": ContentType(parts=parts),
         **gemini_params,

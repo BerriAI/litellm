@@ -55,7 +55,7 @@ class AmazonLlamaConfig(AmazonInvokeConfig, BaseConfig):
             and v is not None
         }
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "temperature",

@@ -201,7 +201,7 @@ class CodeExecutionHandler:
         tools: list[_OpenAIToolSpec],
         skill_files: dict[str, bytes],
         skill_id: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> _CodeExecutionOutcome:
         """
         Execute an LLM call with automatic code execution handling.

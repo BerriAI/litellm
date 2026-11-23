@@ -208,7 +208,7 @@ async def create_vector_store_in_db(
     vector_store_name: str | None = None,
     vector_store_description: str | None = None,
     vector_store_metadata: Mapping[str, object] | None = None,
-    litellm_params: dict | None = None,
+    litellm_params: Mapping[str, object] | None = None,
     litellm_credential_name: str | None = None,
     team_id: str | None = None,
     user_id: str | None = None,
@@ -453,7 +453,7 @@ async def list_vector_stores(
                     )
 
         # Filter vector stores based on access control
-        accessible_vector_stores: Final = []
+        accessible_vector_stores: Final[list[LiteLLM_ManagedVectorStore]] = []
         for vs in await filter_listable_vector_stores(vector_store_map.values(), user_api_key_dict):
             redacted = _with_ownership(vs)
             redacted["litellm_params"] = _redact_sensitive_litellm_params(vs.get("litellm_params"))

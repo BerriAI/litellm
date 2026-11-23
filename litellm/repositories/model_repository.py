@@ -42,7 +42,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         """Encrypt sensitive values in litellm_params."""
         from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 
-        encrypted: Final = {}
+        encrypted: Final[dict[str, object]] = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
@@ -54,7 +54,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         """Decrypt sensitive values in litellm_params."""
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 
-        decrypted: Final = {}
+        decrypted: Final[dict[str, object]] = {}
         for key, value in litellm_params.items():
             if isinstance(value, str):
                 decrypted[key] = decrypt_value_helper(

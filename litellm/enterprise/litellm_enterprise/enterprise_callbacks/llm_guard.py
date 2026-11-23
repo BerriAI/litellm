@@ -43,7 +43,7 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
         elif not self.llm_guard_api_base.endswith("/"):
             self.llm_guard_api_base += "/"
 
-    def print_verbose(self, print_statement):
+    def print_verbose(self, print_statement: object):
         try:
             verbose_proxy_logger.debug(print_statement)
             if litellm.set_verbose:
@@ -186,7 +186,9 @@ class _ENTERPRISE_LLMGuard(CustomLogger):
             data["prompt"] = await self._moderate_text_or_list(prompt)
         return data
 
-    async def _moderate_message(self, message: dict) -> dict:
+    async def _moderate_message(
+        self, message: Mapping[str, object]
+    ) -> Mapping[str, object]:
         content = message.get("content")
         if isinstance(content, str):
             return {**message, "content": await self.moderation_check(text=content)}

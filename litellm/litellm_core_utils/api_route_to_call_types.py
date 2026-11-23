@@ -81,7 +81,7 @@ def get_call_types_for_route(route: str) -> Sequence[CallTypes] | None:
     return None
 
 
-def get_routes_for_call_type(call_type: CallTypes) -> list:
+def get_routes_for_call_type(call_type: CallTypes) -> list[str]:
     """
     Get all routes that use a specific CallType.
 
@@ -91,8 +91,4 @@ def get_routes_for_call_type(call_type: CallTypes) -> list:
     Returns:
         List of routes that use this CallType
     """
-    routes: Final = []
-    for route, types in API_ROUTE_TO_CALL_TYPES.items():
-        if call_type in types:
-            routes.append(route)
-    return routes
+    return [route for route, types in API_ROUTE_TO_CALL_TYPES.items() if call_type in types]

@@ -7,6 +7,7 @@ module should touch a failed upstream response's body.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -41,6 +42,10 @@ def _safe_json(response: httpx.Response) -> object:
         return _DECODED_JSON.validate_python(response.json())
     except Exception:
         return None
+
+
+def _dict_fields(value: object) -> Mapping[object, object]:
+    return value if isinstance(value, dict) else {}
 
 
 def _bounded_field(value: object) -> str | None:
@@ -108,7 +113,7 @@ def classify_upstream_token_rejection(
     ``error`` field goes through blame assignment (:func:`_classify_oauth_error_code`); anything
     without a usable ``error`` field is an upstream protocol fault."""
     parsed: Final = _safe_json(response)
-    fields: Final = parsed if isinstance(parsed, dict) else {}
+    fields: Final = _dict_fields(parsed)
     code: Final = _bounded_field(fields.get("error"))
     if code is None:
         _log_out_of_contract("token", response, log_context)
@@ -128,7 +133,7 @@ def classify_upstream_dcr_rejection(response: httpx.Response, log_context: str) 
     (registration sends no client credentials, so credential codes stay caller-actionable); anything
     without a usable ``error`` field is a registration refusal for 401/403 and a protocol fault otherwise."""
     parsed: Final = _safe_json(response)
-    fields: Final = parsed if isinstance(parsed, dict) else {}
+    fields: Final = _dict_fields(parsed)
     code: Final = _bounded_field(fields.get("error"))
     if code is None:
         if response.status_code == 401 or response.status_code == 403:

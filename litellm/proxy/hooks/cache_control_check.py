@@ -2,6 +2,7 @@
 ## Checks if key is allowed to use the cache controls passed in to the completion() call
 
 
+from collections.abc import Mapping
 from typing import Final
 
 from fastapi import HTTPException
@@ -22,7 +23,7 @@ class _PROXY_CacheControlCheck(CustomLogger):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: Mapping[str, object],
         call_type: str,
     ) -> None:
         try:

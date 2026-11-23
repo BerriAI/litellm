@@ -124,7 +124,7 @@ async def count_input_tokens(
 
 
 async def _count_group(
-    request_body: dict,
+    request_body: dict[str, object],
     raw_body: bytes | None,
     tokenizer: RustTokenizer | None,
     models: tuple[str, ...],
@@ -170,7 +170,7 @@ async def _native_counts(
 
 
 def _count_input_tokens_for_models(
-    request_body: dict,
+    request_body: dict[str, object],
     models: Sequence[str],
     served_models: Sequence[str] = (),
 ) -> Mapping[str, int]:

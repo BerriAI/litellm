@@ -719,7 +719,7 @@ def detect_code_languages(text: str) -> list[str]:
     Returns:
         List of detected language names
     """
-    detected: Final = []
+    detected: Final[list[str]] = []
     for lang, patterns in _CODE_PATTERNS.items():
         for pattern in patterns:
             try:

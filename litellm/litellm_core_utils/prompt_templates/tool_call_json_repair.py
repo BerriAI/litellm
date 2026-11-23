@@ -36,7 +36,7 @@ def _attempt_json_repair(s: str) -> object | None:
         return None
 
     # Track the stack of unmatched openers to respect nesting order
-    opener_stack: Final[list] = []
+    opener_stack: Final[list[str]] = []
     in_string = False
     escape_next = False
 

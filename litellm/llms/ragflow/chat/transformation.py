@@ -10,6 +10,7 @@ Model name format:
 - Agent: ragflow/agent/{agent_id}/{model_name}
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import litellm
@@ -65,7 +66,7 @@ class RAGFlowConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
@@ -171,7 +172,7 @@ class RAGFlowConfig(OpenAIConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,

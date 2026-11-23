@@ -59,7 +59,7 @@ class AmazonStabilityConfig:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
@@ -78,7 +78,7 @@ class AmazonStabilityConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: str | None = None) -> list:
+    def get_supported_openai_params(cls, model: str | None = None) -> list[str]:
         return ["size"]
 
     @classmethod
@@ -100,7 +100,7 @@ class AmazonStabilityConfig:
         cls,
         text: str,
         optional_params: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         inference_params: Final = copy.deepcopy(optional_params)
         inference_params.pop("user", None)  # make sure user is not passed in for bedrock call
 

@@ -31,7 +31,7 @@ class EventStreamTally:
         self.provider = provider
         self.event_statuses = event_statuses
         self.bytes_received = 0
-        self.bytes_decoded = 0
+        self.bytes_decoded: int = 0
         self.events = 0
         self.recognized_events = 0
         self.unrecognized_event_types: frozenset[str] = frozenset()

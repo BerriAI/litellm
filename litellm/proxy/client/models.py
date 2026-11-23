@@ -34,7 +34,7 @@ class ModelsManagementClient:
         Returns:
             Dict[str, str]: Headers to use for API requests
         """
-        headers: Final = {}
+        headers: Final[dict[str, str]] = {}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers

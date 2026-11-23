@@ -59,10 +59,10 @@ class ModelParamHelper:
 
     @staticmethod
     def get_standard_logging_model_parameters(
-        model_parameters: dict,
-    ) -> dict:
+        model_parameters: Mapping[str, object],
+    ) -> dict[str, object]:
         """ """
-        standard_logging_model_parameters: Final[dict] = {}
+        standard_logging_model_parameters: Final[dict[str, object]] = {}
         supported_model_parameters: Final = ModelParamHelper.relevant_logging_args
 
         for key, value in model_parameters.items():

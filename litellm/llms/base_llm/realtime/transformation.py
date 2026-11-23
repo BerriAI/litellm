@@ -65,10 +65,10 @@ class BaseRealtimeConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         pass
 
     @abstractmethod
@@ -101,10 +101,10 @@ class BaseRealtimeConfig(ABC):
     async def pace_backend_send(self, message: bytes) -> None:
         return None
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: dict[str, object]) -> bool:
         return False
 
     def requires_session_configuration(

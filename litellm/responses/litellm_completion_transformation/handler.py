@@ -190,7 +190,7 @@ class LiteLLMCompletionTransformationHandler:
         bridged: Final = _bridged_request(hoisted, request, ())
         bridged_input: Final = bridged.input
         bridged_request: Final = bridged.responses_api_request
-        litellm_completion_request: Final[dict] = {
+        litellm_completion_request: Final[dict[str, object]] = {
             **LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
                 model=model,
                 input=bridged_input,

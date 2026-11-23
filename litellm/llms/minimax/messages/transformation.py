@@ -75,8 +75,8 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         """

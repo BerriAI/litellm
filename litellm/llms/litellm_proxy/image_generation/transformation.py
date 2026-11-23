@@ -1,8 +1,11 @@
+from collections.abc import Mapping
+
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_generation.gpt_transformation import (
     GPTImageGenerationConfig,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 
 class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
@@ -12,9 +15,9 @@ class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
         self,
         headers: dict,
         model: str,
-        messages,
-        optional_params: dict,
-        litellm_params: dict,
+        messages: list[AllMessageValues],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -27,8 +30,8 @@ class LiteLLMProxyImageGenerationConfig(GPTImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = api_base or get_secret_str("LITELLM_PROXY_API_BASE")
