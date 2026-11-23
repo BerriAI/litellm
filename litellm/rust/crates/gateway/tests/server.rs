@@ -45,6 +45,7 @@ async fn inference_for(config: &Config) -> Inference {
             litellm_gateway_inference::RouterTiers::default(),
         ),
         &RedisClients::default(),
+        None,
     )
     .await
     .unwrap()
@@ -72,6 +73,7 @@ fn without_stores(inference: Inference) -> AppState {
         redis: RedisClients::default(),
         database: None,
         keys: None,
+        spend_logs: None,
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
         counters: litellm_gateway::parallel_request_limiter::counters(None),
