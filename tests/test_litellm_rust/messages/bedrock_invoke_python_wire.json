@@ -279,8 +279,8 @@
   "chunks": [],
   "raised": [
    [
-    "ChecksumMismatch",
-    null
+    "BedrockError",
+    502
    ]
   ]
  },
