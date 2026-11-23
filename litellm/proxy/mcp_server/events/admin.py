@@ -134,9 +134,9 @@ async def _owned(caller: UserAPIKeyAuth, subscription_id: str, store: EventStore
 
 async def terminate_subscription(
     row: SubscriptionRow, failure: EventsFailure, services: AdminServices | None = None, *, notify: bool = True
-) -> None:
+) -> bool:
     resolved: Final = services or admin_services()
-    await terminate(
+    return await terminate(
         row,
         failure,
         resolved.require_store(),
@@ -164,8 +164,11 @@ async def terminate_key_subscriptions(
 
 async def _terminate_for_key(token: str, services: AdminServices, notify: bool) -> None:
     store: Final = services.require_store()
-    for row in await store.find(SubscriptionQuery(key_hash=token, live_only=True, limit=1000)):
-        await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
+    after_id: str | None = None  # rebind-ok: advance past each page as termination removes live rows
+    while rows := await store.find(SubscriptionQuery(key_hash=token, live_only=True, after_id=after_id)):
+        for row in rows:
+            await terminate_subscription(row, forbidden("Key revoked"), services, notify=notify)
+        after_id = rows[-1].id
 
 
 @router.get("/types", response_model=tuple[EventType, ...])
@@ -243,7 +246,8 @@ async def delete_subscription(
     if caller.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
         raise HTTPException(status_code=403, detail="Read-only admins cannot terminate subscriptions")
     row: Final = await _owned(caller, subscription_id, services.require_store())
-    await terminate_subscription(row, forbidden("Subscription terminated"), services)
+    if not await terminate_subscription(row, forbidden("Subscription terminated"), services):
+        raise HTTPException(status_code=409, detail="Subscription changed during termination")
     return _view(row.model_copy(update={"status": "terminated"}))
 
 

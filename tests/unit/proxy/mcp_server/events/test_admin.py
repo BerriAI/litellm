@@ -276,3 +276,32 @@ def test_keys_limited_to_mcp_routes_reach_the_event_subscription_endpoints() -> 
 
     for route in ("/v1/mcp/events/types", "/v1/mcp/events/subscriptions", "/v1/mcp/events/subscriptions/sub_1/test"):
         assert RouteChecks.check_route_access(route=route, allowed_routes=LiteLLMRoutes.mcp_routes.value)
+
+
+async def test_delete_reports_a_conflict_if_a_refresh_wins() -> None:
+    class RefreshedStore(MemoryStore):
+        async def end_if_current(
+            self, subscription_id: str, upstream_subscription_id: str | None, generation: str | None = None
+        ) -> bool:
+            current: Final = self.rows[subscription_id]
+            await self.save(current.model_copy(update={"generation": "refreshed"}))
+            return await super().end_if_current(subscription_id, upstream_subscription_id, generation)
+
+    store: Final = RefreshedStore(rows=_store().rows)
+    callback: Final = Callback()
+    async with _client(ALICE, store, callback) as client:
+        response = await client.delete("/events/subscriptions/sub_a")
+    assert response.status_code == 409
+    assert store.rows["sub_a"].status == "active"
+    assert callback.sent == []
+
+
+async def test_revoking_a_key_visits_every_page_of_live_subscriptions() -> None:
+    base: Final = _row("base", ALICE)
+    store: Final = MemoryStore(rows={str(i): base.model_copy(update={"id": str(i)}) for i in range(1001)})
+    await store.save(_row("other", BOB))
+    services: Final = AdminServices(
+        store=store, runtime=runtime((server(),)), post=Callback().post, lookup=_lookup, key_for_alias=_no_alias
+    )
+    await terminate_key_subscriptions((ALICE.token,), notify=False, services=services)
+    assert {row.id for row in store.rows.values() if row.status != "terminated"} == {"other"}
