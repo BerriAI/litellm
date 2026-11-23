@@ -23,6 +23,7 @@ import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from httpx import Response
+from starlette.datastructures import URL
 
 import litellm
 from litellm.caching.base_cache import BaseCache
@@ -7143,6 +7144,18 @@ async def _admits(proxy_logging: ProxyLogging, key: UserAPIKeyAuth, call_type: C
     return await asyncio.create_task(admit(), context=contextvars.Context())
 
 
+class _RefusesWebSocketOpens(CustomLogger):
+    def __init__(self, refusal: Exception) -> None:
+        super().__init__()
+        self.refusal: Final = refusal
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: CallTypesLiteral
+    ) -> None:
+        if call_type == "_aresponses_websocket":
+            raise self.refusal
+
+
 def _legacy_limiter(internal_usage_cache: InternalUsageCache) -> PROXY_MaxParallelRequestsHandler:
     return PROXY_MaxParallelRequestsHandler(internal_usage_cache, clock=lambda: datetime.datetime(2026, 1, 31, 12, 0, 30))
 
@@ -7164,45 +7177,28 @@ async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_
 
     monkeypatch.setattr(litellm, "callbacks", [])
     monkeypatch.setitem(PROXY_HOOKS, "parallel_request_limiter", limiter)
+    monkeypatch.setitem(PROXY_HOOKS, "refuses_after_the_limiter", lambda: _RefusesWebSocketOpens(open_failure))
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         proxy_logging._add_proxy_hooks(llm_router=None)
     ProxyLogging._callback_capabilities_cache.clear()
     key: Final = UserAPIKeyAuth(api_key="hashed-single-slot-key", max_parallel_requests=1)
 
-    async def admit_then_fail(**_: object) -> None:
-        await proxy_logging.pre_call_hook(
-            user_api_key_dict=key, data={"model": "gpt-4o-mini"}, call_type="_aresponses_websocket"
-        )
-        raise open_failure
-
     ws: Final = MagicMock()
     ws.headers = {}
     ws.query_params = {}
     ws.scope = {"headers": []}
-    ws.url = "ws://testserver/v1/responses"
+    ws.url = URL("ws://testserver/v1/responses")
     ws.accept = AsyncMock()
     ws.receive_text = AsyncMock(
         return_value=json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
     )
     ws.send_text = AsyncMock()
     ws.close = AsyncMock()
-    processor: Final = MagicMock()
-    processor.common_processing_pre_call_logic = AsyncMock(side_effect=admit_then_fail)
 
-    with (
-        patch(  # test-quality-ok: first-frame model auth needs a live router and key table and has its own tests above
-            "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
-            new_callable=AsyncMock,
-        ),
-        patch(  # test-quality-ok: the pre-call processor needs a live proxy; it still admits through the real limiter before failing
-            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
-            return_value=processor,
-        ),
-        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
-    ):
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging):
         await asyncio.create_task(
-            responses_websocket_endpoint(websocket=ws, model=None, user_api_key_dict=key),
+            responses_websocket_endpoint(websocket=ws, model="gpt-4o-mini", user_api_key_dict=key),
             context=contextvars.Context(),
         )
 
