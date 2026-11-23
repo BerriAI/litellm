@@ -21,7 +21,6 @@ from ..common_utils import PredibaseError
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.types.llms.openai import AllMessageValues
 
 
 async def make_call(
@@ -58,7 +57,7 @@ class PredibaseChatCompletion:
     def completion(
         self,
         model: str,
-        messages: "list[AllMessageValues]",
+        messages: list,
         api_base: str,
         custom_prompt_dict: dict,
         model_response: ModelResponse,
@@ -198,7 +197,7 @@ class PredibaseChatCompletion:
     async def async_completion(
         self,
         model: str,
-        messages: "list[AllMessageValues]",
+        messages: list,
         api_base: str,
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
