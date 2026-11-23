@@ -335,15 +335,28 @@ class ChatAssistantTurn(BaseModel):
     reasoning_content: str | None = None
     thinking_blocks: list[ThinkingBlock] | None = None
     tool_calls: list[ToolCall] | None = None
+    prefix: bool | None = None
 
 
 class ChatToolResultTurn(BaseModel):
     role: Literal["tool"] = "tool"
     tool_call_id: str
     content: str | list[ContentPart]
+    name: str | None = None
 
 
-type ChatTurn = ChatMessage | ChatAssistantTurn | ChatToolResultTurn
+class ChatAssistantTurnWithCot(ChatAssistantTurn):
+    cot_id: str
+    cot_summary: str
+
+
+class ChatMessageWithMetadata(ChatMessage):
+    metadata: dict[str, str]
+
+
+type ChatTurn = (
+    ChatMessage | ChatAssistantTurn | ChatToolResultTurn | ChatAssistantTurnWithCot | ChatMessageWithMetadata
+)
 
 
 class ChatStreamOptions(BaseModel):
@@ -373,6 +386,7 @@ class ChatBody(BaseModel):
     response_format: dict[str, object] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
+    drop_params: bool | None = None
 
 
 RoutingStrategy = Literal[
