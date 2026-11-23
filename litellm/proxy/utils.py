@@ -211,9 +211,9 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.litellm_core_utils.redact_messages import (
-    drop_token_data_of_rewritten_choices,
+    drop_token_data_of_rewritten_outputs,
     drop_token_ids,
-    token_data_choice_outputs,
+    token_data_outputs,
 )
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
@@ -4829,9 +4829,9 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
-        token_data_outputs: Final = token_data_choice_outputs(response)
+        outputs_before: Final = token_data_outputs(response)
         served: Final = await self._post_call_success_response(data, response, user_api_key_dict)
-        drop_token_data_of_rewritten_choices(served, token_data_outputs)
+        drop_token_data_of_rewritten_outputs(served, outputs_before)
         return served
 
     async def _post_call_success_response(

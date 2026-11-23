@@ -6083,6 +6083,29 @@ async def test_success_deployment_hook_raising_keeps_earlier_hook_rewrite(monkey
 _VLLM_PARIS_TOKEN_IDS: Final = [785, 6722, 315, 9625, 374, 12095, 13]
 
 
+def _mock_vllm_chat_answer(monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("http://vllm.invalid/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-vllm",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "Qwen/Qwen3-0.6B",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "token_ids": _VLLM_PARIS_TOKEN_IDS,
+                    "message": {"role": "assistant", "content": answer},
+                    "logprobs": {"content": [{"token": answer, "logprob": -0.1, "bytes": None, "top_logprobs": []}]},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        }
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("answer", "served_answer", "served_token_ids"),
@@ -6107,26 +6130,7 @@ async def test_model_level_masking_guardrail_drops_vllm_token_data_of_the_answer
         event_hook=GuardrailEventHooks.post_call,
     )
     monkeypatch.setattr(litellm, "callbacks", [mask_paris])
-    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    litellm.in_memory_llm_clients_cache.flush_cache()
-    respx.post("http://vllm.invalid/v1/chat/completions").respond(
-        json={
-            "id": "chatcmpl-vllm",
-            "object": "chat.completion",
-            "created": 1,
-            "model": "Qwen/Qwen3-0.6B",
-            "choices": [
-                {
-                    "index": 0,
-                    "finish_reason": "stop",
-                    "token_ids": _VLLM_PARIS_TOKEN_IDS,
-                    "message": {"role": "assistant", "content": answer},
-                    "logprobs": {"content": [{"token": answer, "logprob": -0.1, "bytes": None, "top_logprobs": []}]},
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
-        }
-    )
+    _mock_vllm_chat_answer(monkeypatch, answer)
 
     response: Final = await litellm.acompletion(
         model="hosted_vllm/Qwen/Qwen3-0.6B",
@@ -6141,6 +6145,49 @@ async def test_model_level_masking_guardrail_drops_vllm_token_data_of_the_answer
     assert response.choices[0].message.content == served_answer
     assert response.choices[0].provider_specific_fields["token_ids"] == served_token_ids
     assert (getattr(response.choices[0], "logprobs", None) is None) is (served_token_ids is None)
+    assert mask_paris.post_call_already_checked({}, response) is True
+
+
+class _SearchResultsDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> ModelResponse | None:
+        if not isinstance(response, ModelResponse):
+            return None
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        cited_message: Final = choice.message.model_copy(
+            update={
+                "provider_specific_fields": {
+                    **(choice.message.provider_specific_fields or {}),
+                    "search_results": [{"object": "vector_store.search_results.page", "data": []}],
+                }
+            }
+        )
+        return response.model_copy(update={"choices": [choice.model_copy(update={"message": cited_message})]})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deployment_hook_that_only_attaches_search_results_keeps_vllm_token_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_SearchResultsDeploymentHook()])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.provider_specific_fields["search_results"][0]["data"] == []
+    assert response.choices[0].provider_specific_fields["token_ids"] == _VLLM_PARIS_TOKEN_IDS
+    assert getattr(response.choices[0], "logprobs", None) is not None
 
 
 class _GuardrailBlocked(Exception):

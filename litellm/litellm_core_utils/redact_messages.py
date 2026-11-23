@@ -10,7 +10,7 @@
 import asyncio
 import copy
 import inspect
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -314,47 +314,72 @@ def drop_token_ids(choice: object) -> None:
         _drop_provider_specific_token_ids(holder)
 
 
-def _comparable_message(message: object) -> object:
-    dumped: Final = message.model_dump() if isinstance(message, BaseModel) else copy.deepcopy(message)
-    fields: Final = _as_mapping(dumped)
-    return dumped if fields is None else {key: value for key, value in fields.items() if value is not None}
+_MESSAGE_OUTPUT_FIELDS: Final = (
+    "content",
+    "reasoning_content",
+    "thinking_blocks",
+    "tool_calls",
+    "function_call",
+    "refusal",
+    "audio",
+)
 
 
-def _choice_output(choice: object) -> tuple[object, object]:
-    return (_comparable_message(stream_item_field(choice, "message")), stream_item_field(choice, "text"))
+def _comparable_value(value: object) -> object:
+    return value.model_dump() if isinstance(value, BaseModel) else copy.deepcopy(value)
 
 
-def _carries_token_data(choice: object) -> bool:
+def _comparable_message(message: object) -> tuple[object, ...]:
+    return tuple(_comparable_value(stream_item_field(message, field)) for field in _MESSAGE_OUTPUT_FIELDS)
+
+
+def _holder_output(holder: object) -> tuple[object, ...]:
+    return (*_comparable_message(stream_item_field(holder, "message")), stream_item_field(holder, "text"))
+
+
+def _carries_logprobs(holder: object) -> bool:
+    return stream_item_field(holder, "logprobs") not in (None, [])
+
+
+def _carries_token_data(holder: object) -> bool:
     return (
-        stream_item_field(choice, "token_ids") is not None
-        or stream_item_field(choice, "logprobs") is not None
+        stream_item_field(holder, "token_ids") is not None
+        or _carries_logprobs(holder)
         or any(
-            stream_item_field(stream_item_field(holder, "provider_specific_fields"), "token_ids") is not None
-            for holder in (choice, stream_item_field(choice, "message"))
+            stream_item_field(stream_item_field(field_holder, "provider_specific_fields"), "token_ids") is not None
+            for field_holder in (holder, stream_item_field(holder, "message"))
         )
     )
 
 
-def token_data_choice_outputs(response: object) -> Mapping[int, tuple[object, object]]:
+def _output_item_parts(item_index: int, item: object) -> Iterator[tuple[tuple[int, ...], object]]:
+    return (((item_index, part_index), part) for part_index, part in enumerate(stream_item_items(item, "content")))
+
+
+def _token_data_holders(response: object) -> Iterator[tuple[tuple[int, ...], object]]:
+    yield from (((index,), choice) for index, choice in enumerate(stream_item_items(response, "choices")))
+    for item_index, item in enumerate(stream_item_items(response, "output")):
+        yield from _output_item_parts(item_index, item)
+
+
+def token_data_outputs(response: object) -> Mapping[tuple[int, ...], tuple[object, ...]]:
     return MappingProxyType(
-        {
-            index: _choice_output(choice)
-            for index, choice in enumerate(stream_item_items(response, "choices"))
-            if _carries_token_data(choice)
-        }
+        {key: _holder_output(holder) for key, holder in _token_data_holders(response) if _carries_token_data(holder)}
     )
 
 
-def _drop_token_data(choice: object) -> None:
-    drop_token_ids(choice)
-    if stream_item_field(choice, "logprobs") is not None:
-        _set_field(choice, "logprobs", None)
+def _drop_token_data(holder: object) -> None:
+    drop_token_ids(holder)
+    if _carries_logprobs(holder):
+        _set_field(holder, "logprobs", None)
 
 
-def drop_token_data_of_rewritten_choices(response: object, outputs_before: Mapping[int, tuple[object, object]]) -> None:
-    for index, choice in enumerate(stream_item_items(response, "choices")):
-        if index in outputs_before and _choice_output(choice) != outputs_before[index]:
-            _drop_token_data(choice)
+def drop_token_data_of_rewritten_outputs(
+    response: object, outputs_before: Mapping[tuple[int, ...], tuple[object, ...]]
+) -> None:
+    for key, holder in _token_data_holders(response):
+        if key in outputs_before and _holder_output(holder) != outputs_before[key]:
+            _drop_token_data(holder)
 
 
 def _redact_provider_specific_fields_dict(choice: Mapping[str, object]) -> None:

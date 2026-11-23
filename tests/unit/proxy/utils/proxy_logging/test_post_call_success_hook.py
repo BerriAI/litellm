@@ -312,3 +312,69 @@ async def test_post_call_success_hook_drops_token_data_when_a_callback_rewrites_
     assert choice["message"]["tool_calls"][0]["function"]["arguments"] == '{"city": "[MASKED]"}'
     assert choice["provider_specific_fields"]["token_ids"] is None
     assert choice["logprobs"] is None
+
+
+def _responses_output_text(text: str, logprobs_requested: bool):
+    from openai.types.responses import ResponseOutputText
+    from openai.types.responses.response_output_text import Logprob
+
+    return ResponseOutputText(
+        type="output_text",
+        text=text,
+        annotations=[],
+        logprobs=[Logprob(token=text, logprob=-0.1, bytes=[], top_logprobs=[])] if logprobs_requested else [],
+    )
+
+
+class _ResponsesPartMaskingLogger(CustomLogger):
+    async def async_post_call_success_hook(self, data, user_api_key_dict, response):
+        message = response.output[0]
+        parts = [part.model_copy(update={"text": _masked(part.text)}) for part in message.content]
+        return response.model_copy(update={"output": [message.model_copy(update={"content": parts})]})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("logprobs_requested", "masked_logprobs", "untouched_tokens"),
+    [(True, None, ["Berlin is in Germany."]), (False, [], [])],
+    ids=["logprobs-requested", "logprobs-not-requested"],
+)
+async def test_post_call_success_hook_drops_logprobs_only_from_responses_output_text_a_callback_rewrote(
+    proxy_logging, make_user_api_key_auth, monkeypatch, logprobs_requested, masked_logprobs, untouched_tokens
+):
+    from openai.types.responses import ResponseOutputMessage
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    monkeypatch.setattr(litellm, "callbacks", [_ResponsesPartMaskingLogger()])
+    response = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=1,
+        model="gpt-4.1-mini",
+        object="response",
+        status="completed",
+        output=[
+            ResponseOutputMessage(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                status="completed",
+                content=[
+                    _responses_output_text("The capital of France is Paris.", logprobs_requested),
+                    _responses_output_text("Berlin is in Germany.", logprobs_requested),
+                ],
+            )
+        ],
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+    )
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "input": "capital of France?"}, response=response, user_api_key_dict=make_user_api_key_auth()
+    )
+
+    masked_part, untouched_part = served.output[0].content
+    assert masked_part.text == "The capital of France is [MASKED]."
+    assert masked_part.logprobs == masked_logprobs
+    assert [logprob.token for logprob in untouched_part.logprobs] == untouched_tokens

@@ -12,7 +12,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -55,6 +55,7 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -330,19 +331,33 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 )
 
 
+_TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
+_JSON_FIELDS: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def _without_token_data(value: JsonValue, depth: int = 0) -> JsonValue:
+    if isinstance(value, list) and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        return [_without_token_data(item, depth + 1) for item in value]
+    if isinstance(value, dict) and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        return {key: _without_token_data(item, depth + 1) for key, item in value.items() if key not in _TOKEN_DATA_KEYS}
+    return value
+
+
 def _response_fingerprint(response: object) -> str | None:
-    """Digest of everything but metadata set between layers, so an unknown field counts as content."""
+    """Digest of everything but layer metadata and token data a rewrite drops, so an unknown field counts as content."""
     try:
         fields: Final[Mapping[str, object]] = (
             response.model_dump(mode="json")
             if isinstance(response, BaseModel)
             else _REQUEST_FIELDS.validate_python(response)
         )
-        content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
+        content: Final = _JSON_FIELDS.validate_python(
+            {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
+        )
         if not content:
             return None
         return hashlib.sha256(
-            json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(_without_token_data(content), sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
     except (TypeError, ValueError):
         return None
