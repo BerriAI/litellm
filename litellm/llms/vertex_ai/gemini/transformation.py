@@ -6,29 +6,43 @@ Why separate file? Make it easy to see how transformation works
 
 import os
 import re
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    MAX_VIDEO_DOWNLOAD_BYTES,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
     convert_to_gemini_tool_call_result,
     get_thought_signature_from_tool,
+    keeps_gemini_video,
     response_schema_prompt,
+    skip_unfetched_video,
 )
 from litellm.litellm_core_utils.prompt_templates.image_handling import RemoteMedia, async_inline_remote_media
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_system_message,
+    message_field,
+    parts_of,
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import pop_vertex_caller_labels, pop_vertex_request_labels
 from litellm.llms.vertex_ai.request_labels import vertex_request_label_fields
@@ -60,11 +74,13 @@ from litellm.types.llms.vertex_ai import (
 from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
-    GEMINI_FILES_API_URI_PREFIX,
     check_text_in_content,
+    gemini_fetches_url_itself,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
+    normalize_youtube_url,
+    youtube_video_mime_type,
 )
 
 # VertexBase is imported only for type checking to avoid introducing a
@@ -129,6 +145,12 @@ def _convert_detail_to_media_resolution_enum(
     elif detail == "ultra_high":
         return {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
     return None
+
+
+def changes_gemini_media_settings(detail: str | None, video_metadata: Mapping[str, object] | None) -> bool:
+    return _convert_detail_to_media_resolution_enum(detail) is not None or bool(
+        gemini_video_metadata_from_openai(video_metadata or {})
+    )
 
 
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
@@ -275,44 +297,56 @@ def _image_url_payload_may_need_sync_gcs_metadata_fetch(
     return _gs_uri_requires_content_type_metadata(url)
 
 
+def _message_fields(message: object) -> Mapping[str, object] | None:
+    if isinstance(message, BaseModel):
+        return as_str_mapping(message.model_dump(exclude_none=False))
+    return as_str_mapping(message)
+
+
+def _video_may_need_download(video_url: object) -> bool:
+    url: Final = video_url if isinstance(video_url, str) else (as_str_mapping(video_url) or {}).get("url")
+    return isinstance(url, str) and url.startswith(("http://", "https://")) and not gemini_fetches_url_itself(url)
+
+
 def _openai_messages_may_need_sync_gcs_metadata_fetch(
     messages: list[AllMessageValues],
 ) -> bool:
     """
     Heuristic: True if any message part can trigger a blocking GCS JSON
     metadata read inside _transform_request_body (extension-less gs:// without
-    explicit MIME hints). Covers user/system ``content`` parts and assistant
-    ``images`` (same paths as ``_gemini_convert_messages_with_history``). Used
-    to decide whether ``async_transform_request_body`` should offload the sync
-    transform via ``asyncify``.
+    explicit MIME hints) or a blocking download of a remote ``video_url``.
+    Covers user/system/tool ``content`` parts and assistant ``images`` (same
+    paths as ``_gemini_convert_messages_with_history``). Used to decide whether
+    ``async_transform_request_body`` should offload the sync transform via
+    ``asyncify``.
     """
     for raw in messages:
-        msg: Any = raw
-        if not isinstance(msg, dict) and hasattr(msg, "model_dump"):
-            msg = msg.model_dump(exclude_none=False)
-        if not isinstance(msg, dict):
+        message_fields = _message_fields(raw)
+        if message_fields is None:
             continue
-        images_field = msg.get("images")
-        if isinstance(images_field, list):
-            for image_item in images_field:
-                if not isinstance(image_item, dict):
-                    continue
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(image_item.get("image_url")):
-                    return True
+        for image_item in as_object_list(message_fields.get("images")) or ():
+            image_fields = as_str_mapping(image_item)
+            if image_fields is not None and _image_url_payload_may_need_sync_gcs_metadata_fetch(
+                image_fields.get("image_url")
+            ):
+                return True
 
-        content = msg.get("content")
-        if not isinstance(content, list):
+        content = as_object_list(message_fields.get("content"))
+        if content is None:
             continue
         for item in content:
-            if not isinstance(item, dict):
+            fields = as_str_mapping(item)
+            if fields is None:
                 continue
-            itype = item.get("type")
-            if itype == "image_url":
-                if _image_url_payload_may_need_sync_gcs_metadata_fetch(item.get("image_url")):
+            itype = fields.get("type")
+            if itype == "video_url" and _video_may_need_download(fields.get("video_url")):
+                return True
+            if itype in ("image_url", "video_url"):
+                if _image_url_payload_may_need_sync_gcs_metadata_fetch(fields.get(itype)):
                     return True
             elif itype == "file":
-                file_obj = item.get("file")
-                if not isinstance(file_obj, dict):
+                file_obj = as_str_mapping(fields.get("file"))
+                if file_obj is None:
                     continue
                 fmt = file_obj.get("format") or file_obj.get("mime_type") or file_obj.get("content_type")
                 passed = file_obj.get("file_id") or file_obj.get("file_data")
@@ -483,6 +517,7 @@ def _process_gemini_media(
     video_metadata: Mapping[str, object] | None = None,
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
+    max_download_bytes: int | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -559,13 +594,13 @@ def _process_gemini_media(
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
-        elif image_url.startswith(GEMINI_FILES_API_URI_PREFIX):
-            # Gemini Files API URIs — the file is already uploaded to Google's
-            # servers; pass the URI through as file_data without fetching it.
-            # These URLs return 403 when accessed directly, so we must not try
-            # to resolve their MIME type via HTTP.
-            if format:
-                file_data = FileDataType(mime_type=format, file_uri=image_url)
+        elif gemini_fetches_url_itself(image_url):
+            # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
+            # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
+            # Vertex rejects a fileData without mimeType, so YouTube links default to video/mp4.
+            uri_mime_type: Final = format or youtube_video_mime_type(image_url)
+            if uri_mime_type:
+                file_data = FileDataType(mime_type=uri_mime_type, file_uri=normalize_youtube_url(image_url))
             else:
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
@@ -576,13 +611,73 @@ def _process_gemini_media(
             part = {"file_data": file_data}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            image: Final = convert_to_anthropic_image_obj(image_url, format=format)
+            image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
             return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
+
+
+def _str_field(fields: Mapping[str, object], *keys: str) -> str | None:
+    value: Final = next((fields[key] for key in keys if fields.get(key)), None)
+    return value if isinstance(value, str) else None
+
+
+def _process_gemini_video_url(
+    video_url: object,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+    custom_llm_provider: str,
+) -> PartType | None:
+    video_fields: Final = as_str_mapping(video_url) or {}
+    url: Final = video_url if isinstance(video_url, str) else _str_field(video_fields, "url")
+    if not url and drop_params:
+        return None
+    if not url:
+        raise litellm.BadRequestError(
+            message="Invalid message content: element type is 'video_url' but it has no 'url'",
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        )
+    try:
+        part: Final = _process_gemini_media(
+            image_url=url,
+            format=_str_field(video_fields, "format", "mime_type", "content_type"),
+            media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
+            model=model,
+            video_metadata=as_str_mapping(video_fields.get("video_metadata")),
+            vertex_project=vertex_project,
+            vertex_credentials=vertex_credentials,
+            max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
+        )
+    except litellm.ImageFetchError:
+        return skip_unfetched_video(
+            "The link is unreachable, too large, or not a video.",
+            location="a message",
+            drop_params=drop_params,
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    media: Final = part.get("inline_data") or part.get("file_data")
+    holds_video: Final = keeps_gemini_video(
+        media.get("mime_type") if media is not None else None,
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        drop_params=drop_params,
+    )
+    return part if holds_video else None
+
+
+def _assistant_video_url_part(element: object, video_url_part: Callable[[object], PartType | None]) -> PartType | None:
+    fields: Final = as_str_mapping(element)
+    if fields is None or fields.get("type") != "video_url":
+        return None
+    return video_url_part(fields.get("video_url"))
 
 
 def snake_to_camel(snake_str: str) -> str:
@@ -694,6 +789,228 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+@dataclass(frozen=True, slots=True)
+class _AssistantImageSource:
+    url: str
+    format: str | None
+    detail: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TargetModel:
+    model: str | None
+    custom_llm_provider: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MalformedHistory:
+    message: str
+
+
+def _outputs_images(info: Mapping[str, object]) -> bool:
+    modalities: Final = info.get("supported_output_modalities")
+    return info.get("mode") == "image_generation" or (isinstance(modalities, list) and "image" in modalities)
+
+
+def _bundled_model_entry(model: str, custom_llm_provider: str | None) -> Mapping[str, object] | None:
+    bundled: Final = litellm.utils.get_bundled_model_cost_map()
+    entries: Final = (as_str_mapping(bundled.get(key)) for key in (model, f"{custom_llm_provider}/{model}"))
+    return next((entry for entry in entries if entry is not None), None)
+
+
+def _generates_images(target: _TargetModel) -> bool:
+    model: Final = target.model
+    if model is None:
+        return False
+    info: Final = litellm.utils.lookup_model_info_for_registration(model, target.custom_llm_provider)
+    registered: Final[Mapping[str, object]] = {} if isinstance(info, litellm.utils.ModelInfoLookupMiss) else info
+    bundled: Final = _bundled_model_entry(model, target.custom_llm_provider)
+    return _outputs_images(registered) or (bundled is not None and _outputs_images(bundled))
+
+
+def _message_thought_signatures(
+    assistant_msg: ChatCompletionAssistantMessage, *, drop_params: bool
+) -> tuple[str, ...] | _MalformedHistory:
+    fields: Final = as_str_mapping(assistant_msg.get("provider_specific_fields"))
+    entries: Final = (as_object_list(fields.get("thought_signatures")) if fields is not None else None) or ()
+    signatures: Final = tuple(entry for entry in entries if isinstance(entry, str))
+    if len(signatures) < len(entries) and not drop_params:
+        return _MalformedHistory("provider_specific_fields.thought_signatures entries must be strings")
+    return signatures
+
+
+def _own_image_thought_signature(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> str | None | _MalformedHistory:
+    fields: Final = as_str_mapping(image_item.get("provider_specific_fields"))
+    signature: Final = fields.get("thought_signature") if fields is not None else None
+    if signature is not None and not isinstance(signature, str) and not drop_params:
+        return _MalformedHistory("images[].provider_specific_fields.thought_signature must be a string")
+    return signature if isinstance(signature, str) and signature else None
+
+
+def _assistant_image_source(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> _AssistantImageSource | None | _MalformedHistory:
+    raw_image_url: Final = image_item.get("image_url")
+    image_url: Final = {"url": raw_image_url} if isinstance(raw_image_url, str) else as_str_mapping(raw_image_url)
+    if raw_image_url is not None and image_url is None and not drop_params:
+        return _MalformedHistory("images[].image_url must be an object or a string")
+    url: Final = image_url.get("url") if image_url is not None else None
+    if image_url is None or not url or (drop_params and not isinstance(url, str)):
+        return None
+    if not isinstance(url, str):
+        return _MalformedHistory("images[].image_url.url must be a string")
+    format_hint: Final = image_url.get("format") or image_url.get("mime_type") or image_url.get("content_type")
+    detail: Final = image_url.get("detail")
+    return _AssistantImageSource(
+        url=url,
+        format=format_hint if isinstance(format_hint, str) else None,
+        detail=detail if isinstance(detail, str) else None,
+    )
+
+
+def _right_aligned(signatures: Sequence[str], count: int) -> tuple[str | None, ...]:
+    claimed: Final = min(count, len(signatures))
+    return (None,) * (count - claimed) + tuple(signatures[len(signatures) - claimed :])
+
+
+def _sourced_assistant_image(
+    image_item: Mapping[str, object], *, drop_params: bool
+) -> tuple[_AssistantImageSource, str | None] | None | _MalformedHistory:
+    source: Final = _assistant_image_source(image_item, drop_params=drop_params)
+    if source is None or isinstance(source, _MalformedHistory):
+        return source
+    signature: Final = _own_image_thought_signature(image_item, drop_params=drop_params)
+    if isinstance(signature, _MalformedHistory):
+        return signature
+    return (source, signature)
+
+
+def _sourced_assistant_images(
+    images: object, *, drop_params: bool
+) -> tuple[tuple[_AssistantImageSource, str | None], ...] | _MalformedHistory:
+    entries: Final = as_object_list(images) or ()
+    items: Final = tuple(item for item in map(as_str_mapping, entries) if item is not None)
+    if len(items) < len(entries) and not drop_params:
+        return _MalformedHistory("images entries must be objects")
+    sourced: Final = tuple(_sourced_assistant_image(item, drop_params=drop_params) for item in items)
+    failure: Final = next((result for result in sourced if isinstance(result, _MalformedHistory)), None)
+    if failure is not None:
+        return failure
+    return tuple(result for result in sourced if isinstance(result, tuple))
+
+
+def _has_text(content: object) -> bool:
+    if isinstance(content, str):
+        return content != ""
+    elements: Final = tuple(filter(None, map(as_str_mapping, as_object_list(content) or ())))
+    return any(element.get("type") == "text" and bool(element.get("text")) for element in elements)
+
+
+def _assistant_text_thought_signature(
+    message_signatures: Sequence[str],
+    own_image_signatures: frozenset[str],
+    tool_call_signatures: frozenset[str],
+) -> str | None:
+    first: Final = next((signature for signature in message_signatures if signature not in own_image_signatures), None)
+    return first if first is not None and first not in tool_call_signatures else None
+
+
+def _signed_assistant_images(
+    sourced_images: tuple[tuple[_AssistantImageSource, str | None], ...],
+    message_signatures: Sequence[str],
+    claimed_signatures: frozenset[str],
+) -> tuple[tuple[_AssistantImageSource, str | None], ...]:
+    if any(signature for _, signature in sourced_images):
+        return sourced_images
+    pool: Final = tuple(signature for signature in message_signatures if signature not in claimed_signatures)
+    return tuple(zip((source for source, _ in sourced_images), _right_aligned(pool, len(sourced_images)), strict=True))
+
+
+def _assistant_image_part(
+    source: _AssistantImageSource,
+    thought_signature: str | None,
+    model: str | None,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+) -> PartType:
+    part: Final = _process_gemini_media(
+        image_url=source.url,
+        format=source.format,
+        media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+    )
+    return part if thought_signature is None else {**part, "thoughtSignature": thought_signature}
+
+
+def _signed_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    target: _TargetModel,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> tuple[PartType, ...] | _MalformedHistory:
+    tool_call_signatures: Final = _collect_tool_call_thought_signatures(assistant_msg)
+    message_signatures: Final = _message_thought_signatures(assistant_msg, drop_params=drop_params)
+    if isinstance(message_signatures, _MalformedHistory):
+        return message_signatures
+    sourced_images: Final = _sourced_assistant_images(assistant_msg.get("images"), drop_params=drop_params)
+    if isinstance(sourced_images, _MalformedHistory):
+        return sourced_images
+    signing_images: Final = sourced_images if sourced_images and _generates_images(target) else ()
+    content: Final = assistant_msg.get("content")
+    text_signature: Final = (
+        _assistant_text_thought_signature(
+            message_signatures,
+            frozenset(signature for _, signature in signing_images if signature is not None),
+            tool_call_signatures,
+        )
+        if _has_text(content) or not signing_images
+        else None
+    )
+    signed_images: Final = (
+        _signed_assistant_images(
+            signing_images, message_signatures, tool_call_signatures | frozenset(filter(None, (text_signature,)))
+        )
+        if signing_images
+        else tuple((source, None) for source, _ in sourced_images)
+    )
+    image_parts: Final = tuple(
+        _assistant_image_part(source, signature, target.model, vertex_project, vertex_credentials)
+        for source, signature in signed_images
+    )
+    if not isinstance(content, str):
+        return image_parts
+    text_part: Final = (
+        PartType(text=content) if text_signature is None else PartType(text=content, thoughtSignature=text_signature)
+    )
+    return (text_part, *image_parts)
+
+
+def _assistant_text_and_image_parts(
+    assistant_msg: ChatCompletionAssistantMessage,
+    target: _TargetModel,
+    vertex_project: str | None,
+    vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
+    *,
+    drop_params: bool,
+) -> tuple[PartType, ...]:
+    parts: Final = _signed_text_and_image_parts(
+        assistant_msg, target, vertex_project, vertex_credentials, drop_params=drop_params
+    )
+    if isinstance(parts, _MalformedHistory):
+        raise BadRequestError(
+            message=f"Invalid assistant message: {parts.message}",
+            model=target.model,
+            llm_provider=target.custom_llm_provider or "vertex_ai",
+        )
+    return parts
+
+
 def gemini_convert_messages_with_history(
     messages: list[AllMessageValues],
     model: str | None = None,
@@ -721,6 +1038,14 @@ def gemini_convert_messages_with_history(
     if litellm_params:
         vertex_project = litellm_params.get("vertex_project") or litellm_params.get("vertex_ai_project")
         vertex_credentials = litellm_params.get("vertex_credentials") or litellm_params.get("vertex_ai_credentials")
+    video_url_part: Final = partial(
+        _process_gemini_video_url,
+        model=model,
+        vertex_project=vertex_project,
+        vertex_credentials=vertex_credentials,
+        drop_params=drop_params,
+        custom_llm_provider=custom_llm_provider or "vertex_ai",
+    )
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 
@@ -781,6 +1106,9 @@ def gemini_convert_messages_with_history(
                                 vertex_credentials=vertex_credentials,
                             )
                             _parts.append(_part)
+                        elif element["type"] == "video_url":
+                            if (video_part := video_url_part(element.get("video_url"))) is not None:
+                                _parts.append(video_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
                             audio_data = audio_element["input_audio"].get("data")
@@ -898,64 +1226,20 @@ def gemini_convert_messages_with_history(
                             if element["type"] == "text":
                                 _part = PartType(text=element["text"])
                                 _parts.append(_part)
+                            elif (video_part := _assistant_video_url_part(element, video_url_part)) is not None:
+                                _parts.append(video_part)
 
                     assistant_content.extend(_parts)
-                elif _message_content is not None and isinstance(_message_content, str):
-                    assistant_text = _message_content
-                    # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
-                    thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
 
-                    # A signature that is already carried by one of this message's
-                    # tool-call parts must not be attached to the text part too:
-                    # Gemini bills every replayed copy as the previous turn's full
-                    # reasoning token count on gemini-3 and newer models
-                    tool_call_signatures = _collect_tool_call_thought_signatures(assistant_msg)
-
-                    if (
-                        thought_signatures
-                        and isinstance(thought_signatures, list)
-                        and len(thought_signatures) > 0
-                        and thought_signatures[0] not in tool_call_signatures
-                    ):
-                        # Use the first signature for the text part (Gemini expects one signature per part)
-                        assistant_content.append(
-                            PartType(
-                                text=assistant_text,
-                                thoughtSignature=thought_signatures[0],
-                            )
-                        )
-                    else:
-                        assistant_content.append(PartType(text=assistant_text))
-
-                ## HANDLE ASSISTANT IMAGES FIELD
-                # Process images field if present (for generated images from assistant)
-                assistant_images = assistant_msg.get("images")
-                if assistant_images is not None and isinstance(assistant_images, list):
-                    for image_item in assistant_images:
-                        if isinstance(image_item, dict):
-                            image_url_obj = image_item.get("image_url")
-                            if isinstance(image_url_obj, dict):
-                                assistant_image_url = image_url_obj.get("url")
-                                format = (
-                                    image_url_obj.get("format")
-                                    or image_url_obj.get("mime_type")
-                                    or image_url_obj.get("content_type")
-                                )
-                                detail = image_url_obj.get("detail")
-                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
-                                if assistant_image_url:
-                                    _part = _process_gemini_media(
-                                        image_url=assistant_image_url,
-                                        format=format,
-                                        media_resolution_enum=media_resolution_enum,
-                                        model=model,
-                                        vertex_project=vertex_project,
-                                        vertex_credentials=vertex_credentials,
-                                    )
-                                    assistant_content.append(_part)
+                assistant_content.extend(
+                    _assistant_text_and_image_parts(
+                        assistant_msg,
+                        _TargetModel(model=model, custom_llm_provider=custom_llm_provider),
+                        vertex_project,
+                        vertex_credentials,
+                        drop_params=drop_params,
+                    )
+                )
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
@@ -1030,6 +1314,9 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    drop_params=drop_params,
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
                 )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
@@ -1082,6 +1369,80 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k].update(v)
             else:
                 data_dict[k] = v
+
+
+class _CallerToolConfig(TypedDict, total=False):
+    toolConfig: ReadOnly[JsonValue]
+    tool_config: ReadOnly[JsonValue]
+
+
+_CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
+
+
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
+    extra_body_fields: Final = as_str_mapping(extra_body)
+    if extra_body_fields is None:
+        return None
+    try:
+        caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
+    except ValidationError:
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
+
+
+_TOOL_FIELD_KEYS: Final = frozenset(
+    ("tools", "tool_choice", "include_server_side_tool_invocations", "includeServerSideToolInvocations")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolFields:
+    tools: Tools | None
+    tool_config: ToolConfig | None
+
+
+def _settled_tool_fields(optional_params: Mapping[str, object]) -> _ToolFields:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    drops_search_next_to_functions: Final = optional_params.get(
+        "includeServerSideToolInvocations"
+    ) is False or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(
+        _caller_tool_config(optional_params.get("extra_body"))
+    )
+    tools: Final = cast(Tools | None, optional_params.get("tools"))  # cast-ok: map_openai_params built these tools
+    tool_choice: Final = cast(ToolConfig | None, optional_params.get("tool_choice"))  # cast-ok: mapped params
+    flags_server_side_tools: Final = (
+        optional_params.get("include_server_side_tool_invocations") is True and not drops_search_next_to_functions
+    )
+    return _ToolFields(
+        tools=(
+            _without_search_tools_next_to_functions(tools)
+            if drops_search_next_to_functions and tools is not None
+            else tools
+        ),
+        tool_config=(
+            ToolConfig({**(tool_choice or ToolConfig()), "includeServerSideToolInvocations": True})
+            if flags_server_side_tools
+            else tool_choice
+        ),
+    )
+
+
+def _with_settled_tool_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _settled_tool_fields(optional_params)
+    rest: Final = {k: v for k, v in optional_params.items() if k not in _TOOL_FIELD_KEYS}
+    return {
+        **rest,
+        **({} if fields.tools is None else {"tools": fields.tools}),
+        **({} if fields.tool_config is None else {"tool_choice": fields.tool_config}),
+    }
 
 
 def _has_google_maps_tool(tools: object) -> bool:
@@ -1148,10 +1509,15 @@ def transform_request_body(
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
+    request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
     # Separate system prompt from rest of message
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
     system_instructions, messages = transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
+        supports_system_message=supports_system_message,
+        messages=messages,
+        drop_params=drops_unsupported_params(request_params.get("drop_params")),
+        model=model,
+        custom_llm_provider=custom_llm_provider,
     )
     # Checks for 'response_schema' support - if passed in
     if "response_schema" in optional_params:
@@ -1172,7 +1538,9 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+    tool_fields: Final = _settled_tool_fields(tool_settings)
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k not in _TOOL_FIELD_KEYS}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1183,15 +1551,11 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
         config_fields: Final = GenerationConfig.__annotations__.keys()
 
-        request_params: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
         # labels: optional explicit param and/or metadata.requester_metadata (OpenAI metadata)
         labels: Final = pop_vertex_caller_labels(optional_params, request_params)
 
@@ -1216,14 +1580,10 @@ def transform_request_body(
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
-            if tools is not None:
-                data["tools"] = tools
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
-                if "toolConfig" not in data:
-                    data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+            if tool_fields.tools is not None:
+                data["tools"] = tool_fields.tools
+            if tool_fields.tool_config is not None:
+                data["toolConfig"] = tool_fields.tool_config
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1231,14 +1591,9 @@ def transform_request_body(
         if cached_content is not None:
             data["cachedContent"] = cached_content
 
-        if service_tier := optional_params.pop("service_tier", None):
-            if isinstance(service_tier, str):
-                if service_tier.lower() == "default":
-                    data["serviceTier"] = "standard"
-                else:
-                    data["serviceTier"] = service_tier.lower()
-            else:
-                data["serviceTier"] = service_tier
+        service_tier: Final[str | None] = optional_params.pop("service_tier", None)
+        if service_tier is not None and custom_llm_provider == LlmProviders.GEMINI:
+            data["serviceTier"] = service_tier
 
         if continuation_token := optional_params.pop("continuation_token", None):
             data["continuationToken"] = continuation_token
@@ -1282,20 +1637,22 @@ def sync_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1320,11 +1677,11 @@ def _explicit_mime_type(fields: Mapping[str, object]) -> str | None:
 
 
 def _ai_studio_inlines(media: RemoteMedia) -> bool:
-    return not media.url.startswith(GEMINI_FILES_API_URI_PREFIX)
+    return not gemini_fetches_url_itself(media.url)
 
 
 def _vertex_inlines(media: RemoteMedia) -> bool:
-    if media.url.startswith(GEMINI_FILES_API_URI_PREFIX):
+    if gemini_fetches_url_itself(media.url):
         return False
     return media.url.startswith("http://") or (
         _explicit_mime_type(media.fields) is None and get_image_mime_type_from_url(media.url) is None
@@ -1356,20 +1713,22 @@ async def async_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1415,50 +1774,69 @@ def _default_user_message_when_system_message_passed() -> ChatCompletionUserMess
     return ChatCompletionUserMessage(content=".", role="user")
 
 
+def _part_text(part: object) -> str:
+    text: Final = message_field(part, "text")
+    return text if isinstance(text, str) else ""
+
+
+def _system_instruction_part(message: AllMessageValues) -> PartType | None:
+    content: Final = message_field(message, "content")
+    if isinstance(content, str):
+        return PartType(text=content)
+    text: Final = "".join(map(_part_text, parts_of(content)))
+    return PartType(text=text) if isinstance(content, list) else None
+
+
+def _has_video_url_part(message: object) -> bool:
+    parts: Final = as_object_list((as_str_mapping(message) or {}).get("content")) or ()
+    return any((as_str_mapping(part) or {}).get("type") == "video_url" for part in parts)
+
+
+def reject_system_message_videos(
+    messages: Sequence[AllMessageValues], drop_params: bool, model: str | None, custom_llm_provider: str | None
+) -> None:
+    if drop_params or not any(is_system_message(message) and _has_video_url_part(message) for message in messages):
+        return
+    raise litellm.BadRequestError(
+        message="Gemini system instructions take text only. Move the video to a user message or set drop_params=True.",
+        model=model or "",
+        llm_provider=custom_llm_provider or "gemini",
+    )
+
+
 def transform_system_message(
-    supports_system_message: bool, messages: list[AllMessageValues]
+    supports_system_message: bool,
+    messages: list[AllMessageValues],
+    drop_params: bool = False,
+    model: str | None = None,
+    custom_llm_provider: str | None = None,
 ) -> tuple[SystemInstructions | None, list[AllMessageValues]]:
     """
-    Extracts the system message from the openai message list.
+    Extracts the leading run of system messages from the openai message list as Gemini system instructions.
 
-    Converts the system message to Gemini format
+    Gemini contents only take the user and model roles, so every later system message becomes a user turn
+    in place. Hoisting it into system_instruction would change the head of the prompt every time a client
+    adds a reminder, which breaks implicit prompt caching.
 
     Returns
-    - system_content_blocks: Optional[SystemInstructions] - the system message list in Gemini format.
-    - messages: List[AllMessageValues] - filtered list of messages in OpenAI format (transformed separately)
+    - system_content_blocks: Optional[SystemInstructions] - the leading system messages in Gemini format.
+    - messages: List[AllMessageValues] - the remaining messages in OpenAI format (transformed separately)
     """
-    # Separate system prompt from rest of message
-    system_prompt_indices: Final = []
-    system_content_blocks: Final[list[PartType]] = []
-    if supports_system_message is True:
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                _system_content_block: PartType | None = None
-                if isinstance(message["content"], str):
-                    _system_content_block = PartType(text=message["content"])
-                elif isinstance(message["content"], list):
-                    system_text = ""
-                    for content in message["content"]:
-                        system_text += content.get("text") or ""
-                    _system_content_block = PartType(text=system_text)
-                if _system_content_block is not None:
-                    system_content_blocks.append(_system_content_block)
-                    system_prompt_indices.append(idx)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-
-    if len(system_content_blocks) > 0:
-        #########################################################
-        # If no messages are passed in, add a blank user message
-        # Relevant Issue - https://github.com/BerriAI/litellm/issues/13769
-        #########################################################
-        if len(messages) == 0:
-            messages.append(_default_user_message_when_system_message_passed())
-        #########################################################
-        return SystemInstructions(parts=system_content_blocks), messages
-
-    return None, messages
+    if supports_system_message is not True:
+        return None, messages
+    reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
+    leading_system_run, rest = split_leading_system_run(messages)
+    parts_by_message: Final = tuple((message, _system_instruction_part(message)) for message in leading_system_run)
+    system_content_blocks: Final = [part for _, part in parts_by_message if part is not None]
+    remaining_messages: Final = [
+        *(message for message, part in parts_by_message if part is None),
+        *place_mid_conversation_system(rest, supports_mid_conversation_system=False),
+    ]
+    if not system_content_blocks:
+        return None, remaining_messages
+    return SystemInstructions(parts=system_content_blocks), remaining_messages or [
+        _default_user_message_when_system_message_passed()
+    ]
 
 
 _transform_system_message = transform_system_message

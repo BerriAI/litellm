@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -43,7 +44,6 @@ from litellm.types.llms.anthropic import (
     AnthropicResponseContentBlockText,
     AnthropicResponseContentBlockThinking,
     AnthropicResponseContentBlockToolUse,
-    AnthropicSystemMessageContent,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -235,7 +235,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _translate_midturn_system_content_to_responses(
-        content: str | Iterable[AnthropicSystemMessageContent],
+        content: str | Iterable[object],
     ) -> list[dict[str, object]]:  # mutable-ok: API message payload
         """Convert in-sequence system content to Responses input-text parts."""
         if isinstance(content, str):
@@ -244,8 +244,10 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             return []
         return [
             with_prompt_cache_breakpoint({"type": "input_text", "text": text}, block.get("prompt_cache_breakpoint"))
-            for block in content
-            if isinstance(block, dict) and block.get("type") == "text" and (text := block.get("text"))  # pyright: ignore[reportUnnecessaryIsInstance]  # untrusted client payload
+            for raw_block in content
+            if (block := as_str_mapping(raw_block)) is not None
+            and block.get("type") == "text"
+            and (text := block.get("text"))
         ]
 
     @staticmethod
@@ -601,6 +603,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         self,
         anthropic_request: AnthropicMessagesRequest,
         include_encrypted_reasoning: bool = True,
+        *,
+        preserve_system_instructions: bool = True,
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -618,11 +622,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         )
 
         input_items: Final = self.translate_messages_to_responses_input(messages_list)
-        system: Final = anthropic_request.get("system")
+        system: Final = system_without_claude_code_billing_header(anthropic_request.get("system"))
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
-            if isinstance(system, list)
-            and any(isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system)
+            if isinstance(system, (str, list))
+            and (
+                not preserve_system_instructions
+                or (
+                    isinstance(system, list)
+                    and any(
+                        isinstance(block, dict) and block.get("prompt_cache_breakpoint") is not None for block in system
+                    )
+                )
+            )
             else ()
         )
         if developer_parts:

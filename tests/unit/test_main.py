@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import os
+import queue
 import threading
 import urllib.parse
 from collections.abc import Awaitable, Callable, Mapping
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from importlib import import_module
+from itertools import chain
 from pathlib import Path
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAI
 from openai._legacy_response import LegacyAPIResponse
 from openai.types.chat.chat_completion import ChatCompletion
 
@@ -43,11 +45,19 @@ from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kw
 from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.litellm_params import ControlOptions
 from litellm.types.llms.openai import AllMessageValues, HttpxBinaryResponseContent
 from litellm.types.prompts.init_prompts import PromptSpec
-from litellm.types.utils import Delta, ModelResponseStream, StandardCallbackDynamicParams, StreamingChoices, Usage
+from litellm.types.utils import (
+    ChoiceLogprobs,
+    Delta,
+    ModelResponseStream,
+    StandardCallbackDynamicParams,
+    StreamingChoices,
+    Usage,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -645,6 +655,208 @@ def test_drop_params_drops_the_choice_beside_a_tool_the_provider_runs(respx_mock
     assert "tool_choice" not in json.loads(route.calls[0].request.content)
 
 
+_DEEPWIKI_HOSTED_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "deepwiki",
+    "server_url": "https://mcp.deepwiki.com/mcp",
+    "require_approval": "never",
+}
+_FORCE_DEEPWIKI: Final = {"type": "mcp", "server_label": "deepwiki"}
+
+
+def test_drop_params_drops_an_mcp_tool_choice_together_with_the_hosted_mcp_tool_it_names(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx_mock.post(
+        url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*"
+    ).respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.completion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == [
+        "get_time",
+        "get_weather",
+    ]
+
+
+_CAPTURED_CHAT_REPLY: Final = {
+    "id": "chatcmpl-mcp",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "captured",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "Sunny."}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 2, "total_tokens": 11},
+}
+
+
+def _capturing_transport(requests: queue.SimpleQueue[httpx.Request]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(200, json=_CAPTURED_CHAT_REPLY)
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize(
+    "tools",
+    [
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS], id="beside-function-tools"),
+        pytest.param([_DEEPWIKI_HOSTED_MCP_TOOL], id="alone"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "route"),
+    [
+        ("openrouter/openai/gpt-6.2-sol", "openrouter"),
+        ("groq/openai/gpt-oss-120b", "groq"),
+        ("xai/grok-4.20-reasoning-gv2", "xai"),
+        ("mistral/mistral-medium-3.5", "mistral"),
+    ],
+)
+def test_drop_params_keeps_the_400_for_a_forced_hosted_mcp_server_on_a_route_that_forwards_hosted_mcp_tools(
+    model: str, route: str, tools: list[dict[str, object]]
+):
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            parallel_tool_calls=True,
+            drop_params=True,
+            api_key="fake_api_key",
+            client=HTTPHandler(client=httpx.Client(transport=_capturing_transport(requests))),
+        )
+
+    assert exc.value.status_code == 400
+    assert f"LiteLLM cannot force a hosted MCP tool on {route}." in exc.value.message
+    assert requests.empty()
+
+
+def test_drop_params_drops_a_forced_hosted_mcp_server_and_its_choice_on_bedrock_converse(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    converse: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-sonnet-5-5/converse"
+    ).respond(
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "Sunny."}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 9, "outputTokens": 2, "totalTokens": 11},
+            "metrics": {"latencyMs": 12},
+        }
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/converse/anthropic.claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        api_key="test-bedrock-token",
+        aws_region_name="us-west-2",
+    )
+
+    sent: Final = json.loads(converse.calls.last.request.content)
+    assert [tool["toolSpec"]["name"] for tool in sent["toolConfig"]["tools"]] == ["get_time", "get_weather"]
+    assert "toolChoice" not in sent["toolConfig"]
+    assert "deepwiki" not in json.dumps(sent)
+    assert response.choices[0].message.content == "Sunny."
+
+
+def test_drop_params_still_sends_a_forced_hosted_mcp_server_and_its_choice_to_openai():
+    requests: Final[queue.SimpleQueue[httpx.Request]] = queue.SimpleQueue()
+
+    litellm.completion(
+        model="openai/gpt-5.5",
+        messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+        tools=[_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+        tool_choice=_FORCE_DEEPWIKI,
+        drop_params=True,
+        client=OpenAI(api_key="fake_api_key", http_client=httpx.Client(transport=_capturing_transport(requests))),
+    )
+
+    sent: Final = json.loads(requests.get_nowait().content)
+    assert sent["tool_choice"] == _FORCE_DEEPWIKI
+    assert sent["tools"] == [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS]
+
+
+@pytest.mark.parametrize(
+    ("model", "tools", "drop_params", "cause"),
+    [
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            False,
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `deepwiki`",
+            id="drop-params-off",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            _TWO_TOOLS,
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
+            id="server-not-sent",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            [{**_DEEPWIKI_HOSTED_MCP_TOOL, "server_label": "docs"}, *_TWO_TOOLS],
+            True,
+            "This request sends no hosted MCP tool with server_label `deepwiki`.",
+            id="another-server-sent",
+        ),
+        pytest.param(
+            "anthropic/claude-haiku-5-5",
+            [_DEEPWIKI_HOSTED_MCP_TOOL, *_TWO_TOOLS],
+            True,
+            "anthropic runs hosted MCP tools itself",
+            id="provider-runs-the-server",
+        ),
+    ],
+)
+def test_an_mcp_tool_choice_stays_a_400_when_drop_params_does_not_drop_its_server(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    tools: list[dict[str, object]],
+    drop_params: bool,
+    cause: str,
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'.*only supported for") as exc:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "What is the weather in Paris right now?"}],
+            tools=tools,
+            tool_choice=_FORCE_DEEPWIKI,
+            drop_params=drop_params,
+            api_key="fake_api_key",
+        )
+
+    assert exc.value.status_code == 400
+    assert cause in exc.value.message
+    assert not respx_mock.calls
+
+
 _CLAUDE_TOOL_SEARCH_CALL: Final = {
     "id": "srvtoolu_01search",
     "type": "function",
@@ -898,6 +1110,68 @@ def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "_litellm_undeclared_sentinel" not in sent, sent
     assert sent["model"] == "text-embedding-3-small"
+
+
+def test_embedding_keeps_deployment_prompt_management_params_out_of_the_bedrock_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    mock_route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-image-v1/invoke"
+    ).mock(return_value=httpx.Response(status_code=200, json={"embedding": [0.1, 0.2], "inputTextTokenCount": 1}))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "titan-image",
+                "litellm_params": {
+                    "model": "bedrock/amazon.titan-embed-image-v1",
+                    "api_key": "fake_bedrock_api_key",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "user"}],
+                    "knowledge_bases": ["kb-1"],
+                    "vector_store_ids": [],
+                },
+            }
+        ]
+    )
+
+    response: Final = router.embedding(model="titan-image", input=["Help me !"])
+
+    assert json.loads(mock_route.calls.last.request.content) == {"inputText": "Help me !"}
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+def test_embedding_drops_root_prompt_management_params_but_keeps_explicit_extra_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    litellm.embedding(
+        model="openai/text-embedding-3-small",
+        input="hi",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        cache_control_injection_points=[{"location": "message", "role": "user"}],
+        knowledge_bases=["kb-1"],
+        vector_store_ids=["root-store"],
+        extra_body={"vector_store_ids": ["caller-store"]},
+    )
+
+    sent: Final = json.loads(mock_route.calls.last.request.content)
+    assert "cache_control_injection_points" not in sent, sent
+    assert "knowledge_bases" not in sent, sent
+    assert sent["vector_store_ids"] == ["caller-store"]
+    assert sent["input"] == "hi"
 
 
 def test_custom_provider_with_extra_headers():
@@ -1997,6 +2271,12 @@ def test_responses_api_bridge_check_azure_ai_foundry_rejected_tools_route_to_res
         pytest.param("gpt-6-astra", "https://myproject.models.ai.azure.com", None, id="serverless-host-stays-chat"),
         pytest.param("Mistral-large-2411", _FOUNDRY_API_BASE, None, id="non-gpt-5-model-stays-chat"),
         pytest.param("claude-opus-4-1", _FOUNDRY_API_BASE, None, id="claude-on-foundry-stays-chat"),
+        pytest.param(
+            "model_router/gpt-6-astra",
+            f"{_FOUNDRY_API_BASE}/api/projects/proj/openai/v1",
+            None,
+            id="model-router-on-a-project-stays-chat",
+        ),
     ],
 )
 def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_stays_chat(
@@ -5330,6 +5610,28 @@ def test_drop_params_drops_an_invalid_stream_chunk_size_instead_of_rejecting_it(
     assert stored_control_options(logging_obj.litellm_params) == ControlOptions()
 
 
+@pytest.mark.parametrize(
+    ("given", "kept"),
+    [
+        ({"stream_chunk_size": "sixty-four", "fake_stream": True}, ControlOptions(fake_stream=True)),
+        ({"stream_chunk_size": 64, "fake_stream": "maybe"}, ControlOptions(stream_chunk_size=64)),
+    ],
+)
+def test_drop_params_drops_only_the_invalid_control_option(
+    given: Mapping[str, object], kept: ControlOptions
+) -> None:
+    logging_obj: Final = _completion_logging_obj(f"drop-only-invalid-{kept}")
+    litellm.completion(
+        model="openai/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        drop_params=True,
+        mock_response="hi",
+        litellm_logging_obj=logging_obj,
+        **given,
+    )
+    assert stored_control_options(logging_obj.litellm_params) == kept
+
+
 def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_request(
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -5361,6 +5663,294 @@ def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_reque
     sent: Final = json.loads(respx_mock.calls[0].request.content)
     assert "stream_chunk_size" not in sent, sent
     assert sent["model"] == "gpt-4.1-mini"
+
+
+_ROUTES_WITHOUT_A_NATIVE_FAKE_STREAM: Final = pytest.mark.parametrize(
+    ("model", "url", "answer"),
+    [
+        (
+            "openai/gpt-5.6",
+            "https://api.openai.com/v1/chat/completions",
+            {
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+        (
+            "anthropic/claude-sonnet-5-5",
+            "https://api.anthropic.com/v1/messages",
+            {
+                "id": "msg_replayed",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        ),
+    ],
+    ids=["openai_sdk", "anthropic"],
+)
+
+
+async def _fake_streamed(model: str, asynchronous: bool) -> tuple[CustomStreamWrapper, list[ModelResponseStream]]:
+    if asynchronous:
+        streamed: Final = await litellm.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            api_key="fake-key",
+            stream=True,
+            stream_options={"include_usage": True},
+            fake_stream=True,
+        )
+        assert isinstance(streamed, CustomStreamWrapper), streamed
+        return streamed, [chunk async for chunk in streamed]
+    replayed: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        api_key="fake-key",
+        stream=True,
+        stream_options={"include_usage": True},
+        fake_stream=True,
+    )
+    assert isinstance(replayed, CustomStreamWrapper), replayed
+    return replayed, list(replayed)
+
+
+async def _fake_streamed_chunks(model: str, asynchronous: bool) -> list[ModelResponseStream]:
+    _, chunks = await _fake_streamed(model, asynchronous)
+    return chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@_ROUTES_WITHOUT_A_NATIVE_FAKE_STREAM
+async def test_a_caller_fake_stream_sends_one_plain_request_and_replays_the_answer_as_a_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    chunks: Final = await _fake_streamed_chunks(model, asynchronous)
+
+    assert route.call_count == 1
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("stream") is not True and "stream_options" not in sent and "fake_stream" not in sent, sent
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices) == "ok"
+    assert chunks[-1].usage is not None and chunks[-1].usage.total_tokens == 2, chunks[-1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_replayed_fake_stream_keeps_the_token_logprobs_of_the_plain_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    logprobs: Final = {"content": [{"token": "ok", "logprob": -0.25, "bytes": [111, 107], "top_logprobs": []}]}
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "logprobs": logprobs,
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    chunks: Final = await _fake_streamed_chunks("openai/gpt-5.6", asynchronous)
+
+    replayed: Final = [chunk.choices[0].logprobs for chunk in chunks if chunk.choices and chunk.choices[0].logprobs]
+    assert [ChoiceLogprobs.model_validate(item).model_dump(exclude_none=True) for item in replayed] == [logprobs], chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_a_replayed_fake_stream_keeps_the_provider_headers_and_served_tier_of_the_plain_answer(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, asynchronous: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers={"x-request-id": "req_replayed", "x-ratelimit-remaining-requests": "99"},
+            json={
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "service_tier": "flex",
+                "system_fingerprint": "fp_replayed",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    stream, chunks = await _fake_streamed("openai/gpt-5.6", asynchronous)
+
+    headers: Final = stream._hidden_params["additional_headers"]
+    assert headers["llm_provider-x-request-id"] == "req_replayed", headers
+    assert headers["x-ratelimit-remaining-requests"] == "99", headers
+    assert {getattr(chunk, "service_tier", None) for chunk in chunks} == {"flex"}, chunks
+    assert {chunk.system_fingerprint for chunk in chunks} == {"fp_replayed"}, chunks
+
+
+_OPENAI_TEXT_ANSWER: Final = {
+    "id": "cmpl-replayed",
+    "object": "text_completion",
+    "created": 1712697600,
+    "model": "gpt-3.5-turbo-instruct",
+    "choices": [{"text": "ok", "index": 0, "logprobs": None, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+async def _fake_streamed_text(entrypoint: str, model: str) -> str:
+    request: Final = {
+        "model": model,
+        "api_key": "fake-key",
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "fake_stream": True,
+    }
+    match entrypoint:
+        case "text_completion":
+            replayed_text: Final = litellm.text_completion(prompt="hi", **request)
+            return "".join(chunk.choices[0].text or "" for chunk in replayed_text if chunk.choices)
+        case "atext_completion":
+            streamed: Final = await litellm.atext_completion(prompt="hi", **request)
+            return "".join([chunk.choices[0].text or "" async for chunk in streamed if chunk.choices])
+        case _:
+            replayed: Final = litellm.completion(messages=[{"role": "user", "content": "hi"}], **request)
+            return "".join(chunk.choices[0].delta.content or "" for chunk in replayed if chunk.choices)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "entrypoint, model, url, answer",
+    [
+        (
+            "text_completion",
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            _OPENAI_TEXT_ANSWER,
+        ),
+        (
+            "atext_completion",
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            _OPENAI_TEXT_ANSWER,
+        ),
+        (
+            "completion",
+            "text-completion-codestral/codestral-latest",
+            "https://codestral.mistral.ai/v1/fim/completions",
+            {
+                "id": "cmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "codestral-latest",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        ),
+    ],
+    ids=["text_completion", "atext_completion", "codestral_completion"],
+)
+async def test_a_text_completion_fake_stream_replays_the_plain_answer_as_a_stream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: str,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    text: Final = await _fake_streamed_text(entrypoint, model)
+
+    assert text == "ok"
+    assert route.call_count == 1
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent.get("stream") is not True and "fake_stream" not in sent, sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, url, answer",
+    [
+        (
+            "text-completion-openai/gpt-3.5-turbo-instruct",
+            "https://api.openai.com/v1/completions",
+            {
+                **_OPENAI_TEXT_ANSWER,
+                "choices": [
+                    {"text": "first", "index": 0, "logprobs": None, "finish_reason": "stop"},
+                    {"text": "second", "index": 1, "logprobs": None, "finish_reason": "stop"},
+                ],
+            },
+        ),
+        (
+            "openai/gpt-5.6",
+            "https://api.openai.com/v1/chat/completions",
+            {
+                "id": "chatcmpl-replayed",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": "gpt-5.6",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "first"}, "finish_reason": "stop"},
+                    {"index": 1, "message": {"role": "assistant", "content": "second"}, "finish_reason": "stop"},
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+            },
+        ),
+    ],
+    ids=["text_endpoint", "chat_endpoint"],
+)
+async def test_a_fake_streamed_text_completion_keeps_every_choice(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    url: str,
+    answer: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url).mock(return_value=httpx.Response(200, json=answer))
+
+    streamed: Final = await litellm.atext_completion(
+        model=model, api_key="fake-key", prompt="hi", n=2, stream=True, fake_stream=True
+    )
+    chunks: Final = [chunk async for chunk in streamed]
+    choices: Final = tuple(chain.from_iterable(chunk.choices for chunk in chunks))
+
+    assert {index: "".join(c.text or "" for c in choices if c.index == index) for index in (0, 1)} == {
+        0: "first",
+        1: "second",
+    }
 
 
 @pytest.mark.asyncio

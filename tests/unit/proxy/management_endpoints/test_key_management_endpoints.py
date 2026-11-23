@@ -40,6 +40,7 @@ from litellm.proxy._types import (
     RegenerateKeyRequest,
     ResetSpendRequest,
     UpdateKeyRequest,
+    hash_token,
 )
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.proxy.auth.auth_checks import (
@@ -52,6 +53,7 @@ from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.management_endpoints.key_management_endpoints import (
+    _can_user_query_key_info,
     _check_key_project_team,
     _check_key_project_team_on_mutation,
     _check_org_key_limits,
@@ -106,6 +108,31 @@ from litellm.types.proxy.management_endpoints.key_management_endpoints import (
 )
 
 client = TestClient(app)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("caller_user_id", "owner_user_id", "expected"),
+    [
+        (None, None, False),
+        ("", "", False),
+        ("alice", None, False),
+        ("alice", "bob", False),
+        ("alice", "alice", True),
+    ],
+)
+async def test_key_info_access_by_owner_requires_a_real_shared_owner(
+    caller_user_id: str | None, owner_user_id: str | None, expected: bool
+) -> None:
+    auth: Final = UserAPIKeyAuth(
+        api_key="caller-key-hash", user_id=caller_user_id, user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    other_key: Final = LiteLLM_VerificationToken(token="other-key-hash", user_id=owner_user_id)
+
+    assert (
+        await _can_user_query_key_info(user_api_key_dict=auth, key=other_key.token, key_info=other_key)
+        is expected
+    ), f"caller user_id={caller_user_id!r} reading key owned by {owner_user_id!r}"
 
 
 @pytest.mark.asyncio
@@ -6710,6 +6737,30 @@ async def test_info_key_fn_archived_key_keeps_owner_authorization(monkeypatch):
         user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="owner-1", api_key="sk-own"),
     )
     assert owner_result["info"]["status"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_info_key_fn_lets_an_ownerless_key_read_itself_by_plaintext(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+
+    own_key: Final = "sk-ownerless-service-key"
+    other_key: Final = "sk-another-ownerless-key"
+    mock_prisma_client: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    caller: Final = UserAPIKeyAuth(api_key=hash_token(own_key), user_id=None, user_role=LitellmUserRoles.INTERNAL_USER)
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(own_key), user_id=None, key_alias="own-service-key")
+    )
+    own_result: Final = await info_key_fn(key=own_key, user_api_key_dict=caller)
+    assert own_result["info"]["key_alias"] == "own-service-key"
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=LiteLLM_VerificationToken(token=hash_token(other_key), user_id=None, key_alias="other-service-key")
+    )
+    with pytest.raises(ProxyException) as exc_info:
+        await info_key_fn(key=other_key, user_api_key_dict=caller)
+    assert exc_info.value.code == "403"
 
 
 @pytest.mark.asyncio

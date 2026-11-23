@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.pass_through.utils import (
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
@@ -430,8 +431,8 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -483,7 +484,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -1037,7 +1038,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """Add system message to messages list if present in request."""
         if "system" not in anthropic_message_request:
             return
-        system_content: Final = anthropic_message_request["system"]
+        system_content: Final = system_without_claude_code_billing_header(anthropic_message_request["system"])
         if not system_content:
             return
         # Handle system as string or array of content blocks
@@ -1050,8 +1051,8 @@ class LiteLLMAnthropicMessagesAdapter:
             # Convert Anthropic system content blocks to OpenAI format
             openai_system_content: Final[list[dict[str, object]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
-            for block in system_content:
-                if isinstance(block, dict) and block.get("type") == "text":
+            for block in (as_str_mapping(raw_block) for raw_block in system_content):
+                if block is not None and block.get("type") == "text":
                     text_block: dict[str, object] = {
                         "type": "text",
                         "text": block.get("text", ""),

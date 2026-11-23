@@ -729,3 +729,45 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+# Probed against Bedrock Converse in us-east-1 on 2026-11-19: each id takes toolChoice auto, any, and a named tool
+BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS: Final = (
+    "mistral.mistral-large-3-675b-instruct",
+    "mistral.ministral-3-14b-instruct",
+    "mistral.ministral-3-8b-instruct",
+    "mistral.ministral-3-3b-instruct",
+)
+WEATHER_TOOL: Final = MappingProxyType(
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+        },
+    }
+)
+
+
+@pytest.mark.parametrize("route", ("", "converse/"))
+@pytest.mark.parametrize("model", BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
+@pytest.mark.parametrize(
+    ("tool_choice", "converse_tool_choice"),
+    (
+        ("auto", {"auto": {}}),
+        ("required", {"any": {}}),
+        ({"type": "function", "function": {"name": "get_weather"}}, {"tool": {"name": "get_weather"}}),
+    ),
+)
+def test_bedrock_converse_mistral_rows_send_tool_choice_to_bedrock(
+    local_model_cost_map: None,
+    route: str,
+    model: str,
+    tool_choice: str | dict[str, JsonValue],
+    converse_tool_choice: dict[str, JsonValue],
+) -> None:
+    optional_params: Final = litellm.get_optional_params(
+        model=f"{route}{model}", custom_llm_provider="bedrock", tools=[dict(WEATHER_TOOL)], tool_choice=tool_choice
+    )
+
+    assert optional_params["tool_choice"] == converse_tool_choice
