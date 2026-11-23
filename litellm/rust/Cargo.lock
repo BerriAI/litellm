@@ -4249,7 +4249,6 @@ dependencies = [
  "litellm-inference",
  "litellm-inference-messages",
  "litellm-license",
- "litellm-llms",
  "litellm-llms-types",
  "litellm-model-catalog",
  "litellm-python-compat",
@@ -4359,6 +4358,7 @@ dependencies = [
 name = "litellm-gateway-inference"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "bytes",
  "futures-util",
@@ -4384,6 +4384,7 @@ dependencies = [
  "litellm-inference-ocr",
  "litellm-llms",
  "litellm-llms-types",
+ "litellm-model-catalog",
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",

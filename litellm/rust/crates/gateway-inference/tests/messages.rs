@@ -324,18 +324,21 @@ async fn upstream_body(deployment: Value, client: Value) -> Value {
         .respond_with(message_response())
         .mount(&upstream)
         .await;
-    let app = support::app_with_shaping(
+    let (app, gateway) = support::app_and_gateway(
         "anthropic/test-model",
         &upstream.uri(),
         deployment_params(deployment),
-        json!({"capabilities": {
-            "supports_reasoning": true,
-            "supports_adaptive_thinking": true,
-            "supports_output_config": true,
-            "supports_speed": true,
-            "effort_tiers": {"low": true, "medium": true, "high": true},
-        }}),
     );
+    gateway.install(support::cost_map(json!({"test-model": {
+        "litellm_provider": "anthropic",
+        "supports_reasoning": true,
+        "supports_adaptive_thinking": true,
+        "supports_output_config": true,
+        "supports_speed": true,
+        "supports_low_reasoning_effort": true,
+        "supports_medium_reasoning_effort": true,
+        "supports_high_reasoning_effort": true,
+    }})));
     let response = support::post(
         app,
         "/v1/messages",
@@ -346,6 +349,42 @@ async fn upstream_body(deployment: Value, client: Value) -> Value {
     upstream.received_requests().await.unwrap()[0]
         .body_json()
         .unwrap()
+}
+
+#[tokio::test]
+async fn a_cost_map_installed_after_boot_shapes_the_next_call() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(message_response())
+        .mount(&upstream)
+        .await;
+    let (app, gateway) = support::app_and_gateway(
+        "anthropic/test-model",
+        &upstream.uri(),
+        deployment_params(json!({"drop_params": true})),
+    );
+    let request = || messages_request("public/model", json!({"max_tokens": 16, "speed": "fast"}));
+
+    let before = support::post(app.clone(), "/v1/messages", request()).await;
+    gateway.install(support::cost_map(json!({"test-model": {
+        "litellm_provider": "anthropic",
+        "supports_speed": true,
+    }})));
+    let after = support::post(app, "/v1/messages", request()).await;
+
+    assert_eq!(
+        (before.status().as_u16(), after.status().as_u16()),
+        (200, 200)
+    );
+    let sent: Vec<Value> = upstream
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| request.body_json::<Value>().unwrap()["speed"].clone())
+        .collect();
+    assert_eq!(sent, [Value::Null, json!("fast")]);
 }
 
 fn message_response() -> ResponseTemplate {
@@ -450,11 +489,10 @@ async fn sampling_params_reach_a_third_party_anthropic_api_under_an_api_version_
         .expect(1)
         .mount(&upstream)
         .await;
-    let app = support::app_with_shaping(
+    let app = support::app_with_litellm_params(
         "anthropic/test-model",
         &format!("{}/anthropic", upstream.uri()),
-        deployment_params(json!({})),
-        json!({"drop_params": drop_params}),
+        deployment_params(json!({"drop_params": drop_params})),
     );
 
     let response = app
@@ -465,21 +503,30 @@ async fn sampling_params_reach_a_third_party_anthropic_api_under_an_api_version_
     assert_eq!(response.status(), 200, "{}", support::json(response).await);
 }
 
-/// What the provider is sent for `client` params under the deployment `shaping`, or the status
-/// the gateway answers with when it sends nothing.
-async fn sent_under(shaping: Value, client: Value) -> Result<Value, u16> {
+/// What the provider is sent for `client` params to a deployment called with `litellm_params`,
+/// under the `litellm_settings` read as `settings` and the cost map `rows` when given, or the
+/// status the gateway answers with when it sends nothing.
+async fn sent_under(
+    litellm_params: Value,
+    settings: Value,
+    rows: Option<Value>,
+    client: Value,
+) -> Result<Value, u16> {
     let upstream = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(message_response())
         .mount(&upstream)
         .await;
-    let app = support::app_with_shaping(
+    let (app, gateway) = support::app_with_settings(
         "anthropic/test-model",
         &upstream.uri(),
-        deployment_params(json!({})),
-        shaping,
+        deployment_params(litellm_params),
+        settings,
     );
+    if let Some(rows) = rows {
+        gateway.install(support::cost_map(rows));
+    }
 
     let response = support::post(
         app,
@@ -499,26 +546,31 @@ async fn sent_under(shaping: Value, client: Value) -> Result<Value, u16> {
 /// `litellm_settings.drop_params` keeps dropping on whatever the request says. The key never
 /// reaches the provider.
 #[rstest]
-#[case::the_request_turning_it_on(json!({}), json!(true), Ok(()))]
-#[case::a_flag_word(json!({}), json!("yes"), Ok(()))]
+#[case::the_request_turning_it_on(json!({}), json!({}), json!(true), Ok(()))]
+#[case::a_flag_word(json!({}), json!({}), json!("yes"), Ok(()))]
 #[case::the_request_turning_the_deployments_off(
-    json!({"drop_params": true, "drops_unsupported_params": true}),
+    json!({"drop_params": true}),
+    json!({}),
     json!(false),
     Err(400)
 )]
 #[case::the_config_over_the_request(
-    json!({"drop_params": true, "drops_unsupported_params": true, "global_drop_params": true}),
+    json!({}),
+    json!({"global_drop_params": true}),
     json!(false),
     Ok(())
 )]
 #[tokio::test]
 async fn a_requests_drop_params_decides_whether_its_unsupported_params_are_dropped(
-    #[case] shaping: Value,
+    #[case] litellm_params: Value,
+    #[case] settings: Value,
     #[case] requested: Value,
     #[case] expected: Result<(), u16>,
 ) {
     let sent = sent_under(
-        shaping,
+        litellm_params,
+        settings,
+        None,
         json!({"max_tokens": 16, "speed": "fast", "drop_params": requested}),
     )
     .await;
@@ -553,6 +605,8 @@ async fn a_requests_additional_drop_params_replace_the_deployments(
 
     let sent = sent_under(
         json!({"additional_drop_params": ["temperature"]}),
+        json!({}),
+        None,
         Value::Object(client),
     )
     .await;
@@ -566,7 +620,9 @@ async fn reasoning_auto_summary_asks_for_summarized_thinking(#[values(false, tru
     let thinking = json!({"type": "enabled", "budget_tokens": 1024});
 
     let sent = sent_under(
-        json!({"reasoning_auto_summary": on, "capabilities": {"supports_reasoning": true}}),
+        json!({}),
+        json!({"reasoning_auto_summary": on}),
+        Some(json!({"test-model": {"litellm_provider": "anthropic", "supports_reasoning": true}})),
         json!({"max_tokens": 2048, "thinking": thinking}),
     )
     .await
@@ -605,7 +661,7 @@ async fn reasoning_auto_summary_asks_for_summarized_thinking(#[values(false, tru
 #[tokio::test]
 async fn a_call_waits_for_the_first_timeout_python_reads(
     #[case] litellm_params: Value,
-    #[case] shaping: Value,
+    #[case] settings: Value,
     #[case] answered: bool,
 ) {
     let delay = Duration::from_secs(1);
@@ -614,11 +670,11 @@ async fn a_call_waits_for_the_first_timeout_python_reads(
         .respond_with(message_response().set_delay(delay))
         .mount(&upstream)
         .await;
-    let app = support::app_with_shaping(
+    let (app, _) = support::app_with_settings(
         "anthropic/test-model",
         &upstream.uri(),
         deployment_params(litellm_params),
-        shaping,
+        settings,
     );
     let started = Instant::now();
 

@@ -27,14 +27,16 @@ mod stream_outcome;
 mod test_support;
 mod worker_outcomes;
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
+use arc_swap::ArcSwap;
 use axum::{Router, routing::post};
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_inference::resources::CoreResources;
-use litellm_inference_messages::{MessagesRoute, MessagesShaping};
+use litellm_inference_messages::{MessagesRoute, MessagesSettings};
 use litellm_inference_ocr::OcrRoute;
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
+use litellm_model_catalog::CostMap;
 use litellm_secrets::source::SecretSource;
 
 pub use asked::call_type;
@@ -53,8 +55,10 @@ pub struct Gateway<H> {
     host: H,
     cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     routing: Arc<RoutingCache>,
-    /// How the messages route shapes a call to each deployment, by deployment id.
-    shaping: HashMap<String, MessagesShaping>,
+    /// The cost map every request reads. It starts as the bundled one.
+    cost_map: ArcSwap<CostMap>,
+    /// What `litellm_settings` sets for a messages call to any deployment.
+    messages_settings: MessagesSettings,
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub router: litellm_router_core::Router,
@@ -92,9 +96,14 @@ impl<H: Host> Gateway<H> {
         &self.host
     }
 
-    /// How the messages route shapes a call to deployment `id`.
-    pub(crate) fn shaping(&self, id: &str) -> MessagesShaping {
-        self.shaping.get(id).cloned().unwrap_or_default()
+    /// The cost map a request reads, which stays the same one for as long as the request holds it.
+    pub fn cost_map(&self) -> Arc<CostMap> {
+        self.cost_map.load_full()
+    }
+
+    /// Has every request from now on read `cost_map`.
+    pub fn install(&self, cost_map: CostMap) {
+        self.cost_map.store(Arc::new(cost_map));
     }
 
     pub fn new(
@@ -102,7 +111,7 @@ impl<H: Host> Gateway<H> {
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
         router: litellm_router_core::Router,
-        shaping: HashMap<String, MessagesShaping>,
+        messages_settings: MessagesSettings,
         routing: impl Into<Arc<RoutingCache>>,
         host: H,
     ) -> Result<Self, litellm_http::Error> {
@@ -112,7 +121,8 @@ impl<H: Host> Gateway<H> {
             host,
             cache: None,
             routing: routing.into(),
-            shaping,
+            cost_map: ArcSwap::from_pointee(CostMap::bundled()),
+            messages_settings,
             messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
