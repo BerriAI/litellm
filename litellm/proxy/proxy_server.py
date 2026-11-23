@@ -2070,7 +2070,6 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
         ## SYNC UI SETTINGS ##
         await ProxyStartupEvent.sync_ui_settings_to_general_settings()
 
-        ## MCP EVENT WEBHOOK DELIVERY (no-op unless mcp_events_enabled) ##
         from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
 
         start_delivery_worker()
@@ -2182,6 +2181,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
+            from litellm.proxy.mcp_server.events.webhooks.worker import stop_delivery_worker
+
+            await stop_delivery_worker()
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:

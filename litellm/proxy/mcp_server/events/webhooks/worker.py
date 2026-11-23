@@ -77,10 +77,17 @@ class DeliveryWorker:
         self._clock = clock
         self._lookup = lookup
 
-    async def run_forever(self) -> None:
+    @classmethod
+    async def run_forever(
+        cls, settings: Callable[[], EventsSettings], store_for_batch: Callable[[], EventStore | None] = default_store
+    ) -> None:
         next_housekeeping = 0.0  # rebind-ok: monotonic deadline of the next expiry sweep
         while True:
-            next_housekeeping = await self._tick(next_housekeeping)
+            store: Final = store_for_batch()
+            if store is None:
+                await asyncio.sleep(_IDLE_SECONDS)
+            else:
+                next_housekeeping = await cls(store, settings)._tick(next_housekeeping)
 
     async def _tick(self, next_housekeeping: float) -> float:
         """One delivery batch, a sweep when due, and an idle pause when nothing was due; returns the next sweep time."""
@@ -268,13 +275,22 @@ class _WorkerHandle:
     def __init__(self) -> None:
         self.task: asyncio.Task[None] | None = None
 
-    def start(self, settings: Callable[[], EventsSettings] = events_settings) -> None:
+    def start(
+        self,
+        settings: Callable[[], EventsSettings] = events_settings,
+        store_for_batch: Callable[[], EventStore | None] = default_store,
+    ) -> None:
         if (self.task is not None and not self.task.done()) or not settings().enabled:
             return
-        store: Final = default_store()
-        if store is None:
-            return
-        self.task = asyncio.get_running_loop().create_task(DeliveryWorker(store, settings).run_forever())
+        self.task = asyncio.get_running_loop().create_task(DeliveryWorker.run_forever(settings, store_for_batch))
+
+    async def stop(self) -> None:
+        task: Final = self.task
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            if self.task is task:
+                self.task = None
 
 
 _handle: Final = _WorkerHandle()
@@ -282,3 +298,7 @@ _handle: Final = _WorkerHandle()
 
 def start_delivery_worker() -> None:
     _handle.start()
+
+
+async def stop_delivery_worker() -> None:
+    await _handle.stop()

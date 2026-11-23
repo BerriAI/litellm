@@ -619,7 +619,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.events.config import events_settings
     from litellm.proxy.mcp_server.events.handlers import events_gate, gated_events_method, register_event_handlers
     from litellm.proxy.mcp_server.events.webhooks.receiver import receive_webhook
-    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker
+    from litellm.proxy.mcp_server.events.webhooks.worker import start_delivery_worker, stop_delivery_worker
     from litellm.proxy.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -914,6 +914,7 @@ if MCP_AVAILABLE:
             _session_manager_stateful_cm, \
             _stateful_auth_context_cleanup_task
 
+        await stop_delivery_worker()
         if _SESSION_MANAGERS_INITIALIZED:
             verbose_logger.info("Shutting down MCP session managers...")
 
