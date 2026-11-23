@@ -252,6 +252,19 @@ def test_a_sealed_gap_cursor_falls_back_to_the_last_known_watermark() -> None:
 
 
 @pytest.mark.asyncio
+async def test_oversized_event_sends_one_gap_with_the_last_safe_cursor() -> None:
+    store: Final = _store()
+    client: Final = _Client(413, 413)
+    worker: Final = _worker(store, client)
+    for _ in range(2):
+        (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
+        await worker.process(delivery)
+    event, gap_notice = client.bodies()
+    assert gap_notice == {"type": "gap", "cursor": event["cursor"]}
+    assert not store.queue and store.rows[ROW.id].consecutive_failures == 0
+
+
+@pytest.mark.asyncio
 async def test_the_last_scheduled_retry_is_delayed_eight_minutes() -> None:
     store: Final = _store(attempt=2)
     (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
