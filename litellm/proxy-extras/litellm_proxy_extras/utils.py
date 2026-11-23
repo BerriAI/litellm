@@ -1077,6 +1077,7 @@ class ProxyExtrasDBManager:
                     stdout=None,
                     stderr=None,
                 )
+                ProxyExtrasDBManager.apply_event_scope_trigger()
                 return True
             except (
                 subprocess.CalledProcessError,
@@ -1391,6 +1392,16 @@ class ProxyExtrasDBManager:
                 f"intervention may be required.\n\n"
                 f"Detail: {resolve_err}"
             ) from resolve_err
+
+    @staticmethod
+    def apply_event_scope_trigger() -> None:
+        """Prisma db push only installs the columns. Legacy writers also need the scope trigger."""
+        migration: Final = Path(__file__).parent / "migrations" / "20261122000000_mcp_event_scope" / "migration.sql"
+        prisma_toolchain.run_prisma(
+            [_get_prisma_command(), "db", "execute", "--schema", "schema.prisma", "--file", str(migration)],
+            timeout=prisma_command_timeout(),
+            env=_get_prisma_env(),
+        )
 
     @staticmethod
     def apply_replica_identity_full_if_requested() -> bool:
@@ -1752,6 +1763,7 @@ class ProxyExtrasDBManager:
                         stderr=None,
                         env=_get_prisma_env(),
                     )
+                    ProxyExtrasDBManager.apply_event_scope_trigger()
                     return True
             except subprocess.TimeoutExpired:
                 logger.error(
