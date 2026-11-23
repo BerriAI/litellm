@@ -133,7 +133,9 @@ def _transcription_model_overrides(session: Mapping[str, object], model_name: st
 def with_resolved_session_model(session: Mapping[str, object], model_name: str) -> dict[str, object]:
     top_level_model: Final = {} if "model" not in session else {"model": model_name}
     transcription_models: Final = (
-        _transcription_model_overrides(session, model_name) if session.get("type") == "transcription" else {}
+        _transcription_model_overrides(session, model_name)
+        if session.get("type") == "transcription"
+        else _EMPTY_MODEL_PARAMS
     )
     return {**session, **top_level_model, **transcription_models}
 
