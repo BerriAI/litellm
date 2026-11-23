@@ -273,6 +273,13 @@ def get_supported_openai_params(
             )
 
             return ScalewayAudioTranscriptionConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "saidwire":
+        if request_type == "transcription":
+            from litellm.llms.saidwire.audio_transcription.transformation import (
+                SaidwireAudioTranscriptionConfig,
+            )
+
+            return SaidwireAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "elevenlabs":
         if request_type == "transcription":
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
