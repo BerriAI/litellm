@@ -54,7 +54,7 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         complete_url: Final = self._add_api_version_to_url(url=url, api_version=(params.get("api_version", None)))
         return complete_url
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -142,8 +142,8 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         """
         Transform request to IBM watsonx.ai rerank format
@@ -163,9 +163,9 @@ class IBMWatsonXRerankConfig(IBMWatsonXMixin, BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        request_data: Mapping[str, object] = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Transform IBM watsonx.ai rerank response to LiteLLM RerankResponse format
