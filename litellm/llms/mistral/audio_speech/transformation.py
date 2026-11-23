@@ -57,7 +57,9 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         }
     )
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a plain list
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: base class contract returns a plain list
         return ["voice", "response_format"]
 
     def _map_openai_voice(self, voice_id: str) -> str:
