@@ -1,7 +1,8 @@
 import copy
 import json
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -10146,6 +10147,8 @@ _MALFORMED_THINKING_BLOCKS: Final = (
     pytest.param("abc", "messages[1].thinking_blocks", "a list", "str", id="string"),
     pytest.param(_REPLAYED_THINKING, "messages[1].thinking_blocks", "a list", "dict", id="unwrapped_block"),
     pytest.param(0, "messages[1].thinking_blocks", "a list", "int", id="zero"),
+    pytest.param(b"abc", "messages[1].thinking_blocks", "a list", "bytes", id="bytes"),
+    pytest.param(bytearray(b"abc"), "messages[1].thinking_blocks", "a list", "bytearray", id="bytearray"),
     pytest.param(["abc"], "messages[1].thinking_blocks[0]", "an object", "str", id="string_block"),
     pytest.param(
         [_REPLAYED_THINKING, 5], "messages[1].thinking_blocks[1]", "an object", "int", id="number_after_a_block"
@@ -10236,6 +10239,46 @@ def test_chat_transform_request_replays_every_well_formed_thinking_block(local_m
     assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
 
 
+@dataclass(frozen=True)
+class _ArrayLikeBlocks:
+    blocks: tuple[object, ...]
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(self.blocks)
+
+    def __len__(self) -> int:
+        return len(self.blocks)
+
+    def __bool__(self) -> bool:
+        raise ValueError("The truth value of an array is ambiguous")
+
+
+@dataclass(frozen=True)
+class _IndexOnlyBlocks:
+    blocks: tuple[object, ...]
+
+    def __getitem__(self, position: int) -> object:
+        return self.blocks[position]
+
+    def __len__(self) -> int:
+        return len(self.blocks)
+
+
+@dataclass(frozen=True)
+class _OneShotBlocks:
+    blocks: Iterator[object]
+    size: int
+
+    def __iter__(self) -> Iterator[object]:
+        return self.blocks
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __contains__(self, item: object) -> bool:
+        return False
+
+
 @pytest.mark.parametrize("drop_params", [False, True])
 @pytest.mark.parametrize(
     "make_blocks",
@@ -10243,6 +10286,9 @@ def test_chat_transform_request_replays_every_well_formed_thinking_block(local_m
         pytest.param(lambda: {"a": _REPLAYED_THINKING, "b": _SECOND_REPLAYED_THINKING}.values(), id="dict_values"),
         pytest.param(lambda: iter([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="iterator"),
         pytest.param(lambda: (block for block in (_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="generator"),
+        pytest.param(lambda: _ArrayLikeBlocks((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="array_like"),
+        pytest.param(lambda: _IndexOnlyBlocks((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="index_only"),
+        pytest.param(lambda: _OneShotBlocks(iter((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), 2), id="one_shot"),
     ],
 )
 def test_chat_transform_request_replays_thinking_blocks_from_any_iterable(
@@ -10281,11 +10327,89 @@ def test_chat_transform_request_treats_no_thinking_blocks_as_absent(local_model_
     )
 
 
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param(["abc"], id="string_block"),
+        pytest.param([_REPLAYED_THINKING, "abc"], id="string_after_the_inline_block"),
+    ],
+)
+def test_chat_transform_request_keeps_a_turn_whose_inline_thinking_replaces_malformed_blocks(
+    local_model_cost_map, thinking_blocks: object, drop_params: bool
+):
+    def converted(turn: dict[str, object]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=[{"role": "user", "content": "Hi"}, turn, {"role": "user", "content": "Go on"}],
+            optional_params={},
+            litellm_params={"drop_params": drop_params},
+            headers={},
+        )["messages"]
+
+    inline: Final = {
+        "role": "assistant",
+        "content": [_REPLAYED_THINKING, {"type": "text", "text": "Hello"}],
+    }
+
+    assert converted({**inline, "thinking_blocks": thinking_blocks}) == converted(inline)
+
+
 def test_chat_transform_request_names_a_malformed_thinking_blocks_past_the_first_assistant_turn(local_model_cost_map):
     with pytest.raises(AnthropicError) as raised:
         _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _two_replayed_turns([_REPLAYED_THINKING], "abc"))
 
     assert raised.value.message == "Invalid type for 'messages[3].thinking_blocks': expected a list, got str"
+
+
+@pytest.mark.parametrize(
+    "earlier_turns",
+    [
+        pytest.param([{"role": "user", "content": "Hi", "thinking_blocks": "abc"}], id="user_turn_with_a_string"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "thinking_blocks": ""},
+                {"role": "user", "content": "Next"},
+            ],
+            id="assistant_turn_with_an_empty_string",
+        ),
+    ],
+)
+def test_chat_transform_request_names_the_assistant_turn_that_broke_translation(
+    local_model_cost_map, earlier_turns: list[dict[str, object]]
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                *earlier_turns,
+                {"role": "assistant", "content": "Answer", "thinking_blocks": "abc"},
+                {"role": "user", "content": "Go on"},
+            ],
+        )
+
+    assert raised.value.message == (
+        f"Invalid type for 'messages[{len(earlier_turns)}].thinking_blocks': expected a list, got str"
+    )
+
+
+def test_chat_transform_request_keeps_the_generic_400_when_thinking_blocks_are_not_the_cause(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+        )
+
+    assert raised.value.status_code == 400
+    assert "thinking_blocks" not in raised.value.message
 
 
 def test_chat_transform_request_leaves_the_callers_messages_alone_when_dropping_thinking_blocks(local_model_cost_map):
