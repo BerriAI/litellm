@@ -4491,6 +4491,52 @@ async def test_streaming_unassemblable_stream_is_forwarded_when_fail_on_error_is
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(b'"content":[]', b'"content":[{"type":"text","text":"hi"}]'),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":1,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"hi"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="unfinished-server-tool-input",
+        ),
+    ],
+)
+async def test_streaming_hook_failing_open_still_blocks_what_it_can_read(chunks: tuple[bytes, ...]):
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        fail_on_error=False,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
 async def test_streaming_fail_closed_records_the_applied_guardrail():
     """A refusal that no header or log attributes to the guardrail leaves on-call unable to tell
     a guardrail block apart from a provider failure."""

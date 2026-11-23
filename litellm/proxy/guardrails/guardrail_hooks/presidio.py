@@ -571,7 +571,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_score_thresholds: dict[PiiEntityType | str, float] | None = None,
         presidio_entities_deny_list: list[PiiEntityType | str] | None = None,
         presidio_analyze_chunk_size_bytes: int | None = None,
-        mask_tool_calls: bool = True,
+        mask_tool_calls: bool = False,
         _callback_role: Literal["scan", "restore"] | None = None,
         **kwargs,
     ):

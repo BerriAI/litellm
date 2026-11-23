@@ -32,6 +32,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
 from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     OPTIONAL_PresidioPIIMasking,
     PresidioPerRequestConfig,
@@ -2722,6 +2723,7 @@ async def _guardrail_over_regex_presidio(
             presidio_analyzer_api_base=str(server.make_url("/")),
             presidio_anonymizer_api_base=str(server.make_url("/")),
             pii_entities_config={entity_type: action},
+            mask_tool_calls=True,
         )
         try:
             yield guardrail
@@ -6924,3 +6926,43 @@ async def test_apply_guardrail_records_its_verdict_on_a_request_dict_that_starts
 
     recorded: Final = request_data["metadata"]["standard_logging_guardrail_information"]
     assert [record["guardrail_name"] for record in recorded] == ["presidio-pii"]
+
+
+@pytest.mark.asyncio
+async def test_the_presidio_callback_masks_reply_text_and_leaves_tool_calls_as_the_model_wrote_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "call", "arguments": json.dumps({"to": _PHONE})},
+    }
+
+    async with TestServer(_regex_presidio_app(PiiEntityType.PHONE_NUMBER, _PHONE_PATTERN)) as server:
+        presidio_base: Final = str(server.make_url("/"))
+        initialize_callbacks_on_proxy(
+            value=["presidio"],
+            premium_user=False,
+            config_file_path="config.yaml",
+            litellm_settings={},
+            callback_specific_params={
+                "presidio": {
+                    "presidio_analyzer_api_base": presidio_base,
+                    "presidio_anonymizer_api_base": presidio_base,
+                }
+            },
+        )
+        (guardrail,) = litellm.callbacks
+        assert isinstance(guardrail, OPTIONAL_PresidioPIIMasking)
+        try:
+            result: Final = await guardrail.apply_guardrail(
+                inputs={"texts": [f"Call {_PHONE}"], "tool_calls": [tool_call]},
+                request_data={},
+                input_type="response",
+            )
+        finally:
+            await guardrail._close_http_session()
+
+    assert result["texts"] == ["Call <PHONE_NUMBER>"]
+    assert [call["function"]["arguments"] for call in result["tool_calls"]] == [json.dumps({"to": _PHONE})]

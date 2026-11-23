@@ -1175,13 +1175,16 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
     ) -> ModelResponse | TextCompletionResponse | ResponsesAPIResponse | None:
         """Assemble the buffered stream into the scannable response its surface produces.
 
-        A ``/v1/messages`` stream some client reads differently from assembly cannot be scanned, since
-        that client could read text the scan never saw.
+        A ``/v1/messages`` stream some client reads differently from assembly cannot be scanned in full,
+        since that client could read text the scan never saw. Failing open still scans what it can.
         """
         if surface is _StreamSurface.ANTHROPIC_MESSAGES:
+            scans_every_text: Final = anthropic_sse_reads_alike(
+                all_chunks
+            ) and anthropic_sse_assembles_every_tool_input(all_chunks)
             return (
                 assemble_anthropic_sse_stream(all_chunks, restore_identity=True)
-                if anthropic_sse_reads_alike(all_chunks) and anthropic_sse_assembles_every_tool_input(all_chunks)
+                if scans_every_text or not self.optional_params.get("fail_on_error", True)
                 else None
             )
         if surface is _StreamSurface.RESPONSES:
