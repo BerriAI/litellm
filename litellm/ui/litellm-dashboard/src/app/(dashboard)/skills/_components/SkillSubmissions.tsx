@@ -18,6 +18,7 @@ import { useUrlTableState, type UrlTableStateOptions } from "@/components/shared
 import SkillScanPanel from "./SkillScanPanel";
 import { toast } from "@/lib/toast";
 import AddPluginForm from "./add_plugin_form";
+import { useUserIdentityLookup, userIdentityLabel } from "@/app/(dashboard)/hooks/users/useUsers";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -28,7 +29,18 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-const METADATA_FIELDS = ["name", "version", "description", "source", "keywords", "domain", "namespace"] as const;
+const METADATA_FIELDS = [
+  "name",
+  "version",
+  "description",
+  "source",
+  "author",
+  "category",
+  "homepage",
+  "keywords",
+  "domain",
+  "namespace",
+] as const;
 
 const displayValue = (value: unknown): string => {
   if (value === null || value === undefined || value === "") return "";
@@ -60,15 +72,23 @@ function SubmissionStatus({ status }: { status: SkillSubmission["status"] }) {
   );
 }
 
-function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
+function SubmissionSummary({
+  submission,
+  scope,
+}: {
+  submission: SkillSubmission;
+  scope: Pick<SubmissionReviewProps, "accessToken" | "userRole" | "isViewOnly">;
+}) {
   const { t } = useTranslation();
+  const users = useUserIdentityLookup([submission.submitted_by, submission.reviewed_by], scope);
+  const reviewed = submission.status === "approved" || submission.status === "rejected";
   return (
     <>
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <SubmissionStatus status={submission.status} />
         <span>{t(`skills.submissions.operation.${submission.operation}`)}</span>
-        <span className="text-muted-foreground">
-          {t("skills.submissions.submittedBy", { name: submission.submitted_by })}
+        <span className="text-muted-foreground" title={submission.submitted_by}>
+          {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })}
         </span>
       </div>
       {submission.status === "pending_review" && (
@@ -79,10 +99,10 @@ function SubmissionSummary({ submission }: { submission: SkillSubmission }) {
           {t("skills.submissions.rejectionReason", { reason: submission.rejection_reason })}
         </p>
       )}
-      {submission.reviewed_at && (
-        <p className="text-sm text-muted-foreground">
-          {t("skills.submissions.reviewedBy", {
-            name: submission.reviewed_by,
+      {submission.reviewed_at && reviewed && (
+        <p className="text-sm text-muted-foreground" title={submission.reviewed_by ?? undefined}>
+          {t(submission.status === "approved" ? "skills.submissions.approvedBy" : "skills.submissions.rejectedBy", {
+            name: userIdentityLabel(submission.reviewed_by, users),
             date: new Date(submission.reviewed_at).toLocaleString(),
           })}
         </p>
@@ -145,7 +165,7 @@ function SubmissionComparison({
           </tbody>
         </table>
       </div>
-      {submission.has_archive && submission.proposal.agent_skill && (
+      {submission.has_archive && (
         <Button variant="outline" onClick={onDownload} disabled={downloading}>
           {t(downloading ? "skills.submissions.downloading" : "skills.submissions.download")}
         </Button>
@@ -155,6 +175,8 @@ function SubmissionComparison({
 }
 
 interface SubmissionReviewProps {
+  userRole: string;
+  isViewOnly: boolean;
   id: string;
   accessToken: string;
   queryScope: QueryKey;
@@ -165,6 +187,8 @@ interface SubmissionReviewProps {
 }
 
 function SubmissionReview({
+  userRole,
+  isViewOnly,
   id,
   accessToken,
   queryScope,
@@ -257,7 +281,7 @@ function SubmissionReview({
           )}
           {submission && (
             <>
-              <SubmissionSummary submission={submission} />
+              <SubmissionSummary submission={submission} scope={{ accessToken, userRole, isViewOnly }} />
               <SubmissionComparison
                 submission={submission}
                 current={current}
@@ -349,6 +373,8 @@ function SubmissionReview({
 }
 
 interface SkillSubmissionsProps {
+  userRole: string;
+  isViewOnly: boolean;
   accessToken: string;
   queryScope: QueryKey;
   canReview: boolean;
@@ -358,6 +384,8 @@ interface SkillSubmissionsProps {
 }
 
 export default function SkillSubmissions({
+  userRole,
+  isViewOnly,
   accessToken,
   queryScope,
   canReview,
@@ -373,6 +401,10 @@ export default function SkillSubmissions({
     queryKey: [...queryScope, "submissions", pageIndex, pageSize],
     queryFn: () => listSkillSubmissions(accessToken, { limit: pageSize, offset: pageIndex * pageSize }),
   });
+  const users = useUserIdentityLookup(
+    submissions.data?.submissions.flatMap((submission) => [submission.submitted_by, submission.reviewed_by]) ?? [],
+    { accessToken, userRole, isViewOnly },
+  );
   const isEmpty = submissions.isSuccess && submissions.data.submissions.length === 0;
   const changePage = (page: number) => {
     setSelectedId(null);
@@ -409,8 +441,8 @@ export default function SkillSubmissions({
                 </span>
               </div>
               <p className="text-sm text-muted-foreground">{submission.proposal.description}</p>
-              <p className="text-xs text-muted-foreground">
-                {t("skills.submissions.submittedBy", { name: submission.submitted_by })} ·{" "}
+              <p className="text-xs text-muted-foreground" title={submission.submitted_by}>
+                {t("skills.submissions.submittedBy", { name: userIdentityLabel(submission.submitted_by, users) })} ·{" "}
                 {new Date(submission.created_at).toLocaleString()}
               </p>
               {submission.rejection_reason && (
@@ -448,6 +480,8 @@ export default function SkillSubmissions({
       </div>
       {selectedId && (
         <SubmissionReview
+          userRole={userRole}
+          isViewOnly={isViewOnly}
           key={selectedId}
           id={selectedId}
           accessToken={accessToken}

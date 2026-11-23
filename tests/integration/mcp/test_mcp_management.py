@@ -325,6 +325,31 @@ def test_peer_worker_observes_create_edit_and_delete_without_restart(gateway: Ga
         assert tool_calls(second.drain()) == ()
 
 
+def test_registry_json_publishes_saved_description_and_server_name(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "registry.yaml"
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [],
+                "general_settings": {"master_key": gateway.key, "store_model_in_db": True, "enable_mcp_registry": True},
+            }
+        )
+    )
+    with (
+        owned_proxy(gateway, tmp_path, {}, config=config, database_setup=()) as registry_proxy,
+        mcp_peer() as peer,
+        registry_proxy.scenario() as scenario,
+    ):
+        alias: Final = "reg" + uuid.uuid4().hex[:8]
+        register_mcp(scenario, peer, alias, server_name=alias + "_server", description="Docs MCP server")
+        response: Final = registry_proxy.client.get("/v1/mcp/registry.json")
+        assert response.status_code == 200, response.text
+        entry: Final = next(item["server"] for item in response.json()["servers"] if item["server"]["name"] == alias)
+        assert entry["title"] == alias + "_server", entry
+        assert entry["description"] == "Docs MCP server", entry
+        assert entry["remotes"][0]["url"].endswith(f"/{alias}/mcp"), entry
+
+
 def test_config_declared_server_behaves_like_database_server_but_is_read_only(gateway: Gateway, tmp_path: Path) -> None:
     with mcp_peer() as declared_peer, mcp_peer() as database_peer:
         config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())

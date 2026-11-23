@@ -42,7 +42,9 @@ impl KeyExchangeGroup {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, strum::EnumString)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, strum::EnumString, strum::EnumIter,
+)]
 #[strum(
     parse_err_ty = Unsupported,
     parse_err_fn = unsupported_cipher_token
@@ -60,6 +62,19 @@ pub enum Tls12CipherSuite {
     EcdheRsaAes256Gcm,
     #[strum(serialize = "ECDHE-RSA-CHACHA20-POLY1305")]
     EcdheRsaChacha20,
+}
+
+pub(crate) fn without_chacha20(selected: Option<Vec<Tls12CipherSuite>>) -> Vec<Tls12CipherSuite> {
+    selected
+        .unwrap_or_else(|| <Tls12CipherSuite as strum::IntoEnumIterator>::iter().collect())
+        .into_iter()
+        .filter(|suite| {
+            !matches!(
+                suite,
+                Tls12CipherSuite::EcdheEcdsaChacha20 | Tls12CipherSuite::EcdheRsaChacha20
+            )
+        })
+        .collect()
 }
 
 fn unsupported_cipher_token(name: &str) -> Unsupported {
@@ -419,6 +434,40 @@ mod tests {
             offered_tls12_suites(&tls),
             [CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384]
         );
+        assert!(
+            tls.crypto_provider()
+                .cipher_suites
+                .iter()
+                .any(|suite| suite.tls13().is_some())
+        );
+    }
+
+    #[rstest]
+    #[case::every_suite(
+        None,
+        &[
+            CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+            CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+            CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+        ]
+    )]
+    #[case::named_suites(
+        Some("ECDHE-RSA-CHACHA20-POLY1305:ECDHE-RSA-AES128-GCM-SHA256"),
+        &[CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256]
+    )]
+    #[case::only_chacha20_leaves_tls13(Some("ECDHE-ECDSA-CHACHA20-POLY1305"), &[])]
+    fn excluded_chacha20_drops_the_tls12_chacha20_suites(
+        #[case] ssl_security_level: Option<&str>,
+        #[case] expected: &[CipherSuite],
+    ) {
+        let tls = ClientConfig::try_from(&config(HttpSettings {
+            ssl_security_level: ssl_security_level.map(str::to_owned),
+            chacha20_excluded: true,
+            ..HttpSettings::default()
+        }))
+        .unwrap();
+        assert_eq!(offered_tls12_suites(&tls), expected);
         assert!(
             tls.crypto_provider()
                 .cipher_suites

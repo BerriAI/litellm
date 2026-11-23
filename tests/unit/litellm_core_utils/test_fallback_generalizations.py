@@ -598,6 +598,27 @@ def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, m
     assert not info.get("output_cost_per_token")
 
 
+def _shipped_databricks_claude_rows_matching_the_mid_conversation_rule() -> tuple[str, ...]:
+    document: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    rule: Final = next(
+        rule
+        for rule in document["fallback_generalizations"]["rules"]
+        if rule["name"] == "claude-mid-conversation-system"
+    )
+    pattern: Final = re.compile(rule["pattern"], re.IGNORECASE)
+    return tuple(
+        key
+        for key, row in document.items()
+        if isinstance(row, dict) and row.get("litellm_provider") == "databricks" and pattern.search(key)
+    )
+
+
+@pytest.mark.parametrize("model", _shipped_databricks_claude_rows_matching_the_mid_conversation_rule())
+def test_shipped_databricks_claude_rows_agree_with_the_mid_conversation_rule(shipped_cost_map, model):
+    """The rule does not fill Databricks rows, so a row that omits the flag turns reminders into user turns."""
+    assert litellm.utils.supports_mid_conversation_system(model=model, custom_llm_provider="databricks") is True, model
+
+
 @pytest.mark.parametrize(
     "model,provider,adaptive,mid_conversation",
     [

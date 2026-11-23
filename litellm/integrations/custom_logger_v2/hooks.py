@@ -19,6 +19,7 @@ class HookSpec:
     legacy_methods: tuple[str, ...]
     request_path: bool
     writes: frozenset[Field] = frozenset()
+    legacy_rewrites: bool = True
     outcomes: frozenset[OutcomeType] = frozenset()
     legacy_guardrail_events: frozenset[LegacyGuardrailEvent] = frozenset()
     has_call: bool = True
@@ -106,7 +107,7 @@ HOOK_SPECS: Final[Mapping[Hook, HookSpec]] = MappingProxyType(
         Hook.post_call_failure: HookSpec(
             legacy_methods=("async_post_call_failure_hook",),
             request_path=True,
-            writes=frozenset({Field.error}),
+            writes=frozenset({Field.error, Field.budget_reservation}),
             outcomes=_ABORT,
         ),
         Hook.response_headers: HookSpec(
@@ -159,6 +160,8 @@ HOOK_SPECS: Final[Mapping[Hook, HookSpec]] = MappingProxyType(
                 "async_log_failure_event",
             ),
             request_path=False,
+            writes=frozenset({Field.budget_reservation}),
+            legacy_rewrites=False,
         ),
         # Not dispatched: the five ports settle on attempt_ended and none needs a once-per-call end event.
         Hook.call_ended: HookSpec(legacy_methods=(), request_path=False),

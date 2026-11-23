@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT EXISTS (\n    SELECT 1\n    FROM jsonb_array_elements(\n        CASE WHEN jsonb_typeof(t.members_with_roles) = 'array' THEN t.members_with_roles ELSE '[]'::jsonb END\n    ) AS member\n    WHERE member ->> 'user_id' = $2\n       OR member ->> 'user_email' = (SELECT user_email FROM \"LiteLLM_UserTable\" WHERE user_id = $2)\n) AS \"listed!\"\nFROM \"LiteLLM_TeamTable\" AS t\nWHERE t.team_id = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "listed!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "6eb80b40541eb61ac869442f41bf189e251f6d27c6e704fa732c4705ddb930f9"
+}

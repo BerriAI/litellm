@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
@@ -10,9 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.batches.native_batch_input import bedrock_batch_input, vertex_batch_input
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -22,7 +23,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
     native_vertex_batch_row_model,
     native_vertex_batch_row_stats,
 )
-from litellm.types.llms.openai import Batch
+from litellm.types.llms.openai import Batch, BatchInputFormat
 from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
@@ -740,14 +741,41 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
-def count_entry_tokens(
-    entry: Mapping[str, object],
-    model_name: str | None = None,
-) -> int:
-    """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
-        Mapping[str, object], entry.get("body", {}) or {}
-    )
+def _count_vertex_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("request"))
+    body: Final = vertex_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
+
+
+def _count_bedrock_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("modelInput"))
+    body: Final = bedrock_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
+
+
+def _count_openai_row(entry: Mapping[str, object]) -> int | None:
+    body: Final = as_str_mapping(entry.get("body"))
+    return _count_batch_body(body) if body is not None else None
+
+
+def batch_row_counter(input_format: BatchInputFormat) -> Callable[[Mapping[str, object]], int | None] | None:
+    match input_format:
+        case BatchInputFormat.VERTEX:
+            return _count_vertex_row
+        case BatchInputFormat.BEDROCK:
+            return _count_bedrock_row
+        case BatchInputFormat.OPENAI:
+            return _count_openai_row
+        case BatchInputFormat.UNKNOWN:
+            return None
+
+
+def count_entry_tokens(entry: Mapping[str, object], model_name: str | None = None) -> int:
+    body: Final = cast(Mapping[str, object], entry.get("body") or {})  # cast-ok: OpenAI batch bodies are JSON objects
+    return _count_batch_body(body, model_name)
+
+
+def _count_batch_body(body: Mapping[str, object], model_name: str | None = None) -> int:
     model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
@@ -861,7 +889,7 @@ def _get_anthropic_result_from_batch_results_line(batch_results_line: Mapping[st
 
 
 def _get_response_from_batch_job_output_file(
-    batch_job_output_file: Mapping[str, Any], custom_llm_provider: str = "openai"
+    batch_job_output_file: Mapping[str, object], custom_llm_provider: str = "openai"
 ) -> Mapping[str, object]:
     """
     Get the response from the batch job output file
@@ -871,7 +899,8 @@ def _get_response_from_batch_job_output_file(
             _get_anthropic_result_from_batch_results_line(batch_job_output_file).get("message", None) or {}
         )
     if custom_llm_provider == "bedrock":
-        return batch_job_output_file.get("modelOutput", None) or {}
+        model_output: Final = batch_job_output_file.get("modelOutput", None) or dict[str, object]()
+        return model_output  # pyright: ignore[reportReturnType]  # main returns it unchecked, consumers fail as before
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )

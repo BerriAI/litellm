@@ -1,6 +1,10 @@
+import base64
+import io
 import json
 import asyncio
 import os
+import struct
+import wave
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import Mock, patch
@@ -100,9 +104,7 @@ def test_bedrock_embedding_with_api_key_bearer_token(model, input_type, embed_re
         ("bedrock/amazon.titan-embed-text-v1", "text", titan_embedding_response),
     ],
 )
-def test_bedrock_embedding_with_env_variable_bearer_token(
-    model, input_type, embed_response
-):
+def test_bedrock_embedding_with_env_variable_bearer_token(model, input_type, embed_response):
     """Test embedding functionality with bearer token from environment variable"""
     client = HTTPHandler()
     test_api_key = "env-bearer-token-12345"
@@ -111,7 +113,6 @@ def test_bedrock_embedding_with_env_variable_bearer_token(
         patch.dict(os.environ, {"AWS_BEARER_TOKEN_BEDROCK": test_api_key}),
         patch.object(client, "post") as mock_post,
     ):
-
         mock_response = Mock()
         mock_response.status_code = 200
         mock_response.text = json.dumps(embed_response)
@@ -318,9 +319,9 @@ def test_bedrock_embedding_plain_model_id_calls_the_env_region_like_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
-    route = respx_mock.post("https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke").mock(
-        return_value=httpx.Response(200, json=cohere_embedding_response)
-    )
+    route = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/cohere.embed-english-v3/invoke"
+    ).mock(return_value=httpx.Response(200, json=cohere_embedding_response))
 
     litellm.embedding(
         model="bedrock/us-east-1/cohere.embed-english-v3",
@@ -456,9 +457,7 @@ def test_bedrock_embedding_with_a_govcloud_arn_model_id_bills_at_the_arn_region_
 ) -> None:
     arn: Final = "arn:aws-us-gov:bedrock:us-gov-west-1::foundation-model/amazon.nova-2-multimodal-embeddings-v1:0"
     route = respx_mock.post(url__startswith=f"{GOVCLOUD_WEST_RUNTIME}/model/").mock(
-        return_value=httpx.Response(
-            200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]}
-        )
+        return_value=httpx.Response(200, json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2, 0.3]}]})
     )
 
     response: Final = litellm.embedding(
@@ -537,9 +536,7 @@ def test_bedrock_embedding_with_sigv4():
     """Test embedding falls back to SigV4 auth when no bearer token is provided"""
     model = "bedrock/amazon.titan-embed-text-v1"
 
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings"
-    ) as mock_bedrock_embed:
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding.embeddings") as mock_bedrock_embed:
         mock_embedding_response = litellm.EmbeddingResponse()
         mock_embedding_response.data = [{"embedding": [0.1, 0.2, 0.3]}]
         mock_bedrock_embed.return_value = mock_embedding_response
@@ -636,9 +633,7 @@ def test_twelvelabs_input_type_parameter_mapping():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
 
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -675,9 +670,7 @@ def test_twelvelabs_input_type_parameter_mapping_async_invoke():
     test_api_key = "test-bearer-token-12345"
     model = "bedrock/async_invoke/twelvelabs.marengo-embed-2-7-v1:0"
 
-    async_invoke_response = {
-        "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"
-    }
+    async_invoke_response = {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123def456"}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -718,9 +711,7 @@ def test_twelvelabs_missing_input_type_error():
 
     # Test TwelveLabs model - should default to 'text' when input_type is missing
     twelvelabs_model = "bedrock/twelvelabs.marengo-embed-2-7-v1:0"
-    twelvelabs_response = {
-        "data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]
-    }
+    twelvelabs_response = {"data": [{"embedding": [0.1, 0.2, 0.3], "inputTextTokenCount": 10}]}
 
     with patch.object(client, "post") as mock_post:
         mock_response = Mock()
@@ -840,8 +831,7 @@ def test_bedrock_embedding_header_forwarding(model, embed_response):
                     or any(k.lower() == header_key.lower() for k in headers.keys())
                 )
                 assert header_found, (
-                    f"Header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
             print(f"✓ Test passed for {model}")
@@ -897,20 +887,14 @@ def test_bedrock_embedding_extra_headers_and_headers_merge():
 
             # Both sets of headers should be present
             # Note: AWS SigV4 signing may modify header names to lowercase
-            proxy_header_found = any(
-                k.lower() == "x-forwarded-header" for k in headers.keys()
-            )
+            proxy_header_found = any(k.lower() == "x-forwarded-header" for k in headers.keys())
             assert proxy_header_found, (
-                "Proxy forwarded header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Proxy forwarded header should be present. Found headers: {list(headers.keys())}"
             )
 
-            explicit_header_found = any(
-                k.lower() == "x-explicit-header" for k in headers.keys()
-            )
+            explicit_header_found = any(k.lower() == "x-explicit-header" for k in headers.keys())
             assert explicit_header_found, (
-                "Explicitly passed header should be present. "
-                f"Found headers: {list(headers.keys())}"
+                f"Explicitly passed header should be present. Found headers: {list(headers.keys())}"
             )
 
             print("✓ Both header sources correctly merged and forwarded")
@@ -1039,12 +1023,9 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             # Note: HeadersDict should be converted to regular dict, so headers should be accessible
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -1055,30 +1036,22 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed: Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed: Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -1087,9 +1060,7 @@ def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_base():
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base: {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base: {str(e)}")
 
 
 @pytest.mark.asyncio
@@ -1154,12 +1125,9 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             # Verify custom headers are present in the request
             for header_key, header_value in custom_headers.items():
                 # Check if header exists (case-insensitive for HTTP headers)
-                header_found = any(
-                    k.lower() == header_key.lower() for k in headers.keys()
-                )
+                header_found = any(k.lower() == header_key.lower() for k in headers.keys())
                 assert header_found, (
-                    f"Custom header {header_key} should be in request headers. "
-                    f"Found headers: {list(headers.keys())}"
+                    f"Custom header {header_key} should be in request headers. Found headers: {list(headers.keys())}"
                 )
 
                 # Verify the value matches
@@ -1170,30 +1138,22 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
                         break
 
                 assert header_value_found == header_value, (
-                    f"Header {header_key} should have value {header_value}, "
-                    f"but found {header_value_found}"
+                    f"Header {header_key} should have value {header_value}, but found {header_value_found}"
                 )
 
             # Verify AWS signature headers are also present
             assert "Authorization" in headers, "AWS signature should be present"
             assert "X-Amz-Date" in headers, "AWS date header should be present"
-            assert (
-                "X-Amz-Security-Token" in headers
-            ), "Session token header should be present"
-            assert (
-                headers["X-Amz-Security-Token"] == aws_session_token
-            ), "Session token should match the provided token"
+            assert "X-Amz-Security-Token" in headers, "Session token header should be present"
+            assert headers["X-Amz-Security-Token"] == aws_session_token, "Session token should match the provided token"
 
             # Verify the custom api_base was used
             called_url = call_kwargs.get("url", "")
             assert custom_api_base in str(called_url), (
-                f"Custom api_base {custom_api_base} should be used. "
-                f"Got URL: {called_url}"
+                f"Custom api_base {custom_api_base} should be used. Got URL: {called_url}"
             )
 
-            print(
-                "✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base"
-            )
+            print("✓ Test passed (async): Custom headers forwarded with IAM role + custom api_base")
             print(
                 f"  Custom headers found: {[k for k in headers.keys() if k.lower().startswith('x-custom') or k.lower().startswith('x-forwarded')]}"
             )
@@ -1202,9 +1162,7 @@ async def test_bedrock_embedding_custom_headers_with_iam_role_and_custom_api_bas
             )
 
         except Exception as e:
-            pytest.fail(
-                f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}"
-            )
+            pytest.fail(f"Failed to forward headers with IAM role + custom api_base (async): {str(e)}")
 
 
 def test_titan_multimodal_embedding_image_cost_tracking():
@@ -1333,9 +1291,7 @@ def test_titan_image_embedding_cost_uses_per_image_rate():
         (["float", "int8"], ["float", "int8"]),
     ],
 )
-def test_bedrock_cohere_embedding_types_wrapped_as_list(
-    encoding_format, expected_embedding_types
-):
+def test_bedrock_cohere_embedding_types_wrapped_as_list(encoding_format, expected_embedding_types):
     """
     Bedrock Cohere expects `embedding_types` as a JSON array, not a raw string.
 
@@ -1538,6 +1494,8 @@ async def test_async_single_func_embeddings_signs_off_the_event_loop(monkeypatch
     assert response.data[0]["embedding"] == titan_embedding_response["embedding"]
     assert "Authorization" in client.post.call_args.kwargs["headers"]
     assert probe.served_during_refresh is True
+
+
 marengo_3_embedding_response = {"data": [{"embedding": [0.01 * i for i in range(512)]}]}
 MARENGO_3_DUCK = "data:image/png;base64,ZHVjaw=="
 
@@ -1602,7 +1560,9 @@ def test_marengo_3_embedding_sends_the_nested_payload_and_parses_512_dims(
         )
 
     assert json.loads(mock_post.call_args.kwargs["data"]) == expected_body
-    assert mock_post.call_args.kwargs["url"].endswith(f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke")
+    assert mock_post.call_args.kwargs["url"].endswith(
+        f"/model/{model.removeprefix('bedrock/').replace(':', '%3A')}/invoke"
+    )
     assert len(response.data[0]["embedding"]) == 512
     assert response.data[0]["embedding"][:2] == [0.0, 0.01]
     assert response.usage.prompt_tokens == 0
@@ -1887,9 +1847,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
         mock_post.return_value = mock_response
 
         # Prepare input based on type
-        input_data = (
-            img_base_64 if input_type == "image" else "Hello world from litellm"
-        )
+        input_data = img_base_64 if input_type == "image" else "Hello world from litellm"
 
         try:
             response = litellm.embedding(
@@ -1912,9 +1870,7 @@ def test_bedrock_embedding_models(model, input_type, embed_response):
             # Verify AWS params are not in request body
             aws_params = ["aws_region_name", "aws_bedrock_runtime_endpoint"]
             for param in aws_params:
-                assert (
-                    param not in request_data
-                ), f"AWS param {param} should not be in request body"
+                assert param not in request_data, f"AWS param {param} should not be in request body"
 
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
@@ -1932,12 +1888,11 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
     litellm.turn_on_debug()
 
     # Mock the HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call"
-    ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
-        }
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_sync_call") as mock_call:
+        mock_call.return_value = (
+            {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"},
+            None,
+        )
 
         response = litellm.embedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -1948,18 +1903,12 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-job-123"
@@ -1967,16 +1916,10 @@ def test_e2e_bedrock_async_invoke_embedding_twelvelabs_marengo():
 
         # Validate embedding structure
         assert len(response.data) == 1, "Should have one embedding"
-        assert (
-            response.data[0].object == "embedding"
-        ), "Embedding object should be 'embedding'"
-        assert (
-            response.data[0].embedding == []
-        ), "Embedding should be empty for async jobs"
+        assert response.data[0].object == "embedding", "Embedding object should be 'embedding'"
+        assert response.data[0].embedding == [], "Embedding should be empty for async jobs"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -1996,12 +1939,11 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
     litellm.turn_on_debug()
 
     # Mock the async HTTP call to return async invoke response
-    with patch(
-        "litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call"
-    ) as mock_call:
-        mock_call.return_value = {
-            "invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
-        }
+    with patch("litellm.llms.bedrock.embed.embedding.BedrockEmbedding._make_async_call") as mock_call:
+        mock_call.return_value = (
+            {"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"},
+            None,
+        )
 
         response = await litellm.aembedding(
             model="bedrock/async_invoke/us.twelvelabs.marengo-embed-2-7-v1:0",
@@ -2012,26 +1954,18 @@ async def test_e2e_bedrock_async_invoke_embedding_async_twelvelabs_marengo():
         )
 
         # Validate response structure
-        assert isinstance(
-            response, litellm.EmbeddingResponse
-        ), "Response should be EmbeddingResponse type"
-        assert hasattr(
-            response, "_hidden_params"
-        ), "Response should have _hidden_params"
+        assert isinstance(response, litellm.EmbeddingResponse), "Response should be EmbeddingResponse type"
+        assert hasattr(response, "_hidden_params"), "Response should have _hidden_params"
         assert response._hidden_params is not None, "Hidden params should not be None"
 
         # Validate hidden params contain invocation ARN
-        assert hasattr(
-            response._hidden_params, "_invocation_arn"
-        ), "Hidden params should have _invocation_arn"
+        assert hasattr(response._hidden_params, "_invocation_arn"), "Hidden params should have _invocation_arn"
         assert (
             response._hidden_params._invocation_arn
             == "arn:aws:bedrock:us-east-1:123456789012:async-invoke/test-async-job-456"
         ), "Invocation ARN should be preserved"
 
-        print(
-            f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}"
-        )
+        print(f"Async invoke embedding successful! Invocation ARN: {response._hidden_params._invocation_arn}")
 
     # Restore original region name
     if original_region_name:
@@ -2079,9 +2013,7 @@ def test_bedrock_embedding_uses_correct_region_when_specified():
 
             # The URL should contain us-east-1, NOT ap-northeast-1
             assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
-            assert (
-                "ap-northeast-1" not in url
-            ), f"URL should NOT contain ap-northeast-1, but got: {url}"
+            assert "ap-northeast-1" not in url, f"URL should NOT contain ap-northeast-1, but got: {url}"
 
             print(f"✓ Test passed: URL contains correct region: {url}")
 
@@ -2138,17 +2070,11 @@ def test_bedrock_embedding_region_bug_reproduction():
             # This assertion will FAIL if the bug exists (it will use ap-northeast-1)
             # This assertion will PASS if the bug is fixed (it will use us-east-1)
             if "ap-northeast-1" in url:
-                print(
-                    "❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter"
-                )
+                print("❌ BUG REPRODUCED: Using wrong region from env var instead of explicit parameter")
                 pytest.fail(f"Bug reproduced: URL contains ap-northeast-1 instead of us-east-1. URL: {url}")
             else:
-                print(
-                    "✓ Bug NOT reproduced: Using correct region from explicit parameter"
-                )
-                assert (
-                    "us-east-1" in url
-                ), f"URL should contain us-east-1, but got: {url}"
+                print("✓ Bug NOT reproduced: Using correct region from explicit parameter")
+                assert "us-east-1" in url, f"URL should contain us-east-1, but got: {url}"
 
     finally:
         # Restore original env var
@@ -2222,6 +2148,39 @@ def test_bedrock_nova_embedding_sends_extra_body_fields_in_the_request_body(resp
 
 
 @pytest.mark.parametrize(
+    ("model_id", "extra_body", "mapped_field"),
+    [
+        ("amazon.nova-2-multimodal-embeddings-v1:0", {"segmentationConfig": {"durationSeconds": 10}}, "taskType"),
+        ("twelvelabs.marengo-embed-2-7-v1:0", {"minClipSec": 4}, "inputText"),
+    ],
+)
+def test_bedrock_async_invoke_embedding_sends_extra_body_fields_inside_model_input(
+    respx_mock: respx.MockRouter, model_id: str, extra_body: dict[str, object], mapped_field: str
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(
+            200, json={"invocationArn": "arn:aws:bedrock:us-east-1:123456789012:async-invoke/abc123"}
+        )
+    )
+    request_fields: Final = {"clientRequestToken": "retry-1", "tags": [{"key": "team", "value": "search"}]}
+    request: Final = {
+        "model": f"bedrock/async_invoke/{model_id}",
+        "input": [test_input],
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+        "output_s3_uri": "s3://my-bucket/out/",
+    }
+
+    litellm.embedding(**request)
+    plain: Final = json.loads(route.calls.last.request.read())
+    litellm.embedding(**request, extra_body={**extra_body, **request_fields, mapped_field: "from extra_body"})
+    body: Final = json.loads(route.calls.last.request.read())
+
+    assert plain.keys() == {"modelId", "modelInput", "outputDataConfig"}
+    assert body == {**plain, **request_fields, "modelInput": {**plain["modelInput"], **extra_body}}
+
+
+@pytest.mark.parametrize(
     ("extra_body", "field", "expected"),
     [
         ({"dimensions": 512}, "dimensions", 256),
@@ -2246,6 +2205,524 @@ def test_bedrock_embedding_extra_body_cannot_replace_the_input_or_a_mapped_param
     )
 
     assert json.loads(route.calls.last.request.read())[field] == expected
+
+
+_NOVA_MODEL_ID: Final = "amazon.nova-2-multimodal-embeddings-v1:0"
+_MARENGO_MODEL_ID: Final = "twelvelabs.marengo-embed-2-7-v1:0"
+
+
+def _sent_body(
+    respx_mock: respx.MockRouter, model_id: str, embed_response: dict[str, object], **params: object
+) -> dict[str, object]:
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=embed_response)
+    )
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        **params,
+    )
+    return json.loads(route.calls.last.request.read())
+
+
+def test_bedrock_nova_embedding_estimates_audio_and_meters_the_text_beside_it(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for metered, embedding_type in (("3", "TEXT"), ("0", "AUDIO"))
+        ]
+    )
+
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=["hi", "data:audio/mp3;base64,AAAA"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    assert response.usage.prompt_tokens == 771
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        771 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("metered_per_input", "expected_text_tokens"),
+    [(("403", "0"), 403), (("403", None), 403), ((None, "0"), 768)],
+    ids=["metered", "image-header-missing", "text-header-missing"],
+)
+@pytest.mark.parametrize("image_first", [False, True], ids=["text-first", "image-first"])
+def test_bedrock_nova_embedding_bills_the_text_sent_beside_an_image(
+    respx_mock: respx.MockRouter,
+    metered_per_input: tuple[str | None, str | None],
+    expected_text_tokens: int,
+    image_first: bool,
+) -> None:
+    inputs: Final = tuple(
+        zip(("long text", "data:image/png;base64,AAAA"), ("TEXT", "IMAGE"), metered_per_input, strict=True)
+    )
+    ordered: Final = inputs[::-1] if image_first else inputs
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={} if metered is None else {"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for _, embedding_type, metered in ordered
+        ]
+    )
+
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=[value for value, _, _ in ordered],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    token_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    image_cost: Final[float] = litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_image"]
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_text_tokens * token_cost + image_cost)
+
+
+def _wav_base64(seconds: float) -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as clip:
+        clip.setnchannels(1)
+        clip.setsampwidth(2)
+        clip.setframerate(8000)
+        clip.writeframes(b"\x00\x00" * int(8000 * seconds))
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _mp4_box(box_type: bytes, payload: bytes, wide: bool = False) -> bytes:
+    if wide:
+        return struct.pack(">I4sQ", 1, box_type, 16 + len(payload)) + payload
+    return struct.pack(">I4s", 8 + len(payload), box_type) + payload
+
+
+def _mp4_base64(timescale: int, duration: int, version: int = 0, wide: bool = False) -> str:
+    times: Final = struct.pack(">IQQIQ" if version == 1 else ">IIIII", version << 24, 0, 0, timescale, duration)
+    movie: Final = _mp4_box(b"moov", _mp4_box(b"trak", b"\x00" * 12) + _mp4_box(b"mvhd", times + b"\x00" * 80), wide)
+    return base64.b64encode(
+        _mp4_box(b"ftyp", b"isom\x00\x00\x02\x00") + _mp4_box(b"mdat", b"\x00" * 32) + movie
+    ).decode()
+
+
+def _nova_usage_and_cost(
+    respx_mock: respx.MockRouter, embedding_types: tuple[str, ...], **params: object
+) -> tuple[litellm.Usage, float]:
+    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={"x-amzn-bedrock-input-token-count": "0"},
+                json={"embeddings": [{"embeddingType": embedding_type, "embedding": [0.1] * 3072}]},
+            )
+            for embedding_type in embedding_types
+        ]
+    )
+    response: Final = litellm.embedding(
+        model=f"bedrock/{_NOVA_MODEL_ID}", api_key="test-bearer-token", aws_region_name="us-east-1", **params
+    )
+    return response.usage, response._hidden_params["response_cost"]
+
+
+def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: respx.MockRouter) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("AUDIO", "IMAGE", "AUDIO"),
+        input=[
+            f"data:audio/wav;base64,{_wav_base64(2.5)}",
+            "data:image/png;base64,AAAA",
+            f"data:audio/wav;base64,{_wav_base64(4)}",
+        ],
+    )
+
+    prices: Final = litellm.model_cost[_NOVA_MODEL_ID]
+    assert (usage.prompt_tokens, usage.prompt_tokens_details.audio_length_seconds) == (0, 6.5)
+    assert cost == pytest.approx(6.5 * prices["input_cost_per_audio_per_second"] + prices["input_cost_per_image"])
+
+
+@pytest.mark.parametrize(
+    ("video", "expected_seconds"),
+    [
+        (_mp4_base64(timescale=1000, duration=6500), 6.5),
+        (_mp4_base64(timescale=600, duration=3600, version=1), 6.0),
+        (_mp4_base64(timescale=1000, duration=6500, wide=True), 6.5),
+    ],
+    ids=["32-bit-times", "64-bit-times", "64-bit-box-size"],
+)
+def test_bedrock_nova_embedding_bills_inline_video_by_its_length(
+    respx_mock: respx.MockRouter, video: str, expected_seconds: float
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("VIDEO",),
+        input=["clip"],
+        video={"format": "mp4", "embeddingMode": "AUDIO_VIDEO_COMBINED", "source": {"bytes": video}},
+    )
+
+    assert (usage.prompt_tokens, usage.prompt_tokens_details.video_length_seconds) == (0, expected_seconds)
+    assert cost == pytest.approx(
+        expected_seconds * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_video_per_second"]
+    )
+
+
+@pytest.mark.parametrize(
+    "media",
+    [
+        {"audio": {"format": "mp3", "source": {"bytes": "AAAA"}}},
+        {"audio": {"format": "wav", "source": {"s3Location": {"uri": "s3://bucket/clip.wav"}}}},
+        {"video": {"format": "webm", "source": {"bytes": base64.b64encode(b"\x1a\x45\xdf\xa3" * 8).decode()}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0, duration=6000)}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0)}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFF)}}},
+        {
+            "video": {
+                "format": "mp4",
+                "source": {"bytes": _mp4_base64(timescale=1000, duration=0xFFFFFFFFFFFFFFFF, version=1)},
+            }
+        },
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=1000, duration=6000)[:40]}}},
+        {"video": {"format": "mp4", "source": {"bytes": "not base64"}}},
+        {"video": {"format": "mp4", "source": {"s3Location": {"uri": "s3://bucket/clip.mp4"}}}},
+        {"video": {"format": "mp4", "source": {"bytes": _mp4_base64(timescale=0xFFFFFFFF, duration=1)}}},
+        {"audio": {"format": "wav", "source": {"bytes": _wav_base64(0.5)}}},
+    ],
+    ids=[
+        "unreadable-audio",
+        "s3-audio",
+        "webm",
+        "mp4-zero-timescale",
+        "mp4-zero-duration",
+        "mp4-unknown-duration",
+        "mp4-unknown-64-bit-duration",
+        "mp4-truncated",
+        "mp4-invalid-base64",
+        "s3-video",
+        "video-shorter-than-the-estimate-is-worth",
+        "audio-shorter-than-the-estimate-is-worth",
+    ],
+)
+def test_bedrock_nova_embedding_estimates_a_clip_it_cannot_measure(
+    respx_mock: respx.MockRouter, media: dict[str, object]
+) -> None:
+    usage, cost = _nova_usage_and_cost(respx_mock, ("AUDIO",), input=["clip"], **media)
+
+    assert (usage.prompt_tokens, usage.prompt_tokens_details) == (768, None)
+    assert cost == pytest.approx(768 * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"])
+
+
+def test_bedrock_nova_embedding_estimates_an_unmeasured_clip_sent_beside_an_image(
+    respx_mock: respx.MockRouter,
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock, ("IMAGE", "AUDIO"), input=["data:image/png;base64,AAAA", "data:audio/mp3;base64,AAAA"]
+    )
+
+    prices: Final = litellm.model_cost[_NOVA_MODEL_ID]
+    assert usage.prompt_tokens == 768
+    assert cost == pytest.approx(768 * prices["input_cost_per_token"] + prices["input_cost_per_image"])
+
+
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("metered_per_input", "expected_tokens"),
+    [
+        (("3", "403"), 406),
+        (("0", "0"), 0),
+        (("3", None), 771),
+        (("3", "not-a-number"), 771),
+    ],
+    ids=["metered", "zero", "one-header-missing", "one-header-invalid"],
+)
+async def test_bedrock_nova_embedding_reports_the_input_tokens_bedrock_metered(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    sync_mode: bool,
+    metered_per_input: tuple[str | None, ...],
+    expected_tokens: int,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post(
+        f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke"
+    ).mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                headers={} if metered is None else {"x-amzn-bedrock-input-token-count": metered},
+                json={"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1] * 3072}]},
+            )
+            for metered in metered_per_input
+        ]
+    )
+    params: Final = dict(
+        model=f"bedrock/{_NOVA_MODEL_ID}",
+        input=["hi", "a much longer input"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+    )
+
+    response: Final = litellm.embedding(**params) if sync_mode else await litellm.aembedding(**params)
+
+    assert route.call_count == 2
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (expected_tokens, expected_tokens)
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        expected_tokens * litellm.model_cost[_NOVA_MODEL_ID]["input_cost_per_token"]
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "embed_response", "extra_body"),
+    [
+        ("cohere.embed-english-v3", cohere_embedding_response, {"input_type": "search_query"}),
+        ("cohere.embed-v4:0", cohere_embedding_response, {"input_type": "classification"}),
+        (_MARENGO_MODEL_ID, {"data": [{"embedding": [0.1, 0.2]}]}, {"textTruncate": "none"}),
+    ],
+    ids=["cohere_v3", "cohere_v4", "marengo_2_7"],
+)
+def test_bedrock_embedding_extra_body_value_replaces_a_litellm_default(
+    respx_mock: respx.MockRouter, model_id: str, embed_response: dict[str, object], extra_body: dict[str, object]
+) -> None:
+    default_body: Final = _sent_body(respx_mock, model_id, embed_response)
+    body: Final = _sent_body(respx_mock, model_id, embed_response, extra_body=extra_body)
+
+    assert extra_body.items() <= body.items()
+    assert {k: v for k, v in body.items() if k not in extra_body} == {
+        k: v for k, v in default_body.items() if k not in extra_body
+    }
+
+
+def test_bedrock_nova_embedding_combines_extra_body_params_with_the_generated_ones(
+    respx_mock: respx.MockRouter,
+) -> None:
+    nova_response: Final = {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]}
+    default_params: Final = _sent_body(respx_mock, _NOVA_MODEL_ID, nova_response)["singleEmbeddingParams"]
+    caller_params: Final = {
+        "embeddingDimension": 256,
+        "embeddingPurpose": "GENERIC_RETRIEVAL",
+        "text": {"value": "text the guardrails never saw"},
+        "extraOption": {"enabled": True},
+    }
+
+    params: Final = _sent_body(
+        respx_mock, _NOVA_MODEL_ID, nova_response, extra_body={"singleEmbeddingParams": caller_params}
+    )["singleEmbeddingParams"]
+
+    assert params == {
+        **default_params,
+        "embeddingDimension": 256,
+        "embeddingPurpose": "GENERIC_RETRIEVAL",
+        "extraOption": {"enabled": True},
+    }
+
+
+def test_bedrock_nova_embedding_argument_beats_the_same_extra_body_param(respx_mock: respx.MockRouter) -> None:
+    body: Final = _sent_body(
+        respx_mock,
+        _NOVA_MODEL_ID,
+        {"embeddings": [{"embeddingType": "TEXT", "embedding": [0.1, 0.2]}]},
+        dimensions=1024,
+        extra_body={"singleEmbeddingParams": {"embeddingDimension": 256}},
+    )
+
+    assert body["singleEmbeddingParams"]["embeddingDimension"] == 1024
+
+
+def test_bedrock_async_marengo_embedding_uses_extra_body_text_truncate_under_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+    request: Final = {
+        "model": f"bedrock/async_invoke/{_MARENGO_MODEL_ID}",
+        "input": [test_input],
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+        "output_s3_uri": "s3://test-bucket/out/",
+    }
+
+    litellm.embedding(**request)
+    plain: Final = json.loads(route.calls.last.request.read())
+    litellm.embedding(**request, extra_body={"modelInput": {"textTruncate": "none"}})
+    body: Final = json.loads(route.calls.last.request.read())
+
+    assert plain["modelInput"]["textTruncate"] == "end"
+    assert body == {**plain, "modelInput": {**plain["modelInput"], "textTruncate": "none"}}
+
+
+def test_bedrock_async_nova_embedding_uses_extra_body_params_under_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+
+    litellm.embedding(
+        model=f"bedrock/async_invoke/{_NOVA_MODEL_ID}",
+        input=[test_input],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        output_s3_uri="s3://test-bucket/out/",
+        extra_body={
+            "modelInput": {
+                "segmentedEmbeddingParams": {
+                    "embeddingDimension": 256,
+                    "text": {
+                        "value": "text the guardrails never saw",
+                        "source": {"s3Location": {"uri": "s3://bucket/unscanned.txt"}},
+                        "segmentationConfig": {"maxLengthChars": 500},
+                    },
+                    "image": {"detailLevel": "STANDARD_IMAGE"},
+                    "extraOption": {"enabled": True},
+                }
+            }
+        },
+    )
+
+    body: Final = json.loads(route.calls.last.request.read())
+    params: Final = body["modelInput"]["segmentedEmbeddingParams"]
+    assert params["embeddingDimension"] == 256
+    assert params["extraOption"] == {"enabled": True}
+    assert params["text"]["value"] == test_input
+    assert params["text"]["segmentationConfig"] == {"maxLengthChars": 500}
+    assert "source" not in params["text"]
+    assert "image" not in params
+    assert body["outputDataConfig"] == {"s3OutputDataConfig": {"s3Uri": "s3://test-bucket/out/"}}
+
+
+def test_bedrock_cohere_image_embedding_keeps_its_input_type_over_extra_body(respx_mock: respx.MockRouter) -> None:
+    model_id: Final = "cohere.embed-english-v3"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=cohere_embedding_response)
+    )
+
+    def sent_body(**params: object) -> dict[str, object]:
+        litellm.embedding(
+            model=f"bedrock/{model_id}",
+            input=[img_base_64],
+            api_key="test-bearer-token",
+            aws_region_name="us-east-1",
+            **params,
+        )
+        return json.loads(route.calls.last.request.read())
+
+    default_body: Final = sent_body()
+
+    assert "images" in default_body
+    assert sent_body(extra_body={"input_type": "search_query"}) == default_body
+
+
+def test_bedrock_titan_multimodal_extra_body_settings_join_the_generated_embedding_config(
+    respx_mock: respx.MockRouter,
+) -> None:
+    model_id: Final = "amazon.titan-embed-image-v1"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=titan_embedding_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=["hello"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        dimensions=384,
+        extra_body={"embeddingConfig": {"outputEmbeddingLength": 256, "extraOption": {"enabled": True}}},
+    )
+
+    assert json.loads(route.calls.last.request.read()) == {
+        "inputText": "hello",
+        "embeddingConfig": {"outputEmbeddingLength": 384, "extraOption": {"enabled": True}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("params", "extra_body", "expected_body"),
+    [
+        (
+            {},
+            {"text": {"inputText": "text the guardrails never saw", "extraOption": 1}},
+            {"inputType": "text", "text": {"inputText": "a duck on water", "extraOption": 1}},
+        ),
+        (
+            {"input_type": "image"},
+            {
+                "image": {
+                    "inputText": "text the guardrails never saw",
+                    "extraOption": 1,
+                    "mediaSource": {"s3Location": {"uri": "s3://bucket/unscanned.png"}, "extraOption": 2},
+                }
+            },
+            {
+                "inputType": "image",
+                "image": {"extraOption": 1, "mediaSource": {"base64String": "ZHVjaw==", "extraOption": 2}},
+            },
+        ),
+    ],
+)
+def test_marengo_3_extra_body_settings_join_the_generated_input_without_adding_content(
+    params: dict[str, object],
+    extra_body: dict[str, object],
+    expected_body: dict[str, object],
+    respx_mock: respx.MockRouter,
+) -> None:
+    model_id: Final = "us.twelvelabs.marengo-embed-3-0-v1:0"
+    route: Final = respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/invoke").mock(
+        return_value=httpx.Response(200, json=marengo_3_embedding_response)
+    )
+
+    litellm.embedding(
+        model=f"bedrock/{model_id}",
+        input=[MARENGO_3_DUCK if params else "a duck on water"],
+        api_key="test-bearer-token",
+        aws_region_name="us-east-1",
+        extra_body=extra_body,
+        **params,
+    )
+
+    assert json.loads(route.calls.last.request.read()) == expected_body
+
+
+def test_marengo_3_async_extra_body_cannot_add_another_input_object_to_the_model_input(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://bedrock-runtime.us-east-1.amazonaws.com/async-invoke").mock(
+        return_value=httpx.Response(200, json={"invocationArn": "arn:aws:bedrock:us-east-1:1:async-invoke/abc"})
+    )
+    arguments: Final = {
+        "model": "bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",
+        "input": ["s3://bucket/scanned.mp4"],
+        "input_type": "video",
+        "output_s3_uri": "s3://bucket/out/",
+        "bucketOwner": "123456789012",
+        "api_key": "test-bearer-token",
+        "aws_region_name": "us-east-1",
+    }
+
+    litellm.embedding(**arguments)
+    generated_model_input: Final = json.loads(route.calls.last.request.read())["modelInput"]
+    litellm.embedding(
+        **arguments,
+        extra_body={
+            "modelInput": {
+                "multi_input": {"inputText": "text the guardrails never saw"},
+                "text_image": {"inputText": "text the guardrails never saw"},
+                "extraOption": 1,
+            }
+        },
+    )
+
+    assert json.loads(route.calls.last.request.read())["modelInput"] == {**generated_model_input, "extraOption": 1}
 
 
 def test_bedrock_embedding_signs_the_body_it_sends(

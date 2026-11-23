@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct OcrSettings {

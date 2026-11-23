@@ -9,13 +9,15 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Number, Value};
 
+use crate::depythonize::depythonize;
+
 /// Converts a `#[pyo3(from_py_with = ...)]` argument, reporting failures as `ValueError`
 /// so a bad argument reads as a bad argument rather than as whatever the conversion hit.
 pub fn from_py_argument<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value)
+    depythonize(value)
         .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
@@ -23,7 +25,7 @@ pub fn from_py<T>(value: &Bound<'_, PyAny>) -> PyResult<T>
 where
     T: DeserializeOwned,
 {
-    pythonize::depythonize(value).map_err(PyErr::from)
+    depythonize(value).map_err(PyErr::from)
 }
 
 pub fn to_py<T>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>>
@@ -31,6 +33,15 @@ where
     T: Serialize + ?Sized,
 {
     Pythonized(value).into_pyobject(py).map(Bound::unbind)
+}
+
+/// Serializes `value` to JSON text for Python to validate, reporting failures as `ValueError`.
+pub fn json_dumps<T>(value: &T) -> PyResult<String>
+where
+    T: Serialize + ?Sized,
+{
+    serde_json::to_string(value)
+        .map_err(|error| PyValueError::new_err(litellm_error::Report::new(&error).to_string()))
 }
 
 pub fn json_object_field(py: Python<'_>, document: &str, name: &str) -> PyResult<Py<PyAny>> {

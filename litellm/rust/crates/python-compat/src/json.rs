@@ -17,8 +17,33 @@ use crate::{Error, MAX_DEPTH, Value, repr::float_repr};
 
 /// `json.dumps(value)`.
 pub fn dumps(value: &Value) -> Result<String, Error> {
+    dumps_with(value, DEFAULT_SEPARATORS)
+}
+
+/// `json.dumps(value, separators=(",", ":"))`.
+pub fn dumps_compact(value: &Value) -> Result<String, Error> {
+    dumps_with(value, COMPACT_SEPARATORS)
+}
+
+/// The item and key separators `json.dumps` writes between values.
+#[derive(Clone, Copy)]
+struct Separators {
+    item: &'static str,
+    key: &'static str,
+}
+
+const DEFAULT_SEPARATORS: Separators = Separators {
+    item: ", ",
+    key: ": ",
+};
+const COMPACT_SEPARATORS: Separators = Separators {
+    item: ",",
+    key: ":",
+};
+
+fn dumps_with(value: &Value, separators: Separators) -> Result<String, Error> {
     let mut out = String::new();
-    write_value(&mut out, value)?;
+    write_value(&mut out, value, separators)?;
     Ok(out)
 }
 
@@ -46,6 +71,61 @@ pub fn from_json(value: serde_json::Value) -> Value {
                 .map(|(key, value)| (Value::Str(key), from_json(value)))
                 .collect(),
         ),
+    }
+}
+
+/// `str(value)` of what `json.loads` returns: a string's own contents, `None` for null, and
+/// `repr` for every other value.
+pub fn loaded_str(value: &serde_json::Value) -> String {
+    crate::repr::to_str(&from_json(value.clone()))
+}
+
+/// `left == right` between what `json.loads` returns for two scalars: `bool`, `int` and
+/// `float` compare by numeric value (`True == 1 == 1.0`), and other values compare as JSON.
+/// Containers compare as JSON, so a nested `[1]` is not equal to `[1.0]` here though Python
+/// says it is.
+pub fn loaded_equals(left: &serde_json::Value, right: &serde_json::Value) -> bool {
+    match (numeric(left), numeric(right)) {
+        (Some(Ok(a)), Some(Ok(b))) => a == b,
+        (Some(Err(a)), Some(Err(b))) => a == b,
+        (Some(Ok(int)), Some(Err(float))) | (Some(Err(float)), Some(Ok(int))) => {
+            int_equals_float(int, float)
+        }
+        (Some(_), None) | (None, Some(_)) => false,
+        (None, None) => left == right,
+    }
+}
+
+fn numeric(value: &serde_json::Value) -> Option<Result<i128, f64>> {
+    match value {
+        serde_json::Value::Bool(flag) => Some(Ok(i128::from(*flag))),
+        serde_json::Value::Number(number) => Some(
+            number
+                .as_i64()
+                .map(i128::from)
+                .or_else(|| number.as_u64().map(i128::from))
+                .map_or_else(|| Err(number.as_f64().unwrap_or(f64::NAN)), Ok),
+        ),
+        _ => None,
+    }
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::float_cmp)]
+fn int_equals_float(int: i128, float: f64) -> bool {
+    float.is_finite() && float.fract() == 0.0 && float.abs() < 1.7e38 && float as i128 == int
+}
+
+/// `type(json.loads(text)).__name__`: the type [`crate::json::from_json`] gives the value,
+/// so an integer `serde_json` holds as `f64` (beyond `u64`) reads as `float`.
+pub fn type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "NoneType",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(number) if number.is_i64() || number.is_u64() => "int",
+        serde_json::Value::Number(_) => "float",
+        serde_json::Value::String(_) => "str",
+        serde_json::Value::Array(_) => "list",
+        serde_json::Value::Object(_) => "dict",
     }
 }
 
@@ -338,7 +418,7 @@ pub fn to_json(value: &Value) -> Result<serde_json::Value, Error> {
     })
 }
 
-fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
+fn write_value(out: &mut String, value: &Value, separators: Separators) -> Result<(), Error> {
     match value {
         Value::None => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
@@ -352,9 +432,9 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
             out.push('[');
             for (index, value) in values.iter().enumerate() {
                 if index > 0 {
-                    out.push_str(", ");
+                    out.push_str(separators.item);
                 }
-                write_value(out, value)?;
+                write_value(out, value, separators)?;
             }
             out.push(']');
         }
@@ -362,11 +442,11 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
             out.push('{');
             for (index, (key, value)) in entries.iter().enumerate() {
                 if index > 0 {
-                    out.push_str(", ");
+                    out.push_str(separators.item);
                 }
                 write_string(out, &json_key(key)?);
-                out.push_str(": ");
-                write_value(out, value)?;
+                out.push_str(separators.key);
+                write_value(out, value, separators)?;
             }
             out.push('}');
         }
@@ -375,6 +455,89 @@ fn write_value(out: &mut String, value: &Value) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// `len(json.dumps(value))` for a value Rust serializes with serde, counted without building
+/// the text: Python's `", "` and `": "` separators, `ensure_ascii` escapes and float repr. A
+/// non-finite float counts as serde's `null`.
+pub fn dumps_len<T: serde::Serialize + ?Sized>(value: &T) -> Result<usize, serde_json::Error> {
+    let mut count = ByteCount(0);
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut count,
+        PythonFormatter,
+    ))?;
+    Ok(count.0)
+}
+
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// serde_json output in `json.dumps`'s default layout.
+struct PythonFormatter;
+
+impl serde_json::ser::Formatter for PythonFormatter {
+    fn begin_array_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        if first {
+            Ok(())
+        } else {
+            writer.write_all(DEFAULT_SEPARATORS.item.as_bytes())
+        }
+    }
+
+    fn begin_object_key<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        first: bool,
+    ) -> std::io::Result<()> {
+        self.begin_array_value(writer, first)
+    }
+
+    fn begin_object_value<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+    ) -> std::io::Result<()> {
+        writer.write_all(DEFAULT_SEPARATORS.key.as_bytes())
+    }
+
+    fn write_f64<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f64,
+    ) -> std::io::Result<()> {
+        writer.write_all(float_text(value).as_bytes())
+    }
+
+    fn write_f32<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        value: f32,
+    ) -> std::io::Result<()> {
+        self.write_f64(writer, f64::from(value))
+    }
+
+    fn write_string_fragment<W: ?Sized + std::io::Write>(
+        &mut self,
+        writer: &mut W,
+        fragment: &str,
+    ) -> std::io::Result<()> {
+        let mut escaped = Vec::new();
+        write_string(&mut escaped, fragment);
+        writer.write_all(&escaped[1..escaped.len() - 1])
+    }
 }
 
 /// `json.encoder.JSONEncoder.iterencode`'s `floatstr` with `allow_nan=True`.
@@ -460,8 +623,46 @@ pub fn write_string(out: &mut impl Sink, text: &str) {
 mod tests {
     use rstest::rstest;
 
-    use super::{dumps, loads};
+    use super::{dumps, dumps_compact, dumps_len, from_json, loads, type_name};
     use crate::{Error, Value, repr::repr};
+
+    #[rstest]
+    #[case::null(serde_json::json!(null), "NoneType")]
+    #[case::boolean(serde_json::json!(true), "bool")]
+    #[case::int(serde_json::json!(1), "int")]
+    #[case::float(serde_json::json!(1.5), "float")]
+    #[case::text(serde_json::json!("a"), "str")]
+    #[case::list(serde_json::json!([1]), "list")]
+    #[case::object(serde_json::json!({"a": 1}), "dict")]
+    fn a_json_value_is_named_by_its_python_type(
+        #[case] value: serde_json::Value,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(type_name(&value), expected);
+    }
+
+    #[rstest]
+    #[case::separators(r#"{"a": [1, 2], "b": {"c": null}}"#)]
+    #[case::ensure_ascii(r#"{"m": "caf\u00e9 \ud834\udd1e \u007f"}"#)]
+    #[case::escapes(r#"["quote \" backslash \\ newline \n tab \t \u0001"]"#)]
+    #[case::python_float_repr(r#"[3.5e-05, 1e+16, 0.1, 2.0]"#)]
+    fn counts_what_json_dumps_writes(#[case] text: &str) {
+        let value: serde_json::Value = serde_json::from_str(text).expect("parses");
+        assert_eq!(
+            dumps_len(&value).expect("counts"),
+            dumps(&from_json(value)).expect("dumps").len()
+        );
+    }
+
+    // Expected value is CPython json.dumps(value, separators=(",", ":"))
+    #[test]
+    fn compact_dumps_drops_the_spaces() {
+        let value = loads(r#"{"a": [1, "\u00e9", null], "b": {"c": 1.5}}"#).expect("parses");
+        assert_eq!(
+            dumps_compact(&value).expect("dumps"),
+            r#"{"a":[1,"\u00e9",null],"b":{"c":1.5}}"#
+        );
+    }
 
     // Expected values are the repr of CPython 3.14 json.loads(text)
     #[rstest]

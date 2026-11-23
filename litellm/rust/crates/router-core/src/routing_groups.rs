@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::registry::{Deployment, RoutingGroupSpec};
+use litellm_router_types::{RoutingGroupSpec, RoutingStrategy};
+
+use crate::registry::Deployment;
 
 /// The member deployments of `group`, in member order, with a priority group's priorities as
 /// their `order`.
@@ -36,7 +38,7 @@ pub fn members(
 
 /// Whether `group` is a priority group.
 pub fn is_priority(group: &RoutingGroupSpec) -> bool {
-    matches!(&group.routing_strategy, crate::config::RoutingStrategy::Other(name) if name == "priority")
+    matches!(&group.routing_strategy, RoutingStrategy::Other(name) if name == "priority")
 }
 
 fn with_order(deployment: &Arc<Deployment>, order: i64) -> Arc<Deployment> {

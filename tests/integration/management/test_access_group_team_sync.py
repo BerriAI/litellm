@@ -21,6 +21,7 @@ from litellm.proxy.management_helpers.access_group_team_sync import (
     reconcile_team_access_group_membership,
     sync_team_access_group_membership,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 from tests.integration._support.client import eventually
 from tests.integration._support.database import read_rows
 
@@ -87,18 +88,16 @@ async def _set_team_groups(db, team_id, access_group_ids):
     )
 
 
-def _cache_key(access_group_id: str) -> str:
-    return f"access_group_id:{access_group_id}"
-
-
 async def _sync(db, team_id, access_group_ids) -> frozenset[str]:
     from litellm.proxy.proxy_server import user_api_key_cache
 
     await _set_team_groups(db, team_id, access_group_ids)
     for group in GROUPS:
-        user_api_key_cache.set_cache(key=_cache_key(group), value={"access_group_id": group})
+        user_api_key_cache.set_cache(key=AuthObject.access_group(group), value={"access_group_id": group})
     await sync_team_access_group_membership(prisma_client=SimpleNamespace(db=db), team_id=team_id)
-    return frozenset(group for group in GROUPS if user_api_key_cache.get_cache(key=_cache_key(group)) is None)
+    return frozenset(
+        group for group in GROUPS if user_api_key_cache.get_cache(key=AuthObject.access_group(group)) is None
+    )
 
 
 @pytest.mark.asyncio

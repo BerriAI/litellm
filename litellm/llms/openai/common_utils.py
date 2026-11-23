@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json
 from litellm.litellm_core_utils.reasoning_effort_utils import warn_dropped_reasoning_params
 from litellm.litellm_core_utils.token_counter import token_counter, usage_tokenizer_model
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.custom_httpx.accept_encoding import ACCEPT_ENCODING_HEADER
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -122,6 +123,7 @@ class OpenAIHTTPClient(httpx.Client):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -136,6 +138,7 @@ class OpenAIAsyncHTTPClient(httpx.AsyncClient):
             timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
             limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
             follow_redirects=True,
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     def __del__(self) -> None:
@@ -180,7 +183,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: dict | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -199,7 +202,7 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=body,
+            body=None if body is None else dict(body),
         )
 
 
@@ -209,6 +212,10 @@ def upstream_error_response(error: Exception) -> httpx.Response | None:
     return error_response_without_credentials(
         error.response.status_code, error.response, "https://docs.litellm.ai/docs"
     )
+
+
+def upstream_error_body(error: Exception) -> Mapping[str, object] | None:
+    return as_str_mapping(error.body) if isinstance(error, openai.APIError) else None
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -472,6 +479,7 @@ class BaseOpenAILLM:
             mounts=AsyncHTTPHandler.create_httpx_proxy_mounts(transport, verify=ssl_config, cert=None),
             follow_redirects=True,
             http2=http2_enabled(),
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod
@@ -498,6 +506,7 @@ class BaseOpenAILLM:
             verify=ssl_config,
             follow_redirects=True,
             http2=http2_enabled(),
+            headers=ACCEPT_ENCODING_HEADER,
         )
 
     @classmethod

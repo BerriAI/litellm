@@ -45,7 +45,7 @@ from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 from litellm.integrations.custom_logger import CustomLogger
 from openai.types.batch import Batch
-from litellm.types.utils import LiteLLMBatch
+from litellm.types.utils import LiteLLMBatch, admin_api_key_secret_reference
 
 
 # --------------------------------------------------------------------------- #
@@ -1202,6 +1202,148 @@ async def test_delete_batch_output_file(respx_mock: respx.MockRouter, monkeypatc
     assert delete_route.call_count == 1
     assert delete_response.id == "file-output123"
     assert delete_response.deleted is True
+
+
+@pytest.mark.asyncio
+async def test_router_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key_on_each_call(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-one")
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "gpt", "litellm_params": {"model": "openai/gpt-4o", "api_key": "oidc/env/OPENAI_SA_TOKEN"}}
+        ]
+    )
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token-two")
+    cancelled: Final = await router.acancel_batch(model="gpt", batch_id="batch_abc123")
+
+    assert [call.request.headers["Authorization"] for call in cancel_route.calls] == [
+        "Bearer env-token-one",
+        "Bearer env-token-two",
+    ]
+    assert cancelled.status == "cancelling"
+
+
+def test_cancel_batch_sends_the_token_behind_an_admin_oidc_env_api_key(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("OPENAI_SA_TOKEN", "env-token")
+    cancel_route: Final = respx_mock.post("https://api.openai.com/v1/batches/batch_abc123/cancel").mock(
+        return_value=httpx.Response(200, json={**_OPENAI_BATCH_JSON, "status": "cancelling"})
+    )
+
+    litellm.cancel_batch(
+        batch_id="batch_abc123",
+        custom_llm_provider="openai",
+        api_key=admin_api_key_secret_reference({"api_key": "oidc/env/OPENAI_SA_TOKEN"})["api_key"],
+    )
+
+    assert cancel_route.calls.last.request.headers["Authorization"] == "Bearer env-token"
+
+
+VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
+VERTEX_IDENTITY: Final = MappingProxyType(
+    {"user_api_key_alias": "chargeback-key", "user_api_key_team_alias": "ai-platform"}
+)
+VERTEX_PROXY_METADATA: Final = MappingProxyType({**VERTEX_IDENTITY, "spend_logs_metadata": {"cost-center": "cc-1"}})
+VERTEX_BATCH_FILE: Final = "gs://bucket/publishers/google/models/gemini-3.8-flash/file-uuid"
+VERTEX_SENT_JOB: Final = TypeAdapter(Mapping[str, object])
+VERTEX_SENT_LABELS: Final = TypeAdapter(Mapping[str, str])
+VERTEX_BATCH_JOBS_URL: Final = (
+    "https://us-central1-aiplatform.googleapis.com/v1/projects/proj/locations/us-central1/batchPredictionJobs"
+)
+
+
+async def _vertex_batch_job_sent(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, batch_metadata: Mapping[str, object]
+) -> Mapping[str, object]:
+    import litellm.llms.vertex_ai.batches.handler as vertex_batches
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    reply: Final = MagicMock(
+        side_effect=lambda _request: httpx.Response(
+            200,
+            json={
+                "name": "projects/proj/locations/us-central1/batchPredictionJobs/123",
+                "state": "JOB_STATE_PENDING",
+                "createTime": "2026-10-29T00:00:00Z",
+            },
+        )
+    )
+    transport: Final = httpx.MockTransport(reply)
+    handler: Final = vertex_batches.VertexAIBatchPrediction(gcs_bucket_name="bucket")
+    monkeypatch.setattr(handler, "_ensure_access_token", lambda **_: ("token", "proj"))
+    monkeypatch.setattr(bm, "vertex_ai_batches_instance", handler)
+    monkeypatch.setattr(
+        vertex_batches, "get_httpx_client", lambda **_: HTTPHandler(client=httpx.Client(transport=transport))
+    )
+    monkeypatch.setattr(vertex_batches, "get_async_httpx_client", lambda **_: AsyncHTTPHandler(transport=transport))
+    batch: Final = {
+        "completion_window": "24h",
+        "endpoint": "/v1/chat/completions",
+        "input_file_id": VERTEX_BATCH_FILE,
+        "custom_llm_provider": "vertex_ai",
+        "vertex_location": "us-central1",
+        **batch_metadata,
+    }
+    if is_async:
+        await bm.acreate_batch(**batch)
+    else:
+        bm.create_batch(**batch)
+
+    sent: Final[httpx.Request] = reply.call_args.args[0]
+    assert str(sent.url) == VERTEX_BATCH_JOBS_URL
+    return VERTEX_SENT_JOB.validate_json(sent.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_carries_proxy_identity_never_the_callers_batch_metadata(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool
+):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch,
+        is_async,
+        {
+            "metadata": {"user_api_key_alias": "forged", "user_api_key_team_alias": "forged", "app": "bot"},
+            "litellm_metadata": dict(VERTEX_PROXY_METADATA),
+        },
+    )
+
+    labels: Final = VERTEX_SENT_LABELS.validate_python(job["labels"])
+    assert list(labels.items()) == [*VERTEX_IDENTITY.items(), ("cost-center", "cc-1")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_metadata_alone_never_labels_the_job(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", VERTEX_LABEL_FIELDS)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {**VERTEX_IDENTITY, "spend_logs_metadata": "cc-1"}}
+    )
+
+    assert "labels" not in job
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_vertex_batch_job_with_the_setting_off_is_unlabelled(monkeypatch: pytest.MonkeyPatch, is_async: bool):
+    monkeypatch.setattr(litellm, "vertex_request_label_fields", None)
+
+    job: Final = await _vertex_batch_job_sent(
+        monkeypatch, is_async, {"metadata": {"app": "bot"}, "litellm_metadata": dict(VERTEX_PROXY_METADATA)}
+    )
+
+    assert "labels" not in job
 
 
 VLLM_ROUTER_API_BASE: Final = "http://vllm-router.test/v1"

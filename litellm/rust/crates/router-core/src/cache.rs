@@ -5,12 +5,12 @@
 
 use std::{
     collections::HashMap,
+    future::Future,
     hash::Hash,
     sync::Arc,
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use litellm_cache::Error;
 use parking_lot::Mutex;
 use serde::Deserialize;
@@ -51,49 +51,121 @@ pub struct Outcomes {
     pub fails: u64,
 }
 
-#[async_trait]
 pub trait RouterCache: Send + Sync {
     /// The stored cooldown of each of `ids`, in order, `None` for one without.
-    async fn cooldowns(&self, ids: &[String]) -> Result<Vec<Option<CooldownValue>>, Error>;
+    fn cooldowns(
+        &self,
+        ids: &[String],
+    ) -> impl Future<Output = Result<Vec<Option<CooldownValue>>, Error>> + Send;
 
-    async fn put_cooldown(
+    fn put_cooldown(
         &self,
         id: &str,
         cooldown: &CooldownValue,
         ttl: Duration,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// Count one more failure against `id`'s allowed fails (per `suffix` when one is given) and
     /// return the count. `ttl` applies when the counter is created.
-    async fn increment_allowed_fails(
+    fn increment_allowed_fails(
         &self,
         id: &str,
         suffix: Option<&str>,
         ttl: Duration,
-    ) -> Result<f64, Error>;
+    ) -> impl Future<Output = Result<f64, Error>> + Send;
 
     /// `_increment_deployment_usage`'s write: tokens and requests in one round trip.
-    async fn add_usage(
+    fn add_usage(
         &self,
         window: &UsageWindow,
         tokens: f64,
         requests: f64,
-    ) -> Result<(), Error>;
+    ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// One more request on `window`.
-    async fn add_request(&self, window: &UsageWindow) -> Result<(), Error>;
+    fn add_request(&self, window: &UsageWindow) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn usage(&self, window: &UsageWindow) -> Result<UsageCounts, Error>;
+    fn usage(
+        &self,
+        window: &UsageWindow,
+    ) -> impl Future<Output = Result<UsageCounts, Error>> + Send;
 
     /// The background health checks' latest state of each deployment they checked, by id.
-    async fn health_states(&self) -> Result<HashMap<String, HealthState>, Error>;
+    fn health_states(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<String, HealthState>, Error>> + Send;
 
     /// `id`'s outcomes in this worker, which no other worker sees.
-    async fn outcomes(&self, id: &str) -> Result<Outcomes, Error>;
+    fn outcomes(&self, id: &str) -> impl Future<Output = Result<Outcomes, Error>> + Send;
 
-    async fn count_success(&self, id: &str) -> Result<(), Error>;
+    fn count_success(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
 
-    async fn count_failure(&self, id: &str) -> Result<(), Error>;
+    fn count_failure(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send;
+}
+
+impl<T: RouterCache + ?Sized> RouterCache for &T {
+    fn cooldowns(
+        &self,
+        ids: &[String],
+    ) -> impl Future<Output = Result<Vec<Option<CooldownValue>>, Error>> + Send {
+        (**self).cooldowns(ids)
+    }
+
+    fn put_cooldown(
+        &self,
+        id: &str,
+        cooldown: &CooldownValue,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        (**self).put_cooldown(id, cooldown, ttl)
+    }
+
+    fn increment_allowed_fails(
+        &self,
+        id: &str,
+        suffix: Option<&str>,
+        ttl: Duration,
+    ) -> impl Future<Output = Result<f64, Error>> + Send {
+        (**self).increment_allowed_fails(id, suffix, ttl)
+    }
+
+    fn add_usage(
+        &self,
+        window: &UsageWindow,
+        tokens: f64,
+        requests: f64,
+    ) -> impl Future<Output = Result<(), Error>> + Send {
+        (**self).add_usage(window, tokens, requests)
+    }
+
+    fn add_request(&self, window: &UsageWindow) -> impl Future<Output = Result<(), Error>> + Send {
+        (**self).add_request(window)
+    }
+
+    fn usage(
+        &self,
+        window: &UsageWindow,
+    ) -> impl Future<Output = Result<UsageCounts, Error>> + Send {
+        (**self).usage(window)
+    }
+
+    fn health_states(
+        &self,
+    ) -> impl Future<Output = Result<HashMap<String, HealthState>, Error>> + Send {
+        (**self).health_states()
+    }
+
+    fn outcomes(&self, id: &str) -> impl Future<Output = Result<Outcomes, Error>> + Send {
+        (**self).outcomes(id)
+    }
+
+    fn count_success(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send {
+        (**self).count_success(id)
+    }
+
+    fn count_failure(&self, id: &str) -> impl Future<Output = Result<(), Error>> + Send {
+        (**self).count_failure(id)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -127,7 +199,7 @@ struct State {
     health_states: HashMap<String, HealthState>,
 }
 
-/// An in-process [`RouterCache`], for tests.
+/// An in-process [`RouterCache`]: one process's routing state, shared with no other worker.
 #[derive(Clone, Default)]
 pub struct InMemoryRouterCache {
     state: Arc<Mutex<State>>,
@@ -167,7 +239,6 @@ impl InMemoryRouterCache {
     }
 }
 
-#[async_trait]
 impl RouterCache for InMemoryRouterCache {
     async fn cooldowns(&self, ids: &[String]) -> Result<Vec<Option<CooldownValue>>, Error> {
         let mut state = self.state.lock();

@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core_utils::settings::Lookup;
+use litellm_env::Lookup;
 use litellm_secret_value::SecretValue;
 use litellm_secrets::{
     KeyManagementSettings, SecretManager,

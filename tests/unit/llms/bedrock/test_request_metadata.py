@@ -15,9 +15,6 @@ from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformati
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
 from litellm.llms.bedrock.request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
     BEDROCK_REQUEST_METADATA_HEADER_MAX_CHARS,
@@ -74,10 +71,6 @@ def test_feature_off_by_default_leaves_body_and_headers_untouched(setting, monke
     assert BEDROCK_REQUEST_METADATA_HEADER not in AmazonInvokeConfig().validate_environment(
         headers={}, model=MODEL, messages=MESSAGES, optional_params={}, litellm_params=dict(params)
     )
-    messages_headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
-        headers={}, model=MODEL, messages=MESSAGES, optional_params={}, litellm_params=dict(params)
-    )
-    assert BEDROCK_REQUEST_METADATA_HEADER not in messages_headers
 
 
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
@@ -88,18 +81,6 @@ def test_resolver_reads_both_metadata_variable_names(metadata_key, monkeypatch: 
     params = litellm_params(metadata_key, spend_logs_metadata={"cost_center": "cc-1"}, **IDENTITY)
 
     assert converse_body(params)["requestMetadata"] == {**IDENTITY, "cost_center": "cc-1"}
-
-
-@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
-def test_invoke_messages_header_reads_both_metadata_variable_names(metadata_key, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ALL_FIELDS)
-    params = litellm_params(metadata_key, **IDENTITY)
-
-    headers, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
-        headers={}, model=MODEL, messages=MESSAGES, optional_params={}, litellm_params=params
-    )
-
-    assert json.loads(headers[BEDROCK_REQUEST_METADATA_HEADER]) == IDENTITY
 
 
 @pytest.mark.parametrize("reverse_client_keys", [False, True])
@@ -354,17 +335,6 @@ def invoke_headers(caller_headers, params, optional_params=None):
     )
 
 
-def messages_headers(caller_headers, params):
-    resolved, _ = AmazonAnthropicClaudeMessagesConfig().validate_anthropic_messages_environment(
-        headers=dict(caller_headers),
-        model=MODEL,
-        messages=MESSAGES,
-        optional_params={},
-        litellm_params=dict(params),
-    )
-    return resolved
-
-
 def openai_invoke_headers(caller_headers, params):
     return AmazonBedrockOpenAIConfig().validate_environment(
         headers=dict(caller_headers),
@@ -385,7 +355,7 @@ def converse_headers(caller_headers, params):
     )
 
 
-HEADER_DRIVERS = [invoke_headers, messages_headers, openai_invoke_headers, converse_headers]
+HEADER_DRIVERS = [invoke_headers, openai_invoke_headers, converse_headers]
 
 
 def metadata_header_values(headers):
