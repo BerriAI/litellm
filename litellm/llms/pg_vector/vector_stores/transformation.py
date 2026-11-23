@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
@@ -28,9 +27,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
     - api_key: API key for authentication with the PG vector service
     """
 
-    def validate_environment(
-        self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None
-    ) -> dict[str, object]:
+    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate environment and set headers for PG vector service authentication
         """
@@ -56,7 +53,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> str:
         """
         Get the complete URL for PG vector service endpoints

@@ -63,14 +63,14 @@ class BaseBatchesConfig(ABC):
     @abstractmethod
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
         Validate and prepare environment-specific headers and parameters.
 
@@ -93,8 +93,8 @@ class BaseBatchesConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -117,8 +117,8 @@ class BaseBatchesConfig(ABC):
         self,
         model: str,
         create_batch_data: CreateBatchRequest,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
     ) -> bytes | str | dict[str, object]:
         """
         Transform the batch creation request to provider-specific format.
@@ -158,8 +158,8 @@ class BaseBatchesConfig(ABC):
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
     ) -> bytes | str | dict[str, object]:
         """
         Transform the batch retrieval request to provider-specific format.
@@ -179,7 +179,7 @@ class BaseBatchesConfig(ABC):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict[str, object],
+        litellm_params: dict,
     ) -> LiteLLMBatch:
         """
         Transform provider-specific batch retrieval response to LiteLLM format.
@@ -195,9 +195,7 @@ class BaseBatchesConfig(ABC):
         """
 
     @abstractmethod
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, str] | Headers
-    ) -> "BaseLLMException":
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> "BaseLLMException":
         """
         Get the appropriate error class for this provider.
 
