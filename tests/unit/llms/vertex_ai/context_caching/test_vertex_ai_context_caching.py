@@ -2741,6 +2741,67 @@ def test_a_cache_mark_on_the_last_reminder_keeps_one_gemini_cache_and_the_remind
     ]
 
 
+def _cached_question_then_a_reminder_marked(
+    reminder_mark: Mapping[str, str], user_turns: int
+) -> list[AllMessageValues]:
+    later_turns: Final = tuple(chain.from_iterable(map(_later_turn_with_a_reminder, range(2, user_turns + 1))))
+    return [
+        {"role": "system", "content": "shared policy " * 3000},
+        {"role": "user", "content": [{"type": "text", "text": "question 1", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "system", "content": [{"type": "text", "text": "1 of 8 turns used", "cache_control": reminder_mark}]},
+        *later_turns,
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_ttl_on_a_reminder_that_ends_the_cached_block_still_sets_how_long_the_gemini_cache_lives(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for user_turns in (1, 2):
+        await complete(
+            {
+                "model": "gemini/gemini-flash-latest",
+                "messages": _cached_question_then_a_reminder_marked({"type": "ephemeral", "ttl": "5m"}, user_turns),
+                "api_key": "test-key",
+            },
+            calls,
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
+    assert [(body["contents"], body.get("ttl")) for body in created] == [
+        ([{"role": "user", "parts": [{"text": "question 1"}]}], "300s")
+    ]
+    assert generated[1]["cachedContent"] == "cachedContents/created"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [_complete_sync, _complete_async])
+async def test_a_reminder_ttl_gets_its_own_gemini_cache_beside_one_made_without_a_ttl(
+    local_model_cost_map: None, complete: Callable[[Mapping[str, object], list[httpx.Request]], Awaitable[None]]
+) -> None:
+    calls: Final[list[httpx.Request]] = []
+    for reminder_mark in ({"type": "ephemeral"}, {"type": "ephemeral", "ttl": "5m"}):
+        await complete(
+            {
+                "model": "gemini/gemini-flash-latest",
+                "messages": _cached_question_then_a_reminder_marked(reminder_mark, 1),
+                "api_key": "test-key",
+            },
+            calls,
+        )
+
+    created: Final = tuple(
+        json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    )
+    assert [body.get("ttl") for body in created] == [None, "300s"]
+    assert created[0]["displayName"] != created[1]["displayName"]
+
+
 def test_a_cached_block_from_a_later_turn_that_ends_on_a_reminder_goes_out_uncached_and_in_order(
     local_model_cost_map,
 ) -> None:
