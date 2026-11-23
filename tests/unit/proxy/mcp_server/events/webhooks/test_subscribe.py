@@ -425,6 +425,22 @@ async def test_a_renewal_cannot_revive_a_subscription_an_unsubscribe_is_holding(
 
 
 @pytest.mark.asyncio
+async def test_a_failed_reactivation_keeps_the_suspended_subscription_upstream() -> None:
+    store = MemoryStore()
+    upstream = FakeUpstream(responses={"events/subscribe": UPSTREAM_OK})
+    await _subscribe(store, upstream, _Client())
+    suspended = store.rows[SID].model_copy(update={"status": "suspended"})
+    store.rows[SID] = suspended
+    store.fail_enqueue = True
+    with pytest.raises(ConnectionError):
+        await _subscribe(store, upstream, _Client())
+    assert (store.rows[SID], [method for method, *_ in upstream.calls]) == (
+        suspended,
+        ["events/subscribe", "events/subscribe"],
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_failed_activation_write_undoes_the_upstream_subscription() -> None:
     class _WriteFails(MemoryStore):
         async def activate(
