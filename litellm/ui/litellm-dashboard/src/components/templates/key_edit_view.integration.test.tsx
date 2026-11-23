@@ -377,6 +377,24 @@ describe("KeyEditView", () => {
     expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).store_prompts_in_spend_logs).toBe(false);
   });
 
+  it("submits an explicitly disabled semantic cache in key metadata", async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+    renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={() => {}}
+        onSubmit={onSubmit}
+        accessToken=""
+        userID=""
+        userRole="Admin"
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "false" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(JSON.parse(onSubmit.mock.calls[0][0].metadata).cache_params).toEqual({ enabled: false });
+  });
+
   it("should render tags", async () => {
     renderWithProviders(
       <KeyEditView

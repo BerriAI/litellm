@@ -1302,6 +1302,7 @@ class _ProxyDBLogger(CustomLogger):
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
+                    for_auth=True,
                 )
                 if team_obj.team_alias is not None:
                     metadata["user_api_key_team_alias"] = team_obj.team_alias

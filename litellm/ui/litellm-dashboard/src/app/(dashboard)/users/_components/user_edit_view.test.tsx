@@ -345,6 +345,35 @@ describe("UserEditView", () => {
     expect(callArgs.metadata).toEqual(MOCK_USER_DATA.user_info.metadata);
   });
 
+  it("submits a semantic cache TTL alongside existing user metadata", async () => {
+    const onSubmit = vi.fn();
+    renderWithProviders(<UserEditView {...defaultProps} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("TTL in seconds"), { target: { value: "37" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({
+      ...MOCK_USER_DATA.user_info.metadata,
+      cache_params: { ttl: 37 },
+    });
+  });
+
+  it("submits a semantic cache clear when it was the only user metadata", async () => {
+    const onSubmit = vi.fn();
+    const userData = {
+      ...MOCK_USER_DATA,
+      user_info: { ...MOCK_USER_DATA.user_info, metadata: { cache_params: { enabled: false } } },
+    };
+    renderWithProviders(<UserEditView {...defaultProps} userData={userData} onSubmit={onSubmit} />);
+
+    fireEvent.change(screen.getByLabelText("Cache mode"), { target: { value: "" } });
+    await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0].metadata).toEqual({ cache_params: null });
+  });
+
   it("uses No change for an unset reset period in bulk edit", async () => {
     const onSubmit = vi.fn();
     const userDataWithUnsetResetPeriod = {
