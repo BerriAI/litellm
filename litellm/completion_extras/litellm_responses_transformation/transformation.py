@@ -1867,6 +1867,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None
         )
 
+        if (
+            len(choices) == 0
+            and raw_response.status == "completed"
+            and len(output_items) > 0
+            and len(_reasoning_items_from_output_items(output_items)) == len(output_items)
+        ):
+            # The model reasoned and ended the turn with no text or tool call
+            choices.append(self._build_empty_choice(output_items, "stop"))
+
         if len(choices) == 0 and not response_is_incomplete:
             raise ValueError(f"Unknown items in responses API response: {output_items}")
 
