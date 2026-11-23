@@ -301,13 +301,14 @@ def test_saving_an_unchanged_okta_binding_rewrites_it_only_when_its_org_changed(
     assert ("identity" in result) is writes
 
 
-@pytest.mark.parametrize("mode", ["delegated", "both"])
-def test_okta_bindings_run_autonomous_only_until_delegation_ships(mode: AgentExecutionMode) -> None:
+@pytest.mark.parametrize("mode", ["autonomous", "delegated", "both"])
+def test_okta_bindings_accept_every_execution_mode(mode: AgentExecutionMode) -> None:
     result: Final = managed_write_fields(
         {"identity": OKTA_IDENTITY, "execution_mode": mode}, None, "admin", {OKTA_ISSUER: "acme"}
     )
 
-    assert isinstance(result, AgentIdentityFailure)
+    assert not isinstance(result, AgentIdentityFailure)
+    assert result["execution_mode"] == mode
 
 
 @pytest.mark.parametrize("provider", ["microsoft_entra", "okta"])

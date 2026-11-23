@@ -38,7 +38,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.identity import has_legacy_identity
 from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore, resolve_managed_agent
-from litellm.proxy.agent_endpoints.okta_identity import okta_issuers
+from litellm.proxy.agent_endpoints.okta_identity import OktaAgents, okta_issuers
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     TeamNotFoundError,
@@ -57,6 +57,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object_by_alias,
     get_user_object,
     get_user_role,
+    read_email_verified,
     read_team,
     resolve_and_validate_end_user_id,
 )
@@ -67,6 +68,7 @@ from litellm.proxy.auth.host.facts import (
     FoundTeam,
     RegisteredAgentFacts,
     TeamMissing,
+    deactivated,
     end_user_params,
     team_facts,
     with_project,
@@ -75,6 +77,7 @@ from litellm.proxy.auth.host.identity import auto_registered_key
 from litellm.proxy.auth.host.steps import jwt_auto_register, team_member_add
 from litellm.proxy.auth.host.steps.budgets import BudgetChecks, proxy_budget_alert
 from litellm.proxy.auth.jwt import auth_from_result, jwt_result
+from litellm.proxy.auth.jwt import claims as claims_reading
 from litellm.proxy.auth.resolvers.exceptions import KeyNotFoundError
 from litellm.proxy.auth.resolvers.grants import (
     GrantResolver,
@@ -104,7 +107,7 @@ from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.rust_bridge._native import RustIdentity
 from litellm.types.agents import AgentResponse
-from litellm.types.proxy.agent_identity import AgentIdentityFailure, ManagedAgentContext
+from litellm.types.proxy.agent_identity import NO_PERSON, AgentIdentityFailure, ManagedAgentContext
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
@@ -799,8 +802,30 @@ class PythonAuthHost:
 
     async def managed_agent(self, claims: Mapping[str, object]) -> ManagedAgentContext | None:
         return await resolve_managed_agent(
-            claims, self.prisma_client, cache=self.user_api_key_cache, okta=okta_issuers(self.litellm_jwtauth)
+            claims,
+            self.prisma_client,
+            cache=self.user_api_key_cache,
+            okta=OktaAgents(okta_issuers(self.litellm_jwtauth), self.okta_person),
         )
+
+    async def okta_person(self, claims: Mapping[str, object], /) -> str | AgentIdentityFailure | None:
+        reading: Final = claims_reading(claims, self.litellm_jwtauth)
+        if reading.valid_user_email is False:
+            return None
+        user_id: Final = reading.effective_user_id
+        if not user_id:
+            return NO_PERSON
+        resolved: Final = await self.resolve_user_identity(
+            user_id,
+            reading.user_email,
+            user_id,
+            False,
+            None,
+            read_email_verified(claims.get("email_verified")),
+        )
+        if resolved is None:
+            return NO_PERSON
+        return None if deactivated(resolved[0]) else resolved[0].user_id
 
     async def record_agent_authentication(self, agent: ManagedAgentContext) -> AgentIdentityFailure | None:
         return await AgentIdentityStore.from_client(self.prisma_client).record_authentication(agent)

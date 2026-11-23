@@ -82,8 +82,6 @@ def _configuration_failure(
     enabling_without_binding: bool,
 ) -> AgentIdentityFailure | None:
     provider: Final = identity.provider if identity is not None else None
-    if provider == "okta" and mode != "autonomous":
-        return AgentIdentityFailure(message="Okta agent identities support autonomous mode only")
     if provider == "microsoft_entra" and mode != "delegated" and not _service_principal(identity):
         return AgentIdentityFailure(
             message="Autonomous mode requires the Enterprise application service-principal object ID"

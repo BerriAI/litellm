@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm._internal_context import with_service_target
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
-from litellm.proxy.agent_endpoints.okta_identity import OktaIssuer, resolve_okta_claims
+from litellm.proxy.agent_endpoints.okta_identity import OktaAgents, resolve_okta_claims
 from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, get_management_object_ttl
 from litellm.redis.stores.auth_cache import AuthObject
@@ -136,11 +136,11 @@ class AgentIdentityStore:
         return agent
 
     async def resolve_verified_claims(
-        self, claims: Mapping[str, object], okta: Mapping[str, OktaIssuer] | None = None
+        self, claims: Mapping[str, object], okta: OktaAgents | None = None
     ) -> ManagedAgentContext | AgentIdentityFailure | None:
         issuer: Final = claims.get("iss")
-        if okta is not None and isinstance(issuer, str) and issuer in okta:
-            return await resolve_okta_claims(claims, okta[issuer], self.okta_agent)
+        if okta is not None and isinstance(issuer, str) and issuer in okta.issuers:
+            return await resolve_okta_claims(claims, okta.issuers[issuer], self.okta_agent, okta.person)
         tenant: Final = claims.get("tid")
         client: Final = claims.get("azp")
         if not isinstance(issuer, str) or not isinstance(tenant, str) or not isinstance(client, str):
@@ -254,7 +254,7 @@ async def resolve_managed_agent(
     client: object,
     *,
     cache: UserApiKeyCache | None = None,
-    okta: Mapping[str, OktaIssuer] | None = None,
+    okta: OktaAgents | None = None,
 ) -> ManagedAgentContext | None:
     from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 
