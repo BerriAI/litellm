@@ -10,8 +10,8 @@ export const organizationAppKey = (appId: string | null, organizationId: string)
 
 export const invalidateAppBudgets = (queryClient: QueryClient) =>
   Promise.all(
-    ["app-resources", "apps", "app", "app-organization", "app-member"].map((key) =>
-      queryClient.invalidateQueries({ queryKey: [key] }),
+    ["app-resources", "apps", "app", "app-organization", "app-member", "app-groups", "app-group-organizations"].map(
+      (key) => queryClient.invalidateQueries({ queryKey: [key] }),
     ),
   );
 
@@ -33,18 +33,25 @@ export const loadAppDefinition = async () => {
   return response.data;
 };
 
-export const loadAppResources = async (resourceType: AppResourceType, offset = 0): Promise<AppResource[]> => {
-  const response = await fetchClient.GET("/management/v1/apps/resources", {
-    params: { query: { resource_type: resourceType, offset, limit: 100 } },
-  });
-  const page = response.data ?? [];
-  return page.length === 100 ? [...page, ...(await loadAppResources(resourceType, offset + 100))] : page;
-};
+export async function loadAppPages<T>(
+  request: (query: { offset: number; limit: number }) => Promise<{ data?: T[] }>,
+  offset = 0,
+): Promise<T[]> {
+  const { data } = await request({ offset, limit: 100 });
+  const page = data ?? [];
+  return page.length === 100 ? [...page, ...(await loadAppPages(request, offset + 100))] : page;
+}
 
-export const loadApps = async (offset = 0): Promise<App[]> => {
-  const result = await fetchClient.GET("/management/v1/apps", { params: { query: { offset, limit: 100 } } });
-  const page = result.data ?? [];
-  return page.length === 100 ? [...page, ...(await loadApps(offset + 100))] : page;
-};
+export const loadAppResources = (resourceType: AppResourceType, offset = 0): Promise<AppResource[]> =>
+  loadAppPages(
+    (query) =>
+      fetchClient.GET("/management/v1/apps/resources", {
+        params: { query: { ...query, resource_type: resourceType } },
+      }),
+    offset,
+  );
+
+export const loadApps = (offset = 0): Promise<App[]> =>
+  loadAppPages((query) => fetchClient.GET("/management/v1/apps", { params: { query } }), offset);
 
 export { appSpend } from "./appBudgetPresentation";

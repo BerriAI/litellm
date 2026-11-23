@@ -124,7 +124,8 @@ export default function TeamMemberTab({
 
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
-    return findMembership(userId)?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
+    const membership = findMembership(userId);
+    return membership?.effective_max_budget ?? membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user
@@ -250,14 +251,22 @@ export default function TeamMemberTab({
       sortValue: (record: Member) => getUserBudget(record.user_id),
       render: (record: Member) => {
         const source = getUserBudgetSource(record.user_id);
+        const credit = findMembership(record.user_id)?.rollover_credit;
         return (
           <span className="flex items-center justify-end gap-2">
-            <MoneyCell
-              value={getUserBudget(record.user_id)}
-              decimals={2}
-              emptyText={t("teams.memberTab.unlimited")}
-              showZero
-            />
+            <span>
+              <MoneyCell
+                value={getUserBudget(record.user_id)}
+                decimals={2}
+                emptyText={t("teams.memberTab.unlimited")}
+                showZero
+              />
+              {credit != null && (
+                <span className="block text-xs text-muted-foreground">
+                  {t("teams.memberTab.rolledOver", { amount: formatNumberWithCommas(credit, 2) })}
+                </span>
+              )}
+            </span>
             {source !== "none" && (
               <Badge variant={source === "custom" ? "outline" : "secondary"} data-testid="member-budget-source">
                 {t(BUDGET_SOURCE_LABEL_KEYS[source])}

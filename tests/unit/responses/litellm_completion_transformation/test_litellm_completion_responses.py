@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
@@ -46,6 +48,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -1007,6 +1010,184 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].name == "spawn_agent"
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
+
+    def test_namespace_member_past_64_characters_round_trips_through_a_chat_name_within_64(self):
+        namespace = "mcp__codex_apps__codex_document_control"
+        member = "_get_document_tool_schemas"
+        sibling = "_get_document_tool_schemas_v2"
+        request_tools = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Document control",
+                "tools": [
+                    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                    for name in (member, sibling)
+                ],
+            }
+        ]
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=request_tools
+        )
+        chat_names = [tool["function"]["name"] for tool in chat_tools]
+        assert len(f"{namespace}__{member}") > 64
+        assert all(len(name) <= 64 for name in chat_names)
+        assert len(set(chat_names)) == 2
+
+        echoed = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": member,
+                "namespace": namespace,
+                "call_id": "call_echo",
+                "arguments": "{}",
+            }
+        )
+        assert echoed[0]["tool_calls"][0]["function"]["name"] == chat_names[0]
+
+        tool_call_id = "call_long_namespace_member"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="muse-ember-1.0",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name=chat_names[0], arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="List the document tools",
+                    responses_api_request={"tools": request_tools},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(call.namespace, call.name) for call in tool_calls] == [(namespace, member)]
+
+    def test_forced_tool_choice_on_a_namespace_member_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="Fetch the document tool schemas",
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ],
+                "tool_choice": {"type": "function", "name": f"{namespace}__{member}"},
+            },
+            custom_llm_provider="azure_ai",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        assert len(declared_names[0]) <= 64
+        assert result["tool_choice"] == {"type": "function", "function": {"name": declared_names[0]}}
+
+    def test_replayed_function_call_with_a_joined_name_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-haiku-5-5",
+            input=[
+                {"type": "message", "role": "user", "content": "Fetch the document tool schemas"},
+                {
+                    "type": "function_call",
+                    "name": f"{namespace}__{member}",
+                    "call_id": "call_flattened_history",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_flattened_history", "output": "[]"},
+            ],
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ]
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        replayed_names: Final = [
+            call["function"]["name"] for message in result["messages"] for call in message.get("tool_calls") or ()
+        ]
+        assert len(declared_names[0]) <= 64
+        assert replayed_names == declared_names
+
+    def test_transform_tools_rejects_a_top_level_function_named_like_a_namespace_member_past_64_characters(
+        self,
+    ) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        with pytest.raises(
+            litellm.BadRequestError,
+            match=f"Top-level function names conflict with flattened namespace tools: {namespace}__{member}",
+        ) as exc_info:
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {"type": "function", "name": f"{namespace}__{member}", "parameters": {"type": "object"}},
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}}],
+                    },
+                ]
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_transform_tools_rejects_a_namespace_member_named_like_another_members_shortened_name(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = "_get_document_tool_schemas"
+        shortened: Final = chat_member_name(namespace, long_member)
+        with pytest.raises(litellm.BadRequestError, match=f"Flattened namespace tools share a name: {shortened}"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [
+                            {"type": "function", "name": long_member, "parameters": {"type": "object"}},
+                            {
+                                "type": "function",
+                                "name": shortened.removeprefix(f"{namespace}__"),
+                                "parameters": {"type": "object"},
+                            },
+                        ],
+                    },
+                ]
+            )
 
     def test_transform_chat_completion_response_deferred_top_level_tool_call_has_namespace_equal_to_name(self):
         """A deferred top-level function (defer_loading=True) comes back with namespace == name,
@@ -3676,6 +3857,25 @@ class TestToolTransformation:
         assert result["admin__run"] == ("admin", "run")
         assert "run" not in result
 
+    def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
+        tools = [
+            {
+                "type": "namespace",
+                "name": "x",
+                "tools": [{"type": "function", "name": "foo", "parameters": {"type": "object"}}],
+            },
+            {
+                "type": "namespace",
+                "name": "y",
+                "tools": [{"type": "function", "name": "x__foo", "parameters": {"type": "object"}}],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["x__foo"] == ("x", "foo")
+        assert result["y__x__foo"] == ("y", "x__foo")
+
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
             {
@@ -3697,7 +3897,7 @@ class TestToolTransformation:
         ]
 
         with pytest.raises(
-            ValueError,
+            litellm.BadRequestError,
             match="Top-level function names conflict with flattened namespace tools: admin__run",
         ):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
@@ -4899,6 +5099,7 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._pending_response_events = []
         iterator._pending_tool_events = []
         iterator._annotations_awaiting_message = ()
+        iterator._compaction_summary = None
         iterator._tool_output_index_by_call_id = {}
         iterator._tool_args_by_call_id = {}
         iterator._tool_item_id_by_call_id = {}
@@ -8413,6 +8614,127 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_DEEPWIKI_MCP_TOOL: Final = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    }
+)
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+@pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
+def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
+    monkeypatch: pytest.MonkeyPatch, function_names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_stays_a_400_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'") as exc:
+        litellm.responses(
+            model="gemini/gemini-3.8-flash",
+            input="Weather in Paris?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+            tool_choice={"type": "mcp", "server_label": "unsent"},
+            drop_params=True,
+            api_key="gemini-test-key",
+        )
+
+    assert "This request sends no hosted MCP tool with server_label `unsent`." in exc.value.message
+    assert not gemini.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_function_tool_choice_under_drop_params_still_forces_the_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+        tool_choice={"type": "function", "name": "get_weather"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert sent["toolConfig"]["functionCallingConfig"]["allowed_function_names"] == ["get_weather"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_without_drop_params_is_a_400_on_a_route_that_runs_the_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = respx.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_weather",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Sunny."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        }
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model="anthropic/claude-haiku-5-5",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "deepwiki"},
+            api_key="anthropic-test-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert not anthropic.called
 
 
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"

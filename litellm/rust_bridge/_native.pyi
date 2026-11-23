@@ -35,6 +35,7 @@ from litellm.types.integrations.custom_logger_v2 import BudgetPlan, BudgetReserv
 from litellm.types.proxy.agent_identity import ManagedAgentContext
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.native_budgets import BudgetCheck
+from litellm.types.proxy.spend_log_rows import LedgerColumns, NativeSpendLogRow
 
 _T_co = TypeVar("_T_co", covariant=True)
 
@@ -810,9 +811,12 @@ class RustIdentity:
 
     @final
     class MappedJwtKey(RustIdentity):
-        __match_args__: tuple[
-            Literal["claims"], Literal["end_user_id"], Literal["user_email"], Literal["context"]
-        ] = ("claims", "end_user_id", "user_email", "context")
+        __match_args__: tuple[Literal["claims"], Literal["end_user_id"], Literal["user_email"], Literal["context"]] = (
+            "claims",
+            "end_user_id",
+            "user_email",
+            "context",
+        )
         def __new__(
             cls,
             claims: dict[str, object],
@@ -1806,7 +1810,6 @@ def jwt_unverified_claims(token: str) -> dict[str, object] | None: ...
 def jwt_presents_claims(token: str, claims: dict[str, object]) -> bool: ...
 def jwt_claims(claims: dict[str, object], litellm_jwtauth: LiteLLM_JWTAuth) -> RustMappedClaims: ...
 def jwt_is_allowed_domain(user_email: str, litellm_jwtauth: LiteLLM_JWTAuth) -> bool: ...
-def jwt_key_mapping_cache_key(claim_field: str, claim_value: str, issuer: str | None = None) -> str: ...
 def auth_route_matches_wildcard(route: str, pattern: str) -> bool: ...
 def auth_managed_route(route: str) -> Literal["discovery", "realtime", "live", "model", "tool", "other"]: ...
 def auth_managed_agent_route_allowed(route: str, method: str | None = None) -> bool: ...
@@ -1815,6 +1818,7 @@ def auth_route_matches_denied(route: str, denied_route: str) -> bool: ...
 def auth_first_denied_route(forwarded_routes: Sequence[str], denied_sources: Sequence[object]) -> str | None: ...
 def auth_jwt_team_routes_grant(route: str, team_allowed_routes: object) -> bool: ...
 def auth_allowed_routes_grant(route: str, *, key: object, team: object) -> bool: ...
+
 @final
 class AuthObject:
     @staticmethod
@@ -1851,6 +1855,16 @@ class AuthObject:
     def customer_org_alias(customer_org_alias: str) -> AuthObject: ...
     @staticmethod
     def customer_app_definition() -> AuthObject: ...
+    @staticmethod
+    def customer_app(resource_type: str, resource_id: str) -> AuthObject: ...
+    @staticmethod
+    def customer_app_association(scope: str, app_id: str, customer_id: str) -> AuthObject: ...
+    @staticmethod
+    def customer_app_budget(budget_id: str) -> AuthObject: ...
+    @staticmethod
+    def customer_app_key_resource(hashed_token: str) -> AuthObject: ...
+    @staticmethod
+    def customer_app_shared_profiles() -> AuthObject: ...
     @staticmethod
     def default_end_user_budget(budget_id: str) -> AuthObject: ...
     @staticmethod
@@ -1895,38 +1909,67 @@ class NativeAuthCache:
         memory_entries: int,
         memory_ttl_seconds: float | None = None,
     ) -> NativeAuthCache: ...
+    def attach(self, client: NativeRedisClient) -> bool: ...
     @property
     def has_redis(self) -> bool: ...
-    def get(self, key: str, request: NativeRequestRedis | None) -> Future[object]: ...
+    def get(self, key: AuthObject, request: NativeRequestRedis | None) -> Future[object]: ...
     def reconfigure(self, *, memory_entries: int, memory_ttl_seconds: float | None = None) -> None: ...
-    def get_sync(self, key: str) -> object: ...
+    def get_sync(self, key: AuthObject) -> object: ...
     def set(
-        self, key: str, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
+        self, key: AuthObject, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
     ) -> Future[None]: ...
     def set_sync(
-        self, key: str, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
+        self, key: AuthObject, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
     ) -> None: ...
-    def lease(self, key: str) -> Future[str | None]: ...
+    def lease(self, key: AuthObject) -> Future[str | None]: ...
     def set_leased(
-        self, key: str, lease: str | None, value: object, ttl_seconds: float | None, request: NativeRequestRedis | None
+        self,
+        key: AuthObject,
+        lease: str | None,
+        value: object,
+        ttl_seconds: float | None,
+        request: NativeRequestRedis | None,
     ) -> Future[bool]: ...
     def declare_set(
-        self, key: str, value: object, ttl_seconds: float | None, send: NativeSend
+        self, key: AuthObject, value: object, ttl_seconds: float | None, send: NativeSend
     ) -> NativePending[None]: ...
     def declare_delete(self, key: str, send: NativeSend) -> NativePending[None]: ...
     def set_many(
-        self, entries: Sequence[tuple[str, object]], ttl_seconds: float | None, request: NativeRequestRedis | None
+        self,
+        entries: Sequence[tuple[AuthObject, object]],
+        ttl_seconds: float | None,
+        request: NativeRequestRedis | None,
     ) -> Future[None]: ...
-    def write_back(self, entries: Sequence[tuple[str, object, float | None]], send: NativeSend) -> Future[None]: ...
+    def write_back(
+        self, entries: Sequence[tuple[AuthObject, object, float | None]], send: NativeSend
+    ) -> Future[None]: ...
     def delete(self, keys: Sequence[str]) -> Future[None]: ...
     def delete_sync(self, keys: Sequence[str]) -> None: ...
-    def get_many(self, keys: Sequence[str], send: NativeSend) -> NativePending[list[object]] | None: ...
-    def increment_if_present(self, key: str, amount: float) -> Future[float | None]: ...
-    def get_local(self, key: str) -> object: ...
-    def set_local(self, key: str, value: object, ttl_seconds: float | None = None) -> None: ...
+    def get_many(self, keys: Sequence[AuthObject], send: NativeSend) -> NativePending[list[object]] | None: ...
+    def increment_if_present(self, key: AuthObject, amount: float) -> Future[float | None]: ...
+    def get_local(self, key: AuthObject) -> object: ...
+    def get_local_by_key(self, key: str) -> object: ...
+    def set_local(self, key: AuthObject, value: object, ttl_seconds: float | None = None) -> None: ...
     def delete_local(self, key: str) -> None: ...
     def flush_local(self) -> None: ...
     def len_local(self) -> LocalSizes: ...
+
+@final
+class NativeCacheInvalidation:
+    def __new__(
+        cls,
+        client: NativeRedisClient,
+        namespace: str | None,
+        auth_cache: NativeAuthCache,
+        spend_counters: NativeSpendCounters,
+        python_caches: object,
+    ) -> NativeCacheInvalidation: ...
+    @property
+    def channel(self) -> str: ...
+    def publish(self, cache_key: str, new_value: float | None = None, ttl: float | None = None) -> bool: ...
+    def broadcast_evictions(self, cache_keys: Sequence[str]) -> Future[None]: ...
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
 
 @final
 class SpendRead:
@@ -1949,6 +1992,15 @@ class NativeBudgets:
         actual: float,
         apply_consistent: bool,
     ) -> Future[JsonValue]: ...
+    def charge_counters(
+        self,
+        step: Mapping[str, object],
+        record: BudgetReservation | None,
+        reservation: dict[str, object] | None,
+        request: NativeRequestRedis | None,
+        host: object,
+        /,
+    ) -> Execution: ...
 
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
@@ -2005,9 +2057,28 @@ class NativeDatabase:
     def close(self) -> Future[None]: ...
 
 @final
+class RustSpendLogWriter:
+    def __new__(
+        cls,
+        database: NativeDatabase,
+        *,
+        queue_max_bytes: int,
+        write_batch_max_bytes: int,
+        write_batch_max_rows: int,
+        on_flush_request: Callable[[], None],
+    ) -> RustSpendLogWriter: ...
+    def enqueue(self, rows: Sequence[str], at_head: bool, max_bytes: int) -> int: ...
+    def flush(
+        self, limit: int, retention: tuple[Sequence[str] | None, Sequence[str] | None] | None = None
+    ) -> Future[list[dict[str, object]]]: ...
+    def wait_idle(self) -> Future[None]: ...
+    def dequeue(self, limit: int) -> list[str]: ...
+    def __len__(self) -> int: ...
+
+@final
 class RustKeyRepository:
     def __new__(cls, database: NativeDatabase) -> RustKeyRepository: ...
-    def find(self, token: str, *, use_writer: bool = False) -> Future[str | None]: ...
+    def find(self, token: str, *, use_writer: bool = False) -> Future[object]: ...
 
 @final
 class RustJwtKeyMappingRepository:
@@ -2154,9 +2225,49 @@ class RustObjectPermissionRepository:
     ) -> Future[str | None]: ...
 
 @final
+class RustSpendLog:
+    def __new__(
+        cls,
+        writer: RustSpendLogWriter,
+        spend_counters: NativeSpendCounters,
+        token_redactor: NativeTokenRedactor,
+    ) -> RustSpendLog: ...
+    def callback(self) -> RustHandle: ...
+
+@final
 class NativeTokenRedactor:
     def __new__(cls, minimum_custom_key_length: int, word_ranges: Sequence[tuple[int, int]]) -> NativeTokenRedactor: ...
     def redact(self, text: str, replacement: str) -> str | None: ...
+
+@final
+class RustSpendLogRowBuilder:
+    def __new__(
+        cls,
+        *,
+        token_redactor: NativeTokenRedactor,
+        latest_turn_only: bool,
+        redact_tokens: bool,
+        drop_requester_ip_address: bool,
+        omit_missing_session_id: bool,
+        max_string_length_prompt_in_db: int,
+        disable_end_user_cost_tracking: bool,
+        request_correlation_in_logs: bool,
+        turn_off_message_logging: bool,
+    ) -> RustSpendLogRowBuilder: ...
+    def build_row(self, input_json: bytes) -> NativeSpendLogRow: ...
+    @staticmethod
+    def ledger_columns(
+        row: Mapping[str, object],
+        *,
+        billable_cost: float | None,
+        org_id: str | None,
+        team_id: str | None,
+        delivery_id: str,
+        entities: Sequence[tuple[str, str | None]],
+        model_access_groups: Sequence[str],
+        windows: Sequence[Mapping[str, object]],
+        savings: Mapping[str, float],
+    ) -> LedgerColumns: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -2389,6 +2500,7 @@ __all__ = [
     "AtomicApplied",
     "AtomicOverLimit",
     "AttemptShape",
+    "AuthObject",
     "DatabaseEndpoint",
     "ForkedAfterNativeRuntimeStarted",
     "GaugeOverLimit",
@@ -2463,7 +2575,10 @@ __all__ = [
     "RustOrganizationRepository",
     "RustPlan",
     "RustProjectRepository",
+    "RustSpendLog",
     "RustSpendLogRepository",
+    "RustSpendLogRowBuilder",
+    "RustSpendLogWriter",
     "RustTagRepository",
     "RustTeamGrant",
     "RustTeamMembershipRepository",
@@ -2497,7 +2612,6 @@ __all__ = [
     "jwt_claims",
     "jwt_is_allowed_domain",
     "jwt_is_jwt",
-    "jwt_key_mapping_cache_key",
     "jwt_presents_claims",
     "jwt_unverified_claims",
     "messages",
@@ -2987,6 +3101,7 @@ class RouterCoreHandle:
         counts_request: bool = False,
         usage_model: str | None = None,
         callbacks: Mapping[str, bool] | None = None,
+        batch_api: bool = False,
     ) -> RouterCall[_FailureReportSteps]: ...
     # A success a logging callback saw, driven like `report_failure`; `done` carries `key`.
     def report_success(

@@ -12121,6 +12121,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -12155,7 +12187,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
@@ -13645,6 +13677,38 @@
                                           ],
                                           "title": "OpenAIDecisionInputImage",
                                           "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "data": {
+                                              "anyOf": [
+                                                {
+                                                  "additionalProperties": true,
+                                                  "type": "object"
+                                                },
+                                                {
+                                                  "items": {
+                                                    "additionalProperties": true,
+                                                    "type": "object"
+                                                  },
+                                                  "type": "array"
+                                                }
+                                              ],
+                                              "title": "Data"
+                                            },
+                                            "type": {
+                                              "const": "input_json",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "data"
+                                          ],
+                                          "title": "OpenAIDecisionInputJSON",
+                                          "type": "object"
                                         }
                                       ]
                                     },
@@ -13679,7 +13743,7 @@
                           "type": "array"
                         }
                       ],
-                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text and images.",
+                      "description": "The text being judged, or user, developer, and system messages. Developer and system messages are input text. User messages can mix input text, images, and JSON.",
                       "title": "Input"
                     },
                     "model": {
@@ -23918,6 +23982,38 @@
           "summary": "Langfuse Proxy Route",
           "tags": [
             "langfuse_passthrough"
+          ]
+        }
+      }
+    }
+  },
+  "live_sessions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/v1/live/sessions": {
+        "post": {
+          "description": "Create a GPT-Live session over WebRTC. The body carries the session and the browser's SDP offer,\nand the response carries the SDP answer. The returned `session.id` attaches a sideband on\n`/v1/live/sessions/{session_id}/attach`.",
+          "operationId": "create_live_session_v1_live_sessions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Create Live Session",
+          "tags": [
+            "live_sessions"
           ]
         }
       }
@@ -62804,6 +62900,54 @@
             }
           },
           "summary": "Skill Content",
+          "tags": [
+            "skill_hub"
+          ]
+        }
+      },
+      "/skill-hub/skills/{name}/downloads/export": {
+        "get": {
+          "description": "Export all recorded authenticated downloads. Anonymous downloads remain totals-only.",
+          "operationId": "export_skill_downloads_skill_hub_skills__name__downloads_export_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "name",
+              "required": true,
+              "schema": {
+                "title": "Name",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Authenticated download history as CSV"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Export Skill Downloads",
           "tags": [
             "skill_hub"
           ]

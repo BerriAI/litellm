@@ -1,4 +1,7 @@
 import type { SkillListQuery } from "@/components/claude_code_plugins/types";
+import { Page, PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Blocks } from "lucide-react";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
 import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
@@ -185,140 +188,149 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
-      {selectedSkill ? (
-        <CatalogSkillDetail
-          userRole={userRole}
-          isViewOnly={readOnly}
-          skill={selectedSkill}
-          isAdmin={isAdmin}
-          accessToken={accessToken}
-          queryScope={queryScope}
-          canWrite={canWrite}
-          onBack={() => setSelectedSkillId(null)}
-          onEdit={setEditingSkill}
-        />
-      ) : (
-        <>
-          <div className="flex flex-col gap-2 mb-4">
-            <h1 className="text-2xl font-bold">{t("skills.panel.title")}</h1>
-            <p className="text-sm text-muted-foreground">{t("skills.panel.intro")}</p>
-            <div className="mt-2 flex gap-2">
-              <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
-                {t("skills.panel.addButton")}
-              </Button>
-            </div>
-          </div>
+    <Page>
+      <PageContent>
+        {selectedSkill ? (
+          <CatalogSkillDetail
+            userRole={userRole}
+            isViewOnly={readOnly}
+            skill={selectedSkill}
+            isAdmin={isAdmin}
+            accessToken={accessToken}
+            queryScope={queryScope}
+            canWrite={canWrite}
+            onBack={() => setSelectedSkillId(null)}
+            onEdit={setEditingSkill}
+          />
+        ) : (
+          <>
+            <PageHeader>
+              <PageHeaderTitle>
+                <Blocks />
+                {t("skills.panel.title")}
+              </PageHeaderTitle>
+              <PageHeaderDescription>{t("skills.panel.intro")}</PageHeaderDescription>
+              <PageHeaderControls>
+                <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
+                  {t("skills.panel.addButton")}
+                </Button>
+              </PageHeaderControls>
+            </PageHeader>
 
-          <Tabs value={tab} onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}>
-            <TabsList variant="line">
-              <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
-              <TabsTrigger value="submissions">
-                {t(adminView ? "skills.panel.tabs.submissions" : "skills.panel.tabs.mySubmissions")}
-              </TabsTrigger>
-            </TabsList>
-            <TabsContent value="skills">
-              <div className="my-4">
-                <SkillFilters {...filters} tags={plugins.data?.tags ?? []} />
-              </div>
-              {plugins.isError && (
-                <div role="alert" className="my-3 text-sm text-destructive">
-                  {t("skills.panel.loadFailed")}
-                  <Button variant="link" onClick={() => void plugins.refetch()}>
-                    {t("skills.submissions.retry")}
+            <Tabs
+              value={tab}
+              onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}
+              className="gap-6"
+            >
+              <TabsList variant="line">
+                <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
+                <TabsTrigger value="submissions">
+                  {t(adminView ? "skills.panel.tabs.submissions" : "skills.panel.tabs.mySubmissions")}
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent value="skills">
+                <div className="my-4">
+                  <SkillFilters {...filters} tags={plugins.data?.tags ?? []} />
+                </div>
+                {plugins.isError && (
+                  <div role="alert" className="my-3 text-sm text-destructive">
+                    {t("skills.panel.loadFailed")}
+                    <Button variant="link" onClick={() => void plugins.refetch()}>
+                      {t("skills.submissions.retry")}
+                    </Button>
+                  </div>
+                )}
+                <PluginTable
+                  users={users}
+                  pluginsList={pluginsList}
+                  isLoading={plugins.isLoading}
+                  filtered={filters.active}
+                  sorting={sorting}
+                  onSortingChange={onSortingChange}
+                  onDeleteClick={handleDeleteClick}
+                  isAdmin={isAdmin}
+                  onPluginClick={setSelectedSkillId}
+                />
+                <div className="mt-4 flex items-center justify-end gap-3">
+                  <span>{t("skills.submissions.page", { page: pageIndex + 1 })}</span>
+                  <Button
+                    variant="outline"
+                    disabled={pageIndex === 0 || plugins.isFetching}
+                    onClick={() => onPaginationChange({ pageIndex: pageIndex - 1, pageSize })}
+                  >
+                    {t("skills.submissions.previous")}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={plugins.data?.next_offset == null || plugins.isFetching || plugins.isError}
+                    onClick={() => onPaginationChange({ pageIndex: pageIndex + 1, pageSize })}
+                  >
+                    {t("skills.submissions.next")}
                   </Button>
                 </div>
-              )}
-              <PluginTable
-                users={users}
-                pluginsList={pluginsList}
-                isLoading={plugins.isLoading}
-                filtered={filters.active}
-                sorting={sorting}
-                onSortingChange={onSortingChange}
-                onDeleteClick={handleDeleteClick}
-                isAdmin={isAdmin}
-                onPluginClick={setSelectedSkillId}
-              />
-              <div className="mt-4 flex items-center justify-end gap-3">
-                <span>{t("skills.submissions.page", { page: pageIndex + 1 })}</span>
-                <Button
-                  variant="outline"
-                  disabled={pageIndex === 0 || plugins.isFetching}
-                  onClick={() => onPaginationChange({ pageIndex: pageIndex - 1, pageSize })}
-                >
-                  {t("skills.submissions.previous")}
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={plugins.data?.next_offset == null || plugins.isFetching || plugins.isError}
-                  onClick={() => onPaginationChange({ pageIndex: pageIndex + 1, pageSize })}
-                >
-                  {t("skills.submissions.next")}
-                </Button>
-              </div>
-            </TabsContent>
-            <TabsContent value="submissions">
-              {accessToken && (
-                <SkillSubmissions
-                  userRole={userRole}
-                  isViewOnly={readOnly}
-                  accessToken={accessToken}
-                  queryScope={queryScope}
-                  canReview={isAdmin}
-                  canWrite={canWrite}
-                  adminView={adminView}
-                  onChanged={refreshSkills}
-                />
-              )}
-            </TabsContent>
-          </Tabs>
-        </>
-      )}
+              </TabsContent>
+              <TabsContent value="submissions">
+                {accessToken && (
+                  <SkillSubmissions
+                    userRole={userRole}
+                    isViewOnly={readOnly}
+                    accessToken={accessToken}
+                    queryScope={queryScope}
+                    canReview={isAdmin}
+                    canWrite={canWrite}
+                    adminView={adminView}
+                    onChanged={refreshSkills}
+                  />
+                )}
+              </TabsContent>
+            </Tabs>
+          </>
+        )}
 
-      {showForm && (
-        <AddPluginForm
-          key={editingSkill ? editingSkill.id : "new"}
-          visible
-          skill={editingSkill}
-          requiresApproval={!isAdmin}
-          onClose={() => {
-            setIsAddModalVisible(false);
-            setEditingSkill(undefined);
-          }}
-          accessToken={accessToken}
-          onSuccess={(response) => void handleSaved(response)}
-        />
-      )}
+        {showForm && (
+          <AddPluginForm
+            key={editingSkill ? editingSkill.id : "new"}
+            visible
+            skill={editingSkill}
+            requiresApproval={!isAdmin}
+            onClose={() => {
+              setIsAddModalVisible(false);
+              setEditingSkill(undefined);
+            }}
+            accessToken={accessToken}
+            onSuccess={(response) => void handleSaved(response)}
+          />
+        )}
 
-      {pluginToDelete && (
-        <AlertDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setPluginToDelete(null);
-          }}
-        >
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{t("skills.panel.deleteDialog.title")}</AlertDialogTitle>
-              <AlertDialogDescription>
-                <Trans
-                  i18nKey="skills.panel.deleteDialog.confirm"
-                  components={{ name: <strong>{pluginToDelete.displayName}</strong> }}
-                />
-              </AlertDialogDescription>
-              <p className="text-sm text-muted-foreground">{t("skills.panel.deleteDialog.irreversible")}</p>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{t("skills.panel.deleteDialog.cancel")}</AlertDialogCancel>
-              <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
-                {t("skills.panel.deleteDialog.delete")}
-              </Button>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      )}
-    </div>
+        {pluginToDelete && (
+          <AlertDialog
+            open
+            onOpenChange={(open) => {
+              if (!open) setPluginToDelete(null);
+            }}
+          >
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{t("skills.panel.deleteDialog.title")}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  <Trans
+                    i18nKey="skills.panel.deleteDialog.confirm"
+                    components={{ name: <strong>{pluginToDelete.displayName}</strong> }}
+                  />
+                </AlertDialogDescription>
+                <p className="text-sm text-muted-foreground">{t("skills.panel.deleteDialog.irreversible")}</p>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{t("skills.panel.deleteDialog.cancel")}</AlertDialogCancel>
+                <Button variant="destructive" onClick={handleDeleteConfirm} disabled={isDeleting}>
+                  {t("skills.panel.deleteDialog.delete")}
+                </Button>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        )}
+      </PageContent>
+    </Page>
   );
 };
 

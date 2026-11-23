@@ -13,6 +13,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import MappingProxyType
 from typing import Final
 
@@ -3815,3 +3816,124 @@ def test_a_mantle_route_credential_failure_maps_the_kind_rust_names(
 
     assert type(mapped).__name__ == raised
     assert mapped.__traceback__ is not None
+
+
+_DIAGNOSTICS: Final = {"previous_message_id": "msg_01previous"}
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+_AWS_TEST_CREDENTIALS: Final = {
+    "aws_access_key_id": "test-access-key",
+    "aws_secret_access_key": "test-secret-key",
+    "aws_region_name": "us-east-1",
+}
+
+
+@pytest.fixture
+def recording_upstream() -> Iterator[tuple[str, list[dict[str, object]]]]:
+    bodies: Final[list[dict[str, object]]] = []
+    answer: Final = json.dumps(
+        {
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+    ).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            bodies.append(_JSON_OBJECT.validate_json(self.rfile.read(int(self.headers["Content-Length"]))))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    server: Final = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", bodies
+    server.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", (False, True), ids=("default", "drop_params"))
+async def test_anthropic_messages_forwards_diagnostics_to_anthropic(
+    recording_upstream: tuple[str, list[dict[str, object]]], drop_params: bool
+) -> None:
+    api_base, bodies = recording_upstream
+
+    await litellm.anthropic_messages(
+        model="anthropic/claude-opus-5-5",
+        api_base=api_base,
+        api_key="sk-ant-test",
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        diagnostics=_DIAGNOSTICS,
+        drop_params=drop_params,
+    )
+
+    assert bodies[0]["diagnostics"] == _DIAGNOSTICS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        {"model": "bedrock/invoke/us.anthropic.claude-opus-4-8", **_AWS_TEST_CREDENTIALS},
+        {"model": "bedrock/mantle/anthropic.claude-mythos-preview", **_AWS_TEST_CREDENTIALS},
+    ),
+    ids=("bedrock_invoke", "bedrock_mantle"),
+)
+async def test_anthropic_messages_refuses_diagnostics_a_provider_rejects_without_drop_params(
+    recording_upstream: tuple[str, list[dict[str, object]]],
+    deployment: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    api_base, bodies = recording_upstream
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params") as refused:
+        await litellm.anthropic_messages(
+            api_base=api_base,
+            max_tokens=16,
+            messages=[{"role": "user", "content": "hi"}],
+            diagnostics=_DIAGNOSTICS,
+            **deployment,
+        )
+
+    assert refused.value.status_code == 400
+    assert bodies == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "drop",
+    ({"drop_params": True}, {"additional_drop_params": ["diagnostics"]}),
+    ids=("drop_params", "additional_drop_params"),
+)
+async def test_anthropic_messages_drops_diagnostics_a_provider_rejects_when_asked(
+    recording_upstream: tuple[str, list[dict[str, object]]],
+    drop: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    api_base, bodies = recording_upstream
+
+    response: Final = await litellm.anthropic_messages(
+        model="bedrock/invoke/us.anthropic.claude-opus-4-8",
+        api_base=api_base,
+        max_tokens=16,
+        messages=[{"role": "user", "content": "hi"}],
+        diagnostics=_DIAGNOSTICS,
+        **_AWS_TEST_CREDENTIALS,
+        **drop,
+    )
+
+    assert _JSON_OBJECT.validate_python(response)["id"] == "msg_test"
+    assert "diagnostics" not in bodies[0]

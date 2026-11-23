@@ -145,7 +145,7 @@ pub trait AuthHost: Send + Sync {
     ) -> impl Future<Output = Result<(), Error>> + Send;
 
     /// What the auth cache holds for `claim`: the hash of the key it maps to, or a sentinel.
-    /// Management endpoints evict it under `claim.cache_key()`.
+    /// Management endpoints evict it under the key the host caches the claim by.
     fn cached_key_mapping(
         &self,
         claim: MappedClaim<'_>,

@@ -6,7 +6,7 @@ import asyncio
 import traceback
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 from typing_extensions import ReadOnly, TypedDict, Unpack
 
@@ -111,7 +111,7 @@ class OpikLogger(CustomBatchLogger):
     async def async_log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:
@@ -194,7 +194,7 @@ class OpikLogger(CustomBatchLogger):
     def log_success_event(
         self,
         kwargs: dict[str, object],
-        response_obj: Any,
+        response_obj: object,
         start_time: datetime,
         end_time: datetime,
     ) -> None:

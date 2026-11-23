@@ -42,6 +42,6 @@ it("shows a custom-only organization cap without calling it uncapped", () => {
       onEdit={vi.fn()}
     />,
   );
-  expect(screen.getByRole("cell", { name: "$10.00" })).toBeInTheDocument();
+  expect(screen.getByRole("cell", { name: "$10.00/7d" })).toBeInTheDocument();
   expect(screen.queryByText("No limit")).not.toBeInTheDocument();
 });

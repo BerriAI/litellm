@@ -6,12 +6,12 @@ import os
 import secrets
 import time
 import traceback
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias, TypedDict
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypedDict
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -111,6 +111,9 @@ from litellm.types.proxy.litellm_pre_call_utils import RedactedDict, SecretField
 from litellm.types.router import reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
+
 #### Health ENDPOINTS ####
 
 
@@ -121,7 +124,7 @@ class _HealthBacklogResponse(TypedDict):
     rejected_requests: ReadOnly[int]
 
 
-def _reject_os_environ_references(params: dict) -> None:
+def _reject_os_environ_references(params: object) -> None:
     """
     Validate that the provided params do not contain any ``os.environ/``
     references. Values with that prefix are expected to come only from
@@ -777,10 +780,10 @@ def _check_prisma_client():
 
 
 async def _save_health_check_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient",
     model_name: str,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     user_id: str | None,
     model_id: str | None = None,
@@ -971,7 +974,7 @@ def _should_persist_health_check_result(
 
 
 async def _save_health_check_results_if_changed(
-    prisma_client,
+    prisma_client: "PrismaClient",
     model_results: dict,
     latest_checks_map: dict,
     start_time: float,
@@ -1023,7 +1026,7 @@ async def _save_health_check_results_if_changed(
 
 
 async def save_background_health_checks_to_db(
-    prisma_client,
+    prisma_client: "PrismaClient | None",
     model_list: list,
     healthy_endpoints: list,
     unhealthy_endpoints: list,
@@ -1109,7 +1112,7 @@ def _is_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
     return role_value in _PROXY_ADMIN_ROLES
 
 
-def _strip_admin_only_fields_from_health_result(result: dict) -> dict:
+def _strip_admin_only_fields_from_health_result(result: Mapping[str, object]) -> dict[str, object]:
     """
     Return a copy of the /health response with the admin-only fields (provider routing plus
     server-owned federation or OAuth token-exchange params) removed from each healthy/unhealthy
@@ -1507,7 +1510,9 @@ def _resolve_targeted_model_ids(
 _ENDPOINTS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
-def _filter_health_check_results_by_model_ids(results: Mapping[str, object], allowed_model_ids: set) -> dict:
+def _filter_health_check_results_by_model_ids(
+    results: Mapping[str, object], allowed_model_ids: Container[object]
+) -> dict[str, object]:
     """
     Restrict a cached background health-check result dict to endpoints whose
     model_id is in ``allowed_model_ids``.
@@ -1572,15 +1577,15 @@ def _without_model_ids(results: Mapping[str, object], model_ids: frozenset[str])
 
 async def _perform_health_check_and_save(
     model_list,
-    target_model,
+    target_model: str | None,
     recorded_model_name: str | None,
-    cli_model,
-    details,
-    prisma_client,
-    start_time,
-    user_id,
-    model_id=None,
-    max_concurrency=None,
+    cli_model: str | None,
+    details: bool | None,
+    prisma_client: "PrismaClient | None",
+    start_time: float,
+    user_id: str | None,
+    model_id: str | None = None,
+    max_concurrency: int | None = None,
     **perform_health_check_extra,
 ):
     """Helper function to perform health check and save results to database"""
@@ -2059,7 +2064,7 @@ def read_license_data() -> EnterpriseLicenseData | None:
     return license_data
 
 
-def _read_allowed_features(license_data: Mapping[str, object]) -> list:
+def _read_allowed_features(license_data: Mapping[str, object]) -> list[object]:
     raw_allowed_features: Final = license_data.get("allowed_features")
     if isinstance(raw_allowed_features, list):
         return list(raw_allowed_features)

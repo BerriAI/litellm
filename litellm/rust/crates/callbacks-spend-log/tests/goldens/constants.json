@@ -1,0 +1,279 @@
+{
+ "SpendLogsMetadata": [
+  "user_api_key_customer_org_id",
+  "user_api_key_app_id",
+  "user_api_key_app_group_id",
+  "user_api_key_app_alias",
+  "user_api_key_customer_org_alias",
+  "user_api_key_customer_team_id",
+  "user_api_key_customer_team_alias",
+  "user_api_key_customer_member_id",
+  "user_api_key_customer_member_alias",
+  "user_api_key_customer_usage",
+  "actor_agent_id",
+  "target_agent_id",
+  "billing_agent_id",
+  "agent_execution_mode",
+  "verified_human_user_id",
+  "autorouter_baseline_observation",
+  "additional_usage_values",
+  "user_api_key",
+  "user_api_key_alias",
+  "user_api_key_team_id",
+  "user_api_key_project_id",
+  "user_api_key_project_alias",
+  "user_api_key_org_id",
+  "user_api_key_user_id",
+  "user_api_key_user_email",
+  "user_api_key_team_alias",
+  "spend_logs_metadata",
+  "requester_ip_address",
+  "user_agent",
+  "litellm_call_id",
+  "applied_guardrails",
+  "mcp_tool_call_metadata",
+  "vector_store_request_metadata",
+  "routing_decision",
+  "kubernetes_pod_routing",
+  "internal_call_origin",
+  "billed_retry_attempt",
+  "route_call_type",
+  "upstream_provider",
+  "litellm_roi_estimator",
+  "is_silent_experiment",
+  "guardrail_information",
+  "eval_information",
+  "status",
+  "proxy_server_request",
+  "batch_models",
+  "batch_successful_requests",
+  "batch_failed_requests",
+  "error_information",
+  "usage_object",
+  "model_map_information",
+  "cold_storage_object_key",
+  "litellm_overhead_time_ms",
+  "attempted_retries",
+  "max_retries",
+  "attempted_fallbacks",
+  "original_model_group",
+  "cost_breakdown",
+  "compression_savings",
+  "autorouter_savings",
+  "autorouter_savings_estimate",
+  "litellm_gateway_injected_cache",
+  "router_metadata",
+  "azure_spillover",
+  "used_client_oauth_token",
+  "claude_subscription_usage"
+ ],
+ "_CustomerIdentityMetadata": [
+  "user_api_key_app_id",
+  "user_api_key_app_group_id",
+  "user_api_key_app_alias",
+  "user_api_key_customer_org_id",
+  "user_api_key_customer_org_alias",
+  "user_api_key_customer_team_id",
+  "user_api_key_customer_team_alias",
+  "user_api_key_customer_member_id",
+  "user_api_key_customer_member_alias"
+ ],
+ "_REDACTED_REQUEST_FIELDS": [
+  "instructions",
+  "query_image",
+  "images",
+  "retrievalQuery",
+  "retrieval_query"
+ ],
+ "_NESTED_REQUEST_FIELDS": [
+  "extra_body",
+  "additional_args",
+  "complete_input_dict"
+ ],
+ "_WEB_ACTION_TEXT_FIELDS": [
+  "query",
+  "url",
+  "pattern"
+ ],
+ "_WEB_ACTION_LIST_FIELDS": [
+  "queries",
+  "sources"
+ ],
+ "VERTEX_AI_PROVIDER_METADATA_FIELDS": [
+  "vertex_ai_grounding_metadata",
+  "vertex_ai_url_context_metadata",
+  "vertex_ai_safety_ratings",
+  "vertex_ai_safety_results",
+  "vertex_ai_citation_metadata"
+ ],
+ "BEDROCK_GUARDRAIL_TRACE_FIELDS": [
+  "trace",
+  "amazon-bedrock-trace"
+ ],
+ "MESSAGE_REDACTION_ENABLE_HEADERS": [
+  "litellm-enable-message-redaction",
+  "x-litellm-enable-message-redaction"
+ ],
+ "_STAMPED_METADATA_KEYS": [
+  "autorouter_baseline_observation",
+  "autorouter_savings",
+  "autorouter_savings_estimate",
+  "azure_spillover",
+  "billed_retry_attempt",
+  "claude_subscription_usage",
+  "is_silent_experiment",
+  "kubernetes_pod_routing",
+  "litellm_roi_estimator",
+  "route_call_type",
+  "router_metadata",
+  "upstream_provider",
+  "used_client_oauth_token",
+  "user_api_key_app_alias",
+  "user_api_key_app_group_id",
+  "user_api_key_app_id",
+  "user_api_key_customer_member_alias",
+  "user_api_key_customer_member_id",
+  "user_api_key_customer_org_alias",
+  "user_api_key_customer_org_id",
+  "user_api_key_customer_team_alias",
+  "user_api_key_customer_team_id",
+  "user_api_key_user_email"
+ ],
+ "_NON_SECRET_KEY_ALIASES": [
+  "litellm-cli",
+  "litellm-internal-health-check",
+  "litellm_proxy_master_key"
+ ],
+ "_BATCH_TRACE_CALL_TYPES": [
+  "acreate_batch",
+  "aretrieve_batch",
+  "create_batch",
+  "retrieve_batch"
+ ],
+ "BATCH_COST_REQUEST_ID_SUFFIX": [
+  "_batch_cost"
+ ],
+ "VIDEO_COST_REQUEST_ID_SUFFIX": [
+  "_video_cost"
+ ],
+ "VIDEO_STATUS_CALL_TYPES": [
+  "avideo_status",
+  "video_status"
+ ],
+ "_REQUEST_BODY_CREDENTIAL_MASKER": [
+  "access",
+  "apikey",
+  "auth",
+  "authorization",
+  "certificate",
+  "cookie",
+  "credential",
+  "credentials",
+  "fingerprint",
+  "key",
+  "password",
+  "private",
+  "secret",
+  "tenancy",
+  "token"
+ ],
+ "_TOOL_INPUT_BLOCK_TYPES": [
+  "mcp_tool_use",
+  "server_tool_use",
+  "tool_use"
+ ],
+ "_TOOL_OUTPUT_BLOCK_TYPES": [
+  "function_call_output",
+  "mcp_tool_result",
+  "tool_result"
+ ],
+ "PROMPT_CARRYING_GUARDRAIL_FIELDS": [
+  "classification",
+  "guardrail_request",
+  "guardrail_response",
+  "match_details"
+ ],
+ "_NUMERIC_COMPRESSION_STAT_KEYS": [
+  "compression_ratio",
+  "tokens_after",
+  "tokens_before",
+  "tokens_saved"
+ ],
+ "_SCRUBBED_ERROR_TEXT_FIELDS": [
+  "error_message",
+  "traceback"
+ ],
+ "_CLIENT_IP_HEADERS": [
+  "cf-connecting-ip",
+  "cf-connecting-ipv6",
+  "cf-pseudo-ipv4",
+  "cloudfront-viewer-address",
+  "fastly-client-ip",
+  "fly-client-ip",
+  "forwarded",
+  "true-client-ip",
+  "x-appengine-user-ip",
+  "x-arr-clientip",
+  "x-azure-clientip",
+  "x-client-ip",
+  "x-cluster-client-ip",
+  "x-envoy-external-address",
+  "x-forwarded-for",
+  "x-original-forwarded-for",
+  "x-real-ip",
+  "x-vercel-forwarded-for"
+ ],
+ "_MATCHED_TEXT_KEYS": [
+  "match",
+  "regex"
+ ],
+ "accounting._METADATA_FIELDS": [
+  "billed_retry_attempt",
+  "compression_savings",
+  "guardrail_information",
+  "internal_call_origin",
+  "route_call_type",
+  "standard_logging_guardrail_information",
+  "status",
+  "usage_object",
+  "user_api_key_customer_usage"
+ ],
+ "accounting._GUARDRAIL_METADATA_FIELDS": [
+  "guardrail_information",
+  "standard_logging_guardrail_information"
+ ],
+ "accounting._ACCOUNTING_FIELDS": [
+  "agent_id",
+  "api_key",
+  "app_group_id",
+  "app_id",
+  "call_type",
+  "completion_tokens",
+  "custom_llm_provider",
+  "customer_member_id",
+  "customer_org_id",
+  "customer_team_id",
+  "end_user",
+  "mcp_namespaced_tool_name",
+  "model",
+  "model_group",
+  "organization_id",
+  "prompt_tokens",
+  "request_duration_ms",
+  "request_id",
+  "request_tags",
+  "spend",
+  "startTime",
+  "status",
+  "team_id",
+  "user"
+ ],
+ "accounting._GUARDRAIL_ACCOUNTING_FIELDS": [
+  "guardrail_cost_by_unit",
+  "guardrail_cost_in_spend",
+  "guardrail_id",
+  "guardrail_name",
+  "guardrail_provider",
+  "guardrail_usage"
+ ]
+}

@@ -1319,7 +1319,9 @@ def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_proxy_server_request_for_spend_logs_payload,
+    )
 
     monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
     shared_metadata: dict[str, object] = {"user_api_key_alias": "alias"}
@@ -10599,6 +10601,57 @@ def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
         usage.prompt_tokens * rates["input_cost_per_token"]
         + usage.completion_tokens * rates["output_cost_per_token"]
     )
+
+
+@pytest.mark.parametrize("override_location", ("litellm_params", "model_info"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("deployment_rate", (7e-6, 0.0))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_speech_cost_bills_the_deployment_per_character_rate(
+    deployment_rate: float, call_type: str, override_location: str
+) -> None:
+    list_rate: Final = 3e-6
+    deployment_id: Final = "speech-fixture-deployment"
+    override: Final[dict[str, float]] = {"input_cost_per_character": deployment_rate}
+    no_override: Final[dict[str, float]] = {}
+    litellm.register_model(
+        {
+            "openai/speech-fixture": {
+                "litellm_provider": "openai",
+                "mode": "audio_speech",
+                "input_cost_per_character": list_rate,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "speech-alias",
+                "litellm_params": {
+                    "model": "openai/speech-fixture",
+                    "api_key": "sk-test",
+                    **(override if override_location == "litellm_params" else no_override),
+                },
+                "model_info": {
+                    "id": deployment_id,
+                    **(override if override_location == "model_info" else no_override),
+                },
+            }
+        ]
+    )
+
+    cost: Final = completion_cost(
+        completion_response=None,
+        model="openai/speech-fixture",
+        custom_llm_provider="openai",
+        call_type=call_type,
+        prompt="a" * 1000,
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+    assert cost == pytest.approx(1000 * deployment_rate)
 
 
 def test_moderation_cost_uses_test_owned_token_rate() -> None:
