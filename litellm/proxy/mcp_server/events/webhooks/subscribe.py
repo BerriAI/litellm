@@ -1,7 +1,10 @@
+import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Final
+
+import anyio
 
 from mcp.shared.exceptions import MCPError
 
@@ -29,8 +32,7 @@ from litellm.proxy.mcp_server.events.errors import (
 )
 from litellm.proxy.mcp_server.events.observability import EventActivity
 from litellm.proxy.mcp_server.events.runtime import EventsRuntime
-from litellm.proxy.mcp_server.events.upstream import routing_headers
-from litellm.proxy.mcp_server.events.webhooks.delivery import is_https_callback
+from litellm.proxy.mcp_server.events.webhooks.delivery import CALLBACK_DEADLINE_SECONDS, is_https_callback
 from litellm.proxy.mcp_server.events.webhooks.policy import (
     callback_url,
     client_grant,
@@ -53,6 +55,7 @@ from litellm.proxy.mcp_server.outbound_credentials.result import Error, Ok, Resu
 from litellm.types.mcp_server.events import (
     DeliveryStatus,
     EventsErrorCode,
+    JsonObject,
     SubscribeEventsParams,
     SubscribeEventsResult,
 )
@@ -151,6 +154,23 @@ async def _admit_new(
     return callback_error(failure) if failure is not None else None
 
 
+def _upstream_params(subscription: _Subscription, settings: EventsSettings) -> JsonObject:
+    params: Final = subscription.params
+    prepared: Final = subscription.prepared
+    return {
+        "name": prepared.resolved.upstream_name,
+        "arguments": dict(params.arguments),
+        "delivery": {
+            "mode": "webhook",
+            "url": callback_url(settings, subscription.base.id, subscription.base.upstream_secret),
+            "secret": subscription.base.upstream_secret,
+        },
+        "cursor": subscription.opened.upstream,
+        **({"maxAgeMs": params.max_age_ms} if params.max_age_ms is not None else {}),
+        "ttlMs": granted_ttl_ms(params, prepared.resolved.target.server),
+    }
+
+
 async def _discard_pending(subscription: _Subscription) -> None:
     if subscription.reserved:
         await subscription.request.store.discard_pending(subscription.base.id, subscription.base.generation)
@@ -169,7 +189,7 @@ async def _roll_back(
         if current.status == "pending" and current.generation != subscription.base.generation:
             return
     orphan: Final = subscription.base.model_copy(update={"upstream_subscription_id": upstream.id})
-    await _unsubscribe_upstream(orphan, subscription.prepared, settings, runtime)
+    await end_upstream(orphan, settings, runtime, prepared=subscription.prepared)
 
 
 async def activate_subscription(
@@ -292,29 +312,21 @@ async def reserve_subscription(
     if subscription.existing is not None and subscription.existing.status != "terminated":
         return Ok(subscription)
     store: Final = subscription.request.store
-    if not await store.reserve(subscription.base):
-        return Error(_BEING_CREATED)
-    if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
-        await store.discard_pending(subscription.base.id, subscription.base.generation)
-        return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
-    return Ok(replace(subscription, reserved=True))
-
-
-async def _unsubscribe_upstream(
-    row: SubscriptionRow, prepared: PreparedEvent, settings: EventsSettings, runtime: EventsRuntime
-) -> None:
-    if row.upstream_subscription_id is None:
-        return
+    claiming: Final = asyncio.create_task(store.reserve(subscription.base))
     try:
-        await runtime.call(
-            prepared.upstream,
-            "events/unsubscribe",
-            {
-                "name": row.event_name,
-                "arguments": dict(row.arguments),
-                "delivery": {"url": callback_url(settings, row.id, row.upstream_secret)},
-            },
-            routing_headers(row.event_name, row.arguments, prepared.descriptor),
-        )
-    except (MCPError, OSError, TimeoutError):
-        return
+        try:
+            if not await asyncio.shield(claiming):
+                return Error(_BEING_CREATED)
+        finally:
+            # Prisma can finish an insert after caller cancellation. Order the delete after its write outcome.
+            if not claiming.done():
+                with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+                    await claiming
+        if await store.count_live(subscription.request.principal) > settings.max_subscriptions_per_key:
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+            return Error(exhausted("subscriptions", settings.max_subscriptions_per_key))
+    except BaseException:
+        with anyio.move_on_after(CALLBACK_DEADLINE_SECONDS, shield=True):
+            await store.discard_pending(subscription.base.id, subscription.base.generation)
+        raise
+    return Ok(replace(subscription, reserved=True))

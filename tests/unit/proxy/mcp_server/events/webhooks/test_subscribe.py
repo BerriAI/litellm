@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 from collections.abc import Mapping
@@ -152,3 +153,21 @@ async def test_refresh_preserves_the_watermark_with_a_delivery_outstanding() -> 
     )
     assert isinstance(result, Ok) and result.ok.cursor == first.ok.cursor
     assert store.rows[SID].cursor == first.ok.cursor
+
+
+@pytest.mark.asyncio
+async def test_interrupting_the_post_reservation_quota_check_allows_an_immediate_retry() -> None:
+    class InterruptedQuota(MemoryStore):
+        async def count_live(self, principal: str) -> int:
+            if SID in self.rows:
+                raise asyncio.CancelledError
+            return await super().count_live(principal)
+
+    store: Final = InterruptedQuota()
+    prepared: Final = await prepare_subscription(
+        context(), _params(), None, SETTINGS, runtime((server(),)), _request(store), _Client()
+    )
+    assert isinstance(prepared, Ok)
+    with pytest.raises(asyncio.CancelledError):
+        await reserve_subscription(prepared.ok, SETTINGS)
+    assert await store.reserve(prepared.ok.base)
