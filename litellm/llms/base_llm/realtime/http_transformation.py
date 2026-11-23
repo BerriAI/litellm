@@ -107,7 +107,7 @@ class BaseRealtimeHTTPConfig(ABC):
         base: Final = (api_base or "").rstrip("/")
         return f"{base}/v1/realtime/translations/calls"
 
-    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict:
+    def get_realtime_calls_headers(self, ephemeral_key: str) -> dict[str, str]:
         """
         Build headers for the realtime_calls POST.
 
