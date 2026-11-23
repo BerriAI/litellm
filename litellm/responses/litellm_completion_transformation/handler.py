@@ -13,7 +13,6 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
-from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.model_param_helper import embeds_thought_signature_in_tool_call_id
@@ -34,6 +33,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.tool_search import has_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    previous_response_not_found,
     with_compaction_items_as_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -77,6 +77,14 @@ def _stored_turns_need_aresponses(client_response_id: str, model: str, provider:
         model=model,
         llm_provider=provider,
         body={"message": message, "type": "invalid_request_error", "param": "previous_response_id", "code": None},
+    )
+
+
+def _sync_follow_up_refusal(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+    return (
+        _stored_turns_need_aresponses(client_response_id, model, provider)
+        if _proxy_database_connected()
+        else previous_response_not_found(client_response_id, model, provider)
     )
 
 
@@ -153,27 +161,6 @@ def _with_the_tool_choice_sent(
     ):
         return responses_api_request
     return {**responses_api_request, "tool_choice": None}
-
-
-async def _with_previous_turns(
-    previous_response_id: str,
-    previous_response_client_ids: tuple[str, ...],
-    stored_turns: StoredTurns | None,
-    litellm_completion_request: Mapping[str, object],
-    request_input: str | ResponseInputParam,
-    responses_api_request: ResponsesAPIOptionalRequestParams,
-    request_kwargs: Mapping[str, object],
-) -> Mapping[str, object]:
-    return await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
-        previous_response_id=previous_response_id,
-        litellm_completion_request=dict(litellm_completion_request),
-        instructions=responses_api_request.get("instructions"),
-        request_kwargs=request_kwargs,
-        previous_response_client_ids=previous_response_client_ids,
-        stored_turns=stored_turns,
-        input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
-        request_input=request_input,
-    )
 
 
 def _log_full_tool_names(
@@ -260,31 +247,15 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        if previous_response_id and _proxy_database_connected():
-            raise _stored_turns_need_aresponses(
+        if previous_response_id and not holds_compaction_summary(with_compaction_items_as_params(bridged_input)):
+            raise _sync_follow_up_refusal(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,
                 custom_llm_provider,
             )
-        completion_request: Final[Mapping[str, object]] = (
-            _REQUEST_KWARGS_ADAPTER.validate_python(
-                run_async_function(
-                    _with_previous_turns,
-                    previous_response_id,
-                    previous_response_client_ids,
-                    None,
-                    litellm_completion_request,
-                    bridged_input,
-                    echoed_request,
-                    _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
-                )
-            )
-            if previous_response_id
-            else litellm_completion_request
-        )
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
         litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
-            **{**kwargs, **completion_request, "_skip_responses_api_bridge": True},
+            **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
         )
         return _bridged_reply(
             litellm_completion_response,
@@ -364,14 +335,15 @@ class LiteLLMCompletionTransformationHandler:
     ) -> ResponsesAPIResponse | BaseResponsesAPIStreamingIterator:
         previous_response_id: Final[str | None] = responses_api_request.get("previous_response_id")
         completion_request: Final[Mapping[str, object]] = (
-            await _with_previous_turns(
-                previous_response_id,
-                previous_response_client_ids,
-                stored_turns,
-                litellm_completion_request,
-                request_input,
-                responses_api_request,
-                _REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+            await LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+                previous_response_id=previous_response_id,
+                litellm_completion_request=dict(litellm_completion_request),
+                instructions=responses_api_request.get("instructions"),
+                request_kwargs=_REQUEST_KWARGS_ADAPTER.validate_python(kwargs),
+                previous_response_client_ids=previous_response_client_ids,
+                stored_turns=stored_turns,
+                input_replaces_history=holds_compaction_summary(with_compaction_items_as_params(request_input)),
+                request_input=request_input,
             )
             if previous_response_id
             else litellm_completion_request

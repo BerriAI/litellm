@@ -633,11 +633,11 @@ def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
     return BadRequestError(message=invalid_type_message(field_path, value), model="", llm_provider="")
 
 
-def _previous_response_not_found(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+def previous_response_not_found(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
     message: Final = (
         f"Previous response with id '{client_response_id}' not found. LiteLLM rebuilds this model's conversation "
-        "from the LiteLLM proxy's spend logs, which needs a database, `disable_spend_logs` left off, "
-        "and `store_prompts_in_spend_logs: true`."
+        "from the LiteLLM proxy's spend logs, so the id must be a response this proxy served and already logged, "
+        "with a database, `disable_spend_logs` left off, and `store_prompts_in_spend_logs: true`."
     )
     return BadRequestError(
         message=message,
@@ -1780,7 +1780,7 @@ class LiteLLMCompletionResponsesConfig:
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []
         if previous_response_id and not session_history and not input_replaces_history:
-            raise _previous_response_not_found(
+            raise previous_response_not_found(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,
                 provider,

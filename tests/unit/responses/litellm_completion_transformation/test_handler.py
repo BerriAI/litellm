@@ -325,14 +325,17 @@ def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
 
 
 async def _bridged_follow_up(
-    asynchronous: bool, provider: _RecordingAnthropicHandler, proxy_fields: Mapping[str, object] = MappingProxyType({})
+    asynchronous: bool,
+    provider: _RecordingAnthropicHandler,
+    proxy_fields: Mapping[str, object] = MappingProxyType({}),
+    follow_up_input: str | Sequence[Mapping[str, object]] = "Double it",
 ) -> object:
     request: Final = {
         **proxy_fields,
         "model": "azure_ai/claude-sonnet-4-6",
         "api_base": "https://fake-foundry-resource.services.ai.azure.com",
         "api_key": "fake-api-key",
-        "input": "Double it",
+        "input": follow_up_input,
         "previous_response_id": _TURN_ONE_ID,
     }
     if not asynchronous:
@@ -422,6 +425,27 @@ async def test_a_sync_follow_up_beside_the_proxy_database_asks_for_aresponses_wi
     assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
     assert "'resp_the_client_held'" in refused.value.message
     assert "litellm.aresponses()" in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_sync_follow_up_carrying_a_compaction_summary_beside_the_proxy_database_reaches_the_provider():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    summarized_input: Final = [
+        {
+            "type": "compaction",
+            "id": "cmp_1",
+            "encrypted_content": json.dumps({"type": "compaction", "content": "The number is 7."}),
+        },
+        {"role": "user", "content": "Double it"},
+    ]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_DatabaseOnTheProxyLoop())):
+        response = await _bridged_follow_up(False, provider, follow_up_input=summarized_input)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider.request_body is not None, "the summarized follow-up never reached the provider"
+    sent_messages: Final = json.dumps(provider.request_body["messages"])
+    assert "The number is 7." in sent_messages and "Double it" in sent_messages
 
 
 @pytest.mark.asyncio
