@@ -6233,7 +6233,7 @@ def test_decisions_cost_uses_mapped_model_when_vendor_echo_is_unmapped(
     assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
 
 
-@pytest.mark.parametrize("region", ("us", "eu"))
+@pytest.mark.parametrize("region", ("us", "eu", "apac"))
 @pytest.mark.parametrize("call_type", ("adecisions", "asystemone"))
 def test_foundry_decision_data_zone_uses_regional_input_price(
     _local_model_cost_map: None, region: str, call_type: Literal["adecisions", "asystemone"]

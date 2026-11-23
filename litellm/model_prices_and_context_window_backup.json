@@ -109617,6 +109617,14 @@
         "output_cost_per_token": 0.0,
         "source": "https://prices.azure.com/api/retail/prices?$filter=contains(productName,'Decision')"
     },
+    "azure_ai/apac/Microsoft-Decision-1.1": {
+        "input_cost_per_token": 5e-08,
+        "litellm_provider": "azure_ai",
+        "max_input_tokens": 32768,
+        "mode": "decisions",
+        "output_cost_per_token": 0.0,
+        "source": "https://commandline.microsoft.com/microsoft-decision-model-ga/#pricing"
+    },
     "azure_ai/eu/Microsoft-Decision-1.1": {
         "input_cost_per_token": 5e-08,
         "litellm_provider": "azure_ai",
