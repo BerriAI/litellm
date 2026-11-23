@@ -114,7 +114,7 @@ struct Side {
 impl Side {
     fn new(endpoint: &Endpoint) -> Result<Self, Error> {
         let recycled = Arc::new(Recycled::default());
-        let files = ClientFiles::now();
+        let files = ClientFiles::of(endpoint);
         let pool = endpoint
             .pool_options()?
             .before_acquire({
@@ -171,18 +171,18 @@ impl Side {
     fn set_password(&self, password: SecretValue) {
         let mut connect = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
         connect.endpoint = connect.endpoint.with_password(password);
-        connect.files = ClientFiles::now();
+        connect.files = ClientFiles::of(&connect.endpoint);
         self.pool
             .pool
             .set_connect_options(connect.endpoint.connect_options());
     }
 
-    /// The pool, with its connect options built again first when `PGSSLCERT` or `PGSSLKEY` changed since they were
-    /// built, so a new connection presents the files as they are now even when the options hold a key converted for
-    /// native-tls.
+    /// The pool, with its connect options built again first when `PGSSLCERT`, `PGSSLKEY` or the root certificate
+    /// changed since they were built, so a new connection uses the files as they are now even when the options hold a
+    /// key converted for native-tls or a root certificate in place of one native-tls cannot load.
     fn pool(&self) -> &FailFastPool {
-        let files = ClientFiles::now();
         let mut connect = self.connect.lock().unwrap_or_else(PoisonError::into_inner);
+        let files = ClientFiles::of(&connect.endpoint);
         if connect.files != files {
             connect.files = files;
             self.pool
@@ -641,17 +641,22 @@ mod tests {
             path::{Path, PathBuf},
             process::Command,
             sync::{Arc, Mutex, PoisonError},
+            time::{Duration, Instant},
         };
 
         use openssl::{
             asn1::Asn1Time,
+            ec::{EcGroup, EcKey},
             error::ErrorStack,
             hash::MessageDigest,
             nid::Nid,
             pkey::{PKey, Private},
             rsa::Rsa,
             ssl::{SslAcceptor, SslMethod, SslVerifyMode},
-            x509::{X509, X509NameBuilder, X509Ref},
+            x509::{
+                X509, X509Builder, X509Name, X509NameBuilder, X509NameRef, X509Ref,
+                extension::{BasicConstraints, SubjectAlternativeName},
+            },
         };
 
         use litellm_secret_value::SecretValue;
@@ -662,20 +667,66 @@ mod tests {
 
         const CHILD_DIRECTORY: &str = "LITELLM_DB_CLIENT_FILES_TEST_DIRECTORY";
 
-        fn self_signed(common_name: &str) -> Result<(X509, PKey<Private>), ErrorStack> {
-            let key = PKey::from_rsa(Rsa::generate(2048)?)?;
-            let mut name = X509NameBuilder::new()?;
-            name.append_entry_by_nid(Nid::COMMONNAME, common_name)?;
-            let name = name.build();
+        /// A certificate builder for `common_name`'s public key, issued by `issuer`, valid from today to tomorrow.
+        fn builder(
+            common_name: &str,
+            key: &PKey<Private>,
+            issuer: &X509NameRef,
+        ) -> Result<X509Builder, ErrorStack> {
             let mut certificate = X509::builder()?;
             certificate.set_version(2)?;
-            certificate.set_subject_name(&name)?;
-            certificate.set_issuer_name(&name)?;
-            certificate.set_pubkey(&key)?;
+            certificate.set_subject_name(&*name(common_name)?)?;
+            certificate.set_issuer_name(issuer)?;
+            certificate.set_pubkey(key)?;
             certificate.set_not_before(&*Asn1Time::days_from_now(0)?)?;
             certificate.set_not_after(&*Asn1Time::days_from_now(1)?)?;
+            Ok(certificate)
+        }
+
+        fn name(common_name: &str) -> Result<X509Name, ErrorStack> {
+            let mut name = X509NameBuilder::new()?;
+            name.append_entry_by_nid(Nid::COMMONNAME, common_name)?;
+            Ok(name.build())
+        }
+
+        fn self_signed(common_name: &str) -> Result<(X509, PKey<Private>), ErrorStack> {
+            let key = PKey::from_rsa(Rsa::generate(2048)?)?;
+            let mut certificate = builder(common_name, &key, &*name(common_name)?)?;
+            certificate.append_extension(BasicConstraints::new().critical().ca().build()?)?;
             certificate.sign(&key, MessageDigest::sha256())?;
             Ok((certificate.build(), key))
+        }
+
+        /// A certificate for 127.0.0.1 issued by `root`.
+        fn server_certificate(
+            root: &X509Ref,
+            root_key: &PKey<Private>,
+        ) -> Result<(X509, PKey<Private>), ErrorStack> {
+            let key = PKey::from_rsa(Rsa::generate(2048)?)?;
+            let mut certificate = builder("127.0.0.1", &key, root.subject_name())?;
+            let san = SubjectAlternativeName::new()
+                .ip("127.0.0.1")
+                .build(&certificate.x509v3_context(Some(root), None))?;
+            certificate.append_extension(san)?;
+            certificate.sign(root_key, MessageDigest::sha256())?;
+            Ok((certificate.build(), key))
+        }
+
+        /// A client certificate with a SEC1 P-256 key, signed by `issuer_key` with RSA: both encode to the same
+        /// length whatever the key, so a replacement keeps the files' sizes.
+        fn same_size_client(
+            common_name: &str,
+            issuer_key: &PKey<Private>,
+        ) -> Result<(Vec<u8>, Vec<u8>), ErrorStack> {
+            let p256 = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+            let key = EcKey::generate(&p256)?;
+            let mut certificate = builder(
+                common_name,
+                &PKey::from_ec_key(key.clone())?,
+                &*name("issuer")?,
+            )?;
+            certificate.sign(issuer_key, MessageDigest::sha256())?;
+            Ok((certificate.build().to_pem()?, key.private_key_to_pem()?))
         }
 
         /// Puts a client certificate and its PKCS#1 key in place the way a mounted secret is replaced: new files
@@ -723,13 +774,21 @@ mod tests {
 
         type Recorded = Arc<Mutex<Vec<Presented>>>;
 
-        /// A server that answers Postgres' SSLRequest, completes the TLS handshake asking for a client certificate,
-        /// asks for the password, records the certificate's common name and the password, and hangs up.
         fn recording_server() -> Result<(u16, Recorded), Box<dyn StdError>> {
             let (certificate, key) = self_signed("server")?;
+            recording_server_with(&certificate, &key)
+        }
+
+        /// A server that answers Postgres' SSLRequest, completes the TLS handshake with `certificate` asking for a
+        /// client certificate, asks for the password, records the client certificate's common name and the
+        /// password, and hangs up. A handshake the client gives up on is recorded as neither.
+        fn recording_server_with(
+            certificate: &X509Ref,
+            key: &PKey<Private>,
+        ) -> Result<(u16, Recorded), Box<dyn StdError>> {
             let mut acceptor = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
-            acceptor.set_certificate(&certificate)?;
-            acceptor.set_private_key(&key)?;
+            acceptor.set_certificate(certificate)?;
+            acceptor.set_private_key(key)?;
             acceptor.set_verify_callback(SslVerifyMode::PEER, |_, _| true);
             let acceptor = acceptor.build();
             let listener = TcpListener::bind("127.0.0.1:0")?;
@@ -761,37 +820,43 @@ mod tests {
             Ok((port, presented))
         }
 
-        #[rstest]
-        #[tokio::test]
-        async fn new_connections_present_the_client_files_as_they_are_now()
-        -> Result<(), Box<dyn StdError>> {
-            let Some(directory) = std::env::var_os(CHILD_DIRECTORY).map(PathBuf::from) else {
-                let directory = std::env::temp_dir()
-                    .join(format!("litellm-db-client-files-{}", std::process::id()));
-                std::fs::create_dir_all(&directory)?;
-                let output = Command::new(std::env::current_exe()?)
-                    .args([
-                        "--exact",
-                        std::thread::current()
-                            .name()
-                            .ok_or("the test thread is named")?,
-                        "--nocapture",
-                    ])
-                    .env(CHILD_DIRECTORY, &directory)
-                    .env("PGSSLCERT", directory.join("cert.pem"))
-                    .env("PGSSLKEY", directory.join("key.pem"))
-                    .output()?;
-                std::fs::remove_dir_all(&directory)?;
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                assert!(
-                    output.status.success() && stdout.contains("1 passed"),
-                    "{stdout}\n{}",
-                    String::from_utf8_lossy(&output.stderr)
-                );
-                return Ok(());
-            };
-            let (port, presented_to_server) = recording_server()?;
-            let pools = Pools::new(
+        /// Runs the calling test again in a child process whose environment sets each variable to a file in a new
+        /// directory, since sqlx and OpenSSL read these variables from the environment. Returns the directory in the
+        /// child, and None in the parent once the child passed.
+        fn in_child(files: &[(&str, &str)]) -> Result<Option<PathBuf>, Box<dyn StdError>> {
+            if let Some(directory) = std::env::var_os(CHILD_DIRECTORY) {
+                return Ok(Some(PathBuf::from(directory)));
+            }
+            let test = std::thread::current()
+                .name()
+                .ok_or("the test thread is named")?
+                .to_owned();
+            let directory = std::env::temp_dir().join(format!(
+                "litellm-db-client-files-{}-{}",
+                std::process::id(),
+                test.replace("::", "-")
+            ));
+            std::fs::create_dir_all(&directory)?;
+            let mut child = Command::new(std::env::current_exe()?);
+            child
+                .args(["--exact", &test, "--nocapture"])
+                .env(CHILD_DIRECTORY, &directory);
+            for (variable, file) in files {
+                child.env(variable, directory.join(file));
+            }
+            let output = child.output()?;
+            std::fs::remove_dir_all(&directory)?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            Ok(None)
+        }
+
+        fn pools(port: u16, ssl_mode: SslMode) -> Result<Pools, crate::Error> {
+            Pools::new(
                 &Endpoint {
                     host: "127.0.0.1".to_owned(),
                     port,
@@ -799,7 +864,7 @@ mod tests {
                     username: "litellm".to_owned(),
                     password: Some(SecretValue::new("first")),
                     database: "litellm".to_owned(),
-                    ssl_mode: SslMode::Require,
+                    ssl_mode,
                     ssl_root_cert: None,
                     ssl_client: None,
                     application_name: None,
@@ -813,7 +878,27 @@ mod tests {
                     },
                 },
                 None,
-            )?;
+            )
+        }
+
+        fn presented(recorded: &Recorded) -> Vec<Presented> {
+            recorded
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone()
+        }
+
+        const CLIENT_FILES: &[(&str, &str)] = &[("PGSSLCERT", "cert.pem"), ("PGSSLKEY", "key.pem")];
+
+        #[rstest]
+        #[tokio::test]
+        async fn new_connections_present_the_client_files_as_they_are_now()
+        -> Result<(), Box<dyn StdError>> {
+            let Some(directory) = in_child(CLIENT_FILES)? else {
+                return Ok(());
+            };
+            let (port, presented_to_server) = recording_server()?;
+            let pools = pools(port, SslMode::Require)?;
 
             install(&directory, "mounted-after-startup")?;
             let first = pools.writer_only().await;
@@ -825,17 +910,158 @@ mod tests {
                 first.is_err() && second.is_err(),
                 "the server hangs up after the password"
             );
-            let presented =
+            let client =
                 |name: &str, password: &str| (Some(name.to_owned()), Some(password.to_owned()));
             assert_eq!(
-                *presented_to_server
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner),
+                presented(&presented_to_server),
                 [
-                    presented("mounted-after-startup", "first"),
-                    presented("replaced", "rotated")
+                    client("mounted-after-startup", "first"),
+                    client("replaced", "rotated")
                 ]
             );
+            Ok(())
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn new_connections_see_a_replacement_that_keeps_the_files_times_and_sizes()
+        -> Result<(), Box<dyn StdError>> {
+            let Some(directory) = in_child(CLIENT_FILES)? else {
+                return Ok(());
+            };
+            let (port, presented_to_server) = recording_server()?;
+            let issuer = PKey::from_rsa(Rsa::generate(2048)?)?;
+            let (cert, key) = (directory.join("cert.pem"), directory.join("key.pem"));
+            let (first_cert, first_key) = same_size_client("first-client", &issuer)?;
+            std::fs::write(&cert, first_cert)?;
+            std::fs::write(&key, first_key)?;
+            let written = |path: &Path| std::fs::metadata(path).and_then(|file| file.modified());
+            let (cert_written, key_written) = (written(&cert)?, written(&key)?);
+            let sizes = || -> std::io::Result<_> {
+                Ok((
+                    std::fs::metadata(&cert)?.len(),
+                    std::fs::metadata(&key)?.len(),
+                ))
+            };
+            let first_sizes = sizes()?;
+            let pools = pools(port, SslMode::Require)?;
+            let first = pools.writer_only().await;
+
+            // The system moves a file's change time on a clock that can tick only every few milliseconds.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let (second_cert, second_key) = same_size_client("other-client", &issuer)?;
+            std::fs::write(&cert, second_cert)?;
+            std::fs::write(&key, second_key)?;
+            std::fs::File::options()
+                .write(true)
+                .open(&cert)?
+                .set_modified(cert_written)?;
+            std::fs::File::options()
+                .write(true)
+                .open(&key)?
+                .set_modified(key_written)?;
+            assert_eq!(sizes()?, first_sizes);
+            assert_eq!(
+                (written(&cert)?, written(&key)?),
+                (cert_written, key_written)
+            );
+            let second = pools.writer_only().await;
+
+            assert!(
+                first.is_err() && second.is_err(),
+                "the server hangs up after the password"
+            );
+            let client = |name: &str| (Some(name.to_owned()), Some("first".to_owned()));
+            assert_eq!(
+                presented(&presented_to_server),
+                [client("first-client"), client("other-client")]
+            );
+            Ok(())
+        }
+
+        const ROOT_FILES: &[(&str, &str)] = &[
+            ("PGSSLROOTCERT", "root.crt"),
+            ("SSL_CERT_FILE", "system.pem"),
+        ];
+
+        /// Whether the server's certificate was accepted on each of the first `count` connections: the server then
+        /// got as far as reading the password. A client that refuses the certificate can return before the server
+        /// records the handshake it gave up on, so this waits until the server recorded `count` connections.
+        fn accepted(recorded: &Recorded, count: usize) -> Vec<bool> {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while presented(recorded).len() < count && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            presented(recorded)
+                .into_iter()
+                .map(|(_, password)| password.is_some())
+                .collect()
+        }
+
+        #[rstest]
+        #[case::der_root_with_the_issuer_among_the_system_roots(true, true, true)]
+        #[case::der_root_without_the_issuer_among_the_system_roots(true, false, false)]
+        #[case::pem_root(false, false, true)]
+        #[tokio::test]
+        async fn verify_full_checks_the_server_the_way_rustls_does_with_a_root_cert_that_is_not_pem(
+            #[case] der: bool,
+            #[case] issuer_among_system_roots: bool,
+            #[case] accepted_server: bool,
+        ) -> Result<(), Box<dyn StdError>> {
+            let Some(directory) = in_child(ROOT_FILES)? else {
+                return Ok(());
+            };
+            let (root, root_key) = self_signed("database-root")?;
+            let (other_root, _) = self_signed("other-root")?;
+            std::fs::write(
+                directory.join("root.crt"),
+                if der { root.to_der()? } else { root.to_pem()? },
+            )?;
+            std::fs::write(
+                directory.join("system.pem"),
+                if issuer_among_system_roots {
+                    &root
+                } else {
+                    &other_root
+                }
+                .to_pem()?,
+            )?;
+            let (certificate, key) = server_certificate(&root, &root_key)?;
+            let (port, presented_to_server) = recording_server_with(&certificate, &key)?;
+
+            let connected = pools(port, SslMode::VerifyFull)?.writer_only().await;
+
+            assert!(connected.is_err(), "the server hangs up after the password");
+            assert_eq!(accepted(&presented_to_server, 1), [accepted_server]);
+            Ok(())
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn new_connections_use_a_root_cert_that_turned_into_pem()
+        -> Result<(), Box<dyn StdError>> {
+            let Some(directory) = in_child(ROOT_FILES)? else {
+                return Ok(());
+            };
+            let (root, root_key) = self_signed("database-root")?;
+            let (other_root, _) = self_signed("other-root")?;
+            let root_file = directory.join("root.crt");
+            std::fs::write(&root_file, root.to_der()?)?;
+            std::fs::write(directory.join("system.pem"), other_root.to_pem()?)?;
+            let (certificate, key) = server_certificate(&root, &root_key)?;
+            let (port, presented_to_server) = recording_server_with(&certificate, &key)?;
+            let pools = pools(port, SslMode::VerifyFull)?;
+            let first = pools.writer_only().await;
+
+            std::fs::write(directory.join("root.new"), root.to_pem()?)?;
+            std::fs::rename(directory.join("root.new"), &root_file)?;
+            let second = pools.writer_only().await;
+
+            assert!(
+                first.is_err() && second.is_err(),
+                "the server hangs up after the password"
+            );
+            assert_eq!(accepted(&presented_to_server, 2), [false, true]);
             Ok(())
         }
     }

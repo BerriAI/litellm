@@ -1,4 +1,7 @@
-use std::{path::PathBuf, time::Duration};
+use std::{
+    path::PathBuf,
+    time::{Duration, SystemTime},
+};
 
 use litellm_secret_value::SecretValue;
 use serde::Deserialize;
@@ -105,8 +108,41 @@ impl Endpoint {
         };
         match self.ssl_mode {
             SslMode::Prefer | SslMode::Require => unchecked_root_cert(options),
+            SslMode::VerifyCa | SslMode::VerifyFull if self.root_cert_holds_no_pem() => {
+                unchecked_root_cert(options)
+            }
             SslMode::Disable | SslMode::VerifyCa | SslMode::VerifyFull => options,
         }
+    }
+
+    /// The root certificate sqlx reads: the one the URL names, otherwise `PGSSLROOTCERT`.
+    #[cfg(feature = "native-tls")]
+    fn root_cert(&self) -> Option<Input> {
+        match &self.ssl_root_cert {
+            Some(path) => Some(Input::File(path.clone())),
+            None => Input::from_env("PGSSLROOTCERT"),
+        }
+    }
+
+    /// Whether the root certificate sqlx reads holds no PEM certificate, as a DER file does. rustls adds the PEM
+    /// certificates it finds to the system's roots, so with none it checks the server against the system's roots
+    /// alone, while native-tls fails every connection on it. A file that cannot be read fails both, so it counts as
+    /// holding one.
+    #[cfg(feature = "native-tls")]
+    fn root_cert_holds_no_pem(&self) -> bool {
+        const PEM_CERTIFICATE: &[u8] = b"-----BEGIN CERTIFICATE-----";
+        self.root_cert()
+            .and_then(|input| input.data())
+            .is_some_and(|data| {
+                !data
+                    .windows(PEM_CERTIFICATE.len())
+                    .any(|window| window == PEM_CERTIFICATE)
+            })
+    }
+
+    #[cfg(not(feature = "native-tls"))]
+    fn root_cert_holds_no_pem(&self) -> bool {
+        false
     }
 
     pub fn pool_options(&self) -> Result<PgPoolOptions, Error> {
@@ -133,14 +169,51 @@ impl Endpoint {
     }
 }
 
-/// The `PGSSLKEY` file sqlx reads, handed to it as PKCS#8 PEM when native-tls cannot load it as it is: native-tls
-/// only loads a file that starts with a PKCS#8 PEM block, while libpq and rustls also load PKCS#1 and SEC1 keys. The
-/// `PGSSLCERT` file is read at the same moment, so the two always match; the pool builds its options again when
-/// either file changes. A key native-tls loads, a file OpenSSL cannot read, and a key that needs a password are left
+/// A certificate or key setting, read the way sqlx reads it: the value itself when it looks like PEM, otherwise the
+/// path of a file.
+#[cfg(feature = "native-tls")]
+enum Input {
+    Inline(Vec<u8>),
+    File(PathBuf),
+}
+
+#[cfg(feature = "native-tls")]
+impl Input {
+    fn from_env(name: &str) -> Option<Self> {
+        let value = std::env::var(name).ok()?;
+        let trimmed = value.trim();
+        Some(
+            if trimmed.starts_with("-----BEGIN") && trimmed.ends_with("-----") {
+                Self::Inline(value.into_bytes())
+            } else {
+                Self::File(PathBuf::from(value))
+            },
+        )
+    }
+
+    fn data(&self) -> Option<Vec<u8>> {
+        match self {
+            Self::Inline(data) => Some(data.clone()),
+            Self::File(path) => std::fs::read(path).ok(),
+        }
+    }
+
+    fn file(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Inline(_) => None,
+            Self::File(path) => Some(path),
+        }
+    }
+}
+
+/// The `PGSSLKEY` key sqlx reads, handed to it as PKCS#8 PEM when native-tls cannot load it as it is: native-tls
+/// only loads a key that starts with a PKCS#8 PEM block, while libpq and rustls also load PKCS#1 and SEC1 keys. The
+/// `PGSSLCERT` certificate is read at the same moment, so the two always match; the pool builds its options again
+/// when either file changes. A key native-tls loads, one OpenSSL cannot read, and one that needs a password are left
 /// for sqlx to read on each connection: OpenSSL gets an empty password instead of asking for it on the terminal.
 #[cfg(feature = "native-tls")]
 fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
-    let read = |name: &str| std::env::var_os(name).and_then(|path| std::fs::read(path).ok());
+    let read = |name: &str| Input::from_env(name).and_then(|input| input.data());
     match read("PGSSLKEY").and_then(|pem| pkcs8_pem(&pem)) {
         Some(key) => match read("PGSSLCERT") {
             Some(cert) => options
@@ -157,23 +230,54 @@ fn pgsslkey_as_pkcs8(options: PgConnectOptions) -> PgConnectOptions {
     options
 }
 
-/// When the `PGSSLCERT` and `PGSSLKEY` files were last written and how long they are, or that they are missing, so a
-/// pool can tell when the client certificate it was built from changed. Without native-tls the options never hold the
-/// files' contents, since sqlx reads both on each connection, so there is nothing to follow.
+/// The `PGSSLCERT`, `PGSSLKEY` and root certificate files as they are now, or that they are missing, so a pool can
+/// tell when a file its options were built from changed. Without native-tls the options never depend on the files'
+/// contents, since sqlx reads them on each connection, so there is nothing to follow.
 #[derive(PartialEq)]
-pub(crate) struct ClientFiles([Option<(std::time::SystemTime, u64)>; 2]);
+pub(crate) struct ClientFiles([Option<Stamp>; 3]);
 
 impl ClientFiles {
-    pub(crate) fn now() -> Self {
-        if !cfg!(feature = "native-tls") {
-            return Self([None, None]);
-        }
-        let stamp = |name: &str| {
-            let metadata = std::fs::metadata(std::env::var_os(name)?).ok()?;
-            Some((metadata.modified().ok()?, metadata.len()))
-        };
-        Self([stamp("PGSSLCERT"), stamp("PGSSLKEY")])
+    #[cfg(feature = "native-tls")]
+    pub(crate) fn of(endpoint: &Endpoint) -> Self {
+        let stamp = |input: Option<Input>| Some(stamp(&std::fs::metadata(input?.file()?).ok()?));
+        Self([
+            stamp(Input::from_env("PGSSLCERT")),
+            stamp(Input::from_env("PGSSLKEY")),
+            stamp(endpoint.root_cert()),
+        ])
     }
+
+    #[cfg(not(feature = "native-tls"))]
+    pub(crate) fn of(_: &Endpoint) -> Self {
+        Self([None, None, None])
+    }
+}
+
+/// What tells that a file changed. On Unix that is its device and inode, which change when a new file is renamed
+/// over it, and its status change time, which every write and every change to its timestamps moves, so a
+/// replacement that keeps the old modified time and size is still seen.
+#[cfg(unix)]
+type Stamp = (u64, u64, i64, i64, Option<SystemTime>, u64);
+
+#[cfg(all(unix, feature = "native-tls"))]
+fn stamp(metadata: &std::fs::Metadata) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    (
+        metadata.dev(),
+        metadata.ino(),
+        metadata.ctime(),
+        metadata.ctime_nsec(),
+        metadata.modified().ok(),
+        metadata.len(),
+    )
+}
+
+#[cfg(not(unix))]
+type Stamp = (Option<SystemTime>, u64);
+
+#[cfg(all(not(unix), feature = "native-tls"))]
+fn stamp(metadata: &std::fs::Metadata) -> Stamp {
+    (metadata.modified().ok(), metadata.len())
 }
 
 #[cfg(feature = "native-tls")]
@@ -188,8 +292,9 @@ fn pkcs8_pem(pem: &[u8]) -> Option<Vec<u8>> {
 
 /// sqlx's native-tls handshake loads the root certificate even in the modes that do not check the server's
 /// certificate, so a `PGSSLROOTCERT` file that is missing or not PEM fails every connection, where rustls never reads
-/// it. sqlx cannot drop the file it read from the environment, so in those modes it gets a throwaway self-signed
-/// certificate in its place, which nothing is checked against.
+/// it. In the modes that check it, a file with no PEM certificate fails every connection too, where rustls checks
+/// against the system's roots alone. sqlx cannot drop the file it read from the environment, so in those cases it
+/// gets a throwaway self-signed certificate in its place, which nothing chains to.
 #[cfg(feature = "native-tls")]
 fn unchecked_root_cert(options: PgConnectOptions) -> PgConnectOptions {
     static CERTIFICATE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
