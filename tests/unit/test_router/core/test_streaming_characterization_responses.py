@@ -325,6 +325,31 @@ async def test_after_text_a_spent_output_ceiling_raises_the_primary_error(
     assert host.deployments_called() == ["a"]
 
 
+@pytest.mark.parametrize(
+    ("primary", "fallbacks", "called"),
+    [
+        (
+            responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("hel")),
+            [{"a": [{"model": "b", "max_output_tokens": 100}]}],
+            ["a"],
+        ),
+        (rate_limit(), [{"a": [{"model": "b", "max_output_tokens": 100}]}, {"b": ["c"]}], ["a", "b"]),
+    ],
+    ids=["a-target-ahead-sets-params", "the-cut-stream-carries-a-targets-params"],
+)
+async def test_after_text_a_fallback_that_would_send_a_dict_targets_params_raises_instead_of_continuing(
+    make_core: MakeCore, host: ScriptedHost, primary: object, fallbacks: list[object], called: list[str]
+) -> None:
+    host.answer("openai/a", primary)
+    host.answer("openai/b", responses_stream(Event(CREATED), Event(TEXT_DELTA), error=cut("hel")))
+    host.answer("openai/c", fallback_ok())
+    core: Final = build(make_core, model_list=[*GROUPS_AB, deployment("c", "c")], fallbacks=fallbacks)
+    stream: Final = await open_stream(core, max_output_tokens=100)
+    with pytest.raises(litellm.RateLimitError, match="stream cut"):
+        await collect_event_types(stream)
+    assert host.deployments_called() == called
+
+
 async def test_after_text_a_content_policy_cut_raises_instead_of_continuing(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:

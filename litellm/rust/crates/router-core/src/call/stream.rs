@@ -8,6 +8,7 @@
 use std::sync::Arc;
 
 use serde::Deserialize;
+use serde_json::{Map, Value};
 
 use super::{
     Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
@@ -91,6 +92,10 @@ pub struct StreamPolicy {
     /// `_stream_retry_budget` for the failure kind asked about: the budget, and whether a retry
     /// policy governs the retry.
     pub retry_budget: Option<(u32, bool)>,
+    /// Whether a fallback that takes the stream over would send params a dict target set: the
+    /// stream's level carries some, or a target of its fallback chain sets some. Such a fallback
+    /// cannot continue the stream's partial output, since those params replace the request's.
+    pub overrides_params: bool,
 }
 
 /// The take-over of a stream that failed before content, which the core found an attempt may
@@ -297,6 +302,7 @@ impl Router {
             can_fall_back: stream_can_fall_back(&snapshot, request, origin),
             refusal_fallback: refusal_fallback_available(&snapshot, request, origin),
             retry_budget: kind.map(|kind| stream_retry_budget(&snapshot, request, origin, kind)),
+            overrides_params: fallback_overrides_params(&snapshot, request, origin),
         }
     }
 
@@ -682,6 +688,34 @@ fn stream_can_fall_back(
         return true;
     }
     origin.has_unattempted(request, regular_targets(snapshot, request, &lists, &lookup))
+}
+
+/// Whether a dict target's params set anything but the group it names.
+fn sets_params(params: &Map<String, Value>) -> bool {
+    params.keys().any(|key| key != "model")
+}
+
+fn fallback_overrides_params(
+    snapshot: &RouterStateSnapshot,
+    request: &RouterRequest,
+    origin: &StreamOrigin,
+) -> bool {
+    if origin.target.params.as_deref().is_some_and(sets_params) {
+        return true;
+    }
+    let lists = Lists::of(snapshot, request);
+    let Some(list) = lists.fallbacks else {
+        return false;
+    };
+    let chain = if list.is_client_side(lists.keys) {
+        Some(list.as_chain())
+    } else {
+        list.lookup_groups(&origin.lookup(request), lists.keys)
+    };
+    chain
+        .into_iter()
+        .flatten()
+        .any(|target| target.params().is_some_and(sets_params))
 }
 
 fn refusal_fallback_available(

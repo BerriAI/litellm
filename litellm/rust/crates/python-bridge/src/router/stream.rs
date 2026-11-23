@@ -78,7 +78,7 @@ fn kind(kind: Option<&str>) -> PyResult<Option<FailureKind>> {
     .transpose()
 }
 
-/// `{"can_retry", "can_fall_back", "refusal_fallback", "retry_budget": int | None,
+/// `{"can_retry", "can_fall_back", "refusal_fallback", "overrides_params", "retry_budget": int | None,
 /// "policy_applies": bool}`.
 pub(super) fn policy<'py>(
     py: Python<'py>,
@@ -93,11 +93,13 @@ pub(super) fn policy<'py>(
         can_fall_back,
         refusal_fallback,
         retry_budget,
+        overrides_params,
     } = router.stream_policy(&request, &stream_origin.0, kind(failure_kind)?);
     let dict = PyDict::new(py);
     dict.set_item("can_retry", can_retry)?;
     dict.set_item("can_fall_back", can_fall_back)?;
     dict.set_item("refusal_fallback", refusal_fallback)?;
+    dict.set_item("overrides_params", overrides_params)?;
     dict.set_item("retry_budget", retry_budget.map(|(budget, _)| budget))?;
     dict.set_item(
         "policy_applies",

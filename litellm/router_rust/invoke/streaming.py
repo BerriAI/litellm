@@ -169,6 +169,11 @@ class StreamAttempt:
     def refusal_fallback_available(self) -> bool:
         return self.policy().get("refusal_fallback") is True
 
+    def fallback_overrides_params(self) -> bool:
+        """Whether a fallback of this stream would send a dict target's params, so it cannot continue the
+        stream's partial output."""
+        return self.policy().get("overrides_params") is True
+
     def retry_budget(self, trigger: BaseException) -> tuple[int, bool]:
         policy: Final = self.policy(trigger)
         budget: Final = policy.get("retry_budget")
@@ -736,7 +741,6 @@ def _mid_stream_continuation_eligible(
     from litellm.router_utils.fallback_event_handlers import (
         continuation_fallback_targets,
         fallback_lookup_groups,
-        fallback_target_overrides_request_params,
     )
     from litellm.router_utils.pre_call_checks.continuation_prefill_check import constrains_continuation
     from litellm.types.guardrails import GuardrailEventHooks
@@ -761,7 +765,7 @@ def _mid_stream_continuation_eligible(
         request.get("fallbacks", core.settings().fallbacks),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request's list replaces the router's
         lookup_groups,
     )
-    if any(fallback_target_overrides_request_params(target) for target in targets):
+    if attempt.fallback_overrides_params():
         return False
     if any(_names_deployment_that_cannot_continue(core, target) for target in targets):
         return False
@@ -1926,7 +1930,7 @@ def _responses_continuation_request(
 ) -> Mapping[str, object] | None:
     """The request a fallback continues from once a Responses stream broke after text, or None before
     output. Raises the primary's error when the output is constrained, a tool call began, a content
-    filter cut it, or the output ceiling is spent."""
+    filter cut it, a fallback would send a dict target's params, or the output ceiling is spent."""
     from litellm.litellm_core_utils.token_counter import (
         token_counter,  # pyright: ignore[reportUnknownVariableType]  # untyped tokenizer argument
     )
@@ -1943,6 +1947,8 @@ def _responses_continuation_request(
     if _mid_stream_error_before_output(e):
         return None
     if isinstance(e.original_exception, litellm_exceptions.ContentPolicyViolationError):
+        _raise_original_mid_stream_error(e)
+    if attempt.fallback_overrides_params():
         _raise_original_mid_stream_error(e)
     cut_deployment_id: Final = (get_hidden_params(source_iterator) or {}).get("model_id")
     if constrains_responses_continuation(_params_sent_to_deployment(attempt, cut_deployment_id)):

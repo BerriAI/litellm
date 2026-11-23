@@ -2136,6 +2136,45 @@ fn a_request_fallback_list_replaces_the_router_list_for_a_stream(
 }
 
 #[rstest]
+#[case::a_target_that_sets_a_param(json!([{"primary": [{"model": "backup", "max_tokens": 64}]}]), true)]
+#[case::a_target_that_only_names_its_group(json!([{"primary": [{"model": "backup"}, "backup"]}]), false)]
+#[case::another_groups_target(json!([{"other": [{"model": "backup", "max_tokens": 64}]}]), false)]
+fn a_fallback_chain_target_that_sets_params_would_override_the_requests(
+    config: RouterConfig,
+    #[case] fallbacks: Value,
+    #[case] overrides: bool,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, json!({"fallbacks": fallbacks}), host);
+
+    let policy = router.stream_policy(&request(), &stream_origin(), None);
+
+    assert_eq!(policy.overrides_params, overrides);
+}
+
+#[tokio::test]
+async fn a_dict_fallbacks_stream_would_override_the_requests_params_on_its_next_fallback() {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![server_error()]));
+    let fallbacks = json!([
+        {"primary": [{"model": "backup", "max_tokens": 64}]},
+        {"backup": ["primary"]},
+    ]);
+    let router = router(
+        lone(plain()),
+        json!({"num_retries": 0, "fallbacks": fallbacks}),
+        host,
+    );
+    let fallback = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+
+    let policy = router.stream_policy(&request(), &fallback.origin, None);
+
+    assert!(policy.overrides_params);
+}
+
+#[rstest]
 #[case::readable(vec![], 5, true)]
 #[case::malformed(vec!["primary".to_owned()], 1, false)]
 fn a_group_policy_that_does_not_read_governs_no_stream_retry(

@@ -672,6 +672,28 @@ async def test_continuation_declines_a_fallback_target_that_overrides_request_pa
     assert host.deployments_called() == ["a"]
 
 
+async def test_continuation_declines_a_stream_that_carries_a_dict_targets_params(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer("openai/a", rate_limit())
+    host.answer(
+        PREFILL_MODEL,
+        rate_limit(),
+        chat_stream("he", "llo", error=rate_limit(message="carried")),
+        chat_stream(" world"),
+    )
+    core = build(
+        make_core,
+        model_list=[deployment("a", "a"), *(deployment(name, name, model=PREFILL_MODEL) for name in "bcd")],
+        enable_mid_stream_fallback_continuation=True,
+        fallbacks=[{"a": ["b"]}, {"b": [{"model": "c", "temperature": 0.1}]}, {"c": ["d"]}],
+    )
+    stream = await open_stream(core)
+    with pytest.raises(litellm.RateLimitError, match="carried"):
+        await collect_texts(stream)
+    assert host.deployments_called() == ["a", "b", "c"]
+
+
 async def test_continuation_reads_the_request_fallbacks_over_the_routers(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
