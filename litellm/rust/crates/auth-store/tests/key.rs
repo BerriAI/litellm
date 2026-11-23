@@ -143,13 +143,15 @@ const TEAM_ENTRY: &str = concat!(
 );
 const PERMISSION_ROW: &str = concat!(
     r#"{"object_permission_id":"kv-permission","mcp_servers":["server-a"],"mcp_access_groups":[],"#,
-    r#""mcp_tool_permissions":{"server-a": ["search"]},"vector_stores":["store-a"],"agents":[],"#,
+    r#""mcp_tool_permissions":{"server-a": ["search"]},"mcp_event_permissions":null,"#,
+    r#""vector_stores":["store-a"],"agents":[],"#,
     r#""agent_access_groups":[],"models":[],"blocked_tools":[],"mcp_toolsets":[],"search_tools":[],"#,
     r#""mcp_tool_search_enabled":null,"skills":[]}"#,
 );
 const PERMISSION_ENTRY: &str = concat!(
     r#"{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],"#,
-    r#" "mcp_tool_permissions": {"server-a": ["search"]}, "mcp_event_permissions": null, "vector_stores": ["store-a"], "agents": [],"#,
+    r#" "mcp_tool_permissions": {"server-a": ["search"]}, "mcp_event_permissions": null,"#,
+    r#" "vector_stores": ["store-a"], "agents": [],"#,
     r#" "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],"#,
     r#" "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null}"#,
 );
@@ -201,7 +203,8 @@ const FULL_ENTRY: &str = concat!(
     r#" "settings_updated_at": "2026-03-03T03:03:03Z", "last_active": "2026-04-04T04:04:04.400000Z","#,
     r#" "object_permission_id": "full-key-permission","#,
     r#" "object_permission": {"object_permission_id": "full-key-permission", "mcp_servers": ["server"],"#,
-    r#" "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]}, "mcp_event_permissions": null,"#,
+    r#" "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]},"#,
+    r#" "mcp_event_permissions": {"server": ["build.*"]},"#,
     r#" "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agent-group"],"#,
     r#" "models": ["p-model"], "mcp_toolsets": ["toolset"], "blocked_tools": ["blocked-tool"],"#,
     r#" "search_tools": ["search-tool"], "mcp_tool_search_enabled": true, "skills": ["skill"],"#,
@@ -234,13 +237,15 @@ const FULL_ENTRY: &str = concat!(
 const FULL_PERMISSION_ROW: &str = concat!(
     r#"{"object_permission_id":"full-key-permission","mcp_servers":["server"],"#,
     r#""mcp_access_groups":["mcp-group"],"mcp_tool_permissions":{"server": ["tool"]},"#,
+    r#""mcp_event_permissions":{"server": ["build.*"]},"#,
     r#""vector_stores":["store"],"agents":["agent"],"agent_access_groups":["agent-group"],"#,
     r#""models":["p-model"],"blocked_tools":["blocked-tool"],"mcp_toolsets":["toolset"],"#,
     r#""search_tools":["search-tool"],"mcp_tool_search_enabled":true,"skills":["skill"]}"#,
 );
 const FULL_PERMISSION_ENTRY: &str = concat!(
     r#"{"object_permission_id": "full-key-permission", "mcp_servers": ["server"],"#,
-    r#" "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]}, "mcp_event_permissions": null,"#,
+    r#" "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]},"#,
+    r#" "mcp_event_permissions": {"server": ["build.*"]},"#,
     r#" "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agent-group"],"#,
     r#" "models": ["p-model"], "mcp_toolsets": ["toolset"], "blocked_tools": ["blocked-tool"],"#,
     r#" "search_tools": ["search-tool"], "mcp_tool_search_enabled": true, "skills": ["skill"],"#,
@@ -374,10 +379,10 @@ async fn insert_full_key(pool: &PgPool) {
     execute(
         pool,
         r#"INSERT INTO "LiteLLM_ObjectPermissionTable"
-               (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, vector_stores, agents,
+               (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, mcp_event_permissions, vector_stores, agents,
                 agent_access_groups, models, blocked_tools, mcp_toolsets, search_tools, mcp_tool_search_enabled, skills)
-           VALUES ('full-team-permission', ARRAY['team-server'], NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
-                  ('full-key-permission', ARRAY['server'], ARRAY['mcp-group'], '{"server": ["tool"]}', ARRAY['store'], ARRAY['agent'],
+           VALUES ('full-team-permission', ARRAY['team-server'], NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL),
+                  ('full-key-permission', ARRAY['server'], ARRAY['mcp-group'], '{"server": ["tool"]}', '{"server": ["build.*"]}', ARRAY['store'], ARRAY['agent'],
                    ARRAY['agent-group'], ARRAY['p-model'], ARRAY['blocked-tool'], ARRAY['toolset'], ARRAY['search-tool'], true, ARRAY['skill'])"#,
     )
     .await;
