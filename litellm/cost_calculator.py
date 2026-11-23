@@ -3606,7 +3606,11 @@ def _batch_prompt_cost(
     return (
         text_tokens * input_rate
         + audio_tokens
-        * _batch_rate(model_info, "input_cost_per_audio_token_batches", input_rate, prompt_tokens=usage.prompt_tokens)
+        * _batch_or_half(
+            _optional_batch_rate(model_info, "input_cost_per_audio_token_batches", usage.prompt_tokens),
+            _standard_rate(model_info, "input_cost_per_audio_token", usage.prompt_tokens),
+            default=input_rate,
+        )
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
         + cached_text_tokens * (cache_read_rate or 0.0)
