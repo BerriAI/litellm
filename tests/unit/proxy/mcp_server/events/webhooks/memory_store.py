@@ -275,12 +275,12 @@ class MemoryStore:
         if (
             row is None
             or row.generation != generation
-            or (outcome != "discarded" and row.status not in ("active", "suspended"))
+            or ((outcome != "discarded" or gap) and row.status not in ("active", "suspended"))
             or delivery.claim_id is None
             or not self._holds(delivery)
         ):
             return False
-        if gap:
+        if gap and outcome not in ("delivered", "terminated"):
             gap_id: Final = f"msg_gap_{delivery.delivery_id}"
             await self.enqueue(
                 QueuedDelivery(
