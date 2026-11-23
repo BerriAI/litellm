@@ -515,7 +515,7 @@ class BaseResponsesAPIStreamingIterator:
                 )
                 transformed_chunk: Final = self.responses_api_provider_config.transform_streaming_response(
                     model=self.model,
-                    parsed_chunk=typed_chunk,
+                    parsed_chunk=_with_string_tool_input(typed_chunk),
                     logging_obj=self.logging_obj,
                 )
                 affinity_model_id: Final = ResponsesAPIRequestUtils.affinity_model_id(self.litellm_metadata)
@@ -1911,6 +1911,28 @@ _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = _CLIENT_RUN_TOOL_ARGUMENTS_DELTA_EVENTS | {
     ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA
 }
+_STRING_TOOL_INPUT_FIELD_BY_EVENT: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value: "arguments",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.MCP_CALL_ARGUMENTS_DONE.value: "arguments",
+        "response.mcp_call.arguments.delta": "delta",
+        "response.mcp_call.arguments.done": "arguments",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value: "delta",
+        ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value: "input",
+    }
+)
+
+
+def _with_string_tool_input(chunk: dict[str, object]) -> dict[str, object]:
+    field_name: Final = _STRING_TOOL_INPUT_FIELD_BY_EVENT.get(str(chunk.get("type")))
+    if field_name is None:
+        return chunk
+    value: Final = chunk.get(field_name)
+    if isinstance(value, str):
+        return chunk
+    return {**chunk, field_name: "" if value is None else json.dumps(value, ensure_ascii=False)}
 
 
 def _estimate_usage_from_text(
