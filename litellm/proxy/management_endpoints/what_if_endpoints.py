@@ -1171,6 +1171,9 @@ def _patch_drop(tree: str, lts_branch: str, main_branch: str, git: Git = _git) -
     )
 
 
+_GIT_REF: Final = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
+
+
 @router.get("/patch_drop")
 async def patch_drop(
     user: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
@@ -1180,6 +1183,8 @@ async def patch_drop(
     """Lists every file the tree at PATCH_DROP_TREE changed since its release tag and checks each local patch
     against the newest LTS tag, the LTS branch and main, by looking for its added lines in the upstream file."""
     _require_admin(user)
+    if not (_GIT_REF.fullmatch(lts_branch) and _GIT_REF.fullmatch(main_branch)):
+        raise HTTPException(status_code=400, detail="lts_branch and main_branch must be plain git ref names")
     tree: Final = os.environ.get("PATCH_DROP_TREE", "")
     if not tree:
         raise HTTPException(status_code=404, detail="Set PATCH_DROP_TREE to the checkout that carries local patches")

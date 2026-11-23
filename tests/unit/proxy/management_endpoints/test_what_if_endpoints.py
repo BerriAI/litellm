@@ -1,5 +1,8 @@
+import pytest
+
 import litellm
 from litellm.proxy.management_endpoints.what_if_endpoints import (
+    _GIT_REF,
     _already_in,
     _at_todays_price,
     _patch_drop,
@@ -113,3 +116,13 @@ def test_a_patch_is_not_upstream_until_every_added_line_is():
 
     assert _already_in(_customer_tree, "/srv/litellm", "lts", "lts_fix.py", "+def backported():\n+    return 2\n")
     assert not _already_in(_customer_tree, "/srv/litellm", "lts", "lts_fix.py", half)
+
+
+@pytest.mark.parametrize("ref", ["--output=/tmp/probe", "-c", "main --output=x", "main;id", ""])
+def test_a_branch_that_git_would_read_as_an_option_is_not_a_ref(ref: str):
+    assert _GIT_REF.fullmatch(ref) is None
+
+
+@pytest.mark.parametrize("ref", ["origin/main", "origin/lts/1.108.x", "v1.108.15", "litellm_whatif_demos"])
+def test_branch_and_tag_names_are_refs(ref: str):
+    assert _GIT_REF.fullmatch(ref) is not None
