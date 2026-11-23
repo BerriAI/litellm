@@ -5,7 +5,7 @@ Based on OpenAI-compatible API interface implementation
 Documentation: [CometAPI Documentation Link]
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
@@ -89,8 +89,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
