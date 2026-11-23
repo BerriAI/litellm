@@ -17,6 +17,7 @@ from typing_extensions import TypedDict, Unpack
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    _request_is_streaming,
     log_guardrail_information,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -230,7 +231,9 @@ class EpistemicGuardrail(CustomGuardrail):
                     "Response blocked: assistant made an ungrounded action claim "
                     "not supported by verified tool execution receipts."
                 )
-                is_streaming = bool(request_data.get("stream", False))
+                is_streaming = bool(request_data.get("stream", False)) or _request_is_streaming(
+                    request_data, GuardrailEventHooks.post_call
+                )
                 if self.on_fail == "block" or (
                     self.on_fail == "rewrite" and is_streaming
                 ):
