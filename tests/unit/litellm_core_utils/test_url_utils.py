@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.url_utils import (
     encode_url_path_segments,
     ensure_api_route,
     is_https_url_with_host,
+    is_local_host,
     join_api_base,
     validate_url,
 )
@@ -33,6 +34,29 @@ from litellm.litellm_core_utils.url_utils import (
 )
 def test_is_https_url_with_host(url: str, expected: bool) -> None:
     assert is_https_url_with_host(url) is expected
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    (
+        ("localhost", True),
+        ("LOCALHOST.", True),
+        ("app.localhost", True),
+        ("127.0.0.1", True),
+        ("127.8.9.10", True),
+        ("[::1]", True),
+        ("::ffff:127.0.0.1", True),
+        ("0.0.0.0", True),
+        ("::", True),
+        ("10.20.30.40", False),
+        ("::ffff:10.20.30.40", False),
+        ("localhost.example.com", False),
+        ("proxy.example.com", False),
+        ("", False),
+    ),
+)
+def test_is_local_host(host: str, expected: bool) -> None:
+    assert is_local_host(host) is expected
 
 
 @pytest.fixture

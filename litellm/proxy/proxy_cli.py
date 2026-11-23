@@ -31,6 +31,7 @@ from litellm.constants import (
     DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS,
 )
 from litellm.litellm_core_utils.llm_request_utils import is_cost_map_model_past_deprecation_date
+from litellm.litellm_core_utils.url_utils import is_local_host
 from litellm.proxy.db.pgbouncer import (
     PgBouncerError,
     PgBouncerSettings,
@@ -292,8 +293,19 @@ class _ModelList(TypedDict):
 _MODEL_LIST: Final = TypeAdapter(_ModelList)
 
 
-def _proxy_api_key() -> str:
-    return os.getenv("LITELLM_MASTER_KEY") or "My API Key"
+_PROXY_KEY_HINT: Final = "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host"
+
+
+def _proxy_api_key(host: str) -> str:
+    master_key: Final = os.getenv("LITELLM_MASTER_KEY")
+    return master_key if master_key and is_local_host(host) else "My API Key"
+
+
+def _raise_for_proxy_error(response: httpx.Response) -> None:
+    if not response.is_error:
+        return
+    hint: Final = f". {_PROXY_KEY_HINT}" if response.status_code in (401, 403) else ""
+    raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}{hint}")
 
 
 def _pick_test_model(api_base: str, api_key: str) -> str:
@@ -302,8 +314,7 @@ def _pick_test_model(api_base: str, api_key: str) -> str:
         params={"return_wildcard_routes": "true"},
         headers={"Authorization": f"Bearer {api_key}"},
     )
-    if response.is_error:
-        raise click.ClickException(f"GET {response.url} answered {response.status_code}: {response.text}")
+    _raise_for_proxy_error(response)
     named_models: Final = itertools.takewhile(
         lambda listed: "*" not in listed["id"], _MODEL_LIST.validate_json(response.content)["data"]
     )
@@ -335,8 +346,9 @@ class ProxyInitializationHelpers:
     def run_health_check(host: str, port: int):
         print("\nLiteLLM: Health Testing models in config")
         response: Final = httpx.get(
-            url=f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {_proxy_api_key()}"}
+            url=f"http://{host}:{port}/health", headers={"Authorization": f"Bearer {_proxy_api_key(host)}"}
         )
+        _raise_for_proxy_error(response)
         print(json.dumps(response.json(), indent=4))
 
     _run_health_check = run_health_check
@@ -385,7 +397,7 @@ class ProxyInitializationHelpers:
         import openai
 
         api_base: Final = f"http://{host}:{port}"
-        api_key: Final = _proxy_api_key()
+        api_key: Final = _proxy_api_key(host)
         request_model: Final = model or _pick_test_model(api_base, api_key)
         click.echo(f"\nLiteLLM: Making a test ChatCompletions request to your proxy. Model={request_model}")
         client: Final = openai.OpenAI(api_key=api_key, base_url=api_base)
@@ -1183,12 +1195,13 @@ def control_plane_tls(ssl_keyfile_path: str | None, ssl_certfile_path: str | Non
 @click.option(
     "--health",
     flag_value=True,
-    help="Make a chat/completions request to all llms in config.yaml",
+    help="Health check every model of the proxy at --host and --port, with LITELLM_MASTER_KEY when --host is local",
 )
 @click.option(
     "--test",
     flag_value=True,
-    help="Send test chat, streaming and text completion requests to the proxy at --host and --port",
+    help="Send test chat, streaming and text completion requests to the proxy at --host and --port, "
+    "with LITELLM_MASTER_KEY when --host is local",
 )
 @click.option(
     "--test_async",

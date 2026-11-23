@@ -211,17 +211,48 @@ class TestProxyInitializationHelpers:
         mock_version.assert_called_once_with("litellm")
         mock_echo.assert_called_once_with("\nLiteLLM: Current Version = 1.0.0\n")
 
+    @pytest.mark.parametrize(
+        ("host", "sends_master_key"),
+        [
+            pytest.param("127.0.0.1", True, id="loopback"),
+            pytest.param("localhost", True, id="localhost"),
+            pytest.param("0.0.0.0", True, id="unspecified"),
+            pytest.param("10.20.30.40", False, id="private-network"),
+            pytest.param("proxy.example.com", False, id="remote-name"),
+        ],
+    )
     @respx.mock
-    def test_health_flag_authenticates_with_the_master_key(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    def test_health_flag_sends_the_master_key_only_to_a_local_host(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], host: str, sends_master_key: bool
     ) -> None:
         monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
-        health: Final = respx.get(f"{_CLI_TEST_PROXY}/health").respond(json={"healthy_count": 1})
+        health: Final = respx.get(f"http://{host}:24871/health").respond(json={"healthy_count": 1})
 
-        run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+        run_server.main(["--health", "--host", host, "--port", "24871"], standalone_mode=False)
 
-        assert health.calls.last.request.headers["Authorization"] == "Bearer sk-cli-master"
+        assert ("sk-cli-master" in health.calls.last.request.headers["Authorization"]) is sends_master_key
         assert '"healthy_count": 1' in capsys.readouterr().out
+
+    @pytest.mark.parametrize(
+        ("status_code", "names_the_master_key"),
+        [
+            pytest.param(401, True, id="unauthorized"),
+            pytest.param(403, True, id="forbidden"),
+            pytest.param(503, False, id="server-error"),
+        ],
+    )
+    @respx.mock
+    def test_health_flag_fails_when_the_proxy_answers_an_error(
+        self, capsys: pytest.CaptureFixture[str], status_code: int, names_the_master_key: bool
+    ) -> None:
+        respx.get(f"{_CLI_TEST_PROXY}/health").respond(status_code, text="proxy said no")
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--health", *_CLI_TEST_PROXY_ARGS], standalone_mode=False)
+
+        assert f"/health answered {status_code}: proxy said no" in raised.value.message
+        assert ("LITELLM_MASTER_KEY" in raised.value.message) is names_the_master_key
+        assert "proxy said no" not in capsys.readouterr().out
 
     @pytest.mark.parametrize(
         ("listed_models", "expected_model"),
@@ -297,12 +328,27 @@ class TestProxyInitializationHelpers:
         assert len(respx.calls) == 4
         assert all("sk-openai-upstream" not in call.request.headers["Authorization"] for call in respx.calls)
 
+    @respx.mock
+    def test_test_flag_never_sends_the_master_key_to_a_remote_host(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-cli-master")
+        remote_proxy: Final = "http://proxy.example.com:24871"
+        _mock_cli_test_model_list(httpx.Response(401, text="Invalid proxy server token passed"), remote_proxy)
+        completions: Final = _mock_cli_test_completions(remote_proxy)
+
+        with pytest.raises(click.ClickException) as raised:
+            run_server.main(["--test", "--host", "proxy.example.com", "--port", "24871"], standalone_mode=False)
+
+        assert "LITELLM_MASTER_KEY" in raised.value.message
+        assert [call.request.headers["Authorization"] for call in respx.calls] == ["Bearer My API Key"]
+        assert completions == []
+
     @pytest.mark.parametrize(
         ("models_response", "expected_message"),
         [
             pytest.param(
                 httpx.Response(401, text="Invalid proxy server token passed"),
-                "/v1/models?return_wildcard_routes=true answered 401: Invalid proxy server token passed",
+                "/v1/models?return_wildcard_routes=true answered 401: Invalid proxy server token passed. "
+                "--test and --health send LITELLM_MASTER_KEY as the key, and only to a local --host",
                 id="rejected-key",
             ),
             pytest.param(
