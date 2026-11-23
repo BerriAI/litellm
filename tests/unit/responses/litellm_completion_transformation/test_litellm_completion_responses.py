@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -18,8 +19,7 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
-from litellm.constants import CALLER_SESSION_ID_METADATA_KEY
+from litellm.constants import CALLER_SESSION_ID_METADATA_KEY, PREVIOUS_RESPONSE_IDS_METADATA_KEY
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.tool_fields import chat_member_name
@@ -27,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.reasoning_items import encode_thinking_blocks
 from litellm.responses.litellm_completion_transformation.tool_search import tool_search_routing
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -47,6 +48,7 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -8482,8 +8484,6 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
     monkeypatch: pytest.MonkeyPatch, request_kwargs: Mapping[str, object], logged_metadata_key: str
 ):
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
-    sent_kwargs: Final = deepcopy(request_kwargs)
-
     request: Final = _continued_chain_request(request_kwargs)
 
     assert request["litellm_trace_id"] == "chain-session"
@@ -8492,7 +8492,7 @@ def test_a_continued_chain_logs_its_spend_under_the_chain_session_with_request_c
         **TypeAdapter(dict[str, object]).validate_python(request_kwargs[logged_metadata_key]),
         CALLER_SESSION_ID_METADATA_KEY: "chain-session",
     }
-    assert request_kwargs == sent_kwargs
+    assert request[logged_metadata_key] is request_kwargs[logged_metadata_key]
 
 
 def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_correlation(
@@ -8506,6 +8506,42 @@ def test_a_continued_chain_leaves_the_turns_metadata_alone_without_request_corre
     assert request["litellm_trace_id"] == "chain-session"
     assert "litellm_metadata" not in request
     assert request["metadata"] == {CALLER_SESSION_ID_METADATA_KEY: "turn-session", "user_api_key": "hashed"}
+
+
+@pytest.mark.parametrize("request_correlation_in_logs", [True, False])
+def test_a_continued_chain_stores_the_replayed_turns_as_its_path_to_the_root(
+    monkeypatch: pytest.MonkeyPatch, request_correlation_in_logs: bool
+):
+    """The proxy's spend log row for this turn carries the ids it replayed, so a fork off it replays only them."""
+    monkeypatch.setattr(litellm, "request_correlation_in_logs", request_correlation_in_logs)
+
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "turn 1"}],
+            litellm_session_id="chain-session",
+            previous_response_ids=("chatcmpl-root", "chatcmpl-turn-1"),
+        )
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_turn_1",
+            litellm_completion_request={
+                "model": _CLAUDE_ON_BEDROCK,
+                "custom_llm_provider": "bedrock",
+                "messages": [{"role": "user", "content": "turn 2"}],
+            },
+            instructions=None,
+            session_lookup=session_lookup,
+            request_kwargs={"litellm_metadata": {"user_api_key": "hashed"}, "metadata": {"tag": "client"}},
+        )
+    )
+
+    assert request["litellm_metadata"] == {
+        "user_api_key": "hashed",
+        **({CALLER_SESSION_ID_METADATA_KEY: "chain-session"} if request_correlation_in_logs else {}),
+        PREVIOUS_RESPONSE_IDS_METADATA_KEY: ["chatcmpl-root", "chatcmpl-turn-1"],
+    }
+    assert "metadata" not in request
 
 
 @pytest.mark.asyncio
@@ -8612,6 +8648,127 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_DEEPWIKI_MCP_TOOL: Final = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    }
+)
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+@pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
+def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
+    monkeypatch: pytest.MonkeyPatch, function_names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_stays_a_400_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'") as exc:
+        litellm.responses(
+            model="gemini/gemini-3.8-flash",
+            input="Weather in Paris?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+            tool_choice={"type": "mcp", "server_label": "unsent"},
+            drop_params=True,
+            api_key="gemini-test-key",
+        )
+
+    assert "This request sends no hosted MCP tool with server_label `unsent`." in exc.value.message
+    assert not gemini.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_function_tool_choice_under_drop_params_still_forces_the_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+        tool_choice={"type": "function", "name": "get_weather"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert sent["toolConfig"]["functionCallingConfig"]["allowed_function_names"] == ["get_weather"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_without_drop_params_is_a_400_on_a_route_that_runs_the_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = respx.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_weather",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Sunny."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        }
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model="anthropic/claude-haiku-5-5",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "deepwiki"},
+            api_key="anthropic-test-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert not anthropic.called
 
 
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"

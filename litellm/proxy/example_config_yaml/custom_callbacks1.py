@@ -3,7 +3,7 @@ from typing import Final, Literal, Optional
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.proxy_server import DualCache, UserAPIKeyAuth
-from litellm.types.utils import CallTypesLiteral
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -37,7 +37,7 @@ class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observabili
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         # print("in async_post_call_success_hook")
         pass

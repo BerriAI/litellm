@@ -46,9 +46,13 @@ mod fallback;
 mod lower;
 mod model;
 mod model_info;
+mod pricing;
 mod register;
 mod resolve;
 mod store;
+#[cfg(test)]
+mod test_support;
+mod view;
 mod vocabulary;
 pub mod wire;
 
@@ -57,11 +61,13 @@ pub use catalog::*;
 pub use cost_map::*;
 pub use error::*;
 pub use fallback::*;
+pub use lower::{BilledPrices, billed_prices};
 pub use model::*;
 pub use model_info::*;
 pub use register::*;
 pub use resolve::*;
 pub use store::*;
+pub use view::*;
 pub use vocabulary::*;
 
 #[cfg(feature = "schema")]

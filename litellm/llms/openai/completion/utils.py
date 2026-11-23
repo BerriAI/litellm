@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Final, cast
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -10,7 +11,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def is_tokens_or_list_of_tokens(value: list):
+def is_tokens_or_list_of_tokens(value: Sequence[object]) -> bool:
     # Check if it's a list of integers (tokens)
     if isinstance(value, list) and all(isinstance(item, int) for item in value):
         return True

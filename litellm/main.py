@@ -77,7 +77,6 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     drops_unsupported_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
-    raise_if_hosted_tool_choice_unsupported,
 )
 from litellm.litellm_core_utils.asyncify import asyncify, run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -145,6 +144,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+from litellm.litellm_core_utils.tool_fields import raise_if_a_forced_hosted_tool_stays
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
@@ -6198,13 +6198,6 @@ def completion(
             model=model,
             drop_params=drop_unsupported_reasoning,
         )
-        raise_if_hosted_tool_choice_unsupported(
-            tool_choice=cast(  # cast-ok: widening an untyped dict to object is always sound, the helper validates it with pydantic
-                object, tool_choice
-            ),
-            custom_llm_provider=custom_llm_provider,
-            model=model,
-        )
 
         if provider_specific_header is not None:
             headers.update(
@@ -6255,6 +6248,16 @@ def completion(
                 provider=LlmProviders(custom_llm_provider),
                 base_model=base_model,
             )
+        raise_if_a_forced_hosted_tool_stays(
+            cast(  # cast-ok: widening untyped tool kwargs to object is always sound, the helper validates them
+                Mapping[str, object],
+                {"tools": tools, "tool_choice": tool_choice},
+            ),
+            model=model,
+            route=custom_llm_provider,
+            drop_params=drop_unsupported_reasoning,
+            provider_config=provider_config,
+        )
 
         if provider_config is not None:
             translated_messages: Final = list(

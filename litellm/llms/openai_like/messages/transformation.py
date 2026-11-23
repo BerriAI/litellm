@@ -50,8 +50,8 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers: dict[str, str],
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
@@ -84,10 +84,10 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],  # mutable-ok: matches dict-typed base signature
-        anthropic_messages_optional_request_params: dict,  # mutable-ok: matches dict-typed base signature
+        messages: list[dict[str, object]],  # mutable-ok: matches dict-typed base signature
+        anthropic_messages_optional_request_params: dict[str, object],  # mutable-ok: matches dict-typed base signature
         litellm_params: GenericLiteLLMParams,
-        headers: dict,  # mutable-ok: matches dict-typed base signature
+        headers: dict[str, str],  # mutable-ok: matches dict-typed base signature
     ) -> dict:  # mutable-ok: matches dict-typed base signature
         """
         Anthropic ignores prompt-caching hints it cannot honor, but strict
@@ -112,8 +112,8 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         if not api_base:
@@ -160,8 +160,8 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         headers: dict[str, str],
         model: str,
         messages: Sequence[object],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict[str, str], str | None]:
@@ -184,8 +184,8 @@ class JSONProviderAnthropicMessagesConfig(OpenAILikeAnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
