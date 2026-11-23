@@ -76,6 +76,7 @@ from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    malformed_without_output_message,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     embed_content_config_fields,
@@ -2014,6 +2015,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 logging_obj=logging_obj,
                 raw_response=mock_httpx_response,
             )
+
+            malformed: Final = malformed_without_output_message(transformed_response)
+            if malformed is not None:
+                return _openai_batch_output_row(
+                    custom_id=custom_id, error_code="vertex_ai_error", error_message=malformed
+                )
 
             # Convert ModelResponse to dict
             response_dict: Final = transformed_response.model_dump()

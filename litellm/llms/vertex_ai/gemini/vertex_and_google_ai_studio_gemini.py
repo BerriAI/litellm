@@ -436,14 +436,15 @@ def _is_malformed_without_output(choice: object) -> bool:
     )
 
 
-def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+def malformed_without_output_message(response: ModelResponse) -> str | None:
     if not response.choices or not all(_is_malformed_without_output(choice) for choice in response.choices):
         return None
-    return VertexAIError(
-        status_code=500,
-        message=f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output",
-        headers=headers,
-    )
+    return f"Gemini finished with {_native_finish_reason(response.choices[0])} and returned no output"
+
+
+def _malformed_without_output_error(response: ModelResponse, headers: httpx.Headers) -> VertexAIError | None:
+    message: Final = malformed_without_output_message(response)
+    return None if message is None else VertexAIError(status_code=500, message=message, headers=headers)
 
 
 def _served_model_name(model_version: object) -> str | None:

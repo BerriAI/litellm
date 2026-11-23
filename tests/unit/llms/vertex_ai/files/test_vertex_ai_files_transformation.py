@@ -588,6 +588,42 @@ class TestVertexBatchOutputTransformation:
         assert result["error"]["code"] == "vertex_ai_error"
         assert result["custom_id"] == "request-error"
 
+    def test_malformed_rows_without_output_become_error_rows_and_other_rows_stay_responses(self, config):
+        def row(custom_id: str, candidate: dict) -> dict:
+            return {
+                "status": "",
+                "request": {
+                    "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
+                    "labels": {"litellm_custom_id": custom_id},
+                },
+                "response": {
+                    "candidates": [candidate],
+                    "modelVersion": "gemini-3.8-flash",
+                    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 4, "totalTokenCount": 13},
+                },
+            }
+
+        text_parts = {"role": "model", "parts": [{"text": "Paris is 12C."}]}
+        rows = [
+            row("call", {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}),
+            row("response", {"finishReason": "MALFORMED_RESPONSE"}),
+            row("call-with-text", {"content": text_parts, "finishReason": "MALFORMED_FUNCTION_CALL"}),
+            row("stop", {"content": text_parts, "finishReason": "STOP"}),
+        ]
+
+        transformed = config._try_transform_vertex_batch_output_to_openai(
+            "\n".join(json.dumps(r) for r in rows).encode("utf-8")
+        )
+        results = {r["custom_id"]: r for r in map(json.loads, transformed.decode("utf-8").splitlines())}
+
+        for custom_id, native_reason in (("call", "MALFORMED_FUNCTION_CALL"), ("response", "MALFORMED_RESPONSE")):
+            assert results[custom_id]["response"] is None
+            assert results[custom_id]["error"]["code"] == "vertex_ai_error"
+            assert native_reason in results[custom_id]["error"]["message"]
+        for custom_id in ("call-with-text", "stop"):
+            assert results[custom_id]["error"] is None
+            assert results[custom_id]["response"]["body"]["choices"][0]["message"]["content"] == "Paris is 12C."
+
     def test_transform_exception_path_sets_response_null(self, config):
         """
         The except-Exception branch in _transform_single_vertex_batch_output_to_openai
