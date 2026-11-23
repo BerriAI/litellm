@@ -18,8 +18,9 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
 
 if TYPE_CHECKING:
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
     from ..success_handler import PassThroughEndpointLogging
-    from ..types import EndpointType
 else:
     PassThroughEndpointLogging = Any
     EndpointType = Any
@@ -48,7 +49,7 @@ class BasePassthroughLoggingHandler(ABC):
         end_time: datetime,
         cache_hit: bool,
         request_body: dict,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Transforms LLM response to OpenAI response, generates a standard logging object so downstream logging can be handled
