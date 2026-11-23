@@ -26365,6 +26365,9 @@
     "gnani/prisma-v2.5": {
         "litellm_provider": "gnani",
         "mode": "audio_transcription",
+        "provider_specific_entry": {
+            "gnani_v25_request_fields": 1
+        },
         "source": "https://docs.gnani.ai/api/STT/models/prisma-v2-5",
         "supported_endpoints": [
             "/v1/audio/transcriptions"
