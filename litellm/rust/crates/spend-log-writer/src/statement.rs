@@ -13,7 +13,7 @@ use litellm_repositories::{JsonText, SpendLogDelivery, SpendLogRecord, SpendLogW
 use crate::QueuedSpendLog;
 
 /// `SPEND_LOGS_METADATA_ALWAYS_KEPT_FIELDS`: metadata fields no retention setting drops.
-const ALWAYS_KEPT: [&str; 2] = ["cold_storage_object_key", "status"];
+const ALWAYS_KEPT: [&str; 3] = ["cold_storage_object_key", "litellm_previous_response_ids", "status"];
 
 /// Which metadata fields a logged row keeps (`general_settings.spend_logs_metadata_fields`),
 /// validated in Python to set exactly one of the two lists.
