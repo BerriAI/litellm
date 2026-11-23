@@ -3038,6 +3038,34 @@ class TestConvertToModelResponseObjectRerank:
         assert result.provider_usage is None
         assert "usage" not in result.model_dump(by_alias=True)
 
+    @pytest.mark.parametrize(
+        ("incoming", "expected_usage"),
+        [
+            ({"usage": None}, None),
+            ({"provider_usage": None}, None),
+            ({"usage": "n/a"}, None),
+            ({"usage": {"search_units": 2, "cost": 0.004}}, {"search_units": 2, "cost": 0.004}),
+            ({"usage": None, "provider_usage": {"search_units": 2, "cost": 0.004}}, None),
+            ({}, {"search_units": 1, "cost": 0.002}),
+        ],
+    )
+    def test_rerank_updates_provider_usage_only_when_supplied(
+        self, incoming: Mapping[str, object], expected_usage: Mapping[str, object] | None
+    ) -> None:
+        from litellm.types.utils import RerankResponse
+
+        supplied: Final = RerankResponse(id="stale", results=[], usage={"search_units": 1, "cost": 0.002})
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "results": [], **incoming},
+            model_response_object=supplied,
+            response_type="rerank",
+        )
+
+        assert result is supplied
+        assert result.id == "rerank-123"
+        assert result.provider_usage == expected_usage
+
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
         response_object = {

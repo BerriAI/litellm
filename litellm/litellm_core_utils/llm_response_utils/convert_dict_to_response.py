@@ -1125,11 +1125,12 @@ def convert_to_model_response_object(
                 model_response_object.results = response_object["results"]
 
             rerank_fields: Final = _RERANK_RESPONSE_FIELDS.validate_python(response_object)
-            reported_usage: Final = provider_usage_or_none(
-                rerank_fields.get("usage", rerank_fields.get("provider_usage"))
-            )
-            if reported_usage is not None:
-                set_extra_attribute(model_response_object, "provider_usage", reported_usage)
+            if "usage" in rerank_fields or "provider_usage" in rerank_fields:
+                set_extra_attribute(
+                    model_response_object,
+                    "provider_usage",
+                    provider_usage_or_none(rerank_fields.get("usage", rerank_fields.get("provider_usage"))),
+                )
             return model_response_object
     except Exception as e:
         from litellm.exceptions import APIError
