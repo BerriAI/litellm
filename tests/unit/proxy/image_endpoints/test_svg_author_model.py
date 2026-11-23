@@ -163,3 +163,34 @@ async def test_conflicting_svg_authors_are_rejected(
     with pytest.raises(HTTPException) as rejected:
         await _authorize(request, UserAPIKeyAuth(), router)
     assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_key_or_team_model_group_alias_for_the_author_is_sent_as_its_provider_model(router: Router) -> None:
+    request: Final = {
+        **_request(_svg_top_level, "nano-alias"),
+        "router_settings_override": {"model_group_alias": {"nano-alias": "my-nano"}},
+    }
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_target_the_key_cannot_call_is_rejected(router: Router) -> None:
+    request: Final = {
+        **_request(_svg_top_level, "chat-alias"),
+        "router_settings_override": {"model_group_alias": {"chat-alias": "restricted-chat"}},
+    }
+    with pytest.raises(ProxyException) as denied:
+        await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6", "chat-alias"]), router)
+    assert denied.value.code == "403"
+
+
+@pytest.mark.asyncio
+async def test_customer_model_limits_apply_to_the_svg_author(router: Router) -> None:
+    customer_scoped: Final = UserAPIKeyAuth().with_customer_model_scopes((("gpt-image-2.6", "my-nano"),))
+    request: Final = {**_request(_svg_top_level, "restricted-chat"), "metadata": {"user_api_key_auth": customer_scoped}}
+    with pytest.raises(ProxyException) as denied:
+        await _authorize(request, UserAPIKeyAuth(), router)
+    assert denied.value.code == "403"

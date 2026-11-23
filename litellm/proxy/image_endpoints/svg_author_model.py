@@ -18,7 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     key_model_aliases_for_auth_check,
     personal_key_team_model_access_applies,
 )
-from litellm.proxy.litellm_pre_call_utils import global_then_key_alias_target
+from litellm.proxy.litellm_pre_call_utils import customer_request_auth, pre_call_served_model
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.utils import ImageSVGAuthorDeployment
 
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
 _SVG_FIELD: Final = "svg"
 _SVG_FORM_MODEL_FIELD: Final = "svg[model]"
 _EXTRA_BODY_FIELD: Final = "extra_body"
+_ROUTER_SETTINGS_FIELD: Final = "router_settings_override"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 
 
@@ -174,16 +175,18 @@ async def svg_author_model_updates(
             detail=f"svg.model is set more than once with different values: {', '.join(authors)}",
         )
     author: Final = authors[0]
-    await can_key_call_resolved_model(
-        model=author,
-        llm_model_list=llm_router.registry().all() if llm_router else None,
-        valid_token=user_api_key_dict,
-        llm_router=llm_router,
-    )
-    await _check_key_owner_access(author, user_api_key_dict, llm_router)
-    deployment: Final = _author_deployment(
-        global_then_key_alias_target(author, user_api_key_dict), user_api_key_dict.team_id, llm_router
-    )
+    router_settings: Final = _as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}
+    served_author: Final = pre_call_served_model(author, user_api_key_dict, router_settings.get("model_group_alias"))
+    auth: Final = customer_request_auth(body) or user_api_key_dict
+    for name in dict.fromkeys((author, served_author)):
+        await can_key_call_resolved_model(
+            model=name,
+            llm_model_list=llm_router.registry().all() if llm_router else None,
+            valid_token=auth,
+            llm_router=llm_router,
+        )
+        await _check_key_owner_access(name, auth, llm_router)
+    deployment: Final = _author_deployment(served_author, user_api_key_dict.team_id, llm_router)
     if deployment is None:
         return {}
     provider_model: Final = _provider_model(deployment.litellm_params.model)
