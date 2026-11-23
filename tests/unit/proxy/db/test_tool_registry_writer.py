@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from prisma.errors import PrismaError, RawQueryError
+from prisma.errors import DataError, PrismaError, RawQueryError
 
 from litellm.constants import DB_SPEND_UPDATE_JOB_NAME, REDIS_TOOL_DISCOVERY_BUFFER_KEY, TOOL_DISCOVERY_COMMIT_JOB_NAME
 from litellm.proxy.db import tool_table_bulk_upsert
@@ -598,11 +598,36 @@ async def test_failed_tool_table_write_requeues_the_rows_only_when_they_provably
     [
         (httpx.ConnectError("connection refused"), True),
         (_postgres_rejection("25006"), True),
+        (_postgres_rejection("40001"), True),
+        (_postgres_rejection("40P01"), True),
+        (
+            DataError(
+                data={"user_facing_error": {"error_code": "P1017", "message": "Server has closed the connection."}}
+            ),
+            False,
+        ),
+        (
+            RawQueryError(
+                data={
+                    "user_facing_error": {
+                        "error_code": "P2010",
+                        "meta": {"code": "N/A", "message": "connection reset by peer"},
+                    }
+                }
+            ),
+            False,
+        ),
+        (_postgres_rejection("57P01"), False),
         (_postgres_rejection("54000"), False),
     ],
     ids=[
         "connection_failure_retries_only_failed_chunk",
         "read_only_failover_retries_only_failed_chunk",
+        "serialization_failure_retries_only_failed_chunk",
+        "deadlock_retries_only_failed_chunk",
+        "connection_closed_drops_only_failed_chunk",
+        "raw_transport_error_drops_only_failed_chunk",
+        "session_termination_drops_only_failed_chunk",
         "limit_rejection_drops_only_failed_chunk",
     ],
 )
