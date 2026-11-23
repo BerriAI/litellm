@@ -159,11 +159,10 @@ async def test_sustained_failure_suspends_the_subscription() -> None:
     assert store.rows["sub_1"].status == "suspended"
 
 
-@pytest.mark.parametrize("status", (410, 413))
 @pytest.mark.asyncio
-async def test_gone_and_too_large_are_never_retried(status: int) -> None:
+async def test_receiver_discarding_an_event_keeps_the_subscription_healthy() -> None:
     store: Final = _store()
-    await _worker(store, _Client(status)).run_once()
+    await _worker(store, _Client(410)).run_once()
     assert store.queue == {} and store.rows["sub_1"].consecutive_failures == 0
 
 
@@ -250,6 +249,19 @@ def test_a_sealed_gap_cursor_falls_back_to_the_last_known_watermark() -> None:
     assert isinstance(stored, Ok)
     outgoing: Final = gap(ROW.model_copy(update={"cursor": stored.ok}), None, int(NOW.timestamp()))
     assert json.loads(outgoing.body) == {"type": "gap", "cursor": stored.ok}
+
+
+@pytest.mark.asyncio
+async def test_oversized_event_sends_one_gap_with_the_last_safe_cursor() -> None:
+    store: Final = _store()
+    client: Final = _Client(413, 413)
+    worker: Final = _worker(store, client)
+    for _ in range(2):
+        (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
+        await worker.process(delivery)
+    event, gap_notice = client.bodies()
+    assert gap_notice == {"type": "gap", "cursor": event["cursor"]}
+    assert not store.queue and store.rows[ROW.id].consecutive_failures == 0
 
 
 @pytest.mark.asyncio
