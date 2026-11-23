@@ -1080,19 +1080,21 @@ def image_edit(
             dropped_form_field_roots: Final[frozenset[str]] = (
                 unsupported_edit_params if should_drop_params else frozenset()
             )
+            caller_fields: Final = {
+                key: value
+                for key, value in kept_params.items()
+                if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
+            }
+            extra_body_fields: Final = (
+                {key: value for key, value in extra_body.items() if key not in dropped_form_params}
+                if isinstance(extra_body, dict)
+                else None
+            )
+            json_fields: Final = {**caller_fields, **(extra_body_fields or {})}
             image_edit_request_params.update(
-                flatten_form_field_values(
-                    {
-                        key: value
-                        for key, value in kept_params.items()
-                        if key not in dropped_edit_params and key.split("[", 1)[0] not in dropped_form_field_roots
-                    },
-                    (
-                        {key: value for key, value in extra_body.items() if key not in dropped_form_params}
-                        if isinstance(extra_body, dict)
-                        else None
-                    ),
-                )
+                json_fields
+                if image_edit_provider_config.uses_json_body(images, json_fields)
+                else flatten_form_field_values(caller_fields, extra_body_fields)
             )
 
         # Pre Call logging

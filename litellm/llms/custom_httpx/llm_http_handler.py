@@ -7626,18 +7626,18 @@ class BaseLLMHTTPHandler:
         )
 
         def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params):
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
             )
 
@@ -7734,18 +7734,18 @@ class BaseLLMHTTPHandler:
         )
 
         async def send() -> httpx.Response:
-            if image_edit_provider_config.use_multipart_form_data():
+            if image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params):
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
             )
 

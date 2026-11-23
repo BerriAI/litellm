@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -41,6 +41,12 @@ class _ImageResponseFields(TypedDict, total=False, extra_items=object):
 
 def _upload_file_name(image: object) -> object:
     return image.name if isinstance(image, BufferedReader) else "image.png"
+
+
+def _has_uploaded_image(image: FileTypes | Sequence[FileTypes | None] | None) -> bool:
+    if isinstance(image, list | tuple):
+        return any(item is not None for item in image)
+    return image is not None
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -90,6 +96,15 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
         files_list.append((field_name, (_upload_file_name(image), image, image_content_type)))
 
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return super().uses_json_body(image, image_edit_optional_request_params) or (
+            "images" in image_edit_optional_request_params and not _has_uploaded_image(image)
+        )
+
     def transform_image_edit_request(
         self,
         model: str,
@@ -117,6 +132,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
         request: Final = ImageEditRequestParams(**request_params)
         request_dict: Final = cast(dict, request)
+        if self.uses_json_body(image, image_edit_optional_request_params):
+            return {key: value for key, value in request_dict.items() if key != "image"}, []
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
