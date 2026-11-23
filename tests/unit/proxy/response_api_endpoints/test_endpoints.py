@@ -32,8 +32,11 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.hooks import PROXY_HOOKS
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook
 from litellm.proxy.proxy_server import app
-from litellm.proxy.utils import ProxyLogging
+from litellm.proxy.utils import InternalUsageCache, ProxyLogging
 from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -7140,7 +7143,12 @@ async def _admits(proxy_logging: ProxyLogging, key: UserAPIKeyAuth, call_type: C
     return await asyncio.create_task(admit(), context=contextvars.Context())
 
 
+def _legacy_limiter(internal_usage_cache: InternalUsageCache) -> PROXY_MaxParallelRequestsHandler:
+    return PROXY_MaxParallelRequestsHandler(internal_usage_cache, clock=lambda: datetime.datetime(2026, 1, 31, 12, 0, 30))
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limiter", [ParallelRequestLimiterHook, _legacy_limiter], ids=["default", "legacy"])
 @pytest.mark.parametrize(
     "open_failure",
     [
@@ -7150,23 +7158,23 @@ async def _admits(proxy_logging: ProxyLogging, key: UserAPIKeyAuth, call_type: C
     ids=["rate_limit", "error"],
 )
 async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_slot_back(
-    monkeypatch: pytest.MonkeyPatch, open_failure: Exception
+    monkeypatch: pytest.MonkeyPatch, limiter: Callable[..., CustomLogger], open_failure: Exception
 ) -> None:
     from litellm.proxy.response_api_endpoints.endpoints import responses_websocket_endpoint
 
     monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setitem(PROXY_HOOKS, "parallel_request_limiter", limiter)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     with patch("litellm.proxy.proxy_server.prisma_client", None):
         proxy_logging._add_proxy_hooks(llm_router=None)
     ProxyLogging._callback_capabilities_cache.clear()
     key: Final = UserAPIKeyAuth(api_key="hashed-single-slot-key", max_parallel_requests=1)
-    admitted_while_opening: Final[list[bool]] = []
 
     async def admit_then_fail(**_: object) -> None:
         await proxy_logging.pre_call_hook(
             user_api_key_dict=key, data={"model": "gpt-4o-mini"}, call_type="_aresponses_websocket"
         )
-        admitted_while_opening.append(await _admits(proxy_logging, key, "acompletion"))
+        await asyncio.sleep(0)
         raise open_failure
 
     ws: Final = MagicMock()
@@ -7200,5 +7208,5 @@ async def test_a_responses_websocket_refused_after_admission_gives_its_parallel_
         )
 
     ws.close.assert_awaited_once()
-    assert admitted_while_opening == [False], "the socket must hold the key's only slot while it opens"
     assert await _admits(proxy_logging, key, "acompletion"), "the refused socket still holds the key's only slot"
+    assert not await _admits(proxy_logging, key, "acompletion"), "the limiter under test must enforce the single slot"

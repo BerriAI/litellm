@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
@@ -74,6 +75,9 @@ class CacheObject(TypedDict):
     request_count_user_id: dict | None
     request_count_team_id: dict | None
     request_count_end_user_id: dict | None
+
+
+_admitted_in_request: Final[ContextVar[bool]] = ContextVar("legacy_parallel_request_admitted", default=False)
 
 
 class _PROXY_MaxParallelRequestsHandler(CustomLogger):
@@ -520,6 +524,14 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             )  # don't block execution for cache updates
         )
+        _admitted_in_request.set(True)
+
+    async def async_release_admitted_max_parallel_requests(self, user_api_key_dict: UserAPIKeyAuth) -> None:
+        """Release the slot this request's ``async_pre_call_hook`` took, and nothing when it never admitted."""
+        if not _admitted_in_request.get():
+            return
+        _admitted_in_request.set(False)
+        await self.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
