@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date
 from itertools import product
@@ -698,6 +699,176 @@ def test_an_invalid_child_index_left_by_an_interrupted_build_is_rebuilt_and_atta
     assert ensure_request_log_indexes(partitioned_database, "public") is True
 
     _assert_index_covers_every_partition(partitioned_database, CALL_ID_INDEX, "litellm_call_id_idx")
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+@pytest.mark.parametrize("reports_on_path", (False, True), ids=("off-search-path", "on-search-path"))
+def test_spend_runbooks_repoint_views_and_allow_old_table_drop(
+    scratch_database: str, partition_first: bool, reports_on_path: bool
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute("CREATE SCHEMA reports")
+        invoker: Final = ", security_invoker=true" if conn.info.server_version >= 150000 else ""
+        conn.execute(
+            sql.SQL(
+                'CREATE VIEW reports.direct WITH (security_barrier=true{}) AS '
+                'SELECT request_id, \'"LiteLLM_SpendLogs_legacy" "LiteLLM_SpendLogs_partitioned"\' AS label '
+                'FROM public."LiteLLM_SpendLogs" AS "LiteLLM_SpendLogs_legacy" WITH LOCAL CHECK OPTION'
+            ).format(sql.SQL(invoker))
+        )
+        conn.execute("CREATE VIEW reports.nested AS SELECT * FROM reports.direct")
+        if reports_on_path:
+            conn.execute("SET search_path TO public, reports")
+        _insert_spend_log(conn, "before", "2026-08-01")
+        before_options: Final = conn.execute(
+            "SELECT reloptions FROM pg_class WHERE oid = 'reports.direct'::regclass"
+        ).fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        conn.execute(script.read_bytes())
+        assert (
+            conn.execute("SELECT reloptions FROM pg_class WHERE oid = 'reports.direct'::regclass").fetchone()
+            == before_options
+        )
+        _insert_spend_log(conn, "after", "2026-08-01")
+        label: Final = '"LiteLLM_SpendLogs_legacy" "LiteLLM_SpendLogs_partitioned"'
+        expected: Final = [("after", label), ("before", label)] if partition_first else [("after", label)]
+        assert conn.execute("SELECT * FROM reports.direct ORDER BY request_id").fetchall() == expected
+        assert conn.execute("SELECT * FROM reports.nested ORDER BY request_id").fetchall() == expected
+        if not partition_first:
+            conn.execute('DROP TABLE "LiteLLM_SpendLogs_legacy"')
+        assert conn.execute(
+            "SELECT relkind FROM pg_class WHERE oid = '\"LiteLLM_SpendLogs\"'::regclass"
+        ).fetchone() == ("r" if partition_first else "p",)
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+def test_spend_runbooks_reject_materialized_views_without_changing_the_table(
+    scratch_database: str, partition_first: bool
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute('CREATE MATERIALIZED VIEW spend_snapshot AS SELECT request_id FROM "LiteLLM_SpendLogs"')
+        original: Final = conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        old_table: Final = "LiteLLM_SpendLogs_partitioned" if partition_first else "LiteLLM_SpendLogs_legacy"
+        conn.execute(sql.SQL("CREATE TABLE {} (id INT)").format(sql.Identifier(old_table)))
+        with pytest.raises(psycopg.errors.RaiseException, match="Materialized view spend_snapshot"):
+            conn.execute(script.read_bytes())
+        conn.execute("ROLLBACK")
+        assert conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone() == original
+        _insert_spend_log(conn, "still-writable", "2026-08-01")
+        conn.execute("REFRESH MATERIALIZED VIEW spend_snapshot")
+        assert conn.execute("SELECT * FROM spend_snapshot").fetchall() == [("still-writable",)]
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+@pytest.mark.parametrize(
+    "configure_rls",
+    (
+        'ALTER TABLE "LiteLLM_SpendLogs" ENABLE ROW LEVEL SECURITY',
+        'ALTER TABLE "LiteLLM_SpendLogs" FORCE ROW LEVEL SECURITY',
+        'CREATE POLICY spend_policy ON "LiteLLM_SpendLogs" USING (true)',
+    ),
+    ids=("enabled", "forced", "policy-only"),
+)
+def test_spend_runbooks_reject_row_security_before_swapping(
+    scratch_database: str, partition_first: bool, configure_rls: str
+) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        if partition_first:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute(configure_rls)
+        original: Final = conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone()
+        script: Final = (
+            PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+        )
+        old_table: Final = "LiteLLM_SpendLogs_partitioned" if partition_first else "LiteLLM_SpendLogs_legacy"
+        conn.execute(sql.SQL("CREATE TABLE {} (id INT)").format(sql.Identifier(old_table)))
+        with pytest.raises(psycopg.errors.RaiseException, match="LiteLLM_SpendLogs has row-level security") as error:
+            conn.execute(script.read_bytes())
+        conn.execute("ROLLBACK")
+        assert "restore them on the replacement table" in (error.value.diag.message_hint or "")
+        assert conn.execute("SELECT '\"LiteLLM_SpendLogs\"'::regclass::oid").fetchone() == original
+
+
+@requires_db
+def test_partition_runbook_rejects_views_that_rely_on_the_old_primary_key(scratch_database: str) -> None:
+    with psycopg.connect(scratch_database, autocommit=True) as conn:
+        conn.execute(
+            'CREATE VIEW grouped_spend AS SELECT request_id, spend FROM "LiteLLM_SpendLogs" GROUP BY request_id'
+        )
+        conn.execute('CREATE TABLE "LiteLLM_SpendLogs_legacy" (id INT)')
+        with pytest.raises(psycopg.errors.RaiseException, match="View grouped_spend depends on the current") as error:
+            conn.execute(PARTITION_SCRIPT.read_bytes())
+        conn.execute("ROLLBACK")
+        assert error.value.diag.message_hint == (
+            "Rewrite the view to explicitly group or aggregate non-grouped spend log columns before partitioning."
+        )
+
+        conn.execute(
+            "CREATE OR REPLACE VIEW grouped_spend AS SELECT request_id, spend "
+            'FROM "LiteLLM_SpendLogs" GROUP BY request_id, spend'
+        )
+        conn.execute('DROP TABLE "LiteLLM_SpendLogs_legacy"')
+        conn.execute(PARTITION_SCRIPT.read_bytes())
+        _insert_spend_log(conn, "after", "2026-08-01")
+        assert conn.execute("SELECT request_id FROM grouped_spend").fetchall() == [("after",)]
+
+
+@requires_db
+@pytest.mark.parametrize("partition_first", (False, True), ids=("partition", "unpartition"))
+def test_spend_runbooks_report_view_lock_contention_without_deadlocking(
+    scratch_database: str, partition_first: bool
+) -> None:
+    with (
+        psycopg.connect(scratch_database, autocommit=True) as runner,
+        psycopg.connect(scratch_database, autocommit=True) as reader,
+        psycopg.connect(scratch_database, autocommit=True) as observer,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        if partition_first:
+            runner.execute(PARTITION_SCRIPT.read_bytes())
+        runner.execute('CREATE VIEW spend_report AS SELECT request_id FROM "LiteLLM_SpendLogs"')
+        reader.execute("SET statement_timeout = '10s'")
+        runner.execute("BEGIN")
+        runner.execute('LOCK TABLE "LiteLLM_SpendLogs" IN ACCESS EXCLUSIVE MODE')
+        try:
+            pending: Final = pool.submit(reader.execute, "SELECT * FROM spend_report")
+            for _ in range(100):
+                if observer.execute("SELECT pg_blocking_pids(%s)", (reader.info.backend_pid,)).fetchone() == (
+                    [runner.info.backend_pid],
+                ):
+                    break
+                time.sleep(0.05)
+            else:
+                pytest.fail("The reader did not wait for the spend table lock")
+            assert observer.execute(
+                "SELECT mode FROM pg_locks WHERE pid = %s AND relation = 'spend_report'::regclass AND granted",
+                (reader.info.backend_pid,),
+            ).fetchall() == [("AccessShareLock",)]
+            script: Final = (
+                PARTITION_SCRIPT.with_name("unpartition_spend_logs.sql") if partition_first else PARTITION_SCRIPT
+            )
+            with pytest.raises(
+                psycopg.errors.LockNotAvailable, match=r"Could not rebind spend log view public\.spend_report"
+            ):
+                runner.execute(script.read_bytes())
+        finally:
+            runner.execute("ROLLBACK")
+        assert pending.result(timeout=5).fetchall() == []
+        runner.execute(script.read_bytes())
+        _insert_spend_log(runner, "after", "2026-08-01")
+        assert reader.execute("SELECT * FROM spend_report").fetchall() == [("after",)]
 
 
 @requires_db
