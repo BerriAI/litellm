@@ -80,6 +80,7 @@ from litellm.llms.azure_ai.cost_calculator import (
 from litellm.llms.azure_ai.cost_calculator import (
     is_azure_model_router as azure_ai_is_model_router_name,
 )
+from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
@@ -3159,19 +3160,49 @@ def rerank_cost(
             provider=LlmProviders(custom_llm_provider),
         )
 
-        try:
-            model_info: ModelInfo | None = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-        except Exception:
-            model_info = None
+        model_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
-        return config.calculate_rerank_cost(
+        priced: Final = config.calculate_rerank_cost(
             model=model,
             custom_llm_provider=custom_llm_provider,
             billed_units=billed_units,
             model_info=model_info,
         )
+        if priced == (0.0, 0.0) and _rerank_rate_is_missing(
+            config, model, custom_llm_provider, billed_units, model_info
+        ):
+            raise ValueError(
+                f"No rerank price in the cost map for model={model}, custom_llm_provider={custom_llm_provider}"
+            )
+        return priced
     except Exception as e:
         raise e
+
+
+def _rerank_rate_is_missing(
+    config: BaseRerankConfig,
+    model: str,
+    custom_llm_provider: str,
+    billed_units: RerankBilledUnits | None,
+    model_info: ModelInfo,
+) -> bool:
+    """A zero rerank price is a missing price, not a free call, when the provider's own formula would charge these
+    billed units once the per-query or per-token rate it reads was set. An explicitly configured zero rate is free."""
+    configured: Final = cached_get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, preserve_unset_costs=True
+    )
+    query_rate: Final = configured.get("input_cost_per_query")
+    token_rate: Final = configured.get("input_cost_per_token")
+    if 0 in (query_rate, token_rate) or (query_rate is not None and token_rate is not None):
+        return False
+    probe: Final[ModelInfo] = {
+        **model_info,
+        "input_cost_per_query": 1.0 if query_rate is None else query_rate,
+        "input_cost_per_token": 1.0 if token_rate is None else token_rate,
+    }
+    return config.calculate_rerank_cost(
+        model=model, custom_llm_provider=custom_llm_provider, billed_units=billed_units, model_info=probe
+    ) != (0.0, 0.0)
 
 
 def transcription_cost(model: str, custom_llm_provider: str | None, duration: float) -> tuple[float, float]:

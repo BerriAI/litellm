@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -6,7 +8,9 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import Cache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.rerank import RerankResponse
 
 SCALEWAY_RERANK_BODY = {
     "id": "rerank-a89e6d7b8b97492ea81569c65fbfff49",
@@ -134,3 +138,89 @@ async def test_scaleway_arerank_posts_to_the_documented_endpoint():
     assert client.post.await_args.kwargs["url"] == "https://api.scaleway.ai/v1/rerank"
     assert client.post.await_args.kwargs["headers"]["authorization"] == "Bearer scw-key"
     assert [r["index"] for r in response.results] == [1, 0]
+
+
+UNMAPPED_RERANK_MODEL: Final = "scaleway/test-unmapped-reranker"
+REPORTED_USAGE: Final = {"search_units": 1, "cost": 0.002, "is_byok": False}
+OPENROUTER_RERANK_BODY: Final = {
+    "id": "gen-rerank-1",
+    "model": "cohere/rerank-v3.5",
+    "results": [
+        {"index": 1, "relevance_score": 0.9, "document": {"text": DOCUMENTS[1]}},
+        {"index": 0, "relevance_score": 0.1, "document": {"text": DOCUMENTS[0]}},
+    ],
+    "usage": REPORTED_USAGE,
+}
+UNREPORTED_COST_BODY: Final = {**OPENROUTER_RERANK_BODY, "usage": {"search_units": 1}}
+
+
+async def _rerank_unmapped_model(
+    sync_mode: bool, body: Mapping[str, object], respx_mock: respx.MockRouter
+) -> RerankResponse:
+    assert UNMAPPED_RERANK_MODEL not in litellm.model_cost
+    rerank_args: Final = {
+        "model": UNMAPPED_RERANK_MODEL,
+        "query": "q",
+        "documents": DOCUMENTS,
+        "top_n": 2,
+        "api_key": "router-key",
+        "api_base": "https://router.example/api/v1",
+    }
+    if sync_mode:
+        respx_mock.post("https://router.example/api/v1/rerank").return_value = httpx.Response(200, json=body)
+        synced: Final = litellm.rerank(**rerank_args)
+        assert isinstance(synced, RerankResponse)
+        return synced
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=httpx.Response(200, json=body))
+    awaited: Final = await litellm.arerank(**rerank_args, client=client)
+    assert isinstance(awaited, RerankResponse)
+    return awaited
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_scaleway_rerank_bills_and_returns_the_provider_reported_usage(
+    sync_mode: bool, respx_mock: respx.MockRouter
+) -> None:
+    response: Final = await _rerank_unmapped_model(sync_mode, OPENROUTER_RERANK_BODY, respx_mock)
+
+    assert response._hidden_params["response_cost"] == pytest.approx(REPORTED_USAGE["cost"])
+    assert response.model_dump(by_alias=True)["usage"] == REPORTED_USAGE
+    assert response.meta["billed_units"] == {"search_units": 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_scaleway_rerank_without_a_reported_or_mapped_cost_reports_no_cost(
+    sync_mode: bool, respx_mock: respx.MockRouter
+) -> None:
+    response: Final = await _rerank_unmapped_model(sync_mode, UNREPORTED_COST_BODY, respx_mock)
+
+    assert response._hidden_params["response_cost"] is None
+    assert response.model_dump(by_alias=True)["usage"] == {"search_units": 1}
+
+
+def test_scaleway_rerank_cache_hit_costs_nothing_and_keeps_the_provider_usage(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+    route: Final = respx_mock.post("https://router.example/api/v1/rerank")
+    route.return_value = httpx.Response(200, json=OPENROUTER_RERANK_BODY)
+    rerank_args: Final = {
+        "model": UNMAPPED_RERANK_MODEL,
+        "query": "q",
+        "documents": DOCUMENTS,
+        "api_key": "router-key",
+        "api_base": "https://router.example/api/v1",
+    }
+
+    first: Final = litellm.rerank(**rerank_args)
+    second: Final = litellm.rerank(**rerank_args)
+
+    assert isinstance(first, RerankResponse)
+    assert isinstance(second, RerankResponse)
+    assert route.call_count == 1
+    assert first._hidden_params["response_cost"] == pytest.approx(REPORTED_USAGE["cost"])
+    assert second._hidden_params["response_cost"] == 0.0
+    assert second.model_dump(by_alias=True)["usage"] == REPORTED_USAGE

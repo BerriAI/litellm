@@ -21,7 +21,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items, subscript
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_extra_attribute
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
@@ -33,6 +33,7 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
     OpenAIModerationResponse,
 )
+from litellm.types.rerank import provider_usage_or_none
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
@@ -1122,6 +1123,11 @@ def convert_to_model_response_object(
             if "results" in response_object:
                 model_response_object.results = response_object["results"]
 
+            reported_usage: Final = provider_usage_or_none(
+                response_object.get("usage", response_object.get("provider_usage"))
+            )
+            if reported_usage is not None:
+                set_extra_attribute(model_response_object, "provider_usage", reported_usage)
             return model_response_object
     except Exception as e:
         from litellm.exceptions import APIError

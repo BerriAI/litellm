@@ -3002,6 +3002,42 @@ class TestConvertToModelResponseObjectRerank:
         assert result.id == "rerank-123"
         assert result.results[0]["relevance_score"] == 0.9
 
+    @pytest.mark.parametrize("usage_key", ["usage", "provider_usage"])
+    @pytest.mark.parametrize("supplied", [True, False])
+    def test_rerank_keeps_the_provider_usage_on_both_overloads(self, usage_key: str, supplied: bool) -> None:
+        from litellm.types.utils import RerankResponse
+
+        usage: Final = {"search_units": 1, "cost": 0.002, "vendor_detail": {"tier": "x"}}
+        response_object: Final = {"id": "rerank-123", "meta": None, "results": [], usage_key: usage}
+        supplied_response: Final = RerankResponse() if supplied else None
+
+        result: Final = convert_to_model_response_object(
+            response_object=response_object,
+            model_response_object=supplied_response,
+            response_type="rerank",
+        )
+
+        assert not supplied or result is supplied_response
+        assert isinstance(result, RerankResponse)
+        assert result.provider_usage == usage
+        assert result.model_dump(by_alias=True)["usage"] == usage
+
+    @pytest.mark.parametrize("malformed_usage", ["n/a", ["search_units", 1], 7, None])
+    @pytest.mark.parametrize("supplied", [True, False])
+    def test_rerank_with_malformed_provider_usage_still_converts(self, malformed_usage: object, supplied: bool) -> None:
+        from litellm.types.utils import RerankResponse
+
+        result: Final = convert_to_model_response_object(
+            response_object={"id": "rerank-123", "meta": None, "results": [], "usage": malformed_usage},
+            model_response_object=RerankResponse() if supplied else None,
+            response_type="rerank",
+        )
+
+        assert isinstance(result, RerankResponse)
+        assert result.id == "rerank-123"
+        assert result.provider_usage is None
+        assert "usage" not in result.model_dump(by_alias=True)
+
 class TestConvertToModelResponseObjectCompletion:
     def test_tool_calls_finish_reason_override(self):
         response_object = {

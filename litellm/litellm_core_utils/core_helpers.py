@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
+from litellm.types.rerank import RerankResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1348,9 +1349,13 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     cost: Final = (
         _numeric(hidden[UPSTREAM_USAGE_COST])
         if hidden is not None and UPSTREAM_USAGE_COST in hidden
-        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+        else provider_reported_usage_cost(_billed_usage_block(response), custom_llm_provider)
     )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+def _billed_usage_block(response: object) -> object:
+    return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})

@@ -7,7 +7,16 @@ https://docs.cohere.com/reference/rerank
 from collections.abc import Mapping, Sequence
 from typing import Final, Literal, TypeVar, overload
 
-from pydantic import ConfigDict, PrivateAttr, TypeAdapter, ValidationError
+from pydantic import (
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    SerializerFunctionWrapHandler,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_serializer,
+)
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -120,13 +129,42 @@ class RerankResponseResult(TypedDict, total=False):
     document: RerankResponseDocument
 
 
+_PROVIDER_USAGE: Final = TypeAdapter(Mapping[str, object] | None)
+_DUMPED_FIELDS: Final = TypeAdapter(dict[str, object])
+_PROVIDER_USAGE_KEYS: Final = frozenset({"usage", "provider_usage"})
+
+
+def provider_usage_or_none(value: object) -> Mapping[str, object] | None:
+    try:
+        return _PROVIDER_USAGE.validate_python(value)
+    except ValidationError:
+        return None
+
+
 class RerankResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(validate_by_name=True)
+
     id: str | None = None
     results: list[RerankResponseResult] | None = None  # Contains index and relevance_score
     meta: RerankResponseMeta | None = None  # Contains api_version and billed_units
+    # The provider's raw block is "usage" only in by-alias (client JSON) dumps. The attribute and plain dumps use
+    # provider_usage, since logging, spend tracking and routing read a `usage` key or attribute as litellm's token Usage
+    provider_usage: Mapping[str, object] | None = Field(default=None, alias="usage")
 
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("provider_usage", mode="before")
+    @classmethod
+    def _ignore_malformed_provider_usage(cls, value: object) -> Mapping[str, object] | None:
+        return provider_usage_or_none(value)
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_provider_usage(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        fields: Final = _DUMPED_FIELDS.validate_python(handler(self))
+        if self.provider_usage is not None:
+            return fields
+        return {key: value for key, value in fields.items() if key not in _PROVIDER_USAGE_KEYS}
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
