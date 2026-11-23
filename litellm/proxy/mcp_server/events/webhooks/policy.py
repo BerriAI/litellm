@@ -30,8 +30,9 @@ def subscription_id(principal: str, url: str, name: str, arguments: JsonObject) 
     return "sub_" + hashlib.sha256(material.encode()).hexdigest()[:32]
 
 
-def callback_url(settings: EventsSettings, subscription: str) -> str:
-    return f"{(settings.public_base_url or '').rstrip('/')}/mcp/events/webhooks/{subscription}"
+def callback_url(settings: EventsSettings, subscription: str, upstream_secret: str) -> str:
+    incarnation: Final = hashlib.sha256(upstream_secret.encode()).hexdigest()[:32]
+    return f"{(settings.public_base_url or '').rstrip('/')}/mcp/events/webhooks/{subscription}?instance={incarnation}"
 
 
 def _forwards_client_credentials(server: MCPServer) -> bool:
