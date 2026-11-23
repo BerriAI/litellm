@@ -30,24 +30,64 @@ BLOCKS: Final = "outcomes-blocks"
 FLAGS: Final = "outcomes-flags"
 KEPT_OUTCOMES: Final = ("blocked", "flagged", "masked")
 UNSET: Final = "unset"
+EMPTY: Final = "empty"
+MISSPELLED: Final = "misspelled"
+NOT_A_LIST: Final = "not-a-list"
+CHAT: Final = "chat"
+CHAT_STREAM: Final = "chat-stream"
+MESSAGES: Final = "messages"
+RESPONSES: Final = "responses"
+
+
+def _chat_completion() -> dict[str, object]:
+    return {
+        "id": "chatcmpl-" + uuid.uuid4().hex,
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-5.4-mini",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "synthetic"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _chat_completion_stream() -> bytes:
+    completion_id: Final = "chatcmpl-" + uuid.uuid4().hex
+    chunk: Final = {"id": completion_id, "object": "chat.completion.chunk", "created": 1, "model": "gpt-5.4-mini"}
+    events: Final = (
+        {**chunk, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "synthetic"}}]},
+        {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {**chunk, "choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}},
+    )
+    return b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+
+
+def _response() -> dict[str, object]:
+    return {
+        "id": "resp_" + uuid.uuid4().hex,
+        "object": "response",
+        "created_at": 1,
+        "status": "completed",
+        "model": "gpt-5.4-mini",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_" + uuid.uuid4().hex,
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "synthetic", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    }
 
 
 def _provider(request: Request) -> Reply:
+    if request.target.endswith("/v1/responses"):
+        return Reply(body=json.dumps(_response()).encode())
     assert request.target.endswith("/v1/chat/completions"), request.target
-    return Reply(
-        body=json.dumps(
-            {
-                "id": "chatcmpl-" + uuid.uuid4().hex,
-                "object": "chat.completion",
-                "created": 1,
-                "model": "gpt-5.4-mini",
-                "choices": [
-                    {"index": 0, "message": {"role": "assistant", "content": "synthetic"}, "finish_reason": "stop"}
-                ],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-            }
-        ).encode()
-    )
+    if json.loads(request.body).get("stream") is True:
+        return Reply(chunks=(_chat_completion_stream(),), content_type="text/event-stream")
+    return Reply(body=json.dumps(_chat_completion()).encode())
 
 
 def _content_filter(name: str, mode: str, action: str) -> dict[str, object]:
@@ -64,12 +104,12 @@ def _content_filter(name: str, mode: str, action: str) -> dict[str, object]:
     }
 
 
-def _config(root: Path, name: str, outcomes: tuple[str, ...] | None, spend_log_writer: str) -> Path:
+def _config(root: Path, name: str, outcomes: object, spend_log_writer: str) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["general_settings"]["use_spend_logs_ledger"] = spend_log_writer == "rust"
     if outcomes is not None:
-        config["general_settings"]["guardrail_log_outcomes"] = list(outcomes)
+        config["general_settings"]["guardrail_log_outcomes"] = outcomes
     config["guardrails"] = [
         _content_filter(PASSES, "pre_call", "BLOCK"),
         _content_filter(MASKS, "pre_call", "MASK"),
@@ -102,16 +142,22 @@ class Rig:
         assert len(matches) == 1, listed
         return string_value(matches[0]["guardrail_id"])
 
-    def chat(self, text: str, guardrail: str) -> httpx.Response:
+    def send(self, endpoint: str, text: str, guardrail: str) -> httpx.Response:
+        messages: Final = [{"role": "user", "content": text}]
+        path, body = {
+            CHAT: ("/v1/chat/completions", {"messages": messages}),
+            CHAT_STREAM: ("/v1/chat/completions", {"messages": messages, "stream": True}),
+            MESSAGES: ("/v1/messages", {"messages": messages, "max_tokens": 32}),
+            RESPONSES: ("/v1/responses", {"input": text}),
+        }[endpoint]
         return self.proxy.client.post(
-            "/v1/chat/completions",
-            json={
-                "model": self.model,
-                "messages": [{"role": "user", "content": text}],
-                "guardrails": [guardrail],
-            },
+            path,
+            json={"model": self.model, "guardrails": [guardrail], **body},
             headers={"Authorization": f"Bearer {self.proxy.key}", "Connection": "close"},
         )
+
+    def chat(self, text: str, guardrail: str) -> httpx.Response:
+        return self.send(CHAT, text, guardrail)
 
     def counters(self, guardrail_id: str) -> Counters:
         rows: Final = self.proxy.rows(
@@ -126,7 +172,7 @@ class Rig:
         )
 
     def index_rows_added(
-        self, guardrail: str, texts: tuple[str, ...], statuses: tuple[int, ...], added: Counters
+        self, guardrail: str, texts: tuple[str, ...], statuses: tuple[int, ...], added: Counters, endpoint: str = CHAT
     ) -> int:
         """Send one request per text through `guardrail`, wait until the daily counters grew by `added`, and
         return how many index rows the guardrail gained. The worker database outlives each proxy, so every
@@ -134,7 +180,7 @@ class Rig:
         guardrail_id: Final = self.guardrail_id(guardrail)
         before: Final = self.counters(guardrail_id)
         indexed: Final = self.indexed_requests(guardrail_id)
-        assert tuple(self.chat(text, guardrail).status_code for text in texts) == statuses
+        assert tuple(self.send(endpoint, text, guardrail).status_code for text in texts) == statuses
         expected: Final = Counters(
             before.evaluated + added.evaluated,
             before.passed + added.passed,
@@ -152,7 +198,7 @@ class Rig:
         return int(str(rows[0]["total"]))
 
 
-def _rig(root: Path, outcomes: tuple[str, ...] | None, spend_log_writer: str = "rust") -> Iterator[Rig]:
+def _rig(root: Path, outcomes: object, spend_log_writer: str = "rust") -> Iterator[Rig]:
     with (
         gateway_from_environment() as gateway,
         wire_server(_provider) as provider,
@@ -175,13 +221,22 @@ def _rig(root: Path, outcomes: tuple[str, ...] | None, spend_log_writer: str = "
 def rig(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     """One proxy at a time: the owned proxies share the worker database and the guardrail ids, so two alive at
     once would move each other's counts."""
-    outcomes: Final = None if request.param == UNSET else KEPT_OUTCOMES
-    writer: Final = "rust" if request.param == UNSET else str(request.param)
+    configured: Final[dict[str, object]] = {
+        UNSET: None,
+        EMPTY: [],
+        MISSPELLED: ["Blocked", "masked"],
+        NOT_A_LIST: "blocked",
+    }
+    outcomes: Final = configured.get(request.param, list(KEPT_OUTCOMES))
+    writer: Final = str(request.param) if request.param in ("rust", "python") else "rust"
     yield from _rig(tmp_path_factory.mktemp("guardrail-log-outcomes"), outcomes, writer)
 
 
 kept_outcomes: Final = pytest.mark.parametrize("rig", ("rust", "python"), indirect=True)
 unset: Final = pytest.mark.parametrize("rig", (UNSET,), indirect=True)
+empty: Final = pytest.mark.parametrize("rig", (EMPTY,), indirect=True)
+misspelled: Final = pytest.mark.parametrize("rig", (MISSPELLED,), indirect=True)
+not_a_list: Final = pytest.mark.parametrize("rig", (NOT_A_LIST,), indirect=True)
 
 
 @kept_outcomes
@@ -220,6 +275,44 @@ def test_a_flagged_run_keeps_its_index_row(rig: Rig) -> None:
         (guardrail_id, response_id),
     )
     assert len(rows) == 1, rows
+
+
+@kept_outcomes
+@pytest.mark.parametrize("endpoint", (CHAT_STREAM, MESSAGES, RESPONSES))
+def test_every_endpoint_drops_the_passed_run_and_keeps_the_blocked_one(rig: Rig, endpoint: str) -> None:
+    clean: Final = ("clean prompt 0", "clean prompt 1")
+    assert rig.index_rows_added(PASSES, clean, (200, 200), Counters(2, 2, 0, 0), endpoint) == 0
+    assert rig.index_rows_added(BLOCKS, (f"the key is {AWS_KEY}",), (400,), Counters(1, 0, 1, 0), endpoint) == 1
+
+
+@kept_outcomes
+def test_outcomes_set_in_the_config_file_cannot_be_changed_through_the_config_api(rig: Rig) -> None:
+    changed: Final = rig.proxy.request(
+        "POST", "/config/update", {"general_settings": {"guardrail_log_outcomes": ["passed"]}}
+    )
+    assert changed.status_code == 400, changed.text
+    assert "guardrail_log_outcomes" in changed.text
+    assert rig.index_rows_added(PASSES, ("clean prompt",), (200,), Counters(1, 1, 0, 0)) == 0
+
+
+@empty
+def test_an_empty_list_keeps_no_index_row_and_still_counts_every_run(rig: Rig) -> None:
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 0
+    assert rig.index_rows_added(MASKS, texts, (200, 200), Counters(2, 2, 0, 0)) == 0
+
+
+@misspelled
+def test_a_misspelled_outcome_is_ignored_and_the_valid_one_still_applies(rig: Rig) -> None:
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 0
+    assert rig.index_rows_added(MASKS, texts, (200, 200), Counters(2, 2, 0, 0)) == 1
+
+
+@not_a_list
+def test_a_value_that_is_not_a_list_keeps_every_index_row(rig: Rig) -> None:
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    assert rig.index_rows_added(BLOCKS, texts, (200, 400), Counters(2, 1, 1, 0)) == 2
 
 
 def _rows_added_by_passed_runs(rig: Rig, runs: int) -> int:
