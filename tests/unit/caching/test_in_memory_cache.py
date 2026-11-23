@@ -455,3 +455,16 @@ async def test_async_in_memory_cache_response_write_can_refresh_an_active_ttl() 
     assert backend.ttl_dict["response:async-ttl-refresh"] == 2_070.0
     clock.now += 11
     assert backend.get_cache("response:async-ttl-refresh") is None
+
+def test_in_memory_cache_heap_compaction_deduplicates_identical_expiry_entries() -> None:
+    cache = InMemoryCache(max_size_in_memory=1, clock=lambda: 1_000.0)
+
+    # At this magnitude, adding the clock value does not change the float.
+    # Rewriting a live key therefore creates duplicate heap entries with the
+    # same (expiry, key) tuple unless compaction deduplicates by key.
+    for i in range(500):
+        cache.set_cache("hot_key", f"value_{i}", ttl=1e30, reset_ttl=True)
+
+    assert cache.get_cache("hot_key") == "value_499"
+    assert len(cache.expiration_heap) <= 2 * cache.max_size_in_memory + 1
+    assert all(cache.ttl_dict.get(key) == expiry for expiry, key in cache.expiration_heap)
