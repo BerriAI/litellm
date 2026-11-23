@@ -153,10 +153,7 @@ fn member_index(row: &[(Value, Value)]) -> Option<HashMap<String, usize>> {
         match field(row, name) {
             None => (),
             Some(Value::List(ids) | Value::Tuple(ids))
-                if ids.iter().all(|id| matches!(id, Value::Str(_))) =>
-            {
-                ()
-            }
+                if ids.iter().all(|id| matches!(id, Value::Str(_))) => {}
             _ => return None,
         }
     }
