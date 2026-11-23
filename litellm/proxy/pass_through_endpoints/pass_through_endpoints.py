@@ -2032,7 +2032,7 @@ async def pass_through_request(
         )
         forwarded_json_body: Final = _forwarded_json_body(upstream_body, request.method, request_sent_body(request))
         await pass_through_endpoint_logging.settle_background_response_before_delete(
-            request.method, custom_llm_provider, str(url), outbound_headers
+            request.method, str(url), outbound_headers
         )
 
         if stream:

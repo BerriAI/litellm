@@ -118,6 +118,11 @@ def is_openai_compatible_url(url_route: str | None) -> bool:
 _is_openai_compatible_url: Final = is_openai_compatible_url
 
 
+def targets_openai_api(url_route: str) -> bool:
+    hostname: Final = urlparse(url_route).hostname
+    return hostname is not None and _hostname_matches(hostname, _OPENAI_HOSTNAMES)
+
+
 ResponsesCallBilling: TypeAlias = Literal["unbilled", "billed", "background_settlement"]
 
 

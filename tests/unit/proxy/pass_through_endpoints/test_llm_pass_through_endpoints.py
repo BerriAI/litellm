@@ -4737,6 +4737,37 @@ def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
     assert set(creators.rows) == {DELETED_RESPONSE_ID}
 
 
+@pytest.mark.asyncio
+async def test_a_delete_through_a_configured_openai_route_bills_the_creator_with_that_route_credential(
+    local_model_cost_map,
+) -> None:
+    billed: Final[list[str]] = []
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        billed.append(logging_obj.litellm_call_id)
+
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+
+    await passthrough_logging.settle_background_response_before_delete(
+        "DELETE",
+        f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}",
+        {"authorization": "Bearer sk-configured-route"},
+    )
+
+    (read,) = fetch.requests
+    assert ("authorization", "Bearer sk-configured-route") in read.headers
+    assert billed == [DELETED_RESPONSE_CREATOR_CALL_ID]
+    assert creators.rows == {}
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 

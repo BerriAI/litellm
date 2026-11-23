@@ -28,6 +28,7 @@ BACKGROUND_RESPONSE_POLL_SCHEDULE: Final = PollSchedule(
 )
 
 BACKGROUND_RESPONSE_POLL_LEASE_SECONDS: Final = 300.0
+BACKGROUND_RESPONSE_MAX_ACTIVE_POLLS: Final = 1000
 BACKGROUND_RESPONSE_FETCH_TIMEOUT_SECONDS: Final = 10.0
 
 BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS: Final = 120.0
@@ -264,6 +265,7 @@ class BackgroundResponsePoller:
     database_configured: Callable[[], bool] = _proxy_database_configured
     now: Callable[[], datetime] = _now
     lease_seconds: float = BACKGROUND_RESPONSE_POLL_LEASE_SECONDS
+    max_active_polls: int = BACKGROUND_RESPONSE_MAX_ACTIVE_POLLS
     active: dict[str, "asyncio.Task[None]"] = field(  # mutable-ok: asyncio needs strong refs to the polls it runs
         default_factory=dict
     )
@@ -274,6 +276,9 @@ class BackgroundResponsePoller:
     def polls(self, response_id: str) -> bool:
         return response_id in self.active
 
+    def free_poll_slots(self) -> int:
+        return max(self.max_active_polls - len(self.active), 0)
+
     def start(
         self,
         creator: BackgroundResponseCreator,
@@ -282,6 +287,13 @@ class BackgroundResponsePoller:
         creators: BackgroundResponseCreatorStore,
     ) -> "asyncio.Task[None] | None":
         if not self.database_configured() or self.polls(creator.response_id):
+            return None
+        if self.free_poll_slots() == 0:
+            verbose_proxy_logger.warning(
+                "Not polling background response %s yet: this worker already polls %s, so a later sweep polls it",
+                creator.response_id,
+                self.max_active_polls,
+            )
             return None
         lease: Final = PollLease(
             creators=creators,
@@ -350,7 +362,7 @@ async def _sweep(
         creator
         for creator in unleased
         if _resumable(creator, api_base_origin) and not poller.polls(creator.response_id)
-    )
+    )[: poller.free_poll_slots()]
     if not resumable:
         return ()
     headers: Final = await poll_headers(api_base)

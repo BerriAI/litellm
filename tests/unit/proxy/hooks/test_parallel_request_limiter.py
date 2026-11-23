@@ -10,6 +10,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.constants import USAGE_ONLY_SETTLEMENT_KEY
 from litellm.interactions.background_cost_polling import rebuild_logging_obj
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -446,7 +447,7 @@ async def test_a_background_usage_settlement_counts_its_tokens_without_freeing_a
     )
 
     await handler.async_log_success_event(
-        kwargs=settlement.model_call_details,
+        kwargs={**settlement.model_call_details, USAGE_ONLY_SETTLEMENT_KEY: True},
         response_obj=ModelResponse(usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12)),
         start_time=FROZEN_INSTANT,
         end_time=FROZEN_INSTANT,
@@ -483,7 +484,7 @@ async def test_a_background_usage_settlement_in_an_uncounted_minute_leaves_the_c
     )
 
     await handler.async_log_success_event(
-        kwargs={**settlement.model_call_details, "user": "creator-end-user"},
+        kwargs={**settlement.model_call_details, USAGE_ONLY_SETTLEMENT_KEY: True, "user": "creator-end-user"},
         response_obj=ModelResponse(usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12)),
         start_time=FROZEN_INSTANT,
         end_time=FROZEN_INSTANT,

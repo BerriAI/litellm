@@ -55,6 +55,10 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
     proxy_creator_logging_wiring,
 )
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+from litellm.caching.caching import DualCache
+from litellm.proxy.hooks.parallel_request_limiter import PROXY_MaxParallelRequestsHandler
+from litellm.proxy.utils import InternalUsageCache
+from litellm.types.utils import ModelResponse, Usage
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     EndpointType,
     PassthroughStandardLoggingPayload,
@@ -3358,7 +3362,7 @@ async def _passed_through(
     url_route: str,
     request_body: dict[str, object],
     response_body: dict[str, object],
-    custom_llm_provider: str = "openai",
+    custom_llm_provider: str | None = "openai",
 ) -> None:
     await passthrough_logging.pass_through_async_success_handler(
         httpx_response=httpx.Response(200, json=response_body, request=upstream_request),
@@ -3395,7 +3399,9 @@ async def _background_create(
     )
 
 
-async def _finished_read(passthrough_logging: PassThroughEndpointLogging) -> None:
+async def _finished_read(
+    passthrough_logging: PassThroughEndpointLogging, custom_llm_provider: str | None = "openai"
+) -> None:
     url_route: Final = f"{RESPONSES_URL}/{STORED_RESPONSE_ID}"
     await _passed_through(
         passthrough_logging,
@@ -3404,6 +3410,7 @@ async def _finished_read(passthrough_logging: PassThroughEndpointLogging) -> Non
         url_route,
         {},
         _stored_response("completed", True, RESPONSES_USAGE),
+        custom_llm_provider=custom_llm_provider,
     )
 
 
@@ -3439,8 +3446,12 @@ def _assert_billed_to_the_creator(row: _DispatchedRow, create_row: SpendLogsPayl
 
 class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "read_route_provider",
+        [pytest.param("openai", id="openai_passthrough_route"), pytest.param(None, id="configured_route")],
+    )
     async def test_a_finished_read_by_another_key_bills_the_key_that_created_the_response(
-        self, local_model_cost_map
+        self, read_route_provider: str | None, local_model_cost_map
     ):
         rows: Final = _DispatchedSpendRows()
         passthrough_logging: Final = _creator_billing_passthrough_logging(
@@ -3448,7 +3459,7 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         )
 
         await _background_create(passthrough_logging)
-        await _finished_read(passthrough_logging)
+        await _finished_read(passthrough_logging, custom_llm_provider=read_route_provider)
 
         create_row: Final = rows.spend_rows()[0]
         (read_row,) = rows.logged_for(READER_METADATA["user_api_key_team_id"])
@@ -3713,8 +3724,12 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert not rows.logged_for(CREATOR_METADATA["user_api_key_team_id"])[1:]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "read_route_provider",
+        [pytest.param("azure", id="azure_passthrough_route"), pytest.param(None, id="configured_route")],
+    )
     async def test_an_azure_finished_read_bills_the_reader_without_reading_the_creator_table(
-        self, local_model_cost_map
+        self, read_route_provider: str | None, local_model_cost_map
     ):
         rows: Final = _DispatchedSpendRows()
         creators: Final = _CreatorTable(lookup_failures=1)
@@ -3730,7 +3745,7 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
             read_url,
             {},
             _stored_response("completed", True, RESPONSES_USAGE),
-            custom_llm_provider="azure",
+            custom_llm_provider=read_route_provider,
         )
 
         assert creators.failed_lookups == []
@@ -3738,8 +3753,12 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert read_row["spend"] > 0
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "read_route_provider",
+        [pytest.param("azure", id="azure_passthrough_route"), pytest.param(None, id="configured_route")],
+    )
     async def test_an_azure_finished_streamed_read_bills_the_reader_without_reading_the_creator_table(
-        self, local_model_cost_map
+        self, read_route_provider: str | None, local_model_cost_map
     ):
         creators: Final = _CreatorTable(lookup_failures=1)
         passthrough_logging: Final = _creator_billing_passthrough_logging(
@@ -3747,7 +3766,8 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         )
         recorder: Final = _SpendRowRecorder()
         reader: Final = _identified_logging_obj(READ_CALL_ID, READER_METADATA, stream=True, callbacks=(recorder,))
-        reader.model_call_details["custom_llm_provider"] = "azure"
+        if read_route_provider is not None:
+            reader.model_call_details["custom_llm_provider"] = read_route_provider
 
         await PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=reader,
@@ -3837,8 +3857,12 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert not read_row["spend"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "read_route_provider",
+        [pytest.param("openai", id="openai_passthrough_route"), pytest.param(None, id="configured_route")],
+    )
     async def test_a_finished_streamed_read_by_another_key_bills_the_key_that_created_the_response(
-        self, local_model_cost_map
+        self, read_route_provider: str | None, local_model_cost_map
     ):
         rows: Final = _DispatchedSpendRows()
         passthrough_logging: Final = _creator_billing_passthrough_logging(
@@ -3847,7 +3871,8 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         await _background_create(passthrough_logging)
         recorder: Final = _SpendRowRecorder()
         reader: Final = _identified_logging_obj(READ_CALL_ID, READER_METADATA, stream=True, callbacks=(recorder,))
-        reader.model_call_details["custom_llm_provider"] = "openai"
+        if read_route_provider is not None:
+            reader.model_call_details["custom_llm_provider"] = read_route_provider
 
         await PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=reader,
@@ -3931,6 +3956,49 @@ class TestOpenAIPassthroughBackgroundResponseCreatorBilling:
         assert len(fetch.requests) == 2
         assert len(rows.billed()) == 1
         _assert_billed_to_the_creator(rows.billed()[0], rows.spend_rows()[0], await _reader_paid_spend())
+
+    @pytest.mark.asyncio
+    async def test_the_bill_leaves_the_creators_in_flight_request_holding_its_legacy_limiter_slot(
+        self, local_model_cost_map
+    ):
+        rows: Final = _DispatchedSpendRows()
+        creators: Final = _CreatorTable()
+        fetch: Final = _ScriptedFetch()
+        passthrough_logging: Final = _creator_billing_passthrough_logging(
+            rows, _SettlementTable(), creators, fetch, polls=True
+        )
+        await _background_create(
+            passthrough_logging,
+            logging_obj=_identified_logging_obj(
+                CREATE_CALL_ID, {**CREATOR_METADATA, "user_api_key_model_max_budget": {}}
+            ),
+        )
+        fetch.outcomes.put_nowait(Fetched(body=_stored_response("completed", True, RESPONSES_USAGE)))
+        await _poll_settled(creators)
+        (bill,) = rows.billed()
+        billed_at: Final = datetime(2026, 10, 17, 13, 48, 30)
+        limiter: Final = PROXY_MaxParallelRequestsHandler(
+            internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: billed_at
+        )
+        bucket: Final = f"{CREATOR_METADATA['user_api_key']}::{billed_at.strftime('%Y-%m-%d-%H-%M')}::request_count"
+        await limiter.internal_usage_cache.async_set_cache(
+            key=bucket,
+            value={"current_requests": 1, "current_tpm": 0, "current_rpm": 1},
+            litellm_parent_otel_span=None,
+        )
+
+        await limiter.async_log_success_event(
+            kwargs=bill.logging_obj.model_call_details,
+            response_obj=ModelResponse(usage=Usage(prompt_tokens=8, completion_tokens=4, total_tokens=12)),
+            start_time=billed_at,
+            end_time=billed_at,
+        )
+
+        assert await limiter.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None) == {
+            "current_requests": 1,
+            "current_tpm": 12,
+            "current_rpm": 1,
+        }
 
     @pytest.mark.asyncio
     async def test_a_read_whose_claim_the_database_drops_bills_nobody_and_the_poll_bills_the_creator_once(

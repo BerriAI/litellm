@@ -60,7 +60,6 @@ from litellm.constants import (
     BACKGROUND_INTERACTION_COST_POLL_TIMEOUT_SECONDS,
     BACKGROUND_INTERACTION_COST_POLLING_ENABLED,
     BACKGROUND_INTERACTION_SETTLEMENT_CLAIM_LEASE_SECONDS,
-    USAGE_ONLY_SETTLEMENT_KEY,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.types.interactions import InteractionsAPIResponse
@@ -401,7 +400,6 @@ def rebuild_logging_obj(
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
-    logging_obj.model_call_details[USAGE_ONLY_SETTLEMENT_KEY] = True
     return logging_obj
 
 

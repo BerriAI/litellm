@@ -14,7 +14,11 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER, BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
+from litellm.constants import (
+    AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS,
+    USAGE_ONLY_SETTLEMENT_KEY,
+)
 from litellm.interactions.background_cost_polling import rebuild_logging_obj
 from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -354,12 +358,14 @@ class PassThroughEndpointLogging:
     _handle_logging = handle_logging
 
     async def background_response_settlement_for(
-        self, settled_response_id: str, response_body: Mapping[str, object], custom_llm_provider: str | None
+        self, settled_response_id: str, response_body: Mapping[str, object], url_route: str
     ) -> BackgroundResponseSettlementDecision:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import targets_openai_api
+
         upstream_response_id: Final = _upstream_response_id(settled_response_id)
         creator: Final = (
             await self.background_response_creators.creator(upstream_response_id)
-            if custom_llm_provider == LlmProviders.OPENAI.value
+            if targets_openai_api(url_route)
             else None
         )
         if isinstance(creator, CreatorLookupFailed):
@@ -379,7 +385,6 @@ class PassThroughEndpointLogging:
         method: str,
         url_route: str,
         response_fields: Mapping[str, object] | None,
-        custom_llm_provider: str | None,
     ) -> BackgroundResponseSettlementDecision:
         from .llm_provider_handlers.openai_passthrough_logging_handler import (
             OpenAIPassthroughLoggingHandler,
@@ -392,7 +397,7 @@ class PassThroughEndpointLogging:
         )
         if settled_response_id is None:
             return NOT_A_SETTLEMENT
-        return await self.background_response_settlement_for(settled_response_id, response_fields, custom_llm_provider)
+        return await self.background_response_settlement_for(settled_response_id, response_fields, url_route)
 
     async def settle_for_creator(self, settlement: SettlesForCreator) -> None:
         await self._bill_creator_once(settlement.creator, settlement.response_body)
@@ -462,6 +467,7 @@ class PassThroughEndpointLogging:
             url=url_route, request_body={"model": context.model}, request_method="GET"
         )
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
+        logging_obj.model_call_details[USAGE_ONLY_SETTLEMENT_KEY] = True
         return await self._log_llm_pass_through(
             httpx_response=httpx.Response(200, json=response_body, request=httpx.Request("GET", url_route)),
             response_body=dict(response_body),
@@ -546,9 +552,11 @@ class PassThroughEndpointLogging:
         )
 
     async def settle_background_response_before_delete(
-        self, method: str, custom_llm_provider: str | None, target_url: str, headers: Mapping[str, str]
+        self, method: str, target_url: str, headers: Mapping[str, str]
     ) -> None:
-        if method != "DELETE" or custom_llm_provider != LlmProviders.OPENAI.value:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import targets_openai_api
+
+        if method != "DELETE" or not targets_openai_api(target_url):
             return
         try:
             await self._settle_background_response_before_delete(httpx.URL(target_url), headers)
@@ -950,7 +958,7 @@ class PassThroughEndpointLogging:
                 else None
             )
             settlement: Final = await self.background_response_settlement_of_call(
-                httpx_response.request.method, url_route, response_fields, custom_llm_provider
+                httpx_response.request.method, url_route, response_fields
             )
             if isinstance(settlement, SettlesForCreator):
                 await self.settle_for_creator(settlement)

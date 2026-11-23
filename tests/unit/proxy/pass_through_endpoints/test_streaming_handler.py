@@ -493,7 +493,7 @@ class _FirstPoll:
         return StopPolling(status_code=404)
 
 
-def _background_create_logging_obj() -> LiteLLMLoggingObj:
+def _background_create_logging_obj(custom_llm_provider: str | None) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="unknown",
         messages=[],
@@ -510,6 +510,8 @@ def _background_create_logging_obj() -> LiteLLMLoggingObj:
         litellm_params={"metadata": {"user_api_key_team_id": "team-creator"}},
         call_type="pass_through_endpoint",
     )
+    if custom_llm_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
     return logging_obj
 
 
@@ -518,7 +520,11 @@ async def _no_stream_end_logging(**kwargs: object) -> None:
 
 
 async def _streamed_background_create(
-    chunks: tuple[bytes, ...], creators: _CreatorRows, fetch: _FirstPoll, client_disconnects: bool
+    chunks: tuple[bytes, ...],
+    creators: _CreatorRows,
+    fetch: _FirstPoll,
+    client_disconnects: bool,
+    custom_llm_provider: str | None = "openai",
 ) -> None:
     passthrough_logging: Final = PassThroughEndpointLogging(
         background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
@@ -534,7 +540,7 @@ async def _streamed_background_create(
     stream: Final = PassThroughStreamingHandler.chunk_processor(
         response=httpx.Response(200, request=create_request, stream=_UpstreamStream(chunks)),
         request_body=dict(BACKGROUND_STREAM_REQUEST),
-        litellm_logging_obj=_background_create_logging_obj(),
+        litellm_logging_obj=_background_create_logging_obj(custom_llm_provider),
         endpoint_type=EndpointType.OPENAI,
         start_time=datetime.now(),
         passthrough_success_handler_obj=passthrough_logging,
@@ -563,6 +569,18 @@ async def test_a_streamed_background_create_the_client_leaves_early_records_its_
     assert set(creators.rows) == {BACKGROUND_RESPONSE_ID}
     assert polled.url == httpx.URL(f"{RESPONSES_URL}/{BACKGROUND_RESPONSE_ID}")
     assert ("authorization", "Bearer upstream-openai-key") in polled.headers
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_through_a_configured_route_records_no_creator():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    chunks: Final = (_responses_event("response.created", 0, _background_response("queued", None)),)
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=True, custom_llm_provider=None)
+
+    assert creators.rows == {}
+    assert not fetch.request.done()
 
 
 @pytest.mark.asyncio

@@ -84,13 +84,16 @@ class _Provider:
             raise answer
         return answer
 
-    def poller(self, schedule: PollSchedule = FAST, database_configured: bool = True) -> BackgroundResponsePoller:
+    def poller(
+        self, schedule: PollSchedule = FAST, database_configured: bool = True, max_active_polls: int = 1000
+    ) -> BackgroundResponsePoller:
         client: Final = httpx.AsyncClient(transport=httpx.MockTransport(self.handle))
         return BackgroundResponsePoller(
             fetch=HttpxBackgroundResponseFetch(client=lambda: client, current_credential=_no_credential),
             schedule=schedule,
             database_configured=lambda: database_configured,
             now=lambda: RESUMED_AT,
+            max_active_polls=max_active_polls,
         )
 
 
@@ -445,6 +448,39 @@ async def test_two_workers_sweeping_one_store_poll_each_response_once():
         f"{RESPONSES_URL}/resp_first",
         f"{RESPONSES_URL}/resp_second",
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_worker_at_its_poll_limit_starts_no_poll_for_a_new_create():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    poller: Final = provider.poller(max_active_polls=1)
+    table: Final = _CreatorTable(_row(_creator("resp_first")), _row(_creator("resp_second")))
+    create: Final = httpx.Request("POST", RESPONSES_URL)
+
+    first: Final = poller.start(
+        _creator("resp_first"), poll_request_for_create(create, "resp_first"), _Settled(), _store(table)
+    )
+    second: Final = poller.start(
+        _creator("resp_second"), poll_request_for_create(create, "resp_second"), _Settled(), _store(table)
+    )
+
+    assert first is not None
+    assert second is None
+    await first
+
+
+@pytest.mark.asyncio
+async def test_a_worker_at_its_poll_limit_leaves_the_other_responses_unleased_for_its_next_sweep():
+    provider: Final = _Provider((httpx.Response(200, json=COMPLETED),))
+    settled: Final = _Settled()
+    poller: Final = provider.poller(max_active_polls=1)
+    table: Final = _CreatorTable(_row(_creator("resp_first")), _row(_creator("resp_second")))
+
+    first_sweep: Final = await _swept(provider, settled, table, poller=poller)
+    second_sweep: Final = await _swept(provider, settled, table, poller=poller)
+
+    assert (first_sweep, second_sweep) == (1, 1)
+    assert sorted(response_id for response_id, _ in settled.bodies) == ["resp_first", "resp_second"]
 
 
 @pytest.mark.asyncio
