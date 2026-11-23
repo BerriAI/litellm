@@ -5,12 +5,13 @@ from collections.abc import Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
-from typing import Any, Final, ParamSpec
+from typing import Final, ParamSpec
 from urllib.parse import urlparse
 
 import anyio
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
@@ -20,7 +21,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThr
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import StandardPassThroughResponseObject
+from litellm.types.utils import StandardPassThroughResponseObject, Usage
 
 from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
@@ -64,6 +65,11 @@ cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
 _RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
 
 
+class NormalizedPassThroughLoggingPayload(TypedDict):
+    standard_logging_response_object: ReadOnly[PassThroughEndpointLoggingResultValues | None]
+    kwargs: ReadOnly[dict[str, object]]
+
+
 async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
     pending: Final = asyncio.create_task(work)
     try:
@@ -77,7 +83,7 @@ async def complete_despite_cancellation(work: Coroutine[object, object, None]) -
         raise
 
 
-_HandlerParams: Final = ParamSpec("_HandlerParams")
+_HandlerParams = ParamSpec("_HandlerParams")
 
 
 def _finishes_despite_cancellation_when_finalizing(
@@ -114,6 +120,16 @@ def _websocket_frames(
     return tuple(
         message for message in (response_body if isinstance(response_body, list) else ()) if isinstance(message, dict)
     )
+
+
+def _adopt_handler_usage(logging_obj: LiteLLMLoggingObj, handler_kwargs: Mapping[str, object]) -> None:
+    """Cost finalization reads model_call_details, so without the handler's usage there it logs zero tokens."""
+    usage: Final = handler_kwargs.get("combined_usage_object")
+    if isinstance(usage, Usage):
+        logging_obj.model_call_details["combined_usage_object"] = usage  # rebind-ok: finalization reads it
+    payload: Final = handler_kwargs.get("standard_logging_object")
+    if isinstance(payload, dict):
+        logging_obj.model_call_details["standard_logging_object"] = payload  # rebind-ok: finalization reads it
 
 
 class PassThroughEndpointLogging:
@@ -253,12 +269,8 @@ class PassThroughEndpointLogging:
         custom_llm_provider: str | None = None,
         background_response_settled_before: bool = False,
         **kwargs,
-    ):
-        return_dict: Final = {
-            "standard_logging_response_object": None,
-            "kwargs": kwargs,
-        }
-        standard_logging_response_object: Any | None = None
+    ) -> NormalizedPassThroughLoggingPayload:
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
 
         if self.is_gemini_route(url_route, custom_llm_provider):
             gemini_passthrough_logging_handler_result = GeminiPassthroughLoggingHandler.gemini_passthrough_handler(
@@ -460,7 +472,7 @@ class PassThroughEndpointLogging:
             vertex_ai_live_handler: Final = VertexAILivePassthroughLoggingHandler()
 
             # For WebSocket responses, response_body should be a list of messages
-            websocket_messages: Final[list[dict[str, object]]] = (
+            websocket_messages: Final[Sequence[Mapping[str, object]]] = (
                 response_body if isinstance(response_body, list) else []
             )
 
@@ -498,10 +510,11 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = fal_ai_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = fal_ai_handler_result["kwargs"]  # rebind-ok: elif-chain contract
-        return_dict["standard_logging_response_object"] = standard_logging_response_object
-
-        return_dict["kwargs"] = kwargs
-        return return_dict
+        _adopt_handler_usage(logging_obj, _RESPONSE_BODY.validate_python(kwargs))
+        return {
+            "standard_logging_response_object": standard_logging_response_object,
+            "kwargs": kwargs,
+        }
 
     def _websocket_relay_logging_result(
         self,

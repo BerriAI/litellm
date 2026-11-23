@@ -15,9 +15,11 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import Final, NoReturn
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import TypeAdapter
 
 import litellm.proxy.proxy_server as proxy_server
 from litellm.constants import BACKGROUND_HEALTH_CHECK_DB_SAVE_JOB_NAME
@@ -740,3 +742,112 @@ async def test_run_background_health_check_probes_only_listed_model_groups(monke
         await _run_background_health_check()
 
     assert probed["ids"] == ["listed-1", "listed-2"]
+
+
+_MODEL_INFO: Final = TypeAdapter(dict[str, object])
+
+
+def _ignore_call(*_a: object, **_kw: object) -> None:
+    return None
+
+
+def _no_filter_kwargs(_general_settings: object) -> dict[str, object]:
+    return {}
+
+
+async def _stop_after_one_cycle(_seconds: float) -> NoReturn:
+    raise asyncio.CancelledError()
+
+
+async def _every_deployment_healthy(
+    model_list: list[dict[str, object]], *_a: object, **_kw: object
+) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, object]]:
+    return [{"model": "m", "model_id": _MODEL_INFO.validate_python(m["model_info"])["id"]} for m in model_list], [], {}
+
+
+def _one_cycle_with(monkeypatch: pytest.MonkeyPatch, router: object, public_model_groups: list[str]) -> None:
+    import litellm
+
+    monkeypatch.setattr(proxy_server, "health_check_interval", 60)
+    monkeypatch.setattr(proxy_server, "health_check_concurrency", 1)
+    monkeypatch.setattr(proxy_server, "health_check_details", True)
+    monkeypatch.setattr(proxy_server, "use_shared_health_check", False)
+    monkeypatch.setattr(proxy_server, "redis_usage_cache", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "background_health_check_loop_active", False)
+    monkeypatch.setattr(litellm, "public_model_groups", public_model_groups)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_model_list",
+        [{"model_name": "explicit", "litellm_params": {"model": "openai/explicit"}, "model_info": {"id": "explicit"}}],
+    )
+    monkeypatch.setattr(proxy_server, "health_check_results", {"healthy_endpoints": [], "unhealthy_endpoints": []})
+    monkeypatch.setattr(proxy_server, "_run_direct_health_check_with_instrumentation", _every_deployment_healthy)
+    monkeypatch.setattr(proxy_server, "health_check_filter_kwargs_from_general_settings", _no_filter_kwargs)
+    monkeypatch.setattr(proxy_server.asyncio, "sleep", _stop_after_one_cycle)
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_saves_public_wildcard_children_but_keeps_them_out_of_routing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm import Router
+
+    served: Final = "openai/gpt-5.5"
+    router: Final = Router(
+        model_list=[
+            {"model_name": "openai/*", "litellm_params": {"model": "openai/*"}, "model_info": {"id": "wildcard"}},
+            {
+                "model_name": "explicit",
+                "litellm_params": {"model": "openai/explicit"},
+                "model_info": {"id": "explicit"},
+            },
+        ]
+    )
+    saved: Final[dict[str, object]] = {}
+    routed: Final[dict[str, object]] = {}
+
+    def _record_save(
+        _prisma: object, _manager: object, model_list: object, healthy: object, *_a: object, **_kw: object
+    ) -> None:
+        saved.update(model_list=model_list, healthy=healthy)
+
+    def _record_routing(healthy: object, *_a: object) -> None:
+        routed.update(healthy=healthy)
+
+    _one_cycle_with(monkeypatch, router, [served])
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _record_save)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _record_routing)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    saved_names: Final = TypeAdapter(list[dict[str, object]]).validate_python(saved["model_list"])
+    assert sorted(str(m["model_name"]) for m in saved_names) == ["explicit", served]
+    assert len(TypeAdapter(list[object]).validate_python(saved["healthy"])) == 2
+    assert routed["healthy"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]
+    assert proxy_server.health_check_results["healthy_count"] == 1
+
+
+class _RegistryUnavailableRouter:
+    def settings(self) -> RouterSettings:
+        return RouterSettings()
+
+    def registry(self) -> NoReturn:
+        raise RuntimeError("registry unavailable")
+
+
+@pytest.mark.asyncio
+async def test_run_background_health_check_keeps_checking_when_building_wildcard_children_raises(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _one_cycle_with(monkeypatch, _RegistryUnavailableRouter(), ["openai/gpt-5.5"])
+    monkeypatch.setattr(proxy_server, "_schedule_background_health_check_db_save", _ignore_call)
+    monkeypatch.setattr(proxy_server, "_write_health_state_to_router_cache", _ignore_call)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _run_background_health_check()
+
+    assert proxy_server.health_check_results["healthy_endpoints"] == [{"model": "m", "model_id": "explicit"}]

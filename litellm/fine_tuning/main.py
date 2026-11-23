@@ -13,7 +13,7 @@ import contextvars
 import os
 from collections.abc import Coroutine, Mapping
 from functools import partial
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
 
@@ -36,10 +36,10 @@ vertex_fine_tuning_apis_instance: Final = VertexFineTuningAPI()
 
 
 def _prepare_azure_extra_body(
-    extra_body: dict[str, Any] | None,
+    extra_body: Mapping[str, object] | None,
     kwargs: Mapping[str, object],
     azure_specific_hyperparams: Mapping[str, object],
-) -> dict[str, Any]:
+) -> Mapping[str, object]:
     """
     Prepare extra_body for Azure fine-tuning API by combining Azure-specific parameters.
 
@@ -57,20 +57,12 @@ def _prepare_azure_extra_body(
     Returns:
         Dict containing all Azure-specific parameters to be passed in extra_body
     """
-    if extra_body is None:
-        extra_body = {}
-
-    # Azure-specific root-level parameters
-    azure_specific_params: Final = ["trainingType"]
-    for param in azure_specific_params:
-        if param in kwargs:
-            extra_body[param] = kwargs[param]
-
-    # Add Azure-specific hyperparameters
-    if azure_specific_hyperparams:
-        extra_body.update(azure_specific_hyperparams)
-
-    return extra_body
+    azure_specific_params: Final = ("trainingType",)
+    return {
+        **(extra_body or {}),
+        **{param: kwargs[param] for param in azure_specific_params if param in kwargs},
+        **azure_specific_hyperparams,
+    }
 
 
 @client
@@ -261,7 +253,7 @@ def create_fine_tuning_job(
                 extra_body.pop("azure_ad_token", None)
 
             # Prepare Azure-specific parameters for extra_body
-            extra_body = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
+            azure_extra_body: Final = _prepare_azure_extra_body(extra_body, kwargs, azure_specific_hyperparams)
 
             create_fine_tuning_job_data_dict = _build_fine_tuning_job_data(
                 provider_model,
@@ -274,8 +266,8 @@ def create_fine_tuning_job(
             ).model_dump(exclude_none=True)
 
             # Add extra_body if it has Azure-specific parameters
-            if extra_body:
-                create_fine_tuning_job_data_dict["extra_body"] = extra_body
+            if azure_extra_body:
+                create_fine_tuning_job_data_dict["extra_body"] = azure_extra_body
 
             response = azure_fine_tuning_apis_instance.create_fine_tuning_job(
                 api_base=api_base,

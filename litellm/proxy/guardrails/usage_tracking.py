@@ -11,13 +11,14 @@ from datetime import datetime, timezone
 from functools import partial
 from itertools import groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, NamedTuple, Protocol, TypeVar
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_LOG_WRITE_BATCH_MAX_BYTES, SPEND_LOG_WRITE_BATCH_MAX_ROWS
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import billed_guardrail_cost_by_unit
 from litellm.proxy._types import DB_RETRY_SAFE_ERROR_TYPES
 from litellm.proxy.db.spend_log_batching import spend_log_write_batches
@@ -198,11 +199,15 @@ async def _upsert_rows_with_retry(
     return await _upsert_rows_with_retry(retryable, upsert_row, label, sleep, retries_left - 1)
 
 
-def guardrail_status_to_action(status: str | None) -> str:
+class _GuardrailStatusText(Protocol):
+    def lower(self) -> str: ...
+
+
+def guardrail_status_to_action(status: object) -> str:
     """Map StandardLogging guardrail_status to blocked/passed/flagged/not_run."""
     if not status:
         return "passed"
-    s: Final = (status or "").lower()
+    s: Final = require_attributes(status, _GuardrailStatusText, "lower").lower()
     if s == "not_run":
         return "not_run"
     if "intervened" in s or "block" in s:
@@ -212,7 +217,7 @@ def guardrail_status_to_action(status: str | None) -> str:
     return "passed"
 
 
-def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, Any]]:
+def _parse_guardrail_info_from_payload(payload: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
     """Extract guardrail_information from spend log payload metadata."""
     meta = payload.get("metadata")
     if not meta:
@@ -366,6 +371,25 @@ async def process_spend_logs_guardrail_usage(
     """
     if not logs_to_process:
         return
+    await _record_guardrail_usage(prisma_client, logs_to_process, sleep, pending)
+
+
+async def retry_pending_guardrail_usage(
+    prisma_client: PrismaClient,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    pending: PendingRollups = _PENDING_ROLLUPS,
+) -> None:
+    """Retry the daily metrics and usage units a failed rollup left pending, after a spend log pass
+    whose written logs carried no guardrail results."""
+    await _record_guardrail_usage(prisma_client, (), sleep, pending)
+
+
+async def _record_guardrail_usage(
+    prisma_client: PrismaClient,
+    logs_to_process: Sequence[Mapping[str, object]],
+    sleep: Callable[[float], Awaitable[None]],
+    pending: PendingRollups,
+) -> None:
     # Aggregate daily metrics by (guardrail_id, date). Latency/score metrics dropped.
     daily_guardrail: Final[dict[_MetricsKey, dict[str, int]]] = defaultdict(
         lambda: {

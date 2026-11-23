@@ -1265,6 +1265,22 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
 
+@pytest.mark.parametrize("provider", ("bedrock", "bedrock_converse"))
+def test_regional_pricing_rows_do_not_narrow_bedrock_wildcard_discovery(provider: str) -> None:
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    canonical: Final = "bedrock/anthropic.regional-pricing-test-v1:0"
+    regional: Final = "bedrock/us-east-1/anthropic.regional-pricing-test-v1:0"
+    with _registered_chat_models({canonical: provider, regional: provider}):
+        bare: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model="bedrock/*"))
+        routed: Final = get_known_models_from_wildcard("bedrock/*", LiteLLM_Params(model="bedrock/us-east-1/*"))
+
+    assert canonical in bare
+    assert regional not in bare
+    assert sorted(routed) == sorted(bare)
+
+
 def test_wildcard_lists_a_model_once_when_registered_both_bare_and_provider_prefixed():
     import litellm
     from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
