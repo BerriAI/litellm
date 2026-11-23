@@ -521,12 +521,12 @@ class AWSEventStreamDecoder:
         content_block_index: int = 0,
     ) -> tuple[
         ChatCompletionToolCallChunk | None,
-        dict,
+        dict[str, object],
         list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
     ]:
         """Handle 'start' event in converse chunk parsing."""
         tool_use: ChatCompletionToolCallChunk | None = None
-        provider_specific_fields: dict = {}
+        provider_specific_fields: dict[str, object] = {}
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
         self.content_blocks = []  # reset
@@ -568,14 +568,14 @@ class AWSEventStreamDecoder:
     ) -> tuple[
         str,
         ChatCompletionToolCallChunk | None,
-        dict,
+        dict[str, object],
         str | None,
         list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None,
     ]:
         """Handle 'delta' event in converse chunk parsing."""
         text = ""
         tool_use: ChatCompletionToolCallChunk | None = None
-        provider_specific_fields: dict = {}
+        provider_specific_fields: dict[str, object] = {}
         reasoning_content: str | None = None
         thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 
@@ -653,7 +653,7 @@ class AWSEventStreamDecoder:
             tool_use: ChatCompletionToolCallChunk | None = None
             finish_reason = ""
             usage: Usage | None = None
-            provider_specific_fields: dict = {}
+            provider_specific_fields: dict[str, object] = {}
             reasoning_content: str | None = None
             thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None = None
 

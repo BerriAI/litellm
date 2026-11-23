@@ -4797,6 +4797,7 @@ class LlmProviders(str, Enum):
     DEEPINFRA = "deepinfra"
     CLF_AI_GATEWAY = "clf_ai_gateway"
     PERPLEXITY = "perplexity"
+    PERPLEXITY_ORCHESTRATOR = "perplexity_orchestrator"
     TYPESAFE = "typesafe"
     PARALLEL_AI = "parallel_ai"
     NACE = "nace"
