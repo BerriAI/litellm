@@ -107554,6 +107554,176 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "nagaai/anthropic/claude-opus-5.5": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "nagaai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://api.naga.ac/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "nagaai/anthropic/claude-sonnet-5.5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "nagaai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://api.naga.ac/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "nagaai/deepseek/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 3e-09,
+        "input_cost_per_token": 9.75e-08,
+        "litellm_provider": "nagaai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 3.825e-07,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://api.naga.ac/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "nagaai/openai/gpt-6.1-sol": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "nagaai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://api.naga.ac/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "nagaai/openai/gpt-6.2-sol": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1e-06,
+        "litellm_provider": "nagaai",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 5e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://api.naga.ac/v1/models",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "fal_ai/bytedance/seedream/v5/pro/us/edit": {
         "litellm_provider": "fal_ai",
         "metadata": {"comment":"per output image by total pixel area at the default image_size auto_2K with one input image; outputs up to and including 1536x1536 pixels are $0.0675 and outputs above that up to 2048x2048 are $0.135; the first input image is free and each additional input image adds $0.0045 per output, which is not modeled; fal calls this pricing tentative"},
