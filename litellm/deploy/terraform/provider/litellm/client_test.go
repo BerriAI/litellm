@@ -126,3 +126,40 @@ func TestRedactSensitiveDataNonJSONFallback(t *testing.T) {
 		t.Errorf("fallback redaction did not redact: %s", got)
 	}
 }
+
+func TestSendRequestRedactsCallbackDataInErrors(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		status   int
+		body     string
+		mustHide []string
+	}{
+		{
+			name: "structured API error", status: http.StatusBadRequest,
+			body:     `{"detail":{"callback_vars":{"custom_value":"fixture-private"},"provider_secret":"fixture-suffix","provider_secret_key":"fixture-key","provider_api_key":"fixture-api"}}`,
+			mustHide: []string{"fixture-private", "fixture-suffix", "fixture-key", "fixture-api"},
+		},
+		{
+			name: "non-JSON response", status: http.StatusOK,
+			body:     `unexpected "provider_secret_key": "fixture-unstructured"`,
+			mustHide: []string{"fixture-unstructured"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				w.Write([]byte(tt.body))
+			}))
+			defer srv.Close()
+			_, err := NewClient(srv.URL, "test-key", true).sendRequest("POST", "/key/update", nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			for _, value := range tt.mustHide {
+				if strings.Contains(err.Error(), value) {
+					t.Errorf("error exposed %q: %v", value, err)
+				}
+			}
+		})
+	}
+}

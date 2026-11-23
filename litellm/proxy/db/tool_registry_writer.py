@@ -6,8 +6,9 @@ Admins use the management endpoints to read and update input_policy / output_pol
 """
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -24,11 +25,12 @@ from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     aggregate_tool_discoveries,
 )
 from litellm.proxy.db.exception_handler import (
+    PrismaDBExceptionHandler,
     call_with_db_reconnect_retry,
-    db_write_failure_is_requeue_safe,
     db_write_never_sent,
 )
-from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert
+from litellm.proxy.db.spend_log_tool_index import tool_name_fits_index
+from litellm.proxy.db.tool_table_bulk_upsert import build_tool_bulk_upsert, tool_upsert_chunks
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
@@ -119,38 +121,50 @@ def _row_to_model(row: object) -> LiteLLM_ToolTableRow:
 async def batch_upsert_tools(
     prisma_client: "PrismaClient",
     items: Sequence[ToolDiscoveryQueueItem],
-) -> None:
-    """Write a batch of discovered tools to LiteLLM_ToolTable in a single statement. Raises on failure so the
-    caller decides whether the rows can be retried."""
-    rows: Final = aggregate_tool_discoveries(items)
-    if not rows:
-        return
+    *,
+    can_requeue: Callable[[Exception], bool] = db_write_never_sent,
+) -> tuple[ToolDiscoveryQueueItem, ...]:
+    """Write bounded statements and return only chunks that can be retried."""
+    rows: Final = aggregate_tool_discoveries(
+        item for item in items if tool_name_fits_index(item.get("tool_name"), item.get("key_alias"))
+    )
+    return tuple(
+        chain.from_iterable(
+            [chunk for chunk in tool_upsert_chunks(rows) if await _write_tool_chunk(prisma_client, chunk, can_requeue)]
+        )
+    )
+
+
+async def _write_tool_chunk(
+    prisma_client: "PrismaClient",
+    rows: Sequence[ToolDiscoveryQueueItem],
+    can_requeue: Callable[[Exception], bool],
+) -> bool:
     sql, params = build_tool_bulk_upsert(rows)
-    async with db_span("commit_tool_discoveries", "LiteLLM_ToolTable"):
-        await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    try:
+        async with db_span("commit_tool_discoveries", "LiteLLM_ToolTable"):
+            await prisma_client.db.execute_raw(sql, *params)  # pyright: ignore[reportAny]  # untyped prisma client
+    except Exception as e:  # noqa: BLE001  # a failed statement must not stop the remaining chunks
+        if can_requeue(e):
+            verbose_proxy_logger.warning("Tool discovery - retrying %d tool rows next tick. Error: %s", len(rows), e)
+            return True
+        verbose_proxy_logger.error(
+            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
+            "refused the data, so re-sending it is not safe. Error: %s",
+            len(rows),
+            e,
+        )
+        return False
     verbose_proxy_logger.debug("tool_registry_writer: upserted %d tool(s)", len(rows))
+    return False
 
 
 async def flush_tool_discovery_queue(prisma_client: "PrismaClient", tool_discovery_queue: ToolDiscoveryQueue) -> None:
     """One worker's own rows straight to LiteLLM_ToolTable, the path without the Redis buffer."""
     items: Final = tool_discovery_queue.flush()
-    if not items:
-        return
-    try:
-        await batch_upsert_tools(prisma_client=prisma_client, items=items)
-    except Exception as e:  # noqa: BLE001  # the rows go back to the queue or are dropped, the scheduler job must not fail
-        if db_write_never_sent(e):
-            tool_discovery_queue.requeue(items)
-            verbose_proxy_logger.warning(
-                "Tool discovery - %d tool rows went back to the queue for the next tick. Error: %s", len(items), str(e)
-            )
-            return
-        verbose_proxy_logger.error(
-            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
-            "refused the data, so re-sending it is not safe. Error: %s",
-            len(items),
-            str(e),
-        )
+    retryable: Final = await batch_upsert_tools(prisma_client=prisma_client, items=items)
+    if retryable:
+        tool_discovery_queue.requeue(retryable)
 
 
 async def commit_tool_discoveries(
@@ -162,8 +176,8 @@ async def commit_tool_discoveries(
 ) -> None:
     """Scheduled alongside update_spend on its own lock, so tool table writes never ride the spend commit.
 
-    With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them all in
-    one statement. Without it each worker writes its own rows."""
+    With the Redis buffer every worker hands its rows to Redis and the holder of the tool lock writes them.
+    Without it each worker writes its own rows."""
     if not use_redis_buffer:
         await flush_tool_discovery_queue(prisma_client=prisma_client, tool_discovery_queue=tool_discovery_queue)
         return
@@ -176,28 +190,25 @@ async def commit_tool_discoveries(
         await pod_lock_manager.release_lock(cronjob_id=TOOL_DISCOVERY_COMMIT_JOB_NAME)
 
 
+def _tool_redis_write_can_requeue(e: Exception) -> bool:
+    return (
+        db_write_never_sent(e)
+        or PrismaDBExceptionHandler.postgres_sqlstate(e) in {"25006", "40001", "40P01"}
+        or PrismaDBExceptionHandler.is_lock_timeout_error(e)
+        or PrismaDBExceptionHandler.is_statement_timeout_error(e)
+    )
+
+
 async def _commit_tool_discoveries_from_redis(
     prisma_client: "PrismaClient", redis_update_buffer: RedisUpdateBuffer
 ) -> None:
-    """Tool lock holder only: drain every worker's tool rows from Redis and write them in one statement."""
+    """Tool lock holder only: drain every worker's tool rows from Redis and write them."""
     items: Final = await redis_update_buffer.get_all_tool_discoveries_from_redis_buffer()
-    if not items:
-        return
-    try:
-        await batch_upsert_tools(prisma_client=prisma_client, items=items)
-    except Exception as e:  # noqa: BLE001  # the rows go back to redis or are dropped, the scheduler job must not fail
-        if db_write_failure_is_requeue_safe(e):
-            await redis_update_buffer.restore_tool_discoveries_to_redis(items)
-            verbose_proxy_logger.error(
-                "Tool discovery - %d tool rows went back to Redis for the next tick. Error: %s", len(items), str(e)
-            )
-            return
-        verbose_proxy_logger.error(
-            "Tool discovery - dropped %d tool rows: the failed statement may have applied or the database "
-            "refused the data, so re-sending it is not safe. Error: %s",
-            len(items),
-            str(e),
-        )
+    retryable: Final = await batch_upsert_tools(
+        prisma_client=prisma_client, items=items, can_requeue=_tool_redis_write_can_requeue
+    )
+    if retryable:
+        await redis_update_buffer.restore_tool_discoveries_to_redis(retryable)
 
 
 _NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})

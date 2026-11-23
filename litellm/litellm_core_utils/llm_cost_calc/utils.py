@@ -127,6 +127,10 @@ def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
 
 
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+    return _uses_inclusive_token_thresholds(custom_llm_provider)
+
+
 def apply_provider_cache_read_default(model_info: ModelInfo, custom_llm_provider: str | None) -> ModelInfo:
     if custom_llm_provider == "fireworks_ai":
         return with_default_cache_read_rate(model_info)
