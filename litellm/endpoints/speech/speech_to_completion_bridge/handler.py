@@ -2,7 +2,6 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 
 from typing_extensions import TypedDict
@@ -32,7 +31,7 @@ class SpeechToCompletionBridgeHandler:
         super().__init__()
         self.transformation_handler = SpeechToCompletionBridgeTransformationHandler()
 
-    def validate_input_kwargs(self, kwargs: Mapping[str, object]) -> SpeechToCompletionBridgeHandlerInputKwargs:
+    def validate_input_kwargs(self, kwargs: dict) -> SpeechToCompletionBridgeHandlerInputKwargs:
         from litellm import LiteLLMLoggingObj
 
         model: Final = kwargs.get("model")
@@ -82,10 +81,10 @@ class SpeechToCompletionBridgeHandler:
         self,
         model: str,
         input: str,
-        voice: str | Mapping[str, object] | None,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-        headers: Mapping[str, object],
+        voice: str | dict | None,
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str,
     ) -> "HttpxBinaryResponseContent":
