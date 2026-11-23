@@ -106124,6 +106124,8 @@
         "supports_vision": true
     },
     "nagaai/anthropic/claude-opus-5.5": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 2e-06,
         "litellm_provider": "nagaai",
@@ -106157,6 +106159,8 @@
         "supports_vision": true
     },
     "nagaai/anthropic/claude-sonnet-5.5": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "nagaai",
@@ -106223,6 +106227,7 @@
         "supports_vision": true
     },
     "nagaai/openai/gpt-6.1-sol": {
+        "cache_creation_input_token_cost": 1.25e-06,
         "cache_read_input_token_cost": 5e-08,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "nagaai",
