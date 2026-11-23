@@ -2,7 +2,9 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
+from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Final
 
 import httpx
@@ -24,7 +26,7 @@ from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
     owned_chatgpt_subscription_logins,
     save_chatgpt_login,
 )
-from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable
+from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable, PrismaAdvisoryLock
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import InProcessRefreshCoordinator, OAuthToken
 from litellm.types.utils import CredentialItem
 
@@ -319,6 +321,16 @@ class _DatabaseLock:
     ) -> OAuthToken | None | AdvisoryLockUnavailable:
         async with self.held.setdefault(key, asyncio.Lock()):
             return await action(self.transaction)
+
+
+class _DatabaseThatCannotCommit:
+    def __init__(self) -> None:
+        self.transaction = _LockTransaction()
+
+    @asynccontextmanager
+    async def tx(self, *, timeout: timedelta) -> AsyncIterator[_LockTransaction]:
+        yield self.transaction
+        raise ConnectionError("the commit did not reach the database")
 
 
 class _UnreachableDatabaseLock:
@@ -616,13 +628,37 @@ async def test_concurrent_calls_redeem_once_when_the_shared_lock_refreshes_witho
     rows: Final = _CredentialRows(_stored(held))
     oauth, new_access_token = _refreshed("new")
     shared: Final = _SharedCoordinatorWithoutLock()
-    refresher: Final = _refresher(rows, oauth, shared_refresh=CoordinatedRefresh(shared, rows))
+    database_lock: Final = _DatabaseLock()
+    locked: Final = LockedRefresh(database_lock, rows_in=_rows_in_lock_transaction(database_lock, rows))
+    refresher: Final = _refresher(rows, oauth, shared_refresh=CoordinatedRefresh(shared, locked))
 
     tokens: Final = await asyncio.gather(*(refresher.access_token(held) for _ in range(5)))
 
     assert tokens == [new_access_token] * 5
     assert len(oauth.posts) == 1
     assert shared.runs == 1
+
+
+async def test_two_replicas_whose_shared_lock_lets_both_refresh_redeem_a_stale_login_once_through_the_database_lock(
+    monkeypatch,
+):
+    values: Final = _login_values(_access_token("old"), "rt-single-use", STALE_EXPIRES_AT)
+    held: Final = _login("login-a", values, team_id="team-a")
+    _serve(monkeypatch, held)
+    rows: Final = _CredentialRows(_stored(held))
+    oauth, new_access_token = _refreshed("new")
+    shared: Final = _SharedCoordinatorWithoutLock()
+    database_lock: Final = _DatabaseLock()
+    locked: Final = LockedRefresh(database_lock, rows_in=_rows_in_lock_transaction(database_lock, rows))
+    replicas: Final = tuple(
+        _refresher(rows, oauth, shared_refresh=CoordinatedRefresh(shared, locked)) for _ in range(2)
+    )
+
+    tokens: Final = await asyncio.gather(*(replica.access_token(held) for replica in replicas))
+
+    assert tokens == [new_access_token, new_access_token]
+    assert shared.runs == 2
+    assert len(oauth.posts) == 1
 
 
 async def test_a_refresh_that_loses_its_write_to_a_new_sign_in_serves_the_new_sign_in(monkeypatch):
@@ -1193,6 +1229,25 @@ async def test_a_failed_save_on_the_lock_transaction_is_retried_and_the_redeemed
     assert token == new_access_token
     assert len(oauth.posts) == 1
     assert _decrypted(transaction_rows.rows["login-a"].credential_values)["chatgpt_access_token"] == new_access_token
+
+
+async def test_a_refresh_whose_lock_transaction_cannot_commit_still_serves_the_redeemed_token(monkeypatch):
+    values: Final = _login_values(_access_token("old"), "rt-single-use", STALE_EXPIRES_AT)
+    held: Final = _login("login-a", values, team_id="team-a")
+    _serve(monkeypatch, held)
+    committed_rows: Final = _CredentialRows(_stored(held))
+    uncommitted_rows: Final = _CredentialRows(_stored(held))
+    oauth, new_access_token = _refreshed("new")
+    lock: Final = PrismaAdvisoryLock(_DatabaseThatCannotCommit(), timeout=timedelta(seconds=60))
+    refresher: Final = _refresher(
+        committed_rows, oauth, shared_refresh=LockedRefresh(lock, rows_in=lambda _: uncommitted_rows)
+    )
+
+    token: Final = await refresher.access_token(held)
+
+    assert token == new_access_token
+    assert len(oauth.posts) == 1
+    assert _served("login-a")["chatgpt_access_token"] == new_access_token
 
 
 @pytest.mark.parametrize(

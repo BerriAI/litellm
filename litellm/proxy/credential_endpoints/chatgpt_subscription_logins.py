@@ -33,7 +33,7 @@ from litellm.llms.chatgpt.subscription_login import (
 )
 from litellm.proxy.common_utils.credential_hydration import decrypted_credential, stored_credential_provider
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable
+from litellm.proxy.db.advisory_lock import AdvisoryLockTransaction, AdvisoryLockUnavailable, UncommittedResult
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InProcessRefreshCoordinator,
@@ -84,7 +84,7 @@ class SharedRefresh(Protocol):
 @dataclass(frozen=True, slots=True)
 class CoordinatedRefresh:
     coordinator: RefreshCoordinator
-    rows: CredentialRows
+    locked: SharedRefresh
 
     async def run(
         self,
@@ -92,13 +92,15 @@ class CoordinatedRefresh:
         refresh: Callable[[CredentialRows], Awaitable[OAuthToken | None]],
         reread: Callable[[], Awaitable[OAuthToken | None]],
     ) -> OAuthToken | None:
-        return await self.coordinator.run(_COORDINATOR_NAMESPACE, flight, partial(refresh, self.rows), reread)
+        return await self.coordinator.run(
+            _COORDINATOR_NAMESPACE, flight, partial(self.locked.run, flight, refresh, reread), reread
+        )
 
 
 class RefreshLock(Protocol):
     async def while_held(
         self, key: str, action: Callable[[AdvisoryLockTransaction], Awaitable[OAuthToken | None]]
-    ) -> OAuthToken | None | AdvisoryLockUnavailable: ...
+    ) -> OAuthToken | None | UncommittedResult[OAuthToken | None] | AdvisoryLockUnavailable: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,6 +146,8 @@ class LockedRefresh:
         ):
             case AdvisoryLockUnavailable():
                 return await reread()
+            case UncommittedResult(value=token):
+                return token
             case token:
                 return token
 
@@ -405,20 +409,16 @@ def runtime_chatgpt_login_refresher() -> ChatGPTLoginRefresher | None:
 
     if prisma_client is None:
         return None
-    rows: Final = CredentialsRepository(WriterPinnedClient(prisma_client.db))
     redis_coordinator: Final = runtime_refresh_coordinator()
+    locked: Final = LockedRefresh(
+        PrismaAdvisoryLock(writer_wrapper(prisma_client.db), timeout=_REFRESH_LOCK_TIMEOUT),
+        rows_in=lambda transaction: CredentialsRepository(_TransactionClient(transaction)),
+    )
     return ChatGPTLoginRefresher(
-        rows=rows,
+        rows=CredentialsRepository(WriterPinnedClient(prisma_client.db)),
         oauth_client=new_chatgpt_oauth_client(),
         coordinator=_IN_PROCESS_COORDINATOR,
-        shared_refresh=(
-            CoordinatedRefresh(redis_coordinator, rows)
-            if redis_coordinator is not None
-            else LockedRefresh(
-                PrismaAdvisoryLock(writer_wrapper(prisma_client.db), timeout=_REFRESH_LOCK_TIMEOUT),
-                rows_in=lambda transaction: CredentialsRepository(_TransactionClient(transaction)),
-            )
-        ),
+        shared_refresh=CoordinatedRefresh(redis_coordinator, locked) if redis_coordinator is not None else locked,
     )
 
 

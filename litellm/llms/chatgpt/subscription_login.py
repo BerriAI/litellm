@@ -156,7 +156,7 @@ def _is_chatgpt_call(kwargs: Mapping[str, object], model: object) -> bool:
 def _login_unavailable(credential_name: str) -> CallerCredentialAuthenticationError:
     return CallerCredentialAuthenticationError(
         message=(
-            f"ChatGPT subscription login '{credential_name}' is not available to this key. "
+            f"ChatGPT subscription login '{credential_name}' does not exist or is not available to this team or key. "
             "An admin can sign in to ChatGPT for this team or key under LLM Credentials in the LiteLLM UI"
         ),
         llm_provider=CHATGPT_PROVIDER,
