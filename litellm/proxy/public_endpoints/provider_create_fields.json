@@ -1926,6 +1926,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Gnani",
+    "provider_display_name": "Gnani",
+    "litellm_provider": "gnani",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.vachana.ai",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "Gnani API Key",
+        "placeholder": null,
+        "tooltip": "Supports Prisma v3 and v2.5 Speech-to-Text on /v1/audio/transcriptions.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "gnani/prisma-v3.0"
+  },
+  {
     "provider": "Google_AI_Studio",
     "provider_display_name": "Google AI Studio",
     "litellm_provider": "gemini",
@@ -1980,6 +2008,38 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "Gradium",
+    "provider_display_name": "Gradium",
+    "litellm_provider": "gradium",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": "Gradium endpoint. Use api.gradium.ai to route to the closest region.",
+        "required": true,
+        "field_type": "select",
+        "options": [
+          "https://api.gradium.ai",
+          "https://eu.api.gradium.ai",
+          "https://us.api.gradium.ai"
+        ],
+        "default_value": "https://api.gradium.ai"
+      }
+    ],
+    "default_model_placeholder": "gradium/default"
   },
   {
     "provider": "Groq",
@@ -3326,6 +3386,34 @@
       }
     ],
     "default_model_placeholder": "gpt-3.5-turbo"
+  },
+  {
+    "provider": "PERPLEXITY_ORCHESTRATOR",
+    "provider_display_name": "Perplexity Orchestrator",
+    "litellm_provider": "perplexity_orchestrator",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.perplexity.ai/orchestrator/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "perplexity_orchestrator/anthropic/claude-sonnet-5-5"
   },
   {
     "provider": "PETALS",

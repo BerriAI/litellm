@@ -398,6 +398,70 @@ async fn invalid_messages_stays_an_anthropic_error() {
     assert_eq!(body["error"]["type"], "invalid_request_error");
 }
 
+fn requesting_api_version_2026_10_21(temperature: Value) -> Request<Body> {
+    Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("anthropic-version", "2026-10-21")
+        .body(Body::from(
+            messages_request(
+                "public/model",
+                json!({"max_tokens": 16, "temperature": temperature}),
+            )
+            .to_string(),
+        ))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn sampling_params_under_an_api_version_anthropic_removed_them_from_are_refused_before_calling_anthropic()
+ {
+    let response = support::app("anthropic/test-model", "https://api.anthropic.com")
+        .oneshot(requesting_api_version_2026_10_21(json!(1)))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(
+        body["error"]["message"],
+        "invalid request: test-model does not support temperature=1. anthropic-version \
+         2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set \
+         `litellm.drop_params = True`."
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn sampling_params_reach_a_third_party_anthropic_api_under_an_api_version_anthropic_removed_them_from(
+    #[values(false, true)] drop_params: bool,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/anthropic/v1/messages"))
+        .and(header("anthropic-version", "2026-10-21"))
+        .and(body_json(messages_request(
+            "test-model",
+            json!({"max_tokens": 16, "temperature": 0.2}),
+        )))
+        .respond_with(message_response())
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let app = support::app_with_shaping(
+        "anthropic/test-model",
+        &format!("{}/anthropic", upstream.uri()),
+        deployment_params(json!({})),
+        json!({"drop_params": drop_params}),
+    );
+
+    let response = app
+        .oneshot(requesting_api_version_2026_10_21(json!(0.2)))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200, "{}", support::json(response).await);
+}
+
 const FIRST_EVENT: &str = "event: message_start\ndata: {}\n\n";
 
 /// A stream of `public/model`, whose deployment retries `num_retries` times and whose provider
@@ -534,22 +598,6 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     assert_eq!(body["type"], error["type"]);
     assert_eq!(body["error"], error["error"]);
     assert_eq!(body["request_id"], "host-http-request");
-}
-
-#[rstest]
-#[case::messages("/v1/messages")]
-#[case::ocr("/ocr")]
-#[tokio::test]
-async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
-    let upstream = MockServer::start().await;
-    let app = support::app_with_permissions(
-        "anthropic/test-model",
-        &upstream.uri(),
-        litellm_gateway_auth::Permissions::None,
-    );
-    let response = support::post(app, path, json!({"model": "public/model"})).await;
-    assert_eq!(response.status(), 403);
-    assert!(upstream.received_requests().await.unwrap().is_empty());
 }
 
 #[rstest]

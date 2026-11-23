@@ -1,5 +1,5 @@
 import { Bell, Plus } from "lucide-react";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
 import React, { useEffect, useState } from "react";
@@ -613,7 +613,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }
 
   return (
-    <Page>
+    <>
       <PageContent>
         <PageHeader>
           <PageHeaderTitle>
@@ -868,7 +868,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         onOk={confirmDeleteCallback}
         confirmLoading={isDeletingCallback}
       />
-    </Page>
+    </>
   );
 };
 

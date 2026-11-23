@@ -21,7 +21,7 @@ class OpenAITextCompletion(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
-    def validate_environment(self, api_key):
+    def validate_environment(self, api_key: str):
         headers: Final = {
             "content-type": "application/json",
         }
@@ -39,7 +39,7 @@ class OpenAITextCompletion(BaseLLM):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
-        print_verbose: Callable | None = None,
+        print_verbose: Callable[..., object] | None = None,
         api_base: str | None = None,
         acompletion: bool = False,
         litellm_params: Mapping[str, object] | None = None,
@@ -174,10 +174,10 @@ class OpenAITextCompletion(BaseLLM):
 
     async def acompletion(
         self,
-        logging_obj,
-        api_base: str,
+        logging_obj: LiteLLMLoggingObj,
+        api_base: str | None,
         data: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         model_response: ModelResponse,
         api_key: str,
         model: str,
@@ -239,14 +239,14 @@ class OpenAITextCompletion(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         model_response: ModelResponse,
         model: str,
         timeout: float,
         api_base: str | None = None,
-        max_retries=None,
+        max_retries: int | None = None,
         client=None,
-        organization=None,
+        organization: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final = (
@@ -307,14 +307,14 @@ class OpenAITextCompletion(BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         api_key: str,
         data: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         model_response: ModelResponse,
         model: str,
         timeout: float,
         max_retries: int,
         api_base: str | None = None,
         client=None,
-        organization=None,
+        organization: str | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         openai_client: Final = (
