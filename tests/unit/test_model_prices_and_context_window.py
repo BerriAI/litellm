@@ -1414,3 +1414,28 @@ def test_region_pinned_bedrock_converse_rows_carry_their_base_rows_capabilities(
     assert {base for _, base in rows} >= set(BEDROCK_CONVERSE_MISTRAL_TOOL_CHOICE_MODELS)
 
     assert list(chain.from_iterable(_capabilities_missing_from_one_side(prices, key, base) for key, base in rows)) == []
+
+
+AZURE_AI_ROWS_MIRRORING_THEIR_AZURE_TWINS: Final = (
+    "gpt-6.2-astra",
+    "gpt-6.2-sol",
+    "gpt-image-2.5-flare",
+    "gpt-image-2.5-sunburst",
+)
+
+
+def _priced_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({name: value for name, value in row.items() if "cost" in name or name.startswith("max_")})
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+@pytest.mark.parametrize("model", AZURE_AI_ROWS_MIRRORING_THEIR_AZURE_TWINS)
+def test_azure_ai_rows_price_like_their_azure_twins(path: Path, model: str) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    azure_ai_row: Final = prices[f"azure_ai/{model}"]
+    azure_row: Final = prices[f"azure/{model}"]
+    assert isinstance(azure_ai_row, dict)
+    assert isinstance(azure_row, dict)
+    assert azure_ai_row.get("litellm_provider") == "azure_ai"
+    assert azure_ai_row.get("mode") == azure_row.get("mode")
+    assert _priced_fields(azure_ai_row) == _priced_fields(azure_row)
