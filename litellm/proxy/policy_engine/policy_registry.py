@@ -749,7 +749,7 @@ class PolicyRegistry:
             policies: Final = await self.get_all_policies_from_db(prisma_client, version_status="production")
 
             # Build a temporary in-memory map for resolution
-            temp_policies: Final = {}
+            temp_policies: Final[dict[str, Policy]] = {}
             for policy_response in policies:
                 policy = self.parse_policy(
                     policy_response.policy_name,

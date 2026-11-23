@@ -118,7 +118,7 @@ import httpx
 import httpx2
 from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
-from starlette.types import Message, Send
+from starlette.types import Message, Scope, Send
 
 from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
@@ -359,7 +359,7 @@ class MCPDebug:
     def maybe_build_debug_headers(
         *,
         raw_headers: dict[str, str] | None,
-        scope: dict,
+        scope: Scope,
         mcp_servers: list[str] | None,
         oauth2_headers: dict[str, str] | None,
         client_ip: str | None,
