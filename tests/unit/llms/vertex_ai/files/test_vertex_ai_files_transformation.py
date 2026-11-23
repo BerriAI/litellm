@@ -592,6 +592,7 @@ class TestVertexBatchOutputTransformation:
         def row(custom_id: str, candidate: dict) -> dict:
             return {
                 "status": "",
+                "processed_time": "2026-11-23T18:13:16.826+00:00",
                 "request": {
                     "contents": [{"role": "user", "parts": [{"text": "weather in Paris?"}]}],
                     "labels": {"litellm_custom_id": custom_id},
