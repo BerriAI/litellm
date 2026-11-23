@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -15,7 +16,7 @@ from litellm.cost_calculator import BaseTokenUsageProcessor
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
-from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.litellm_logging import Logging, configured_callbacks
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -40,6 +41,7 @@ from litellm.types.router import (
     reject_server_owned_wif_params,
 )
 from litellm.types.utils import Usage
+from litellm.utils import register_dynamic_callbacks
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -52,6 +54,8 @@ else:
 # (e.g. a nonexistent file/batch/thread id), independent of the selected deployment's health.
 _REQUEST_SCOPED_STATUS_CODES: Final = frozenset((404,))
 _NO_MODEL_CALL_DETAILS: Final[Mapping[str, object]] = MappingProxyType({})
+_CALLBACK_SETUP_FIELDS: Final = frozenset({"callbacks", "success_callback", "failure_callback"})
+ATTEMPT_FIELDS: Final = TypeAdapter(dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +98,40 @@ def _restore_failed_attempt_spend(logging_obj: Logging | None, spend: _FailedAtt
         BaseTokenUsageProcessor.combine_usage_objects(usage_objects=[later_usage, spend.usage]),
         _known_cost(logging_obj.model_call_details.get("response_cost")) + spend.response_cost,
     )
+
+
+@dataclass(slots=True)
+class RetriedAttemptsSpend:
+    logging_obj: Logging | None
+    set_aside: tuple[_FailedAttemptSpend, ...] = ()
+
+    @classmethod
+    def from_kwargs(cls, kwargs: Mapping[str, object]) -> "RetriedAttemptsSpend":
+        logging_obj: Final = kwargs.get("litellm_logging_obj")
+        return cls(logging_obj if isinstance(logging_obj, Logging) else None)
+
+    def set_aside_last_attempt(self) -> None:
+        spend: Final = _set_aside_failed_attempt_spend(self.logging_obj)
+        if spend is not None:
+            self.set_aside = (*self.set_aside, spend)
+
+    def restore(self) -> None:
+        for spend in reversed(self.set_aside):
+            _restore_failed_attempt_spend(self.logging_obj, spend)
+        self.set_aside = ()
+
+
+def deployment_fields_for_shared_logging(
+    deployment_fields: Mapping[str, object], request_fields: Mapping[str, object]
+) -> Mapping[str, object]:
+    logging_obj: Final = request_fields.get("litellm_logging_obj")
+    if not isinstance(logging_obj, Logging):
+        return deployment_fields
+    deployment_callbacks: Final = configured_callbacks(deployment_fields.get("callbacks"))
+    if deployment_callbacks is not None:
+        register_dynamic_callbacks(deployment_callbacks)
+    logging_obj.follow_attempt_callback_settings({**deployment_fields, **request_fields})
+    return {key: value for key, value in deployment_fields.items() if key not in _CALLBACK_SETUP_FIELDS}
 
 
 def failure_log_already_ran(kwargs: Mapping[str, object]) -> bool:

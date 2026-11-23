@@ -227,6 +227,7 @@ from ..integrations.s3_v2 import S3Logger as S3V2Logger
 from ..integrations.supabase import Supabase
 from ..integrations.traceloop import TraceloopLogger
 from ..integrations.zerobus import ZerobusLogger
+from .coroutine_checker import coroutine_checker
 from .exception_mapping_utils import _get_response_headers
 from .initialize_dynamic_callback_params import (
     get_trusted_callback_params,
@@ -546,6 +547,7 @@ def _resolve_mantle_region_for_cost(
 
 _PER_CALL_LITELLM_PARAM_DICTS: Final = frozenset({"metadata", "litellm_metadata"})
 _LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
+_CALLBACK_ENTRIES: Final = TypeAdapter(list[object])
 
 
 def _provider_response_id(source: object) -> str | None:
@@ -566,6 +568,17 @@ def _timestamp_seconds(moment: object) -> float | None:
     if isinstance(moment, (int, float)):
         return float(moment)
     return None
+
+
+def configured_callbacks(configured: object) -> tuple[str | Callable[..., object] | CustomLogger, ...] | None:
+    if not isinstance(configured, list):
+        return None
+    entries: Final = _CALLBACK_ENTRIES.validate_python(configured)
+    return tuple(entry for entry in entries if isinstance(entry, str | CustomLogger) or callable(entry))
+
+
+def _is_async_success_callback(callback: str | Callable[..., object] | CustomLogger) -> bool:
+    return coroutine_checker.is_async_callable(callback) or callback in ("dynamodb", "s3")
 
 
 class Logging(LiteLLMLoggingBaseClass):
@@ -734,6 +747,8 @@ class Logging(LiteLLMLoggingBaseClass):
         # Process dynamic callbacks (after standard_callback_dynamic_params is initialized,
         # so team-scoped credentials are available for callback initialization)
         self.process_dynamic_callbacks()
+        self._request_set_success_callbacks: Final = dynamic_success_callbacks is not None
+        self._request_set_failure_callbacks: Final = dynamic_failure_callbacks is not None
         self.standard_built_in_tools_params: StandardBuiltInToolsParams = (
             self.initialize_standard_built_in_tools_params(kwargs)
         )
@@ -872,11 +887,35 @@ class Logging(LiteLLMLoggingBaseClass):
             self.dynamic_async_success_callbacks, dynamic_callbacks_type="async_success"
         )
 
+    def follow_attempt_callback_settings(self, attempt_fields: Mapping[str, object]) -> None:
+        """A Logging object shared across router attempts logs each one by its own deployment's settings."""
+        self.standard_callback_dynamic_params = _initialize_standard_callback_dynamic_params(dict(attempt_fields))
+        self.model_call_details["standard_callback_dynamic_params"] = self.standard_callback_dynamic_params
+        if not self._request_set_success_callbacks:
+            success_callbacks: Final = configured_callbacks(attempt_fields.get("success_callback"))
+            self.dynamic_async_success_callbacks = (
+                None
+                if success_callbacks is None
+                else [callback for callback in success_callbacks if _is_async_success_callback(callback)] or None
+            )
+            self.dynamic_success_callbacks = self._process_dynamic_callback_list(
+                None
+                if success_callbacks is None
+                else [callback for callback in success_callbacks if not _is_async_success_callback(callback)],
+                "success",
+            )
+        if not self._request_set_failure_callbacks:
+            failure_callbacks: Final = configured_callbacks(attempt_fields.get("failure_callback"))
+            self.dynamic_async_failure_callbacks = None
+            self.dynamic_failure_callbacks = self._process_dynamic_callback_list(
+                None if failure_callbacks is None else [*failure_callbacks], "failure"
+            )
+
     def _process_dynamic_callback_list(
         self,
-        callback_list: list[str | Callable | CustomLogger] | None,
+        callback_list: list[str | Callable[..., object] | CustomLogger] | None,
         dynamic_callbacks_type: Literal["input", "success", "failure", "async_success", "async_failure"],
-    ) -> list[str | Callable | CustomLogger] | None:
+    ) -> list[str | Callable[..., object] | CustomLogger] | None:
         """
         Helper function to initialize CustomLogger compatible callbacks in self.dynamic_* callbacks
 
@@ -888,7 +927,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if callback_list is None:
             return None
 
-        processed_list: Final[list[str | Callable | CustomLogger]] = []
+        processed_list: Final[list[str | Callable[..., object] | CustomLogger]] = []
         for callback in callback_list:
             if isinstance(callback, str) and callback in litellm._known_custom_logger_compatible_callbacks:
                 for callback_instance in self._resolve_dynamic_callback_string(callback):

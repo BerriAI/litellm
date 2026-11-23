@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterator, Mapping
@@ -27,6 +28,7 @@ from litellm.proxy.image_endpoints import endpoints
 from litellm.proxy.proxy_server import ProxyConfig
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.router import RetryPolicy
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import custom_llm_setup
 
@@ -779,6 +781,102 @@ def test_image_generation_keeps_a_keys_logging_callbacks_out_of_the_provider_par
     assert handler.received_params == {"size": "1024x1024"}
 
 
+class _LoggedPromptCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_payloads: tuple[str, ...] = ()
+        self.logged: Final = threading.Event()
+
+    def _capture(self, kwargs: dict[str, object]) -> None:
+        self.logged_payloads = (*self.logged_payloads, json.dumps(kwargs.get("standard_logging_object"), default=str))
+        self.logged.set()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._capture(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._capture(kwargs)
+
+
+def _router_with_deployment_settings(
+    handler_group: str, deployment_settings: Mapping[str, object], num_retries: int = 0
+) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": handler_group,
+                "litellm_params": {"model": f"image-regression-{handler_group}/image-model", **deployment_settings},
+            }
+        ],
+        num_retries=num_retries,
+    )
+
+
+@pytest.mark.parametrize(
+    ("handler", "deployment_settings", "prompt_logged"),
+    (
+        pytest.param(_ParamRecordingImageHandler, {"turn_off_message_logging": True}, False, id="served_private"),
+        pytest.param(_UnbilledFailingImageHandler, {"turn_off_message_logging": True}, False, id="failed_private"),
+        pytest.param(_ParamRecordingImageHandler, {}, True, id="served_open"),
+    ),
+)
+def test_image_log_follows_the_deployments_message_logging_setting(
+    monkeypatch: pytest.MonkeyPatch,
+    handler: Callable[[], litellm.CustomLLM],
+    deployment_settings: Mapping[str, object],
+    prompt_logged: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    capture: Final = _LoggedPromptCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    app: Final = _image_regression_app(monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": handler()})
+    monkeypatch.setattr(proxy_server, "llm_router", _router_with_deployment_settings("A", deployment_settings))
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            _send_generation(client)
+            assert capture.logged.wait(timeout=10)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert any("draw a tree" in payload for payload in capture.logged_payloads) is prompt_logged
+
+
+def test_image_generation_runs_a_deployments_callbacks_without_sending_them_to_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "callbacks", [])
+    fired: Final = threading.Event()
+    handler: Final = _ParamRecordingImageHandler()
+    app: Final = _image_regression_app(monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": handler})
+
+    def on_success(kwargs: object, response: object, start_time: object, end_time: object) -> None:
+        fired.set()
+
+    monkeypatch.setattr(
+        proxy_server, "llm_router", _router_with_deployment_settings("A", {"success_callback": [on_success]})
+    )
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = client.post(
+                "/v1/images/generations", json={"model": "A", "prompt": "draw a tree", "size": "1024x1024"}
+            )
+            assert fired.wait(timeout=10)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert handler.received_params == {"size": "1024x1024"}
+
+
 def test_success_event_of_a_fallback_reports_the_tokens_it_billed(monkeypatch: pytest.MonkeyPatch) -> None:
     capture: Final = _SuccessUsageCapture()
     capture.logged.clear()
@@ -828,3 +926,99 @@ def test_a_failure_spend_row_keeps_the_billed_attempt_when_every_fallback_fails(
         end_time=db_call["end_time"],
     )
     assert (db_call["response_cost"], payload["prompt_tokens"], payload["completion_tokens"]) == (0.25, 16, 2240)
+
+
+class _RefusedAfterBillingImageHandler(litellm.CustomLLM):
+    def __init__(self, refusals: int) -> None:
+        super().__init__()
+        self.refusals_left: int = refusals
+
+    async def aimage_generation(
+        self,
+        model: str,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        assert isinstance(logging_obj, LiteLLMLoggingObj)
+        logging_obj.pre_call(input=prompt, api_key=api_key)
+        if self.refusals_left == 0:
+            served: Final = ImageResponse(data=[ImageObject(url="https://example.com/tree.png")])
+            served._hidden_params = {"response_cost": 0.5}
+            return served
+        self.refusals_left -= 1
+        logging_obj.record_partial_usage_for_failure(
+            litellm.Usage(prompt_tokens=16, completion_tokens=2240, total_tokens=2256), 0.25
+        )
+        raise litellm.ContentPolicyViolationError(
+            message="refused after billing", llm_provider="image-regression", model=model
+        )
+
+
+def _router_retrying_refusals(retries: int) -> litellm.Router:
+    return litellm.Router(
+        model_list=[{"model_name": "A", "litellm_params": {"model": "image-regression-A/image-model"}}],
+        num_retries=0,
+        retry_after=0,
+        retry_policy=RetryPolicy(ContentPolicyViolationErrorRetries=retries),
+    )
+
+
+def test_a_refusal_served_on_retry_bills_both_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    capture: Final = _SuccessUsageCapture()
+    capture.logged.clear()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _RefusedAfterBillingImageHandler(refusals=1)}
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router_retrying_refusals(retries=1))
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+            assert capture.logged.wait(timeout=10)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 200, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.75)
+    assert capture.logged_usage == (16, 2240)
+
+
+@pytest.mark.parametrize("retries", (1, 2))
+def test_a_failure_spend_row_keeps_every_refused_retry(monkeypatch: pytest.MonkeyPatch, retries: int) -> None:
+    from litellm.proxy import proxy_server
+
+    attempts: Final = retries + 1
+
+    spend_writer: Final = MagicMock(update_database=AsyncMock())
+    monkeypatch.setattr(litellm, "callbacks", [ProxyDBLogger(spend_writer=lambda: spend_writer)])
+    app: Final = _image_regression_app(
+        monkeypatch, UserAPIKeyAuth(api_key="sk-test"), {"A": _RefusedAfterBillingImageHandler(refusals=attempts)}
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", _router_retrying_refusals(retries=retries))
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response: Final = _send_generation(client)
+    finally:
+        ProxyLogging._callback_capabilities_cache.clear()
+
+    assert response.status_code == 400, response.text
+    assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(0.25 * attempts)
+    db_call: Final = spend_writer.update_database.call_args.kwargs
+    payload: Final = get_logging_payload(
+        kwargs=db_call["kwargs"],
+        response_obj=db_call["completion_response"],
+        start_time=db_call["start_time"],
+        end_time=db_call["end_time"],
+    )
+    assert db_call["response_cost"] == pytest.approx(0.25 * attempts)
+    assert (payload["prompt_tokens"], payload["completion_tokens"]) == (16 * attempts, 2240 * attempts)

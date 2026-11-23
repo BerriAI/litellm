@@ -231,8 +231,10 @@ from litellm.router_utils.cooldown_handlers import (
 )
 from litellm.router_utils.deployment_pricing import deployment_pricing_models
 from litellm.router_utils.fallback_event_handlers import (
+    ATTEMPT_FIELDS,
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
+    RetriedAttemptsSpend,
     attempted_fallback_targets_from,
     attempted_retries_for_request,
     carry_over_pre_routing_selection,
@@ -241,6 +243,7 @@ from litellm.router_utils.fallback_event_handlers import (
     clear_pre_routing_selection,
     committed_retry_budget_for_request,
     cool_down_attempt_the_failure_log_skipped,
+    deployment_fields_for_shared_logging,
     failure_log_already_ran,
     fallback_lookup_groups,
     fallbacks_disabled_for_request,
@@ -5152,11 +5155,14 @@ class Router:
 
             self.total_calls[model_name] += 1
             failure_log_ran_before_this_attempt: Final = failure_log_already_ran(kwargs)
+            deployment_fields: Final = deployment_fields_for_shared_logging(
+                ATTEMPT_FIELDS.validate_python(data), ATTEMPT_FIELDS.validate_python(kwargs)
+            )
             async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
                 try:
                     response = await litellm.aimage_generation(
                         **{
-                            **data,
+                            **deployment_fields,
                             "prompt": prompt,
                             "caching": self.cache_responses,
                             "client": model_client,
@@ -8543,8 +8549,10 @@ class Router:
 
             await asyncio.sleep(retry_after)
 
+            retried_attempts_spend: Final = RetriedAttemptsSpend.from_kwargs(ATTEMPT_FIELDS.validate_python(kwargs))
             for current_attempt in range(num_retries):
                 try:
+                    retried_attempts_spend.set_aside_last_attempt()
                     # Update retry tracking metadata before each retry attempt
                     _metadata["attempted_retries"] = current_attempt + 1
                     _metadata["max_retries"] = num_retries
@@ -8599,6 +8607,7 @@ class Router:
                                 content_policy_fallbacks=content_policy_fallbacks,
                             )
                         except Exception:
+                            retried_attempts_spend.restore()
                             raise e
 
                     skipped_ids = self._deployment_ids_to_skip_on_retry(
@@ -8626,6 +8635,7 @@ class Router:
                 actual_retries_attempted: Final = current_attempt + 1 if current_attempt is not None else num_retries
                 setattr(original_exception, "num_retries", actual_retries_attempted)
 
+            retried_attempts_spend.restore()
             raise original_exception
 
     async def make_call(self, original_function: Any, *args, **kwargs):
