@@ -23,14 +23,16 @@ def salt_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", "synthetic-events-poll-key")
 
 
-def _upstream(events: tuple[object, ...] = (), cursor: str | None = "9", next_poll_ms: int = 200) -> FakeUpstream:
+def _upstream(
+    events: tuple[object, ...] = (), cursor: str | None = "9", next_poll_ms: int = 200, has_more: bool = False
+) -> FakeUpstream:
     return FakeUpstream(
         responses={
             "events/poll": {
                 "events": [item.model_dump(by_alias=True) for item in events],  # pyright: ignore[reportAttributeAccessIssue]  # occurrences
                 "cursor": cursor,
                 "truncated": False,
-                "hasMore": False,
+                "hasMore": has_more,
                 "nextPollMs": next_poll_ms,
             }
         }
@@ -39,7 +41,7 @@ def _upstream(events: tuple[object, ...] = (), cursor: str | None = "9", next_po
 
 @pytest.mark.asyncio
 async def test_a_poll_renames_events_seals_the_cursor_and_strips_upstream_cursors() -> None:
-    upstream: Final = _upstream((occurrence("evt_1", cursor="8"),))
+    upstream: Final = _upstream((occurrence("evt_1", cursor="8"),), has_more=True)
     records: Final[list[EventActivity]] = []  # mutable-ok: collects recorded activity
     sealed_in: Final = seal_cursor(BINDING, "5", NOW)
     assert isinstance(sealed_in, Ok)
@@ -51,6 +53,7 @@ async def test_a_poll_renames_events_seals_the_cursor_and_strips_upstream_cursor
         runtime((server(),), upstream=upstream, records=records),
     )
     assert isinstance(result, Ok)
+    assert result.ok.has_more
     method, params, headers = upstream.calls[0]
     assert (method, params["name"], params["cursor"]) == ("events/poll", "build.failed", "5")
     folded: Final = {key.lower(): value for key, value in headers.items()}
