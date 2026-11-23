@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from prisma.models import LiteLLM_AgentsTable
+from pydantic import TypeAdapter
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy.agent_endpoints.agent_registry import (
@@ -1635,6 +1636,7 @@ async def test_application_registration_preserves_its_existing_owner(operation: 
 
 
 _OBO_SECRET: Final = "obo-stored-client-secret"
+_LITELLM_PARAMS: Final = TypeAdapter(dict[str, object])
 _OBO_BLOCK: Final = {
     "token_exchange_endpoint": "https://idp.example.com/token",
     "client_id": "agent-client",
@@ -1741,8 +1743,7 @@ def test_redact_sensitive_agent_litellm_params_only_exempts_token_exchange_field
     ],
 )
 def test_restore_redacted_litellm_params_round_trips_what_the_read_masked(stored: Mapping[str, object]):
-    redacted = redact_sensitive_agent_litellm_params(stored)
-    assert isinstance(redacted, dict)
+    redacted: Final = _LITELLM_PARAMS.validate_python(redact_sensitive_agent_litellm_params(stored))
 
     assert _restore_redacted_litellm_params(redacted, stored) == stored
 
