@@ -77,7 +77,13 @@ class DeliveryWorker:
         if isinstance(authorization, Revoked):
             if await self._store.settle(delivery, row.generation, self._clock(), "terminated"):
                 await notify_termination(
-                    row, forbidden("Access revoked"), self._settings(), self._runtime, self._post, self._lookup
+                    row,
+                    forbidden("Access revoked"),
+                    self._store,
+                    self._settings(),
+                    self._runtime,
+                    self._post,
+                    self._lookup,
                 )
             return
         if not isinstance(authorization, Authorized):
