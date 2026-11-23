@@ -57,8 +57,9 @@ async def test_a_hung_upstream_times_out_instead_of_hanging_the_poll() -> None:
 
 
 @pytest.mark.asyncio
-async def test_listing_follows_upstream_pages() -> None:
-    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two", "c.three")))
+@pytest.mark.parametrize("cursor", ("1", ""))
+async def test_listing_follows_upstream_pages(cursor: str) -> None:
+    upstream: Final = EventsUpstream(pages=(("a.one",), ("b.two", "c.three")), second_page_cursor=cursor)
     async with events_client(upstream) as client:
         listed: Final = await list_all(client, 10, 5.0)
     assert [item.name for item in listed] == ["a.one", "b.two", "c.three"]
@@ -98,3 +99,13 @@ async def test_an_events_call_does_not_change_the_session_later_tool_calls_use()
 
         await client.run_with_session(probe, quiet_on_error=True)
     assert seen and seen[0] is not EventsClientSession
+
+
+@pytest.mark.asyncio
+async def test_a_server_without_the_events_extension_receives_no_events_request() -> None:
+    upstream: Final = EventsUpstream(advertises_events=False)
+    async with events_client(upstream) as client:
+        with pytest.raises(MCPError) as rejected:
+            await list_all(client, 10, 5.0)
+    assert rejected.value.error.code == -32601
+    assert not upstream.seen

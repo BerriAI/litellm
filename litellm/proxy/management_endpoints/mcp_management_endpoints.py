@@ -1075,6 +1075,7 @@ if MCP_AVAILABLE:
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
             rpm=payload.rpm,
+            events=payload.events,
         )
 
     def get_prisma_client_or_throw(message: str):
