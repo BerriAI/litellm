@@ -62,10 +62,14 @@ impl From<&HttpSettings> for Verify {
 
 impl From<&HttpSettings> for Resolution {
     fn from(settings: &HttpSettings) -> Self {
+        let provider = crate::tls::provider();
         let curve = settings
             .ssl_ecdh_curve
             .as_deref()
-            .map(str::parse::<KeyExchangeGroup>)
+            .map(|name| {
+                name.parse::<KeyExchangeGroup>()
+                    .and_then(|group| group.offered_by(&provider, name))
+            })
             .transpose();
         let ciphers = settings
             .ssl_security_level
