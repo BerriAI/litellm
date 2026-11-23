@@ -6,7 +6,9 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from fastapi import HTTPException, Request
 
+import litellm
 from litellm import Router
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
@@ -836,25 +838,37 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
 
 _VERTEX_MODEL: Final = "gemini-3.8-flash"
 _VERTEX_ENDPOINT: Final = f"v1/projects/p/locations/global/publishers/google/models/{_VERTEX_MODEL}:generateContent"
+_CHAT_MODEL: Final = "guardrail-model"
 
 
 def _least_busy_vertex_router() -> Router:
     return Router(
         model_list=[
+            *(
+                {
+                    "model_name": _VERTEX_MODEL,
+                    "litellm_params": {
+                        "model": f"vertex_ai/{_VERTEX_MODEL}",
+                        "vertex_project": deployment_id,
+                        "vertex_location": "global",
+                        "use_in_pass_through": True,
+                    },
+                    "model_info": {"id": deployment_id},
+                }
+                for deployment_id in ("vertex-a", "vertex-b")
+            ),
             {
-                "model_name": _VERTEX_MODEL,
-                "litellm_params": {
-                    "model": f"vertex_ai/{_VERTEX_MODEL}",
-                    "vertex_project": deployment_id,
-                    "vertex_location": "global",
-                    "use_in_pass_through": True,
-                },
-                "model_info": {"id": deployment_id},
-            }
-            for deployment_id in ("vertex-a", "vertex-b")
+                "model_name": _CHAT_MODEL,
+                "litellm_params": {"model": "openai/gpt-5.4-nano", "api_key": "sk-test", "mock_response": "ok"},
+                "model_info": {"id": "chat"},
+            },
         ],
         routing_strategy="least-busy",
     )
+
+
+async def _routed_chat_call(router: Router) -> None:
+    await router.acompletion(model=_CHAT_MODEL, messages=[{"role": "user", "content": "hi"}])
 
 
 def _vertex_request() -> Request:
@@ -949,6 +963,95 @@ async def test_a_vertex_passthrough_that_fails_before_the_upstream_call_frees_it
         await _relay_vertex(relayed)
 
     assert _picked_deployment(relayed) == _picked_deployment(failed)
+
+
+class _PassThroughPickInsideRoutedCall(CustomLogger):
+    def __init__(self, router: Router) -> None:
+        super().__init__()
+        self._router: Final = router
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: list[object],
+        messages: object,
+        request_kwargs: object = None,
+        parent_otel_span: object = None,
+    ) -> list[object]:
+        if model == _CHAT_MODEL:
+            await self._router.select(_VERTEX_MODEL, {"litellm_call_id": "hook-pick"}, kind="pass_through")
+        return healthy_deployments
+
+
+@pytest.mark.asyncio
+async def test_a_passthrough_pick_made_inside_a_routed_call_holds_no_deployment(monkeypatch: pytest.MonkeyPatch):
+    """A callback's pass-through pick inside a routed SDK call makes no Vertex call, so it must not hold a
+    deployment and steer the next Vertex pass-through call away from the idle first deployment"""
+    router: Final = _least_busy_vertex_router()
+    monkeypatch.setattr(litellm, "callbacks", [_PassThroughPickInsideRoutedCall(router)])
+    request: Final = _vertex_request()
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", router
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ),
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+            return_value=({}, False, "p", "global"),
+        ),
+        patch(  # test-quality-ok: the relay is replaced so no upstream call is made, the route offers no seam
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            return_value=AsyncMock(),
+        ),
+    ):
+        await _routed_chat_call(router)
+        await _relay_vertex(request)
+
+    assert _picked_deployment(request) == "vertex-a"
+
+
+@pytest.mark.asyncio
+async def test_a_routed_call_made_inside_a_vertex_passthrough_keeps_that_calls_pick_held():
+    """A guardrail's routed call inside a pass-through call finishes before the Vertex call starts, and must not
+    free the pass-through call's pick, so a second call arriving meanwhile goes to the other deployment"""
+    router: Final = _least_busy_vertex_router()
+    guarded: Final = _vertex_request()
+    arriving: Final = _vertex_request()
+    guardrail_done: Final = asyncio.Event()
+    arrival_done: Final = asyncio.Event()
+
+    async def guarded_relay(request: Request, fastapi_response: object, user_api_key_dict: UserAPIKeyAuth) -> None:
+        await _routed_chat_call(router)
+        guardrail_done.set()
+        await arrival_done.wait()
+
+    with (
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.proxy_server.llm_router", router
+        ),
+        patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
+        ),
+        patch(  # test-quality-ok: the route offers no injection point for its header preparation
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers",
+            new_callable=AsyncMock,
+            return_value=({}, False, "p", "global"),
+        ),
+        patch(  # test-quality-ok: the relays hold the first call in flight, the route offers no seam
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=[guarded_relay, AsyncMock()],
+        ),
+    ):
+        first: Final = asyncio.ensure_future(_relay_vertex(guarded))
+        await guardrail_done.wait()
+        await _relay_vertex(arriving)
+        arrival_done.set()
+        await first
+
+    assert {_picked_deployment(guarded), _picked_deployment(arriving)} == {"vertex-a", "vertex-b"}
 
 
 def _router_without_deployment() -> MagicMock:

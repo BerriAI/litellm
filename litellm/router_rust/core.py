@@ -492,6 +492,7 @@ _DELETABLE_ATTRIBUTES: Final = frozenset({"model_group_alias", "num_retries", "s
 # Calls whose pick least-busy does not hold (`picks_reserve(False)`): a batch cancel makes no
 # call that logs a start.
 _UNRESERVED_OPS: Final = frozenset({"acancel_batch"})
+_IN_PASS_THROUGH_CALL: Final[ContextVar[bool]] = ContextVar("router_in_pass_through_call", default=False)
 
 
 # Settings converted by `Resolved._selection_setting`.
@@ -2593,17 +2594,22 @@ class RustCore(
             batch_upload=batch_upload,
         )
         if kind == "pass_through":
-            return selection.run_sync()
+            with picks_reserve(_IN_PASS_THROUGH_CALL.get()):
+                return selection.run_sync()
         # A pick that makes no call holds no least-busy reservation (`select` on the Python core).
         with picks_reserve(False):
             return await selection.run()
 
     @contextlib.contextmanager
     def reserving_picks(self, call_id: str) -> Generator[None, None, None]:
-        """A pass-through call's scope: its ``select(kind="pass_through")`` picks hold a least-busy
+        """A pass-through call's scope: only its ``select(kind="pass_through")`` picks hold a least-busy
         reservation until the call starts, and a pick it never started is freed on exit."""
-        with owning_picks(self._selectors.reservations, call_id), picks_reserve(True):
-            yield
+        with owning_picks(self._selectors.reservations, call_id):
+            token: Final = _IN_PASS_THROUGH_CALL.set(True)
+            try:
+                yield
+            finally:
+                _IN_PASS_THROUGH_CALL.reset(token)
 
     async def async_get_available_deployment_for_pass_through(
         self,
