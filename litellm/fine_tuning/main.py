@@ -309,13 +309,13 @@ def create_fine_tuning_job(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_fine_tuning_job'. Only 'openai', 'azure', and 'vertex_ai' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
+                    request=httpx.Request(method="create_fine_tuning_job", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -462,13 +462,13 @@ def cancel_fine_tuning_job(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_fine_tuning_job'. Only 'openai' and 'azure' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
+                    request=httpx.Request(method="cancel_fine_tuning_job", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
@@ -619,13 +619,13 @@ def list_fine_tuning_jobs(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_batch'. Only 'openai' is supported.",
+                message=f"LiteLLM doesn't support {custom_llm_provider} for 'list_fine_tuning_jobs'. Only 'openai' and 'azure' are supported.",
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
                     status_code=400,
                     content="Unsupported provider",
-                    request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),
+                    request=httpx.Request(method="list_fine_tuning_jobs", url="https://github.com/BerriAI/litellm"),
                 ),
             )
         return response
