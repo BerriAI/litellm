@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
@@ -2664,7 +2665,7 @@ class TestRecordPartialUsageForFailure:
             AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
                 litellm_logging_obj=self._make_logging_obj(),
                 request_body={"model": "claude-sonnet-5", "stream": True},
-                all_chunks=[line for chunk in chunks for line in chunk.splitlines() if line],
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
                 model="claude-sonnet-5",
             )
             for chunks in (received, [*received, error_frame])
