@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Proto
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -27,6 +28,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET_GEMINI_2_5_PRO,
 )
 from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, map_finish_reason, normalize_drop_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -299,7 +301,38 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
+def gemini_image_candidate_count(
+    model: str,
+    request_params: Mapping[str, object],
+    drop_params: bool,
+    llm_provider: str,
+) -> Literal["forward", "drop"] | UnsupportedParamsError:
+    n: Final = request_params.get("n")
+    modalities: Final = request_params.get("modalities")
+    asks_for_several_candidates: Final = isinstance(n, int) and n > 1
+    asks_for_image_output: Final = isinstance(modalities, list) and "image" in modalities
+    if not (asks_for_several_candidates and asks_for_image_output):
+        return "forward"
+    if drops_unsupported_params(drop_params):
+        return "drop"
+    return UnsupportedParamsError(
+        message=(
+            f"n={n} with image output in modalities is not supported for {model}. Gemini returns one candidate "
+            "per request when modalities asks for image output, so send n=1 or separate requests, or set "
+            "drop_params to drop n."
+        ),
+        model=model,
+        llm_provider=llm_provider,
+    )
+
+
+class _CandidateCountParams(TypedDict, total=False):
+    n: ReadOnly[object]
+    modalities: ReadOnly[object]
+
+
 _CALLER_HEADERS: Final = TypeAdapter(dict[str, str])
+_CANDIDATE_COUNT_PARAMS: Final = TypeAdapter(_CandidateCountParams)
 _REQUEST_PARAMS: Final = TypeAdapter(dict[str, object])
 
 
@@ -1386,6 +1419,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["include_server_side_tool_invocations"] = True
                 return
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
+
     def _schema_pins_fit(self, request_params: Mapping[str, object], model: str) -> bool:
         tool_params: Final = tuple(
             param
@@ -1416,12 +1452,22 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        allow_unsupported_n: bool = False,
     ) -> dict:
         request_params: Final = tool_params_without_hosted_mcp(
-            non_default_params, model=model, route=self._route, drop_params=drop_params
+            non_default_params,
+            model=model,
+            route=self._route,
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         typed_request_params: Final = _REQUEST_PARAMS.validate_python(request_params)
         self._apply_include_server_side_tool_invocations(typed_request_params, optional_params)
+        candidate_params: Final = _CANDIDATE_COUNT_PARAMS.validate_python(typed_request_params)
+        candidate_count: Final = gemini_image_candidate_count(model, candidate_params, drop_params, self._route)
+        if isinstance(candidate_count, UnsupportedParamsError) and not allow_unsupported_n:
+            raise candidate_count
         pins_fit: Final = self._schema_pins_fit(typed_request_params, model)
         gemini_sampling_params_warned: bool = False
         for param, value in request_params.items():
@@ -1459,6 +1505,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 param == "stream" and value is True
             ):  # sending stream = False, can cause it to get passed unchecked and raise issues
                 optional_params["stream"] = value
+            elif param == "n" and candidate_count == "drop":
+                verbose_logger.warning(
+                    "Dropping n=%s for %s because Gemini returns one candidate per request when modalities asks "
+                    "for image output",
+                    candidate_params.get("n"),
+                    model,
+                )
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):

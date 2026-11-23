@@ -780,6 +780,11 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str) -> bool:
+    model_name: Final = model.lower()
+    return "gemini" in model_name and "tts" in model_name
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.
@@ -8947,6 +8952,8 @@ def validate_chat_completion_tool_choice(
         if is_allowed_tools_tool_choice(requested_choice):
             allowed_tools: Final = parse_allowed_tools_tool_choice_or_refuse(requested_choice, model, drop_params)
             return None if allowed_tools is None else dict(chat_allowed_tools_tool_choice(allowed_tools))
+        if tool_choice_type == "mcp":
+            return tool_choice
 
         # Standard OpenAI format: {"type": "function", "function": {...}}
         if tool_choice_type is None or tool_choice.get("function") is None:
@@ -9512,8 +9519,11 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_decisions_config(model: str, provider: LlmProviders) -> BaseDecisionsConfig | None:
-        if provider == LlmProviders.PERPLEXITY:
-            return litellm.PerplexityDecisionsConfig()
+        if provider in (LlmProviders.GEMINI, LlmProviders.PERPLEXITY):
+            return {
+                LlmProviders.GEMINI: litellm.GeminiDecisionsConfig,
+                LlmProviders.PERPLEXITY: litellm.PerplexityDecisionsConfig,
+            }[provider]()
         if provider == LlmProviders.TYPESAFE:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
