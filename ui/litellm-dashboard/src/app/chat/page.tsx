@@ -167,20 +167,16 @@ export default function ChatConversationPage() {
       // On the very first turn (no session yet), we send the full history.
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> = historyOverride
-        ? [...historyOverride, { role: "user" as const, content: trimmed }]
-        : previousResponseId
-          ? [{ role: "user" as const, content: trimmed }]
-          : [
-              // Explicitly filter to only user/assistant roles — tool messages
-              // lack a required tool_call_id and would cause API errors.
-              ...(activeConversation?.messages ?? [])
-                .filter(
-                  (m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant",
-                )
-                .map((m) => ({ role: m.role, content: m.content })),
-              { role: "user" as const, content: trimmed },
-            ];
+      const fullHistory: Array<{ role: "user" | "assistant"; content: string }> = [
+        ...(historyOverride ??
+          // Explicitly filter to only user/assistant roles — tool messages
+          // lack a required tool_call_id and would cause API errors.
+          (activeConversation?.messages ?? [])
+            .filter((m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant")
+            .map((m) => ({ role: m.role, content: m.content }))),
+        { role: "user" as const, content: trimmed },
+      ];
+      const history = previousResponseId ? [{ role: "user" as const, content: trimmed }] : fullHistory;
 
       let accumulatedContent = "";
       let accumulatedReasoning = "";
@@ -227,6 +223,8 @@ export default function ChatConversationPage() {
           undefined,
           true,
           (totalLatency: number) => updateLastAssistantMessage(convId!, { totalLatency }),
+          undefined,
+          () => fullHistory,
         );
         streamCompletedCleanly = true;
       } catch (err: unknown) {

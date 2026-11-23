@@ -980,21 +980,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
             );
           }
         } else if (endpointType === EndpointType.RESPONSES) {
-          // Create chat history for API call - strip out model field and isImage field
-          let apiChatHistory;
-
-          if (useApiSessionManagement && responsesSessionId) {
-            // When using API session management with existing session, only send the new message
-            apiChatHistory = [newUserMessage];
-          } else {
-            // When using UI session management or starting new API session, send full history
-            apiChatHistory = [
-              ...chatHistory
-                .filter((msg) => !msg.isImage && !msg.isAudio)
-                .map(({ role, content }) => ({ role, content })),
-              newUserMessage,
-            ];
-          }
+          const fullChatHistory = [
+            ...chatHistory
+              .filter((msg) => !msg.isImage && !msg.isAudio)
+              .map(({ role, content }) => ({ role, content })),
+            newUserMessage,
+          ];
+          const apiChatHistory = useApiSessionManagement && responsesSessionId ? [newUserMessage] : fullChatHistory;
 
           await makeOpenAIResponsesRequest(
             apiChatHistory,
@@ -1023,6 +1015,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             streamingEnabled,
             updateTotalLatency,
             customHeaders,
+            () => fullChatHistory,
           );
         } else if (endpointType === EndpointType.ANTHROPIC_MESSAGES) {
           const apiChatHistory = [

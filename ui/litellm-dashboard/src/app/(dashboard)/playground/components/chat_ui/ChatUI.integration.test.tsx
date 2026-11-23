@@ -6,6 +6,7 @@ import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages";
+import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
@@ -17,6 +18,10 @@ vi.mock("@/components/llm_calls/chat_completion", () => ({
 
 vi.mock("../../llm_calls/anthropic_messages", () => ({
   makeAnthropicMessagesRequest: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/components/llm_calls/responses_api", () => ({
+  makeOpenAIResponsesRequest: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/components/networking", () => ({
@@ -575,6 +580,59 @@ describe("ChatUI", () => {
     expect(await screen.findByRole("checkbox", { name: /Stream responses/i })).toBeChecked();
     expect(screen.queryByText("Temperature")).not.toBeInTheDocument();
     expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
+  });
+
+  it("continues an API session with only the new message and offers the answered turns for a resend", async () => {
+    type ResponsesArgs = Parameters<typeof makeOpenAIResponsesRequest>;
+    const responsesRequest = vi.mocked(makeOpenAIResponsesRequest);
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockResolvedValueOnce(undefined);
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { model_group: "ResponsesModel", mode: "responses" },
+    ]);
+    sessionStorage.setItem("useApiSessionManagement", "true");
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+    await selectComboboxOption("Select an endpoint", "/v1/responses");
+    await selectComboboxOption("Select a Model", "ResponsesModel");
+
+    const sendMessage = async (text: string) => {
+      const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+      await act(async () => {
+        fireEvent.change(messageInput, { target: { value: text } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+      });
+    };
+    await sendMessage("I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await sendMessage("Who am I?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(2));
+    const followUp = responsesRequest.mock.calls[1];
+    expect(followUp[14]).toBe("resp-first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
+    expect(followUp[26]?.()).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+    ]);
   });
 
   it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {
