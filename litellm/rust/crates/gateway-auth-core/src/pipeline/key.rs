@@ -107,6 +107,10 @@ mod tests {
         }
     }
 
+    fn hash_of(token: &str) -> KeyHash {
+        Token::new(token).hash().expect("SHA-256 is served")
+    }
+
     fn over_budget() -> crate::BudgetExceeded {
         crate::BudgetExceeded {
             current_cost: 2.0,
@@ -266,7 +270,7 @@ mod tests {
         assert_eq!(
             run(&host, MASTER, "/chat/completions", &settings).await,
             Ok(KeyIdentity::MasterKey {
-                hash: Token::new(MASTER).hash(),
+                hash: hash_of(MASTER),
                 end_user: "end-user".to_owned()
             })
         );
@@ -506,7 +510,7 @@ mod tests {
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
             Err(KeyDenial::NotFound {
-                hash: Token::new("sk-1").hash()
+                hash: hash_of("sk-1")
             }
             .into())
         );
@@ -838,7 +842,7 @@ mod tests {
         assert_eq!(
             run(&host, "sk-1", "/chat/completions", &settings).await,
             Err(KeyDenial::NotFound {
-                hash: Token::new("sk-1").hash()
+                hash: hash_of("sk-1")
             }
             .into())
         );
@@ -936,5 +940,61 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(refused.key.as_deref(), key);
+    }
+
+    /// Set in the copy of the test binary that runs with only OpenSSL's null provider, which serves no digest.
+    #[cfg(feature = "fips")]
+    const NULL_PROVIDER_CHILD: &str = "LITELLM_AUTH_CORE_NULL_PROVIDER_CHILD";
+
+    #[cfg(feature = "fips")]
+    #[rstest]
+    #[tokio::test]
+    async fn a_key_openssl_cannot_hash_is_a_failed_authentication(
+        settings: KeySettings,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if std::env::var_os(NULL_PROVIDER_CHILD).is_none() {
+            let directory = std::env::temp_dir().join(format!(
+                "litellm-auth-core-null-provider-{}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&directory)?;
+            let config = directory.join("openssl.cnf");
+            std::fs::write(
+                &config,
+                "openssl_conf = init\n[init]\nproviders = providers\n[providers]\nnull = null\n[null]\nactivate = 1\n",
+            )?;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    std::thread::current()
+                        .name()
+                        .ok_or("the test thread is named")?,
+                    "--nocapture",
+                ])
+                .env(NULL_PROVIDER_CHILD, "1")
+                .env("OPENSSL_CONF", &config)
+                .output()?;
+            std::fs::remove_dir_all(&directory)?;
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(
+                output.status.success() && stdout.contains("1 passed"),
+                "{stdout}\n{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Ok(());
+        }
+        let host = ScriptedHost::default();
+        let error = run(&host, "sk-1", "/chat/completions", &settings)
+            .await
+            .expect_err("no provider serves SHA-256");
+        assert!(litellm_error::find::<openssl::error::ErrorStack>(&error).is_some());
+        assert_eq!(
+            error.public(),
+            Some(crate::PublicDenial::Plain {
+                message: "OpenSSL could not hash the credential".to_owned()
+            })
+        );
+        assert_eq!(host.calls(), ["prefetch_identity - unread", "end_user -"]);
+        Ok(())
     }
 }
