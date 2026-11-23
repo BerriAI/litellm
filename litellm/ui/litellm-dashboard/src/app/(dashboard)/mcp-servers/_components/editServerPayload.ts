@@ -11,6 +11,9 @@ import {
   MCP_OAUTH2_FLOW_M2M,
   OAUTH_FLOW,
   TRANSPORT,
+  EVENTS_PROTOCOL_VERSION,
+  supportsEvents,
+  handleTransport,
   isClientForwardedTokenMode,
   preservedAdminCredentials,
   type MCPServerEventsConfig,
@@ -92,6 +95,7 @@ export interface EditServerUiState {
 
 export type BuildEditPayloadResult =
   | { readonly kind: "ok"; readonly payload: EditServerPayload }
+  | { readonly kind: "incompatible_events" }
   | { readonly kind: "invalid_tool_display_name"; readonly displayName: string }
   | { readonly kind: "stdio_config_missing_command" }
   | { readonly kind: "invalid_stdio_json" }
@@ -123,6 +127,8 @@ export const editPayloadErrorMessage = (
   t: TFunction,
 ): string => {
   switch (result.kind) {
+    case "incompatible_events":
+      return t("mcpServers.serverEdit.events.requirements");
     case "invalid_tool_display_name":
       return t("mcpServers.editServerPayload.errors.invalidToolDisplayName", { displayName: result.displayName });
     case "stdio_config_missing_command":
@@ -308,6 +314,12 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     ...rawRestValues
   } = values;
 
+  const eventsEnabled = eventsEnabledRaw ?? mcpServer.events?.enabled;
+  const transport = rawRestValues.transport ?? handleTransport(mcpServer.transport, mcpServer.spec_path);
+  if (eventsEnabled && !supportsEvents(transport, mcpServer.mcp_info?.protocol_version)) {
+    return { kind: "incompatible_events" };
+  }
+
   const accessGroups = (rawRestValues.mcp_access_groups || []).map((g) =>
     typeof g === "string" ? g : g.name || String(g),
   );
@@ -388,7 +400,7 @@ export const buildEditServerPayload = (values: EditServerFormValues, ui: EditSer
     server_id: mcpServer.server_id,
     mcp_info: {
       ...(mcpServer.mcp_info ?? {}),
-      ...eventsProtocol(mcpServer.mcp_info?.protocol_version, eventsEnabledRaw ?? mcpServer.events?.enabled),
+      ...(eventsEnabled ? { protocol_version: EVENTS_PROTOCOL_VERSION } : {}),
       server_name: mcpInfoServerName,
       description: restValues.description,
       logo_url: logoUrl || undefined,
@@ -456,16 +468,4 @@ export function eventsEntry(
       allowed_events: allowedEvents.length > 0 ? [...allowedEvents] : null,
     },
   };
-}
-
-export const EVENTS_PROTOCOL_VERSION = "2026-07-28";
-
-/** Events need the 2026-07-28 protocol; a server left on auto negotiation is pinned to it when events turn on. */
-export function eventsProtocol(
-  current: string | undefined,
-  eventsEnabled: boolean | undefined,
-): { readonly protocol_version?: string } {
-  return eventsEnabled === true && (current === undefined || current === "auto")
-    ? { protocol_version: EVENTS_PROTOCOL_VERSION }
-    : {};
 }

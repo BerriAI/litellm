@@ -301,7 +301,7 @@ async def test_a_termination_during_an_inflight_delivery_stays_terminated(status
 
 
 @pytest.mark.asyncio
-async def test_a_refresh_during_an_inflight_delivery_keeps_the_new_secret_and_cursor() -> None:
+async def test_an_inflight_delivery_keeps_the_rotated_secret_and_the_previous_safe_cursor() -> None:
     store: Final = _store()
     activation: Final = Activation(
         client_secret=ROTATED,
@@ -315,7 +315,7 @@ async def test_a_refresh_during_an_inflight_delivery_keeps_the_new_secret_and_cu
         assert await store.activate("sub_1", activation)
 
     await _worker(store, _SlowClient(client_refreshes)).run_once()
-    assert (store.rows["sub_1"].client_secret, store.rows["sub_1"].cursor) == (ROTATED, "mcp_state_v1.fresh")
+    assert (store.rows["sub_1"].client_secret, store.rows["sub_1"].cursor) == (ROTATED, ROW.cursor)
 
 
 @pytest.mark.asyncio
@@ -482,3 +482,22 @@ async def test_worker_losing_a_claim_in_flight_cannot_settle(status: int, attemp
     await _worker(store, _SlowClient(take_over, status)).process(stale)
     assert (store.rows["sub_1"], list(store.queue), store.delivered) == (ROW, ["d1"], {})
     assert store.queue["d1"].claim_id != stale.claim_id
+
+
+@pytest.mark.asyncio
+async def test_a_worker_reading_an_expired_deadline_preserves_a_concurrently_renewed_delivery() -> None:
+    class RenewOnRead(MemoryStore):
+        async def get(self, subscription_id: str) -> SubscriptionRow | None:
+            observed: Final = await super().get(subscription_id)
+            assert observed is not None
+            self.rows[subscription_id] = observed.model_copy(
+                update={"generation": "renewed", "refresh_before": NOW + timedelta(hours=1)}
+            )
+            return observed
+
+    before: Final = _store(ROW.model_copy(update={"refresh_before": NOW - timedelta(seconds=1)}))
+    store: Final = RenewOnRead(rows=before.rows, queue=before.queue)
+    (delivery,) = await store.claim(NOW, NOW + timedelta(minutes=5), 1)
+    client: Final = _Client()
+    await _worker(store, client).process(delivery)
+    assert not client.posts and store.queue["d1"].body == delivery.body and not store.delivered

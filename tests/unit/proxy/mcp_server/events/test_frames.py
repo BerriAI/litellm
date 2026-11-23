@@ -94,3 +94,14 @@ async def test_a_reader_that_falls_too_far_behind_is_terminated_with_bounded_mem
     methods: Final = [frame.method if isinstance(frame, StreamFrame) else "overflow" async for frame in route.reader()]
     assert len(methods) == 256 + 32 + 1
     assert methods[-1] == "notifications/events/terminated"
+
+
+def test_a_new_overflow_with_no_cursor_does_not_reuse_a_previous_overflow_cursor() -> None:
+    route: Final = StreamRoute()
+    for index in range(257):
+        route.deliver(_frame(str(index)))
+    route.receive.receive_nowait()
+    route.deliver(StreamFrame("notifications/events/heartbeat", {}))
+    assert _drain(route)[-1] == Overflow(cursor="256")
+    route.finish(None)
+    assert _drain(route) == (Overflow(cursor=None),)
