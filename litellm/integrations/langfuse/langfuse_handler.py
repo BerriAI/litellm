@@ -104,7 +104,7 @@ class LangFuseHandler:
 
     @staticmethod
     def _create_langfuse_logger_from_credentials(
-        credentials: dict,
+        credentials: dict[str, object],
         in_memory_dynamic_logger_cache: DynamicLoggingCache,
     ) -> LangFuseLogger:
         """
@@ -113,11 +113,12 @@ class LangFuseHandler:
         2. cache the LangFuseLogger to prevent re-creating it for the same credentials
         """
 
+        environment: Final = credentials.get("langfuse_environment")
         langfuse_logger: Final = LangFuseLogger(
             langfuse_public_key=credentials.get("langfuse_public_key"),
             langfuse_secret=credentials.get("langfuse_secret") or credentials.get("langfuse_secret_key"),
             langfuse_host=credentials.get("langfuse_host"),
-            langfuse_environment=credentials.get("langfuse_environment"),
+            langfuse_environment=None if environment is None else str(environment),
             allow_env_credentials=credentials.get("langfuse_host") is None,
         )
         in_memory_dynamic_logger_cache.set_cache(

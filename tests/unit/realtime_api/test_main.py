@@ -25,7 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.realtime_streaming import TRANSLATION_GUARDRAILS_UNSUPPORTED_MESSAGE, RealTimeStreaming
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.llms.openai.live.handler import LiveUpstream
+from litellm.llms.openai.live.handler import LiveAttach, LiveUpstream
 from litellm.llms.openai.workload_identity import _workload_identity_auth
 from litellm.models.credentials import CredentialItem
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
@@ -1424,6 +1424,20 @@ def test_azure_realtime_protocol_configured_by_the_operator_wins(
     assert protocol.name == "beta"
 
 
+def test_a_sideband_joining_a_webrtc_call_uses_ga_on_a_deployment_configured_for_beta(local_model_cost_map) -> None:
+    from litellm.llms.azure.realtime.handler import azure_realtime_protocol_for_client
+
+    protocol: Final = azure_realtime_protocol_for_client(
+        "beta",
+        model="my-realtime-deployment",
+        realtime_mode="realtime",
+        query_params={"call_id": "rtc_123"},
+        websocket=_GA_CLIENT,
+    )
+
+    assert protocol.name == "GA"
+
+
 async def _azure_backend_url_dialed_for(websocket: _ClientWebSocketWithHeaders, **kwargs: object) -> str | None:
     connect: Final = _ConnectThatStopsAfterCapturingTheUrl()
     with patch("websockets.connect", connect):
@@ -2787,3 +2801,82 @@ def test_session_metadata_keeps_the_proxy_caller_identity_for_bedrock_session_ta
         "user_api_key_alias": "internal",
         "user_api_key_team_alias": "team-a",
     }
+
+
+@pytest.mark.asyncio
+async def test_arealtime_live_attach_reaches_the_live_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: Final = _CallCapture()
+
+    class FakeLiveHandler:
+        async def async_live_session(self, **kwargs: object) -> None:
+            captured.values = kwargs
+
+    monkeypatch.setattr(realtime_main, "openai_live_sessions", FakeLiveHandler())
+    attach: Final = LiveAttach(session_id="live_abc", metered=True)
+
+    await realtime_main._arealtime.__wrapped__(
+        model="openai/gpt-live-1",
+        websocket=MagicMock(),
+        litellm_logging_obj=FakeLogging(),
+        api_key="sk-live-test",
+        live_session_start={"type": "session.start", "session": {"model": "gpt-live-1"}},
+        live_attach=attach,
+    )
+
+    assert captured.values is not None
+    assert captured.values["attach"] is attach
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_resolves_an_openai_deployment() -> None:
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "openai/gpt-live-1", "api_key": "sk-live-test", "api_base": "https://api.openai.com/v1"}
+    )
+
+    assert resolved is not None
+    model, upstream = resolved
+    assert model == "gpt-live-1"
+    assert upstream.url == "wss://api.openai.com/v1/live/sessions"
+    assert dict(upstream.headers) == {"Authorization": "Bearer sk-live-test"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_resolves_an_azure_deployment() -> None:
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "azure/gpt-live-1", "api_key": "azure-key", "api_base": "https://my-resource.openai.azure.com"}
+    )
+
+    assert resolved is not None
+    model, upstream = resolved
+    assert model == "gpt-live-1"
+    assert upstream.url == "wss://my-resource.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "azure-key"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_uses_the_deployment_stored_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="azure-live",
+                credential_values={"api_key": "key-from-credential", "api_base": "https://stored.openai.azure.com"},
+                credential_info={},
+            )
+        ],
+    )
+
+    resolved: Final = await realtime_main.live_session_upstream(
+        {"model": "azure/gpt-live-1", "litellm_credential_name": "azure-live"}
+    )
+
+    assert resolved is not None
+    _, upstream = resolved
+    assert upstream.url == "wss://stored.openai.azure.com/openai/v1/live/sessions"
+    assert dict(upstream.headers) == {"api-key": "key-from-credential"}
+
+
+@pytest.mark.asyncio
+async def test_live_session_upstream_is_none_for_a_provider_without_a_live_api() -> None:
+    assert await realtime_main.live_session_upstream({"model": "xai/grok-voice", "api_key": "xai-key"}) is None

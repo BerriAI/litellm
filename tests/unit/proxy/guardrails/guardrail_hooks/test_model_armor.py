@@ -3994,6 +3994,33 @@ async def _drain_surface_hook(guardrail, chunks, request_data=None):
     ]
 
 
+_ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS: Final = (
+    b'event: content_block_delta\n data: {"type":"content_block_delta","index":0,'
+    b'"delta":{"type":"text_delta","text":" and 5500-0000-0000-0004"}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "visible_text_frames", (_ANTHROPIC_SSE_CHUNKS[2:3], ()), ids=("beside-visible-text", "as-the-only-text")
+)
+async def test_streaming_hook_never_forwards_text_on_a_line_the_scan_could_not_read(
+    visible_text_frames: tuple[bytes, ...],
+):
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *visible_text_frames,
+        _ANTHROPIC_SSE_CARD_ON_A_DATA_LINE_NO_SCAN_READS,
+        *_ANTHROPIC_SSE_CHUNKS[3:],
+    )
+    guardrail: Final = _surface_guardrail()
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_CLEAN)):
+        delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    assert b"5500-0000-0000-0004" not in b"".join(delivered)
+
+
 @pytest.mark.asyncio
 async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     """A /v1/messages stream arrives as raw SSE bytes and must be assembled, then scanned.
@@ -4011,6 +4038,124 @@ async def test_streaming_hook_scans_raw_anthropic_sse_instead_of_crashing():
     scanned = post.call_args.kwargs["json"]["modelResponseData"]["text"]
     assert "my card is 4111-1111-1111-1111" in scanned
     assert tuple(delivered) == _ANTHROPIC_SSE_CHUNKS
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_scans_anthropic_sse_text_split_over_data_lines():
+    split_delta: Final = (
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,\n'
+        b'data: "delta":{"type":"text_delta","text":"my card is 4111-1111-1111-1111"}}\n\n'
+    )
+    chunks: Final = (*_ANTHROPIC_SSE_CHUNKS[:2], split_delta, *_ANTHROPIC_SSE_CHUNKS[3:])
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        blocks: Final = "my card is 4111-1111-1111-1111" in scanned
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if blocks else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("card", ["4111-1111-1111-1111", "none"])
+@pytest.mark.parametrize("is_stopped", [False, True], ids=["open-block", "stopped-block"])
+async def test_streaming_hook_scans_an_anthropic_sse_tool_call_cut_by_the_output_limit(card: str, is_stopped: bool):
+    partial_json: Final = json.dumps(f'{{"card": "{card}", "amount": "12').encode()
+    chunks: Final = (
+        _ANTHROPIC_SSE_CHUNKS[0],
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+        b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay","input":{}}}\n\n',
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+        b'"delta":{"type":"input_json_delta","partial_json":' + partial_json + b"}}\n\n",
+        *((_ANTHROPIC_SSE_CHUNKS[3],) if is_stopped else ()),
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if card == "none":
+        assert tuple(delivered) == chunks
+    else:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cards", [("none", "none"), ("4111", "none"), ("none", "4111")])
+async def test_streaming_hook_scans_every_tool_call_of_an_anthropic_sse_stream_whose_calls_overlap(
+    cards: tuple[str, str],
+):
+    starts: Final = tuple(
+        b'event: content_block_start\ndata: {"type":"content_block_start","index":%d,"content_block":'
+        b'{"type":"tool_use","id":"toolu_%d","name":"pay","input":{}}}\n\n' % (index, index)
+        for index in (1, 2)
+    )
+    inputs: Final = tuple(
+        b'event: content_block_delta\ndata: {"type":"content_block_delta","index":%d,"delta":'
+        b'{"type":"input_json_delta","partial_json":"{\\"card\\":\\"%s\\"}"}}\n\n' % (index, card.encode())
+        for index, card in enumerate(cards, start=1)
+    )
+    stops: Final = tuple(
+        b'event: content_block_stop\ndata: {"type":"content_block_stop","index":%d}\n\n' % index for index in (1, 2)
+    )
+    chunks: Final = (
+        *_ANTHROPIC_SSE_CHUNKS[:2],
+        *starts,
+        *inputs,
+        *stops,
+        b'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{}}\n\n',
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    )
+
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    if "4111" in cards:
+        assert b"Streaming response blocked by Model Armor" in sent
+        assert b"4111" not in sent
+    else:
+        assert tuple(delivered) == chunks
 
 
 @pytest.mark.asyncio
@@ -4140,6 +4285,48 @@ async def test_streaming_api_failure_frames_error_per_surface(surface):
             (b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
              b'"delta":{"type":"text_delta","text":"hi"}}\n\n',),
             id="anthropic-sse-without-message-start",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(
+                    b'"content":[]', b'"content":[{"type":"text","text":"my card is 4111-1111-1111-1111"}]'
+                ),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="anthropic-sse-with-text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"text","text":"my card is 4111-1111-1111-1111"}}\n\n',
+                _ANTHROPIC_SSE_CHUNKS[3],
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-reusing-a-block-index",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"tool_use","id":"toolu_1","name":"pay",'
+                b'"input":{"card":"4111-1111-1111-1111"}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{}"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[3:],
+            ),
+            id="anthropic-sse-with-a-tool-start-input-its-streamed-input-replaces",
+        ),
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":0,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"4111-1111-1111-1111"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="anthropic-sse-with-an-unfinished-server-tool-input",
         ),
         pytest.param(None, id="responses-stream-without-completed-event"),
         pytest.param("created", id="responses-stream-cut-off-after-response-created"),
@@ -4328,6 +4515,52 @@ async def test_streaming_unassemblable_stream_is_forwarded_when_fail_on_error_is
 
     post.assert_not_called()
     assert tuple(delivered) == chunks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        pytest.param(
+            (
+                _ANTHROPIC_SSE_CHUNKS[0].replace(b'"content":[]', b'"content":[{"type":"text","text":"hi"}]'),
+                *_ANTHROPIC_SSE_CHUNKS[1:],
+            ),
+            id="text-in-message-start",
+        ),
+        pytest.param(
+            (
+                *_ANTHROPIC_SSE_CHUNKS[:4],
+                b'event: content_block_start\ndata: {"type":"content_block_start","index":1,'
+                b'"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search","input":{}}}\n\n',
+                b'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,'
+                b'"delta":{"type":"input_json_delta","partial_json":"{\\"query\\": \\"hi"}}\n\n',
+                *_ANTHROPIC_SSE_CHUNKS[4:],
+            ),
+            id="unfinished-server-tool-input",
+        ),
+    ],
+)
+async def test_streaming_hook_failing_open_still_blocks_what_it_can_read(chunks: tuple[bytes, ...]):
+    def sanitize(request: httpx.Request) -> httpx.Response:
+        scanned: Final = json.loads(request.content)["modelResponseData"]["text"]
+        return httpx.Response(200, json=_MODEL_ARMOR_BLOCK if "4111" in scanned else _clean_armor_response())
+
+    guardrail: Final = ModelArmorGuardrail(
+        template_id="test-template",
+        project_id="test-project",
+        location="us-central1",
+        guardrail_name="model-armor-test",
+        fail_on_error=False,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(sanitize)),
+        access_token_provider=_async_token_provider,
+    )
+
+    delivered: Final = await _drain_surface_hook(guardrail, chunks)
+
+    sent: Final = b"".join(item for item in delivered if isinstance(item, bytes))
+    assert b"Streaming response blocked by Model Armor" in sent
+    assert b"4111" not in sent
 
 
 @pytest.mark.asyncio

@@ -47,7 +47,6 @@ CRASH_MARKERS: Final = (
     "AttributeError: 'WebSocket' object has no attribute 'method'",
     "ERROR: user_api_key_auth.py",
 )
-OTLP_LOGS_LENS_MESSAGE: Final = "Send logs directly to the Lens endpoint shown in Lens setup."
 REALTIME_TRANSCRIPTION_MODEL: Final = "gpt-realtime-whisper"
 
 Headers = tuple[tuple[str, str], ...]
@@ -197,33 +196,20 @@ def _http_window(owned: OwnedProxy, offset: int, access_line: str) -> str:
     return eventually(lambda: _log_after(owned, offset), lambda text: access_line in text, seconds=30)
 
 
-@pytest.mark.parametrize("content_type", ("application/json", "application/x-protobuf"))
-def test_an_otlp_ingest_post_still_answers_410_in_the_caller_s_encoding(owned: OwnedProxy, content_type: str) -> None:
-    tag: Final = _tag("otlp")
-    offset: Final = owned.log.stat().st_size
-    response: Final = owned.gateway.client.post(
-        f"/v1/logs?tag={tag}", content=b"", headers={"content-type": content_type}
-    )
-    assert response.status_code == 410, response.text
-    assert response.headers["content-type"].split(";", 1)[0] == content_type, response.headers
-    assert OTLP_LOGS_LENS_MESSAGE.encode() in response.content, response.content
-    window: Final = _http_window(owned, offset, f'"POST /v1/logs?tag={tag} HTTP/1.1" 410')
-    assert _crash_lines(window) == (), window
-
-
-@pytest.mark.parametrize("content_type", ("application/json", "application/x-protobuf"))
-def test_an_otlp_trace_post_without_a_key_answers_401_in_the_caller_s_encoding(
-    owned: OwnedProxy, content_type: str
+@pytest.mark.parametrize(
+    ("path", "content_type"),
+    tuple(product(("/v1/traces", "/v1/logs"), ("application/json", "application/x-protobuf"))),
+)
+def test_an_otlp_upload_post_without_a_key_answers_401_in_the_caller_s_encoding(
+    owned: OwnedProxy, path: str, content_type: str
 ) -> None:
-    tag: Final = _tag("otlptrace")
+    tag: Final = _tag("otlpupload")
     offset: Final = owned.log.stat().st_size
-    response: Final = owned.gateway.client.post(
-        f"/v1/traces?tag={tag}", content=b"", headers={"content-type": content_type}
-    )
+    response: Final = owned.gateway.client.post(f"{path}?tag={tag}", content=b"", headers={"content-type": content_type})
     assert response.status_code == 401, response.text
     assert response.headers["content-type"].split(";", 1)[0] == content_type, response.headers
     assert b"Unauthorized" in response.content, response.content
-    window: Final = _http_window(owned, offset, f'"POST /v1/traces?tag={tag} HTTP/1.1" 401')
+    window: Final = _http_window(owned, offset, f'"POST {path}?tag={tag} HTTP/1.1" 401')
     assert _crash_lines(window) == (), window
 
 

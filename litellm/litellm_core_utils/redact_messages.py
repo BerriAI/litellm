@@ -59,7 +59,7 @@ def _opted_out_of_message_logging(custom_logger: CustomLogger) -> bool:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject, result: object, custom_logger: CustomLogger
 ) -> object:
     if _opted_out_of_message_logging(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
@@ -195,7 +195,7 @@ def _redact_streaming_response(streaming_response):
     return streaming_response
 
 
-def _redact_tool_calls(tool_calls) -> None:
+def _redact_tool_calls(tool_calls: Iterable[object] | None) -> None:
     """Redact tool call arguments (assistant tool calls carry prompt-derived data)."""
     if not tool_calls:
         return
@@ -678,7 +678,7 @@ def redacted_litellm_params(params: Mapping[str, object], *, redact_request_body
     }
 
 
-def perform_redaction(model_call_details: dict[str, object], result, redact_streaming_responses: bool = True):
+def perform_redaction(model_call_details: dict[str, object], result: object, redact_streaming_responses: bool = True):
     """
     Performs the actual redaction on the logging object and result.
 
@@ -821,7 +821,9 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
     return litellm.turn_off_message_logging is True
 
 
-def redact_message_input_output_from_logging(model_call_details: dict, result, input: object | None = None) -> object:
+def redact_message_input_output_from_logging(
+    model_call_details: dict, result: object, input: object | None = None
+) -> object:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True

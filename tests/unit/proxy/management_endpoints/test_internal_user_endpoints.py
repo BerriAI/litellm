@@ -2956,9 +2956,11 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
     prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=saved_user)
     prisma_client.db.litellm_usertable.find_many = mocker.AsyncMock(return_value=[saved_user])
     prisma_client.db.litellm_usertable.update_many = mocker.AsyncMock(return_value=1)
+    prisma_client.db.litellm_usertable.upsert = mocker.AsyncMock(return_value=saved_user)
+    prisma_client.db.litellm_usertable.update = mocker.AsyncMock(return_value=saved_user)
     prisma_client.tx = lambda: _transaction_over(prisma_client.db)
     prisma_client.get_data = mocker.AsyncMock(return_value=[saved_user])
-    prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": saved_user.user_id, "data": saved_user})
+    prisma_client.jsonify_object = PrismaClient.jsonify_object.__get__(prisma_client)
     mocker.patch(
         "litellm.proxy.proxy_server.prisma_client", prisma_client
     )  # test-quality-ok: substitute the database dependency
@@ -2985,7 +2987,7 @@ async def test_user_max_budget_update_evicts_cached_user_on_every_worker(
             user_request=UpdateUserRequest(user_id=saved_user.user_id, max_budget=50.0),
             user_api_key_dict=admin,
         )
-        assert prisma_client.update_data.call_args.kwargs["data"]["max_budget"] == 50.0
+        assert prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]["max_budget"] == 50.0
 
     assert await cache.async_get_cache(key=AuthObject.user(saved_user.user_id), model_type=LiteLLM_UserTable) is None
     broadcast.assert_awaited_once_with(cache_key=saved_user.user_id)
@@ -4587,7 +4589,7 @@ async def test_ghsa_wvg4_proxy_admin_can_update_user_budget(mocker):
     }
     existing_user.user_id = "target-user"
     mock_prisma_client.db.litellm_usertable.find_first = mocker.AsyncMock(return_value=existing_user)
-    mock_prisma_client.update_data = mocker.AsyncMock(return_value={"user_id": "target-user", "max_budget": 500})
+    mock_prisma_client.db.litellm_usertable.update = mocker.AsyncMock(return_value=existing_user)
     mock_prisma_client.jsonify_object = mocker.MagicMock(side_effect=lambda x: x)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin")

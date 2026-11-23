@@ -59,6 +59,7 @@ def _recording_persist(sink):
         expires_in: int | None,
         scopes: tuple[str, ...] | None,
         cimd_client_id: str | None = None,
+        refreshed_from: str | None = None,
     ) -> None:
         sink.append(
             (user_id, server_id, access_token, refresh_token, expires_in, scopes)
