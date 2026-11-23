@@ -7,7 +7,7 @@ import itertools
 import re
 from collections.abc import Mapping
 from re import Match
-from typing import Final
+from typing import Final, TypeVar
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
@@ -23,6 +23,7 @@ class _RoutedDeployment(BaseModel):
 
 
 _ROUTED_DEPLOYMENTS: Final = TypeAdapter(tuple[_RoutedDeployment, ...])
+_DeploymentsT = TypeVar("_DeploymentsT")
 _PATTERN_WIDE_CACHE_FLAGS: Final = frozenset(
     (
         "supports_prompt_cache_breakpoint",
@@ -63,8 +64,8 @@ class PatternUtils:
 
     @staticmethod
     def sorted_patterns(
-        patterns: dict[str, list[dict]],
-    ) -> list[tuple[str, list[dict]]]:
+        patterns: Mapping[str, _DeploymentsT],
+    ) -> list[tuple[str, _DeploymentsT]]:
         """
         Cached property for patterns sorted by specificity.
 
