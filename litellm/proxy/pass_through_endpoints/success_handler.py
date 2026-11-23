@@ -79,6 +79,9 @@ from .llm_provider_handlers.cursor_passthrough_logging_handler import (
 from .llm_provider_handlers.deepgram_listen_passthrough_logging_handler import (
     DeepgramListenPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.elevenlabs_tts_passthrough_logging_handler import (
+    ElevenLabsTextToSpeechPassthroughLoggingHandler,
+)
 from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
     FalAIPassthroughLoggingHandler,
 )
@@ -214,6 +217,9 @@ def _safe_response_text(httpx_response: httpx.Response) -> str:
         return httpx_response.text
     except httpx.ResponseNotRead:
         return ""
+
+
+_REQUEST_BODY: Final = TypeAdapter(Mapping[str, object])
 
 
 def _websocket_frames(
@@ -832,6 +838,7 @@ class PassThroughEndpointLogging:
             websocket_relay_result := self._websocket_relay_logging_result(
                 url_route=url_route,
                 websocket_frames=_websocket_frames(response_body),
+                request_body=_REQUEST_BODY.validate_python(request_body),
                 logging_obj=logging_obj,
                 httpx_response=httpx_response,
                 start_time=start_time,
@@ -860,6 +867,7 @@ class PassThroughEndpointLogging:
         self,
         url_route: str,
         websocket_frames: tuple[Mapping[str, object], ...],
+        request_body: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         httpx_response: httpx.Response,
         start_time: datetime,
@@ -880,6 +888,14 @@ class PassThroughEndpointLogging:
         if DeepgramListenPassthroughLoggingHandler.is_deepgram_listen_route(url_route):
             return DeepgramListenPassthroughLoggingHandler().deepgram_listen_passthrough_handler(
                 websocket_messages=websocket_frames,
+                logging_obj=logging_obj,
+                upstream_url=str(httpx_response.request.url),
+                kwargs=kwargs,
+            )
+        if ElevenLabsTextToSpeechPassthroughLoggingHandler.is_elevenlabs_tts_websocket_route(url_route):
+            return ElevenLabsTextToSpeechPassthroughLoggingHandler().elevenlabs_tts_passthrough_handler(
+                request_body=request_body,
+                upstream_frames=websocket_frames,
                 logging_obj=logging_obj,
                 upstream_url=str(httpx_response.request.url),
                 kwargs=kwargs,

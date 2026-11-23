@@ -10830,6 +10830,32 @@ def test_azure_tts_cost_uses_test_owned_character_rate(monkeypatch: pytest.Monke
     assert cost == pytest.approx(0.05)
 
 
+def test_elevenlabs_tts_cost_counts_every_whitespace_character(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "litellm-test-tts"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"elevenlabs/{model}",
+        {
+            "input_cost_per_character": 0.01,
+            "output_cost_per_character": 0.0,
+            "litellm_provider": "elevenlabs",
+            "mode": "audio_speech",
+        },
+    )
+    prompt: Final = "  hello there, world\n"
+
+    cost: Final = response_cost_calculator(
+        response_object=TranscriptionResponse(text=""),
+        model=model,
+        custom_llm_provider="elevenlabs",
+        call_type="aspeech",
+        optional_params={},
+        prompt=prompt,
+    )
+
+    assert cost == pytest.approx(len(prompt) * 0.01)
+
+
 def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
     usage: Final = Usage(
         prompt_tokens=10,

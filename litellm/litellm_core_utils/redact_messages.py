@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import REDACTED_BY_LITELLM
+from litellm.constants import REDACTED_BY_LITELLM, WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.classifier_logging import without_classifier_audit
 from litellm.litellm_core_utils.core_helpers import (
@@ -96,6 +96,7 @@ def _redacted_entries_for_opted_out_logger(model_call_details: Mapping[str, obje
             if standard_logging_object is not None
             else {}
         ),
+        **_passthrough_logging_payload_redactions(model_call_details),
         **{
             streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
             for streaming_key in (
@@ -642,6 +643,32 @@ def _redacted_proxy_server_request(request: Mapping[str, object], *, redact_body
     return {**without_classifier_audit(request), "body": redacted_body}
 
 
+def _redacted_client_frame(frame: object) -> object:
+    readable: Final = _as_mapping(frame)
+    if readable is None or not isinstance(readable.get("text"), str):
+        return frame
+    return {**readable, "text": REDACTED_BY_LITELLM}
+
+
+def _redacted_passthrough_logging_payload(payload: Mapping[str, object]) -> Mapping[str, object]:
+    request_body: Final = _as_mapping(payload.get("request_body"))
+    frames: Final = as_object_list(request_body.get(WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY)) if request_body else None
+    if request_body is None or frames is None:
+        return payload
+    return {
+        **payload,
+        "request_body": {
+            **request_body,
+            WEBSOCKET_PASSTHROUGH_CLIENT_FRAMES_KEY: [_redacted_client_frame(frame) for frame in frames],
+        },
+    }
+
+
+def _passthrough_logging_payload_redactions(model_call_details: Mapping[str, object]) -> Mapping[str, object]:
+    payload: Final = _as_mapping(model_call_details.get("passthrough_logging_payload"))
+    return {} if payload is None else {"passthrough_logging_payload": _redacted_passthrough_logging_payload(payload)}
+
+
 def _redact_hidden_provider_specific_fields(params: Mapping[str, object]) -> None:
     """Redact the provider_specific_fields copied into metadata hidden_params, keeping each metadata dict."""
     for metadata in (params.get("metadata"), params.get("litellm_metadata")):
@@ -705,6 +732,7 @@ def perform_redaction(model_call_details: dict[str, object], result: object, red
             {
                 **_request_field_redactions(model_call_details),
                 **({"optional_params": _with_redacted_request_fields(optional_params)} if optional_params else {}),
+                **_passthrough_logging_payload_redactions(model_call_details),
             }
         )
     model_call_details.pop(SERVED_OUTPUT_TEXTS_KEY, None)

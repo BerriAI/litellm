@@ -446,6 +446,7 @@ class LiteLLMRoutes(enum.Enum):
         "/nvidia_nim",
         "/deepgram",
         "/fal_ai",
+        "/elevenlabs/v1/text-to-speech",
     ]
 
     #########################################################

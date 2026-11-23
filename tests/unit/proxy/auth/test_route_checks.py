@@ -724,6 +724,20 @@ def test_only_the_built_in_eu_jev_decision_path_is_an_llm_route(route: str, is_l
     assert RouteChecks.is_llm_api_route(route=route) is is_llm_route
 
 
+@pytest.mark.parametrize(
+    ("route", "is_llm_route"),
+    [
+        ("/elevenlabs/v1/text-to-speech/voice1/stream-input", True),
+        ("/elevenlabs/v1/text-to-speech/voice1/multi-stream-input", True),
+        ("/elevenlabs/v1/voices", False),
+        ("/elevenlabs/custom", False),
+        ("/elevenlabsx/v1/text-to-speech/voice1/stream-input", False),
+    ],
+)
+def test_only_elevenlabs_text_to_speech_paths_are_llm_routes(route: str, is_llm_route: bool) -> None:
+    assert RouteChecks.is_llm_api_route(route=route) is is_llm_route
+
+
 @pytest.mark.usefixtures("configured_eu_jev_route")
 def test_a_pass_through_configured_at_the_eu_jev_decision_path_is_not_an_llm_route() -> None:
     assert RouteChecks.is_llm_api_route(route="/eu_jev/v1/systemone") is False

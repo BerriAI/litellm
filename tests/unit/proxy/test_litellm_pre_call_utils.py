@@ -8300,6 +8300,7 @@ async def test_add_litellm_data_to_request_refuses_a_model_config_credential_hol
         ("Cookie", True),
         ("Proxy-Authorization", True),
         ("X-Amz-Security-Token", True),
+        ("xi-api-key", True),
         ("anthropic-version", False),
         ("user-agent", False),
     ],

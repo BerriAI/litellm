@@ -160,7 +160,7 @@ def _semantic_cache_fields(request: object, auth: UserAPIKeyAuth) -> Mapping[str
 
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CREDENTIAL_HEADER_NAMES: Final = SpecialHeaders.litellm_credential_header_names() | frozenset(
-    {"cookie", "proxy-authorization", "x-amz-security-token"}
+    {"cookie", "proxy-authorization", "x-amz-security-token", "xi-api-key"}
 )
 _TRANSPORT_ONLY_CREDENTIAL_KEYS: Final = frozenset({"provider_specific_header", "headers", "api_key"})
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
