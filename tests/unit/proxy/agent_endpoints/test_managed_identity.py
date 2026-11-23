@@ -262,14 +262,14 @@ def test_supported_providers_round_trip_through_the_agent_request(provider: str)
 
     from litellm.types.agents import PatchAgentRequest
 
-    client_id = "11111111-1111-4111-8111-111111111111"
-    binding = (
+    client_id: Final = "11111111-1111-4111-8111-111111111111"
+    binding: Final = (
         {"provider": provider, "tenant_id": client_id, "client_id": client_id}
         if provider == "microsoft_entra"
         else {"provider": provider, "issuer": "https://example.okta.test/oauth2/default", "client_id": "0oa123"}
     )
-    adapter = TypeAdapter(PatchAgentRequest)
+    adapter: Final = TypeAdapter(PatchAgentRequest)
 
-    parsed = adapter.validate_python({"identity": binding})
+    parsed: Final = adapter.validate_python({"identity": binding})
 
     assert adapter.dump_python(parsed, exclude_unset=True) == {"identity": binding}
