@@ -687,6 +687,7 @@ nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
 gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
 soniox_models: Set = set()
+zoom_ai_models: Set[str] = set()
 sambanova_models: Set = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
 sambanova_embedding_models: Set = set()
@@ -963,6 +964,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
+        elif value.get("litellm_provider") == "zoom_ai":
+            zoom_ai_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "scaledown":
@@ -1183,6 +1186,7 @@ model_list = list(
     | nvidia_riva_models
     | gnani_models
     | soniox_models
+    | zoom_ai_models
     | sambanova_models
     | scaledown_models
     | azure_text_models
@@ -1317,6 +1321,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "nvidia_riva": nvidia_riva_models,
         "gnani": gnani_models,
         "soniox": soniox_models,
+        "zoom_ai": zoom_ai_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
         "novita": novita_models,

@@ -4815,6 +4815,7 @@ class LlmProviders(str, Enum):
     NVIDIA_RIVA = "nvidia_riva"
     GNANI = "gnani"
     SONIOX = "soniox"
+    ZOOM_AI = "zoom_ai"
     CEREBRAS = "cerebras"
     NADIR = "nadir"
     AI21_CHAT = "ai21_chat"
