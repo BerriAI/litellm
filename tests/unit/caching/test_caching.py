@@ -403,6 +403,31 @@ def test_exact_cache_key_includes_the_reasoning_summary_alias(summary_ask: dict[
     )
 
 
+def test_exact_cache_key_includes_extra_body_by_default() -> None:
+    """extra_body changes what the provider receives (e.g. chat_template_kwargs),
+    so two requests that differ only there must not share a cached response."""
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    messages: Final = [{"role": "user", "content": "extra-body"}]
+    baseline: Final = cache.get_cache_key(model="hosted_vllm/qwen", messages=messages)
+    thinking: Final = cache.get_cache_key(
+        model="hosted_vllm/qwen",
+        messages=messages,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+    )
+    no_thinking: Final = cache.get_cache_key(
+        model="hosted_vllm/qwen",
+        messages=messages,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    assert baseline != thinking
+    assert thinking != no_thinking
+    assert thinking == cache.get_cache_key(
+        model="hosted_vllm/qwen",
+        messages=messages,
+        extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+    )
+
+
 @pytest.mark.asyncio
 async def test_embedding_cache_skips_write_when_one_input_yields_many_embeddings(monkeypatch):
     """A cross-encoder behind /embeddings returns one score per document for a single
