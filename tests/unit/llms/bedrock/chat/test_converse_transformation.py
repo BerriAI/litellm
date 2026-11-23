@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Callable, Iterator, Mapping
 from itertools import chain
-from typing import Final
+from typing import Final, Literal, TypeAlias
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -5378,120 +5378,60 @@ def test_anthropic_messages_converse_thinking_budget_is_preserved_in_request_bod
     }
 
 
-def test_drop_thinking_param_when_thinking_blocks_missing():
-    """
-    Test that thinking param is dropped when modify_params=True and
-    thinking_blocks are missing from assistant message with tool_calls.
+_SEARCH_TOOL_CALL: Final = {"id": "call_123", "type": "function", "function": {"name": "search", "arguments": "{}"}}
 
-    This prevents the Anthropic/Bedrock error:
-    "Expected thinking or redacted_thinking, but found tool_use"
+_TOOL_TURN_WITHOUT_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {"role": "assistant", "content": "", "tool_calls": [_SEARCH_TOOL_CALL]},
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    Related issue: https://github.com/BerriAI/litellm/issues/14194
-    """
-    from litellm.utils import last_assistant_with_tool_calls_has_no_thinking_blocks
+_TOOL_TURN_WITH_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [_SEARCH_TOOL_CALL],
+        "thinking_blocks": [{"type": "thinking", "thinking": "Let me search", "signature": "sig"}],
+    },
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    # Save original modify_params setting
-    original_modify_params = litellm.modify_params
+_ENABLED_THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
+_ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
-    try:
-        # Test case 1: thinking should be dropped when modify_params=True
-        # and assistant message has tool_calls but no thinking_blocks
-        litellm.modify_params = True
 
-        messages_without_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                # No thinking_blocks - simulates OpenAI-compatible client
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
+@pytest.mark.parametrize(
+    ("thinking", "messages", "modify_params", "expect_thinking_sent"),
+    [
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, False),
+        (_ADAPTIVE_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITH_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, False, True),
+    ],
+)
+def test_drop_thinking_param_when_thinking_blocks_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: Mapping[str, object],
+    messages: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expect_thinking_sent: bool,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
 
-        optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=list(messages),
+        optional_params={
+            "thinking": dict(thinking),
+            "tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
+        },
+        litellm_params={},
+        headers={},
+    )
 
-        # Verify the condition is detected
-        assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks), (
-            "Should detect missing thinking_blocks"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params.pop("thinking", None)
-
-        assert "thinking" not in optional_params, (
-            "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
-        )
-
-        # Test case 2: thinking should NOT be dropped when thinking_blocks are present
-        messages_with_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                "thinking_blocks": [{"type": "thinking", "thinking": "Let me search for weather..."}],
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
-
-        optional_params_with_thinking = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Verify the condition is NOT detected when thinking_blocks are present
-        assert not last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks), (
-            "Should NOT detect missing thinking_blocks when they are present"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_with_thinking.get("thinking") is not None
-            and messages_with_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_with_thinking.pop("thinking", None)
-
-        assert "thinking" in optional_params_with_thinking, (
-            "thinking param should NOT be dropped when thinking_blocks are present"
-        )
-
-        # Test case 3: thinking should NOT be dropped when modify_params=False
-        litellm.modify_params = False
-
-        optional_params_no_modify = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_no_modify.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_no_modify.pop("thinking", None)
-
-        assert "thinking" in optional_params_no_modify, "thinking param should NOT be dropped when modify_params=False"
-
-    finally:
-        # Restore original modify_params setting
-        litellm.modify_params = original_modify_params
+    sent_thinking: Final = request.get("additionalModelRequestFields", {}).get("thinking")
+    assert sent_thinking == (thinking if expect_thinking_sent else None)
 
 
 def test_create_output_config_for_response_format():
@@ -5653,6 +5593,86 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
     assert "toolChoice" not in tool_request["toolConfig"]
     assert tool_params.get("fake_stream", False) is stream
+
+
+_CALLER_TEXT: Final = {"verbosity": "low", "format": {"type": "json_schema", "strict": False}}
+_SetNativeStructuredOutput: TypeAlias = Callable[[str, Literal["legacy", "bedrock", "default"] | None], None]
+
+
+def _gpt_params_from_response_format(model: str) -> Mapping[str, object]:
+    return AmazonConverseConfig().map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def _gpt_params_from_caller_output_config(model: str) -> Mapping[str, object]:
+    return {
+        "outputConfig": AmazonConverseConfig()._create_output_config_for_response_format(
+            json_schema=CAPITAL_JSON_SCHEMA["schema"], name="capital"
+        )
+    }
+
+
+@pytest.mark.parametrize("native_params", [_gpt_params_from_response_format, _gpt_params_from_caller_output_config])
+def test_openai_gpt_native_json_schema_sets_text_format_strict(
+    set_native_structured_output: _SetNativeStructuredOutput,
+    native_params: Callable[[str], Mapping[str, object]],
+) -> None:
+    model: Final = "global.openai.gpt-6-luna"
+    set_native_structured_output(model, "legacy")
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params={**native_params(model), "text": _CALLER_TEXT},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert request["additionalModelRequestFields"]["text"] == {
+        "verbosity": "low",
+        "format": {"type": "json_schema", "strict": True},
+    }
+
+
+@pytest.mark.parametrize(
+    ("model", "base_model", "expected_text"),
+    [
+        ("team-model", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("openai-team-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("amazon-prod-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("team-model", "bedrock/us.anthropic.claude-sonnet-4-6", None),
+        ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
+    ],
+)
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(
+    model: str, base_model: str, expected_text: Mapping[str, object] | None
+) -> None:
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=dict(_gpt_params_from_caller_output_config(model)),
+        litellm_params={"base_model": base_model},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("text") == expected_text
+
+
+def test_anthropic_native_json_schema_sends_no_text_field(
+    set_native_structured_output: _SetNativeStructuredOutput,
+) -> None:
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    _, request = _converse_request_for_json_schema(model, False, {"thinking": ADAPTIVE_THINKING})
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "text" not in request.get("additionalModelRequestFields", {})
 
 
 _JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
@@ -5840,10 +5860,10 @@ def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thin
         ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, True),
         ("global.anthropic.claude-fable-5-1", None, True),
         ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, True),
-        ("us-gov.anthropic.claude-opus-5-5", None, False),
-        ("us-gov.anthropic.claude-fable-5-1", None, False),
-        ("us-gov-west-1/anthropic.claude-opus-5-5", None, False),
-        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, False),
+        ("us-gov.anthropic.claude-opus-5-5", None, True),
+        ("us-gov.anthropic.claude-fable-5-1", None, True),
+        ("us-gov-west-1/anthropic.claude-opus-5-5", None, True),
+        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, True),
         ("us-east-1/anthropic.claude-opus-5-5", None, True),
     ],
 )
@@ -5869,8 +5889,8 @@ def test_native_output_follows_model_cost_map_for_bedrock_profiles(
         ("us.anthropic.claude-haiku-5-5", None, True),
         ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "adaptive"}}, True),
         ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "disabled"}}, True),
-        ("us-gov.anthropic.claude-sonnet-5", None, False),
-        ("us-gov.anthropic.claude-haiku-5-5", None, False),
+        ("us-gov.anthropic.claude-sonnet-5", None, True),
+        ("us-gov.anthropic.claude-haiku-5-5", None, True),
         ("us.anthropic.claude-opus-5", None, True),
         ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}, True),
         ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}, True),
@@ -10204,6 +10224,9 @@ def test_not_found_error(model, path, monkeypatch):
     assert exc_info.value.status_code == 404
     assert exc_info.value.response.status_code == 404
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
+    assert exc_info.value.response.json() == {"message": "The provided model identifier is invalid."}
+    assert "authorization" in sent[0].headers
+    assert "authorization" not in exc_info.value.response.request.headers
     assert [request.url.raw_path for request in sent] == [path]
 
 
@@ -12574,6 +12597,21 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tool_choice" not in json.dumps(request)
 
 
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)
+
+
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
         r.getMessage()
@@ -12845,3 +12883,114 @@ def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_c
 
     assert len(list(_cache_points(request["messages"]))) == 3
     assert messages == messages_before
+
+
+_MISTRAL_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
+_REPLAYED_TOOL_CALL_IDS: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
+
+
+def _replayed_tool_history() -> list[AllMessageValues]:
+    return [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": tool_call_id, "type": "function", "function": {"name": f"tool_{n}", "arguments": "{}"}}
+                for n, tool_call_id in enumerate(_REPLAYED_TOOL_CALL_IDS)
+            ],
+        },
+        *(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": "ok"}
+            for tool_call_id in _REPLAYED_TOOL_CALL_IDS
+        ),
+        {"role": "user", "content": "Sum it up."},
+    ]
+
+
+async def _sent_tool_use_ids(model: str, use_async: bool) -> tuple[list[str], list[str]]:
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=_replayed_tool_history(),
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": f"tool_{n}", "parameters": {"type": "object"}}}
+                for n in range(len(_REPLAYED_TOOL_CALL_IDS))
+            ]
+        },
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    return (
+        [block["toolUse"]["toolUseId"] for block in blocks if "toolUse" in block],
+        [block["toolResult"]["toolUseId"] for block in blocks if "toolResult" in block],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral.mistral-large-3-675b-instruct", "us.mistral.pixtral-large-2502-v1:0"])
+async def test_converse_sends_mistral_tool_use_ids_as_nine_alphanumeric_characters(model: str, use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids(model, use_async)
+
+    assert tool_result_ids == tool_use_ids
+    assert all(_MISTRAL_TOOL_USE_ID.fullmatch(tool_use_id) for tool_use_id in tool_use_ids)
+    assert len(set(tool_use_ids)) == len(_REPLAYED_TOOL_CALL_IDS)
+    assert tool_use_ids[3] == "D681PevKs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_converse_keeps_tool_use_ids_for_a_model_that_is_not_mistral(use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids("us.anthropic.claude-haiku-5-5", use_async)
+
+    assert tool_use_ids == tool_result_ids == list(_REPLAYED_TOOL_CALL_IDS)
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sent_thinking"),
+    [
+        pytest.param({"type": "adaptive"}, {"type": "adaptive"}, id="adaptive_is_kept"),
+        pytest.param({"type": "enabled", "budget_tokens": 2000}, None, id="budget_is_dropped"),
+    ],
+)
+def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thinking_blocks(
+    thinking: dict[str, object], sent_thinking: dict[str, object] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "Use the add tool to compute 2 + 3."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "5"},
+        ],
+        optional_params={
+            "thinking": thinking,
+            "maxTokens": 4096,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "parameters": {"type": "object", "properties": {"a": {"type": "integer"}}},
+                    },
+                }
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("thinking") == sent_thinking

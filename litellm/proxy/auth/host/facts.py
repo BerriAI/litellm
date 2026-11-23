@@ -16,8 +16,9 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.models.team import LiteLLM_TeamTable
+from litellm.models.team import LiteLLM_TeamTable, Member
 from litellm.models.user import LiteLLM_UserTable
+from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.router import AllowedModelRegion
@@ -33,7 +34,6 @@ class KeyFacts:
     team_id: str | None
     team_object_permission_id: str | None
     project_id: str | None
-    end_user_id: str | None
     last_refreshed_at: float | None
 
 
@@ -94,6 +94,7 @@ class TeamFacts:
     allowed_passthrough_routes: object
     denied_passthrough_routes: object
     members: Sequence[str]
+    roster: TeamRoster | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +103,7 @@ class FoundTeam:
     row: LiteLLM_TeamTable
 
 
-def team_facts(team: LiteLLM_TeamTable) -> FoundTeam:
+def team_facts(team: LiteLLM_TeamTable, roster: TeamRoster | None = None) -> FoundTeam:
     metadata: Final = team.metadata or {}
     return FoundTeam(
         facts=TeamFacts(
@@ -111,13 +112,20 @@ def team_facts(team: LiteLLM_TeamTable) -> FoundTeam:
             allowed_passthrough_routes=metadata.get("allowed_passthrough_routes"),
             denied_passthrough_routes=metadata.get("denied_passthrough_routes"),
             members=tuple(member.user_id for member in team.members_with_roles if member.user_id is not None),
+            roster=roster,
         ),
         row=team,
     )
 
 
+def team_member_facts(team: LiteLLM_TeamTable, roster: TeamRoster, user_id: str) -> FoundTeam:
+    found: Final = roster.member(user_id)
+    member: Final = [] if found is None else [Member.model_validate(found)]
+    return team_facts(team.model_copy(update={"members_with_roles": member}))
+
+
 class TeamMissing(str, Enum):
-    """Why `get_team_object` found no team: its `TeamNotFoundError`, or any other `HTTPException`."""
+    """Why `read_team` found no team: its `TeamNotFoundError`, or a read that failed with the database reachable."""
 
     ABSENT = "absent"
     UNREADABLE = "unreadable"
@@ -209,6 +217,5 @@ def key_facts(token: UserAPIKeyAuth) -> KeyFacts:
         team_id=token.team_id,
         team_object_permission_id=token.team_object_permission_id,
         project_id=token.project_id,
-        end_user_id=token.end_user_id,
         last_refreshed_at=token.last_refreshed_at,
     )

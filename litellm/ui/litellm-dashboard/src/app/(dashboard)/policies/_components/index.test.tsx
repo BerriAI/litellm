@@ -103,6 +103,7 @@ describe("PoliciesPanel attachment delete", () => {
     const user = userEvent.setup();
     renderWithProviders(<PoliciesPanel accessToken="test-token" userRole="Admin" />);
 
+    expect(screen.getByRole("heading", { level: 1, name: "Policies" })).toBeInTheDocument();
     await waitFor(() => {
       expect(networkingMocks.getPolicyAttachmentsList).toHaveBeenCalled();
     });

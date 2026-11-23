@@ -146,7 +146,7 @@ pub(crate) fn strip_unsupported_bedrock_invoke_output_config_keys(
     if output_config.keys().all(|key| key == "format") || accepts_output_config {
         return;
     }
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Bedrock Invoke: stripping unsupported `output_config` keys for model={model}: neither `supports_output_config` nor any `supports_*_reasoning_effort` flag is set in model_prices_and_context_window.json. Add the capability flag to the model JSON entry if this model accepts `output_config`."
     );
     match output_config
@@ -270,12 +270,15 @@ pub(crate) fn tools_without_eager_input_streaming(request_body: &mut Map<String,
         });
 }
 
-pub(crate) fn validated_region(region: String) -> Result<String, Error> {
-    if !region.is_empty()
+pub(crate) fn is_valid_region(region: &str) -> bool {
+    !region.is_empty()
         && region
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-    {
+}
+
+pub(crate) fn validated_region(region: String) -> Result<String, Error> {
+    if is_valid_region(&region) {
         return Ok(region);
     }
     Err(Error::InvalidRequest(ErrorDetail::InvalidValue {

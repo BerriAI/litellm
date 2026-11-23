@@ -31,6 +31,7 @@ from litellm.llms.base_llm.auth.types import MintedToken, TokenExchangeSpec
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     _CLIENT_REFCOUNT_WHEN_HANDLER_IS_SOLE_REFERRER,
+    _prepare_request_data_and_content,
     AsyncHTTPHandler,
     HTTPHandler,
     HTTPResponseLimitError,
@@ -367,6 +368,7 @@ def _fake_fips_openssl(monkeypatch: pytest.MonkeyPatch) -> None:
         _hashlib, "scrypt", MagicMock(side_effect=ValueError("[digital envelope routines] unsupported"))
     )
     monkeypatch.setattr(rust_openssl, "is_fips_enabled", lambda: True)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
 
 
 @pytest.mark.parametrize(
@@ -2606,3 +2608,32 @@ def test_sync_bounded_get_stops_redirect_loops(respx_mock: respx.MockRouter):
     finally:
         handler.close()
     assert route.call_count == 11
+
+
+@pytest.mark.parametrize("as_content", [False, True])
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("hi\ud800!", "hi\ufffd!"), ("\udc00", "\ufffd"), ("\ud83d\ude00", "😀"), ("漢字😀", "漢字😀")],
+)
+def test_raw_text_can_be_encoded_as_utf8(as_content: bool, raw: str, expected: str):
+    prepared: Final = (
+        _prepare_request_data_and_content(content=raw) if as_content else _prepare_request_data_and_content(data=raw)
+    )
+    request: Final = httpx.Request("POST", "http://localhost/", data=prepared[0], content=prepared[1])
+    assert request.content == expected.encode()
+
+
+def test_valid_text_and_bytes_keep_identity():
+    text: Final = "valid 😀"
+    payload: Final = b"\xed\xa0\x80"
+    assert _prepare_request_data_and_content(data=text) == (None, text)
+    assert _prepare_request_data_and_content(content=text)[1] is text
+    assert _prepare_request_data_and_content(data=payload)[1] is payload
+
+
+def test_explicit_content_wins_without_mutating_form_fields():
+    fields: Final = {"field": "value"}
+    prepared: Final = _prepare_request_data_and_content(data=fields, content="\ud800")
+    assert prepared[0] is fields
+    assert prepared[1] == "\ufffd"
+    assert _prepare_request_data_and_content(data="ignored\ud800", content=b"chosen") == (None, b"chosen")

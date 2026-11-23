@@ -37,10 +37,10 @@ pub async fn observe<T>(
     let result = query.await;
     let outcome = match &result {
         Ok(_) => Some(Outcome::Succeeded),
-        Err(error @ Error::Query(_)) => Some(Outcome::Failed(
+        Err(Error::InvalidDuration(_)) => None,
+        Err(error) => Some(Outcome::Failed(
             litellm_error::Report::new(error).to_string(),
         )),
-        Err(_) => None,
     };
     if let Some(outcome) = outcome {
         observer.record(QueryEvent {
@@ -61,9 +61,9 @@ mod tests {
     use crate::Error;
 
     const CALL: Call = Call {
-        call_type: "add_key_spend",
-        table: Some("LiteLLM_VerificationToken"),
-        operation: Some("update"),
+        call_type: "get_data",
+        table: Some("combined_view"),
+        operation: None,
     };
 
     #[derive(Default)]
@@ -114,11 +114,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn records_a_transaction_that_timed_out() {
+        let recording = Recording::default();
+
+        let result = observe(&recording, CALL, async {
+            Err::<(), _>(Error::TransactionTimedOut)
+        })
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(
+            recording.outcomes(),
+            vec![(CALL, Outcome::Failed("transaction timed out".to_owned()))]
+        );
+    }
+
+    #[tokio::test]
     async fn skips_failures_that_never_reached_the_database() {
         let recording = Recording::default();
 
         let result = observe(&recording, CALL, async {
-            Err::<(), _>(Error::InvalidSpendBatch { ids: 1, costs: 2 })
+            Err::<(), _>(Error::from(
+                std::time::Duration::try_from_secs_f64(-1.0).expect_err("negative"),
+            ))
         })
         .await;
 

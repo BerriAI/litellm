@@ -250,8 +250,6 @@ def _at(value: object, *path: str) -> object:
 
 def _custom_key(body: Mapping[str, object], provider: str) -> object:
     match provider:
-        case "anthropic":
-            return _at(body, "extra_body", "custom_provider_key")
         case "converse":
             return _at(body, "additionalModelRequestFields", "extra_body", "custom_provider_key")
     return _at(body, "custom_provider_key")
@@ -411,6 +409,7 @@ WALK_SEEDS: Final[Mapping[str, object]] = MappingProxyType(
         "skip_mcp_handler": True,
         "mcp_handler_context": {"server": "wire"},
         "_encrypted_content_affinity_pinned": True,
+        "_litellm_prompt_management_applied": True,
         "fallback_depth": 1,
         "max_fallbacks": 1,
         UNDECLARED_SENTINEL: "internal",
@@ -440,6 +439,7 @@ OWNED_NAMES_NOT_SEEDED: Final = MappingProxyType(
         "data_residency": "picks a regional endpoint",
         "litellm_logging_obj": "must be the call's own logging object",
         "stream_response": "holds a response object, not request input",
+        "parent_otel_span": "holds the request's tracing span, not request input",
         "_context_compaction_state": "holds compaction state, not request input",
         "_router_weights": "holds router weight state, not request input",
         "attempted_targets": "holds the router's fallback bookkeeping, not request input",
@@ -535,11 +535,13 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "inferenceapis", "kyma", "lambda_ai", "langflow", "langgraph", "lemonade", "libertai", "litellm_proxy",
     "llamafile", "lm_studio", "maritalk", "meta", "meta_llama", "minimax", "mistral", "modelscope", "moonshot",
     "morph", "nadir", "nano-gpt", "nebius", "neosantara", "novita", "nscale", "nvidia_nim", "ollama", "ollama_chat",
-    "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity", "petals",
-    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "sail",
-    "sambanova", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
+    "oobabooga", "openai", "opencode_go", "openinfer", "openrouter", "ovhcloud", "parasail", "perplexity",
+    "perplexity_orchestrator", "petals",
+    "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
+    "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
-    "vercel_ai_gateway", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai", "zerogpu",
+    "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
+    "zerogpu",
 )  # fmt: skip
 CHAT_ROUTES: Final = MappingProxyType(
     {

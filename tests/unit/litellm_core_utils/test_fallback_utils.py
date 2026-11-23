@@ -19,7 +19,7 @@ from litellm.caching.caching import Cache, DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.dotprompt.dotprompt_manager import DotpromptManager
-from litellm.litellm_core_utils import litellm_logging
+from litellm.litellm_core_utils import litellm_logging, streaming_handler
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
@@ -1240,15 +1240,17 @@ def test_completion_streams_through_the_global_model_fallbacks(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "model_fallbacks", ["openai/second"])
-    _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, text=STREAMED_ANSWER, headers={"content-type": "text/event-stream"})
-    )
+    with ThreadPoolExecutor(max_workers=2) as logging_executor:
+        monkeypatch.setattr(streaming_handler, "executor", logging_executor)
+        _ = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(200, text=STREAMED_ANSWER, headers={"content-type": "text/event-stream"})
+        )
 
-    stream: Final = python_completion(
-        model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key", stream=True
-    )
+        stream: Final = python_completion(
+            model="openai/first", messages=[{"role": "user", "content": "hello"}], api_key="test-key", stream=True
+        )
 
-    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "streamed answer"
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "streamed answer"
 
 
 class _ConcurrentSyncSuccessRecorder(CustomLogger):

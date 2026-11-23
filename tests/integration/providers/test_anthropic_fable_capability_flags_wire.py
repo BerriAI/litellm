@@ -90,6 +90,21 @@ def test_sampling_params_are_refused_before_reaching_anthropic_without_drop_para
         assert wire.drain() == ()
 
 
+def test_temperature_one_reaches_anthropic_without_drop_params(gateway: Gateway) -> None:
+    identity: Final = f"fable-temperature-one-{uuid.uuid4().hex}"
+
+    def respond(request: Request) -> Reply:
+        body: Final = _outbound(request)
+        assert body["temperature"] == 1, body
+        return Reply(body=_anthropic_reply(identity))
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, temperature=1))
+        assert response.status_code == 200, response.text
+        assert len(wire.drain()) == 1
+
+
 def test_drop_params_downgrades_forced_and_named_tool_choice_to_auto(gateway: Gateway) -> None:
     identity: Final = f"fable-tool-choice-{uuid.uuid4().hex}"
 

@@ -5,6 +5,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
+from typing_extensions import Never
+
 from litellm.litellm_core_utils.env_utils import (
     get_env_float,
     get_env_float_in_range,
@@ -37,6 +39,7 @@ GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
 USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
 USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
 SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+USAGE_ONLY_SETTLEMENT_KEY: Final = "litellm_usage_only_settlement"
 
 
 class ServerStreamingClassification(str, Enum):
@@ -140,6 +143,7 @@ DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTER
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
 GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS: Final = 10
 DEFAULT_MAX_REQUEST_HEADER_SIZE: Final = 16 * 1024
+DEFAULT_UVICORN_KEEPALIVE_TIMEOUT_SECONDS: Final = 95
 budget_reservation_disabled_info_emitted = False
 DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE = get_env_int("DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE", 1)
 DEFAULT_SQS_BATCH_SIZE: Final = get_env_int("DEFAULT_SQS_BATCH_SIZE", 512)
@@ -493,6 +497,8 @@ REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v
 REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
 REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
 REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+TOOL_NAME_MAX_UTF8_BYTES: Final = 512
+POSTGRES_MAX_BIND_PARAMETERS: Final = 32_767
 GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
@@ -716,10 +722,11 @@ STREAM_SSE_DONE_STRING: Final[str] = "[DONE]"
 STREAM_SSE_DATA_PREFIX: Final[str] = "data: "
 STREAM_SSE_KEEPALIVE_PING_CHUNK: Final[str] = 'event: ping\ndata: {"type": "ping"}\n\n'
 STREAM_SSE_KEEPALIVE_PING_BYTES: Final[bytes] = STREAM_SSE_KEEPALIVE_PING_CHUNK.encode("utf-8")
-STREAM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+VLLM_FINISH_CHOICE_FIELDS: Final = ("stop_reason",)
+STREAM_FINISH_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, "provider_specific_fields")
 STREAM_CHUNK_CHOICE_FIELDS: Final = ("token_ids",)
 PROVIDER_FINISH_REASONS_HIDDEN_PARAM: Final = "provider_finish_reasons"
-VLLM_CHOICE_FIELDS: Final = STREAM_FINISH_CHOICE_FIELDS + STREAM_CHUNK_CHOICE_FIELDS
+VLLM_CHOICE_FIELDS: Final = (*VLLM_FINISH_CHOICE_FIELDS, *STREAM_CHUNK_CHOICE_FIELDS)
 ### SPEND TRACKING ###
 DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND: Final = get_env_float(
     "DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND", 0.001400
@@ -1018,6 +1025,13 @@ OPENAI_TRANSCRIPTION_PARAMS: Final = [
     "timestamp_granularities",
 ]
 
+GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS: Final = (
+    "chunking_strategy",
+    "include",
+    "known_speaker_names",
+    "known_speaker_references",
+)
+
 OPENAI_EMBEDDING_PARAMS: Final = ["dimensions", "encoding_format", "user"]
 
 DEFAULT_EMBEDDING_PARAM_VALUES: Final = {
@@ -1122,6 +1136,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
     "https://api.libertai.io/v1",
+    "https://api.resetdata.ai/api/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
     "https://api.sailresearch.com/v1",
@@ -1184,6 +1199,7 @@ openai_compatible_providers: Final[list[str]] = [
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
     "libertai",  # LibertAI - JSON-configured provider
+    "resetdata",
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1214,6 +1230,7 @@ openai_compatible_providers: Final[list[str]] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "coralbricks",
+    "perplexity_orchestrator",
     "cortecs",
     "scx-ai",
     "prism",
@@ -1226,7 +1243,7 @@ openai_compatible_providers: Final[list[str]] = [
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
 
-openai_text_completion_compatible_providers: Final[list] = [  # providers that support `/v1/completions`
+openai_text_completion_compatible_providers: Final[list[str]] = [  # providers that support `/v1/completions`
     "together_ai",
     "fireworks_ai",
     "hosted_vllm",
@@ -1413,7 +1430,7 @@ nebius_models: Final[set] = set(
     ]
 )
 
-dashscope_models: Final[frozenset] = frozenset(
+dashscope_models: Final[frozenset[str]] = frozenset(
     [
         "qwen-turbo",
         "qwen-plus",
@@ -1428,9 +1445,9 @@ dashscope_models: Final[frozenset] = frozenset(
     ]
 )
 
-qwencloud_models: Final[frozenset] = frozenset(dashscope_models)
+qwencloud_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
-qwen_ai_platform_models: Final[frozenset] = frozenset(dashscope_models)
+qwen_ai_platform_models: Final[frozenset[str]] = frozenset(dashscope_models)
 
 nebius_embedding_models: Final[set] = set(
     [
@@ -1725,6 +1742,7 @@ VECTOR_STORE_CALLER_METADATA_KWARG: Final = "litellm_vector_store_caller_metadat
 ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_router_usage_counted_tokens"
 USAGE_BASED_ROUTING_COUNTED_TOKENS_METADATA_KEY: Final = "_litellm_usage_based_routing_counted_tokens"
 INTERNAL_CALL_ORIGIN_METADATA_KEY: Final = "internal_call_origin"
+ROUTE_CALL_TYPE_METADATA_KEY: Final = "route_call_type"
 RESPONSES_WEBSOCKET_CALL_ID_METADATA_KEY: Final = "responses_websocket_call_id"
 BILLED_RETRY_ATTEMPT_METADATA_KEY: Final = "billed_retry_attempt"
 MANAGED_BACKGROUND_RESPONSE_METADATA_KEY: Final = "_managed_background_response"
@@ -1732,6 +1750,7 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
 LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE: Final = (
@@ -2168,6 +2187,7 @@ SENTRY_DENYLIST: Final = [
     "authorization",
     "api-key",
     "x-api-key",
+    "x-api-key-id",
     "x-goog-api-key",
     "ocp-apim-subscription-key",
     "x-litellm-api-key",
@@ -2360,6 +2380,9 @@ USAGE_MODEL_TOP_KEYS_MAX: Final[int] = 100
 USAGE_CACHE_LEAKAGE_KEYS_DEFAULT: Final[int] = 20
 USAGE_CACHE_LEAKAGE_KEYS_MAX: Final[int] = 100
 USAGE_EXPORT_BATCH_SIZE: Final[int] = 1000
+CALLBACK_CONFIG_METADATA_SLOTS: Final[frozenset[str]] = frozenset(
+    {"logging", "callback_settings", "secret_manager_settings"}
+)
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
@@ -2407,7 +2430,7 @@ MESSAGE_THREAD_MAX_TRACKED_OWNERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
-EMPTY_MAPPING: Final = MappingProxyType({})
+EMPTY_MAPPING: Final[MappingProxyType[str, Never]] = MappingProxyType({})
 
 # API endpoint for breached password k-anonymity search
 HIBP_RANGE_API_BASE: Final = "https://api.pwnedpasswords.com/range"

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.litellm_core_utils.core_helpers import decoded_json_object
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -33,6 +34,20 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+_AzureSearchDocument: Final = TypedDict(
+    "_AzureSearchDocument",
+    {
+        "id": ReadOnly[str],
+        "content": ReadOnly[str | None],
+        "@search.score": ReadOnly[float],
+    },
+    total=False,
+)
+
+
+class _AzureSearchResponse(TypedDict, total=False):
+    value: ReadOnly[Sequence[_AzureSearchDocument]]
 
 
 class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM):
@@ -204,7 +219,7 @@ class AzureAIVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig, BaseAzureLLM
         }
         """
         try:
-            response_json: Final = response.json()
+            response_json: Final[_AzureSearchResponse] = response.json()
 
             # Extract results from Azure AI Search API response
             results: Final = response_json.get("value", [])

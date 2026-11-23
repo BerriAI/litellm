@@ -32,11 +32,12 @@ from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse, OCRUs
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 from litellm.llms.together_ai.cost_calculator import get_model_params_and_category
+from litellm.types.decisions import DecisionsResponse, DecisionsUsage
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.openai import HttpxBinaryResponseContent, OpenAIRealtimeStreamList, ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.rerank import RerankResponse
-from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
+from litellm.types.utils import CacheCreationTokenDetails, CallTypes, Choices, CompletionTokensDetailsWrapper, CostPerToken, EmbeddingResponse, ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails, LiteLLMRealtimeStreamLoggingObject, Message, ModelInfo, ModelResponse, PromptTokensDetails, PromptTokensDetailsWrapper, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.utils import cached_get_model_info_helper, supports_prompt_caching
 from litellm.litellm_core_utils.model_cost_table import publish
@@ -743,6 +744,54 @@ def test_completion_cost_keeps_the_served_bedrock_row_unless_it_is_the_region_st
     assert cost == pytest.approx(_bedrock_global_cost(served_shape) * _BEDROCK_PROFILE_RATE_MULTIPLIERS[served_model])
 
 
+_FIREWORKS_SERVED_MODEL: Final = "accounts/fireworks/models/router-pricing-test"
+_FIREWORKS_SERVED_RATES: Final = MappingProxyType({"input_cost_per_token": 3e-7, "output_cost_per_token": 1.2e-6})
+
+
+def _fireworks_router_cost(monkeypatch: pytest.MonkeyPatch, router: str, router_row: Mapping[str, float]) -> float:
+    row_base: Final = {"litellm_provider": "fireworks_ai", "mode": "chat"}
+    monkeypatch.setitem(
+        litellm.model_cost, f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}", {**row_base, **_FIREWORKS_SERVED_RATES}
+    )
+    monkeypatch.setitem(litellm.model_cost, f"fireworks_ai/{router}", {**row_base, **router_row})
+    response: Final = ModelResponse(
+        model=f"fireworks_ai/{_FIREWORKS_SERVED_MODEL}",
+        usage=Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+    )
+    return completion_cost(completion_response=response, model=f"fireworks_ai/{router}")
+
+
+def test_completion_cost_bills_the_fireworks_router_row_when_fireworks_serves_the_base_model(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cost: Final = _fireworks_router_cost(
+        monkeypatch,
+        "accounts/fireworks/routers/router-pricing-test-spot",
+        {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+    )
+
+    assert cost == pytest.approx(1000 * 1.5e-7 + 100 * 6e-7)
+
+
+@pytest.mark.parametrize(
+    ("requested", "requested_row"),
+    [
+        pytest.param("accounts/fireworks/routers/router-pricing-test-unpriced", {}, id="unpriced-router"),
+        pytest.param(
+            "accounts/fireworks/models/router-pricing-test-alias",
+            {"input_cost_per_token": 1.5e-7, "output_cost_per_token": 6e-7},
+            id="priced-non-router",
+        ),
+    ],
+)
+def test_completion_cost_keeps_the_served_fireworks_row_unless_a_priced_router_was_requested(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, requested: str, requested_row: Mapping[str, float]
+) -> None:
+    cost: Final = _fireworks_router_cost(monkeypatch, requested, requested_row)
+
+    assert cost == pytest.approx(1000 * 3e-7 + 100 * 1.2e-6)
+
+
 @pytest.mark.parametrize(
     ("base_model", "custom_pricing", "router_model_id", "priced_row"),
     [
@@ -1270,7 +1319,9 @@ def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy import proxy_server
-    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+    from litellm.proxy.spend_tracking.legacy_spend_log_rows import (
+        _get_proxy_server_request_for_spend_logs_payload,
+    )
 
     monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
     shared_metadata: dict[str, object] = {"user_api_key_alias": "alias"}
@@ -4654,6 +4705,28 @@ def test_cost_per_token_resolves_per_second_rate_precedence(
     ) == pytest.approx((expected_rate * 1.5, 0.0))
 
 
+def test_completion_cost_prefers_a_direct_row_over_the_together_size_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "openrouter/togethercomputer/direct-row-4b"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 3e-08,
+                "output_cost_per_token": 0.0,
+                "litellm_provider": "openrouter",
+                "mode": "chat",
+            }
+        }
+    )
+    response: Final = ModelResponse(model=model, usage=Usage(prompt_tokens=100, completion_tokens=0, total_tokens=100))
+
+    assert litellm.completion_cost(completion_response=response, custom_llm_provider="openrouter") == pytest.approx(
+        100 * 3e-08
+    )
+
+
 def _logging_obj_with_call_window(duration_ms: float) -> Logging:
     start_time: Final = datetime.datetime(2026, 9, 21, 12, 0, 0)
     logging_obj: Final = Logging(
@@ -4915,6 +4988,258 @@ def test_batch_cost_calculator_bills_cached_tokens_at_the_standard_cache_price_w
     )
 
     assert prompt_cost == pytest.approx(1000 * expected_rate)
+
+
+def _text_batch_prices() -> ModelInfo:
+    return {"input_cost_per_token": 3e-7, "input_cost_per_token_batches": 1.5e-7}
+
+
+def _uncached_audio_batch_usage(prompt_tokens: int) -> Usage:
+    return Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=0,
+        total_tokens=prompt_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(audio_tokens=1000),
+    )
+
+
+@pytest.mark.parametrize(
+    ("audio_prices", "expected_audio_rate"),
+    [
+        pytest.param({"input_cost_per_audio_token": 1e-6}, 5e-7, id="missing-audio-batch-price-halves-standard-audio"),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": None},
+            5e-7,
+            id="null-audio-batch-price-halves-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": 4e-7},
+            4e-7,
+            id="explicit-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_batches": 0.0},
+            0.0,
+            id="explicit-zero-audio-batch-price-wins",
+        ),
+        pytest.param({"input_cost_per_audio_token": 0.0}, 0.0, id="zero-standard-audio-price-halves-to-zero"),
+        pytest.param(
+            {"input_cost_per_audio_token_batches": 4e-7}, 4e-7, id="audio-batch-price-without-standard-audio-price"
+        ),
+        pytest.param({}, 1.5e-7, id="no-audio-prices-bill-the-text-batch-price"),
+        pytest.param(
+            {"input_cost_per_audio_token": None, "input_cost_per_audio_token_batches": None},
+            1.5e-7,
+            id="null-audio-prices-bill-the-text-batch-price",
+        ),
+    ],
+)
+def test_batch_cost_calculator_falls_back_to_half_the_standard_audio_price_for_uncached_audio(
+    audio_prices: ModelInfo, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {**_text_batch_prices(), **audio_prices}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(1000),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(1000 * expected_audio_rate)
+
+
+@pytest.mark.parametrize(
+    ("audio_prices", "prompt_tokens", "expected_audio_rate"),
+    [
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_above_200k_tokens": 4e-6},
+            200_000,
+            5e-7,
+            id="at-threshold-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token": 1e-6, "input_cost_per_audio_token_above_200k_tokens": 4e-6},
+            200_001,
+            2e-6,
+            id="above-threshold-halves-tiered-standard-audio",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 2.5e-7,
+            },
+            200_001,
+            2.5e-7,
+            id="above-threshold-explicit-tiered-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 2.5e-7,
+            },
+            1000,
+            5e-7,
+            id="below-threshold-with-only-tiered-audio-batch-price-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token": 1e-6,
+                "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+                "input_cost_per_audio_token_batches": 4e-7,
+            },
+            200_001,
+            4e-7,
+            id="above-threshold-flat-audio-batch-price-wins-over-tiered-standard-audio",
+        ),
+    ],
+)
+def test_batch_cost_calculator_uncached_audio_fallback_follows_the_audio_price_tier(
+    audio_prices: ModelInfo, prompt_tokens: int, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {**_text_batch_prices(), **audio_prices}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(prompt_tokens),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 1000) * 1.5e-7 + 1000 * expected_audio_rate)
+
+
+def test_batch_cost_calculator_halves_only_uncached_audio_in_a_mixed_modality_prompt() -> None:
+    model_info: Final[ModelInfo] = {
+        **_text_batch_prices(),
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_image_token": 2e-6,
+        "input_cost_per_video_token": 3e-6,
+        "cache_read_input_token_cost": 3e-8,
+        "cache_read_input_audio_token_cost": 1e-7,
+    }
+    usage: Final = Usage(
+        prompt_tokens=1000,
+        completion_tokens=0,
+        total_tokens=1000,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=300,
+            image_tokens=100,
+            video_tokens=100,
+            cached_tokens=100,
+            cached_tokens_details=CachedTokensDetails(audio_tokens=100),
+        ),
+    )
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=usage, model="gemini-2.5-flash", custom_llm_provider="vertex_ai", model_info=model_info
+    )
+
+    text_cost: Final = 500 * 1.5e-7
+    uncached_audio_cost: Final = 200 * 5e-7
+    image_and_video_cost: Final = 200 * 1.5e-7
+    cached_audio_cost: Final = 100 * 1e-7
+    assert prompt_cost == pytest.approx(text_cost + uncached_audio_cost + image_and_video_cost + cached_audio_cost)
+
+
+@pytest.mark.parametrize(
+    ("audio_batch_prices", "prompt_tokens", "expected_audio_rate"),
+    [
+        pytest.param({}, 199_999, 5e-7, id="below-threshold-halves-base-standard-audio"),
+        pytest.param({}, 200_000, 2e-6, id="at-inclusive-threshold-halves-tiered-standard-audio"),
+        pytest.param({}, 200_001, 2e-6, id="above-threshold-halves-tiered-standard-audio"),
+        pytest.param(
+            {"input_cost_per_audio_token_batches": 4e-7},
+            200_000,
+            4e-7,
+            id="at-inclusive-threshold-explicit-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            199_999,
+            5e-7,
+            id="below-threshold-upper-only-audio-batch-price-halves-base-standard-audio",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            200_000,
+            8e-7,
+            id="at-inclusive-threshold-upper-only-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 8e-7},
+            200_001,
+            8e-7,
+            id="above-threshold-upper-only-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {"input_cost_per_audio_token_above_200k_tokens_batches": 0.0},
+            200_000,
+            0.0,
+            id="at-inclusive-threshold-upper-only-zero-audio-batch-price-wins",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 4e-7,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_000,
+            4e-7,
+            id="at-threshold-flat-and-upper-audio-batch-prices-keep-the-flat-price",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 4e-7,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_001,
+            8e-7,
+            id="above-threshold-flat-and-upper-audio-batch-prices-use-the-upper-price",
+        ),
+        pytest.param(
+            {
+                "input_cost_per_audio_token_batches": 0.0,
+                "input_cost_per_audio_token_above_200k_tokens_batches": 8e-7,
+            },
+            200_000,
+            0.0,
+            id="at-threshold-zero-flat-and-upper-audio-batch-prices-keep-the-zero-flat-price",
+        ),
+    ],
+)
+def test_batch_cost_calculator_uncached_audio_fallback_uses_the_providers_inclusive_audio_threshold(
+    audio_batch_prices: ModelInfo, prompt_tokens: int, expected_audio_rate: float
+) -> None:
+    model_info: Final[ModelInfo] = {
+        **_text_batch_prices(),
+        "input_cost_per_audio_token": 1e-6,
+        "input_cost_per_audio_token_above_200k_tokens": 4e-6,
+        **audio_batch_prices,
+    }
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(prompt_tokens),
+        model="grok-4",
+        custom_llm_provider="xai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx((prompt_tokens - 1000) * 1.5e-7 + 1000 * expected_audio_rate)
+
+
+def test_batch_cost_calculator_without_a_text_batch_price_keeps_halving_the_text_price_for_audio() -> None:
+    model_info: Final[ModelInfo] = {"input_cost_per_token": 3e-7, "input_cost_per_audio_token": 1e-6}
+
+    prompt_cost, _ = batch_cost_calculator(
+        usage=_uncached_audio_batch_usage(1000),
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        model_info=model_info,
+    )
+
+    assert prompt_cost == pytest.approx(1000 * 1.5e-7)
 
 
 def _cached_image_batch_usage() -> Usage:
@@ -6124,6 +6449,40 @@ def test_realtime_explicitly_free_session_model_still_bills_zero(
     )
 
     assert cost == 0.0
+
+
+@pytest.mark.parametrize("returned_model", ["cost-test-decider", "cost-test-decider-20261006"])
+@pytest.mark.parametrize("explicit_model", [None, "openrouter/cost-test-decider"])
+def test_decisions_cost_uses_mapped_model_when_vendor_echo_is_unmapped(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    returned_model: str,
+    explicit_model: str | None,
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openrouter/cost-test-decider",
+        {
+            "input_cost_per_token": 0.000002,
+            "output_cost_per_token": 0.000004,
+            "litellm_provider": "openrouter",
+            "mode": "decisions",
+        },
+    )
+    response: Final = DecisionsResponse(
+        model=returned_model, answers={}, usage=DecisionsUsage(input_tokens=100, output_tokens=50)
+    )
+    response.set_hidden_params(
+        {
+            "custom_llm_provider": "openrouter",
+            "provider_response_model": "openrouter/cost-test-decider",
+        }
+    )
+
+    cost: Final = litellm.completion_cost(completion_response=response, model=explicit_model)
+
+    assert response.model == returned_model
+    assert cost == pytest.approx(100 * 0.000002 + 50 * 0.000004)
 
 
 def test_completion_cost_prefers_private_provider_response_model(
@@ -8129,22 +8488,59 @@ def test_transcription_cost_without_provider_seconds_bills_the_measured_length(
     assert cost == pytest.approx(0.01 * expected_seconds)
 
 
-def test_custom_priced_transcription_deployment_bills_provider_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model", "duration", "billed_seconds"),
+    [
+        ("whisper-large-v3-turbo", 2.4, 10.0),
+        ("whisper-large-v3-turbo", 10.0, 10.0),
+        ("whisper-large-v3-turbo", 12.4, 12.4),
+        ("whisper-large-v3", 2.4, 10.0),
+        ("whisper-large-v3", None, 0.0),
+    ],
+)
+def test_groq_transcription_cost_applies_billed_duration_minimum(
+    monkeypatch: pytest.MonkeyPatch, model: str, duration: float | None, billed_seconds: float
+) -> None:
+    """Groq documents a 10-second minimum at https://console.groq.com/docs/speech-to-text (2026-11-18)."""
+    qualified_model: Final = f"groq/{model}"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        qualified_model,
+        {"input_cost_per_second": 0.01, "litellm_provider": "groq", "mode": "audio_transcription"},
+    )
+    transcription: Final = convert_to_model_response_object(
+        response_object={"text": "Hello", **({"duration": duration} if duration is not None else {})},
+        model_response_object=TranscriptionResponse(),
+        hidden_params={"model": model, "custom_llm_provider": "groq"},
+        response_type="audio_transcription",
+    )
+
+    cost: Final = completion_cost(completion_response=transcription, model=qualified_model, call_type="atranscription")
+
+    assert cost == pytest.approx(0.01 * billed_seconds)
+
+
+@pytest.mark.parametrize(
+    ("provider", "model"), [("openai", "gpt-fake-transcribe"), ("groq", "whisper-large-v3-turbo")]
+)
+def test_custom_priced_transcription_deployment_bills_provider_seconds(
+    monkeypatch: pytest.MonkeyPatch, provider: str, model: str
+) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
         "priced-deployment",
-        {"input_cost_per_second": 0.000075, "litellm_provider": "openai", "mode": "audio_transcription"},
+        {"input_cost_per_second": 0.000075, "litellm_provider": provider, "mode": "audio_transcription"},
     )
     transcription: Final = convert_to_model_response_object(
         response_object={"text": "What is the weather in Paris?", "usage": {"type": "duration", "seconds": 2}},
         model_response_object=TranscriptionResponse(),
-        hidden_params={"model": "gpt-fake-transcribe", "custom_llm_provider": "openai"},
+        hidden_params={"model": model, "custom_llm_provider": provider},
         response_type="audio_transcription",
     )
 
     cost: Final = completion_cost(
         completion_response=transcription,
-        model="openai/gpt-fake-transcribe",
+        model=f"{provider}/{model}",
         call_type="atranscription",
         custom_pricing=True,
         router_model_id="priced-deployment",
@@ -10459,6 +10855,57 @@ def test_speech_cost_with_custom_pricing_bills_the_reported_usage() -> None:
     )
 
 
+@pytest.mark.parametrize("override_location", ("litellm_params", "model_info"))
+@pytest.mark.parametrize("call_type", ("speech", "aspeech"))
+@pytest.mark.parametrize("deployment_rate", (7e-6, 0.0))
+@pytest.mark.usefixtures("isolated_pricing_registry")
+def test_speech_cost_bills_the_deployment_per_character_rate(
+    deployment_rate: float, call_type: str, override_location: str
+) -> None:
+    list_rate: Final = 3e-6
+    deployment_id: Final = "speech-fixture-deployment"
+    override: Final[dict[str, float]] = {"input_cost_per_character": deployment_rate}
+    no_override: Final[dict[str, float]] = {}
+    litellm.register_model(
+        {
+            "openai/speech-fixture": {
+                "litellm_provider": "openai",
+                "mode": "audio_speech",
+                "input_cost_per_character": list_rate,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "speech-alias",
+                "litellm_params": {
+                    "model": "openai/speech-fixture",
+                    "api_key": "sk-test",
+                    **(override if override_location == "litellm_params" else no_override),
+                },
+                "model_info": {
+                    "id": deployment_id,
+                    **(override if override_location == "model_info" else no_override),
+                },
+            }
+        ]
+    )
+
+    cost: Final = completion_cost(
+        completion_response=None,
+        model="openai/speech-fixture",
+        custom_llm_provider="openai",
+        call_type=call_type,
+        prompt="a" * 1000,
+        custom_pricing=True,
+        router_model_id=deployment_id,
+    )
+
+    assert cost == pytest.approx(1000 * deployment_rate)
+
+
 def test_moderation_cost_uses_test_owned_token_rate() -> None:
     prompt: Final = "moderation input"
     rates: Final = MappingProxyType(
@@ -12336,3 +12783,335 @@ def test_cost_failure_for_an_unpriced_response_echoes_only_a_text_search_respons
         )
 
     assert (image_data in str(exc_info.value)) is echoes_response
+
+
+@pytest.mark.parametrize("model", ["canopylabs/orpheus-3b-0.1-ft", "Qwen/Qwen3-TTS-12Hz-1.7B"])
+def test_together_speech_row_priced_per_character_is_not_billed_as_a_chat_size_bucket(model: str) -> None:
+    text: Final = "Hello from the cost tracking check."
+    response: Final = HttpxBinaryResponseContent(
+        httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=f"together_ai/{model}",
+        custom_llm_provider="together_ai",
+        call_type="speech",
+        prompt=text,
+    )
+
+    per_character: Final = litellm.model_cost[f"together_ai/{model}"]["input_cost_per_character"]
+    assert cost == pytest.approx(litellm.utils.count_characters(text=text) * per_character)
+
+
+_JAMBA_ROW: Final = "jamba-1.5-large"
+_JAMBA_MESSAGES: Final = [{"role": "user", "content": "hi"}]
+_CUSTOM_JAMBA_RATES: Final = {"input_cost_per_token": 1e-03, "output_cost_per_token": 2e-03}
+
+
+def _jamba_call(model: str, **kwargs: object) -> ModelResponse:
+    return cast(
+        ModelResponse,
+        litellm.completion(model=model, messages=_JAMBA_MESSAGES, mock_response="hello there", **kwargs),
+    )
+
+
+def _billed_at(response: ModelResponse, input_rate: object, output_rate: object) -> float:
+    usage: Final = cast(Usage, response.usage)
+    return usage.prompt_tokens * cast(float, input_rate) + usage.completion_tokens * cast(float, output_rate)
+
+
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_direct_ai21_jamba_calls_are_billed_at_the_catalog_rates(_local_model_cost_map: None, model: str) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call(model)
+    expected: Final = _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+
+    assert expected > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    assert completion_cost(completion_response=response) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize(
+    "registered_key, provider_fields, model",
+    [
+        pytest.param(
+            "ai21/jamba-1.5-large", {"litellm_provider": "ai21_chat"}, "ai21/jamba-1.5-large", id="ai21-key-ai21-chat"
+        ),
+        pytest.param("ai21/jamba-1.5-large", {"litellm_provider": None}, "ai21/jamba-1.5-large", id="ai21-key-none"),
+        pytest.param("ai21/jamba-1.5-large", {}, "ai21/jamba-1.5-large", id="ai21-key-missing"),
+        pytest.param(
+            "ai21_chat/jamba-1.5-large",
+            {"litellm_provider": "ai21_chat"},
+            "ai21/jamba-1.5-large",
+            id="ai21-chat-key-prefixed-call",
+        ),
+        pytest.param(
+            "ai21_chat/jamba-1.5-large",
+            {"litellm_provider": "ai21_chat"},
+            "jamba-1.5-large",
+            id="ai21-chat-key-bare-call",
+        ),
+        pytest.param("jamba-1.5-large", {}, "ai21/jamba-1.5-large", id="bare-key-prefixed-call"),
+        pytest.param("jamba-1.5-large", {}, "jamba-1.5-large", id="bare-key-bare-call"),
+    ],
+)
+def test_registered_ai21_jamba_prices_beat_the_catalog_rates(
+    _local_model_cost_map: None, registered_key: str, provider_fields: Mapping[str, object], model: str
+) -> None:
+    litellm.register_model(
+        {registered_key: {**_CUSTOM_JAMBA_RATES, **provider_fields}},
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    response: Final = _jamba_call(model)
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _billed_at(response, _CUSTOM_JAMBA_RATES["input_cost_per_token"], _CUSTOM_JAMBA_RATES["output_cost_per_token"])
+    )
+
+
+def test_inline_ai21_jamba_prices_bill_the_call_and_the_bare_response_falls_back_to_catalog_rates(
+    _local_model_cost_map: None,
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large", **_CUSTOM_JAMBA_RATES)
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _billed_at(response, _CUSTOM_JAMBA_RATES["input_cost_per_token"], _CUSTOM_JAMBA_RATES["output_cost_per_token"])
+    )
+    assert completion_cost(completion_response=response) == pytest.approx(
+        _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    )
+
+
+def test_another_providers_jamba_call_never_bills_the_ai21_row(_local_model_cost_map: None) -> None:
+    response: Final = _jamba_call("openai/jamba-1.5-large", api_key="fake-key")
+
+    assert response._hidden_params["response_cost"] is None
+    with pytest.raises(litellm.ModelNotMappedError):
+        completion_cost(completion_response=response)
+
+
+@pytest.mark.parametrize(
+    "model, ai21_row",
+    [
+        pytest.param("ai21_chat/jamba-not-a-real-model", None, id="unknown-model"),
+        pytest.param(
+            "ai21_chat/jamba-rate-free", {"litellm_provider": "ai21", "mode": "chat"}, id="ai21-row-without-rates"
+        ),
+        pytest.param(
+            "ai21_chat/jamba-string-rates",
+            {
+                "input_cost_per_token": "2e-06",
+                "output_cost_per_token": "8e-06",
+                "litellm_provider": "ai21",
+                "mode": "chat",
+            },
+            id="ai21-row-with-non-numeric-rates",
+        ),
+    ],
+)
+def test_ai21_chat_calls_without_an_ai21_price_keep_the_original_error(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch, model: str, ai21_row: Mapping[str, object] | None
+) -> None:
+    if ai21_row is not None:
+        monkeypatch.setitem(litellm.model_cost, model.split("/", 1)[1], dict(ai21_row))
+        publish(litellm.model_cost)
+    response: Final = _jamba_call(model)
+
+    assert response._hidden_params["response_cost"] is None
+    with pytest.raises(litellm.ModelNotMappedError, match="custom_llm_provider=ai21_chat"):
+        completion_cost(completion_response=response)
+
+
+def test_an_ai21_row_with_zero_rates_bills_zero(_local_model_cost_map: None) -> None:
+    litellm.register_model(
+        {
+            "jamba-zero-rate": {
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "litellm_provider": "ai21",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+        add_to_provider_model_sets=False,
+    )
+    response: Final = _jamba_call("ai21_chat/jamba-zero-rate")
+
+    assert response._hidden_params["response_cost"] == 0
+    assert completion_cost(completion_response=response) == 0
+
+
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_text_only_ai21_jamba_cost_is_billed_at_the_catalog_rates(_local_model_cost_map: None, model: str) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    catalog_rates: Final = CostPerToken(
+        input_cost_per_token=row["input_cost_per_token"], output_cost_per_token=row["output_cost_per_token"]
+    )
+
+    cost: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+
+    assert cost > 0
+    assert cost == pytest.approx(
+        completion_cost(model=model, prompt="hi there", completion="hello there", custom_cost_per_token=catalog_rates)
+    )
+
+
+@pytest.mark.parametrize(
+    "discount_config, discount",
+    [
+        pytest.param({}, 0.0, id="no-discount"),
+        pytest.param({"ai21_chat": 0.1}, 0.1, id="provider-discount"),
+        pytest.param({"ai21_chat/jamba*": 0.1}, 0.1, id="model-pattern-discount"),
+        pytest.param({"ai21/jamba*": 0.1}, 0.0, id="ai21-pattern-never-applies"),
+    ],
+)
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_text_only_ai21_jamba_cost_applies_the_ai21_chat_discount(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    discount_config: Mapping[str, float],
+    discount: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(discount_config))
+
+    cost: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+
+    assert undiscounted > 0
+    assert cost == pytest.approx(undiscounted * (1 - discount))
+
+
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large"])
+def test_dict_ai21_jamba_response_without_a_provider_is_billed_at_the_catalog_rates(
+    _local_model_cost_map: None, model: str
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = {
+        "id": "jamba-dict",
+        "model": model,
+        "object": "chat.completion",
+        "choices": [],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+    }
+
+    assert completion_cost(completion_response=response) == pytest.approx(
+        10 * row["input_cost_per_token"] + 20 * row["output_cost_per_token"]
+    )
+
+
+def test_an_explicit_ai21_provider_on_an_ai21_chat_response_is_billed_at_the_catalog_rates(
+    _local_model_cost_map: None,
+) -> None:
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+
+    assert completion_cost(completion_response=response, custom_llm_provider="ai21") == pytest.approx(
+        _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    )
+
+
+@pytest.mark.parametrize(
+    "discount_config, margin_config, discount, margin_percent, margin_fixed",
+    [
+        pytest.param({}, {}, 0.0, 0.0, 0.0, id="no-adjustment"),
+        pytest.param({"ai21_chat": 0.1}, {}, 0.1, 0.0, 0.0, id="provider-discount"),
+        pytest.param({"ai21_chat/jamba*": 0.1}, {}, 0.1, 0.0, 0.0, id="model-pattern-discount"),
+        pytest.param({}, {"ai21_chat": 0.2}, 0.0, 0.2, 0.0, id="margin-percent"),
+        pytest.param({}, {"ai21_chat": {"fixed_amount": 0.001}}, 0.0, 0.0, 0.001, id="margin-fixed"),
+        pytest.param(
+            {},
+            {"ai21_chat": {"percentage": 0.2, "fixed_amount": 0.001}},
+            0.0,
+            0.2,
+            0.001,
+            id="margin-percent-and-fixed",
+        ),
+        pytest.param({"ai21_chat": 0.1}, {"ai21_chat": 0.2}, 0.1, 0.2, 0.0, id="discount-and-margin"),
+        pytest.param({}, {"ai21_chat": 0.2, "global": 0.5}, 0.0, 0.2, 0.0, id="provider-margin-beats-global"),
+        pytest.param({}, {"global": 0.5}, 0.0, 0.5, 0.0, id="global-margin"),
+        pytest.param({"ai21": 0.1}, {"ai21": 0.2}, 0.0, 0.0, 0.0, id="ai21-keyed-config-never-applies"),
+    ],
+)
+def test_catalog_priced_ai21_jamba_calls_apply_the_ai21_chat_adjustments(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    discount_config: Mapping[str, float],
+    margin_config: Mapping[str, object],
+    discount: float,
+    margin_percent: float,
+    margin_fixed: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(discount_config))
+    monkeypatch.setattr(litellm, "cost_margin_config", dict(margin_config))
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+    base: Final = _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    expected: Final = base * (1 - discount) * (1 + margin_percent) + margin_fixed
+
+    assert response._hidden_params["response_cost"] == pytest.approx(expected)
+    assert completion_cost(completion_response=response) == pytest.approx(expected)
+
+
+def test_catalog_priced_ai21_jamba_cost_breakdown_records_the_ai21_chat_adjustments(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {"ai21_chat": 0.1})
+    monkeypatch.setattr(litellm, "cost_margin_config", {"ai21_chat": 0.2})
+    row: Final = litellm.model_cost[_JAMBA_ROW]
+    response: Final = _jamba_call("ai21/jamba-1.5-large")
+    base: Final = _billed_at(response, row["input_cost_per_token"], row["output_cost_per_token"])
+    logging_obj: Final = Logging(
+        model="ai21/jamba-1.5-large",
+        messages=_JAMBA_MESSAGES,
+        stream=False,
+        call_type="completion",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="ai21-adjustments",
+        function_id="f",
+    )
+
+    cost: Final = completion_cost(completion_response=response, litellm_logging_obj=logging_obj)
+
+    breakdown: Final = logging_obj.cost_breakdown
+    assert cost == pytest.approx(base * 0.9 * 1.2)
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(cost)
+    assert breakdown["original_cost"] == pytest.approx(base)
+    assert breakdown["discount_percent"] == pytest.approx(0.1)
+    assert breakdown["discount_amount"] == pytest.approx(base * 0.1)
+    assert breakdown["margin_percent"] == pytest.approx(0.2)
+    assert breakdown["margin_total_amount"] == pytest.approx(base * 0.9 * 0.2)
+
+
+_JAMBA_DEPLOYMENT_RATES: Final = {"cheap": (1e-03, 2e-03), "pricey": (3e-03, 4e-03)}
+
+
+@pytest.mark.parametrize("deployment", list(_JAMBA_DEPLOYMENT_RATES))
+def test_router_jamba_deployments_keep_their_own_prices(_local_model_cost_map: None, deployment: str) -> None:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": name,
+                "litellm_params": {
+                    "model": "ai21/jamba-1.5-large",
+                    "api_key": "fake-key",
+                    "input_cost_per_token": input_rate,
+                    "output_cost_per_token": output_rate,
+                },
+            }
+            for name, (input_rate, output_rate) in _JAMBA_DEPLOYMENT_RATES.items()
+        ]
+    )
+    response: Final = cast(
+        ModelResponse,
+        router.completion(model=deployment, messages=_JAMBA_MESSAGES, mock_response="hello there"),
+    )
+
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        _billed_at(response, *_JAMBA_DEPLOYMENT_RATES[deployment])
+    )

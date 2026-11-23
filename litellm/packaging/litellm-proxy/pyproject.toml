@@ -1,6 +1,6 @@
 [project]
 name = "litellm-proxy"
-version = "1.111.0"
+version = "1.112.0"
 description = "Opt-in Rust HTTP forwarding server for the LiteLLM Python proxy"
 requires-python = ">=3.10, <3.16"
 license = "MIT"
@@ -19,6 +19,7 @@ include = [
     { path = "litellm/rust/rust-toolchain.toml", format = "sdist" },
     { path = "litellm/rust/.cargo/config.toml", format = "sdist" },
     { path = "model_prices_and_context_window.json", format = "sdist" },
+    { path = "litellm/proxy/auth/public_key.pem", format = "sdist" },
 ]
 
 [tool.uv]

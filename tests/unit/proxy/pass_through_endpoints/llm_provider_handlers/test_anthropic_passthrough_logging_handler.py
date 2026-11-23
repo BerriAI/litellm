@@ -6,16 +6,128 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from fastapi import Request
 from pydantic import ValidationError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
+
+
+@pytest.mark.parametrize("overage", (False, True, None))
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("credential_header", ("authorization", "x-api-key"))
+@pytest.mark.parametrize("client_oauth,operator_oauth", ((True, False), (False, False), (True, True), (False, True)))
+def test_oauth_passthrough_prices_only_subscription_overage(
+    monkeypatch: pytest.MonkeyPatch,
+    overage: bool | None,
+    metadata_key: str,
+    stream: bool,
+    credential_header: str,
+    client_oauth: bool,
+    operator_oauth: bool,
+):
+    model: Final = "claude-subscription-passthrough-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    logger: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    client_token: Final = "sk-ant-oat-client" if client_oauth else "sk-ant-api03-client"
+    client_credential: Final = f"Bearer {client_token}" if credential_header == "authorization" else client_token
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "query_string": b"",
+            "headers": [
+                (credential_header.encode(), client_credential.encode()),
+                (b"x-litellm-api-key", b"sk-virtual"),
+            ],
+        }
+    )
+    authenticated: Final = UserAPIKeyAuth(api_key="sk-virtual")
+    headers_forwarded: Final = _upstream_headers_for_anthropic_route(
+        request,
+        authenticated,
+        {"authorization": "Bearer sk-ant-oat-operator"} if operator_oauth else None,
+    )
+    assert headers_forwarded["authorization" if operator_oauth else credential_header] == (
+        "Bearer sk-ant-oat-operator" if operator_oauth else client_credential
+    )
+    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated,
+        logging_obj=logger,
+        litellm_call_id="subscription",
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://api.anthropic.com/v1/messages"),
+        _parsed_body={
+            "model": model,
+            metadata_key: {
+                "used_client_oauth_token": True,
+                "claude_subscription_usage": {"is_overage": False},
+            },
+        },
+    )
+    assert kwargs["litellm_params"]["metadata"]["used_client_oauth_token"] is (client_oauth and not operator_oauth)
+    assert "claude_subscription_usage" not in kwargs["litellm_params"]["metadata"]
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=kwargs["litellm_params"],
+    )
+    body: Final = {
+        "id": "msg_subscription",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 10},
+    }
+    headers: Final = (
+        {}
+        if overage is None
+        else {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
+        }
+    )
+    result: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx.Response(200, json=body, headers=headers),
+        response_body=body,
+        logging_obj=logger,
+        url_route="/anthropic/v1/messages",
+        result="",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+    )
+    covered: Final = overage is False and client_oauth and not operator_oauth
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.0 if covered else 100 * 0.01 + 10 * 0.02)
+    assert logger.model_call_details["response_cost"] == result["kwargs"]["response_cost"]
 
 
 async def _drain_tasks():
@@ -2551,6 +2663,69 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     all_chunks: list[str | bytes], interrupted: bool
 ):
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
+
+
+_UNDECODABLE_DATA_LINES: Final = (
+    "data: " + "[" * 100_000 + "]" * 100_000 + "\n\n",
+    "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+)
+
+
+@pytest.mark.parametrize("position", ["before_message_start", "after_message_stop"])
+@pytest.mark.parametrize("undecodable_line", _UNDECODABLE_DATA_LINES, ids=["deep-array", "deep-object"])
+def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_the_stream(
+    position: str, undecodable_line: str
+) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_undecodable_line",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Sunny."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    )
+    stream: Final = [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events]
+    all_chunks: Final = (
+        [undecodable_line, *stream] if position == "before_message_start" else [*stream, undecodable_line]
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Weather?"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="undecodable-line-call",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    handled: Final = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/anthropic/v1/messages",
+        request_body={"model": "claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=all_chunks,
+        end_time=datetime.now(),
+    )
+
+    assert handled["result"].id == "msg_undecodable_line"
+    assert handled["result"].choices[0].message.content == "Sunny."
+    assert (handled["result"].usage.prompt_tokens, handled["result"].usage.completion_tokens) == (12, 3)
+    assert handled["kwargs"]["response_cost"] > 0
 
 
 

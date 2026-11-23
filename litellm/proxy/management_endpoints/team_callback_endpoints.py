@@ -370,9 +370,8 @@ async def add_team_callbacks(
 
         # store team callback settings in metadata
         team_metadata = _existing_team.metadata
-        team_callback_settings: list[dict] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
-        if team_callback_settings is None or not isinstance(team_callback_settings, list):
-            team_callback_settings = []
+        stored_logging: Final[object] = team_metadata.get("logging")  # will be dict of type AddTeamCallback
+        team_callback_settings: list[dict] = stored_logging if isinstance(stored_logging, list) else []
 
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.

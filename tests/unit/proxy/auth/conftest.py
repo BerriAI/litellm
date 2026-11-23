@@ -26,6 +26,7 @@ def auth_host() -> Callable[..., PythonAuthHost]:
             http=HttpCall(request=request, request_data={}, start_time=datetime(2024, 1, 1, tzinfo=timezone.utc)),
             prisma_client=None,
             user_api_key_cache=cache,
+            jwks_cache=DualCache(),
             proxy_logging_obj=ProxyLogging(user_api_key_cache=cache),
             llm_router=None,
             llm_model_list=None,

@@ -469,8 +469,11 @@ if MCP_AVAILABLE:
 
     def _build_mcp_registry_entry_for_server(server: MCPServer, base_url: str) -> _McpRegistryEntry:
         server_name: Final = _build_mcp_registry_server_name(server)
-        title: Final = server_name
-        description: Final = server_name
+        title: Final = server.server_name or server_name
+        stored_description: Final[object] = (server.mcp_info or {}).get("description")
+        description: Final = (
+            stored_description if isinstance(stored_description, str) and stored_description else server_name
+        )
         version: Final = DEFAULT_MCP_REGISTRY_VERSION
 
         server_prefix: Final = get_server_prefix(server)
@@ -2292,6 +2295,8 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    _PATH_PARAM_VALUE: Final = TypeAdapter(object)
+
     @public_catalog_operation
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
@@ -2349,7 +2354,8 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server_id: Final[str] = request.path_params.get("server_id", "")
+            raw_server_id: Final = _PATH_PARAM_VALUE.validate_python(request.path_params.get("server_id", ""))
+            server_id: Final = raw_server_id if isinstance(raw_server_id, str) else ""
             if server_id:
                 _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
@@ -3034,10 +3040,12 @@ if MCP_AVAILABLE:
             if not is_set:
                 missing_count += 1
             required.append(
-                MCPUserEnvVarSpec(
-                    name=name,
-                    description=spec.get("description"),
-                    is_set=is_set,
+                MCPUserEnvVarSpec.model_validate(
+                    {
+                        "name": name,
+                        "description": spec.get("description"),
+                        "is_set": is_set,
+                    }
                 )
             )
 
