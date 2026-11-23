@@ -191,6 +191,38 @@ def test_the_fixed_margin_is_charged_once_per_request_across_charged_rounds(
     assert breakdown["margin_total_amount"] == pytest.approx(request_margin)
 
 
+def test_rounds_with_different_fixed_fees_charge_the_final_rounds_fee_once():
+    first_breakdown: Final[CostBreakdown] = {
+        "input_cost": 0.0005,
+        "output_cost": 0.0,
+        "total_cost": 0.0035,
+        "margin_fixed_amount": 0.003,
+        "margin_total_amount": 0.003,
+    }
+    final_breakdown: Final[CostBreakdown] = {
+        "input_cost": 0.0004,
+        "output_cost": 0.0,
+        "total_cost": 0.0014,
+        "margin_fixed_amount": 0.001,
+        "margin_total_amount": 0.001,
+    }
+    first: Final = _round("resp_first", 0.0035)
+    final: Final = _round("resp_final", 0.0014)
+
+    billed: Final = billed_for_every_round(
+        first=first, first_breakdown=first_breakdown, final=final, final_breakdown=final_breakdown
+    )
+    breakdown: Final = summed_cost_breakdown(
+        first=first, first_breakdown=first_breakdown, final=final, final_breakdown=final_breakdown
+    )
+
+    assert billed.hidden_params["response_cost"] == pytest.approx(0.0005 + 0.0004 + 0.001)
+    assert breakdown is not None
+    assert breakdown["total_cost"] == pytest.approx(billed.hidden_params["response_cost"])
+    assert breakdown["margin_fixed_amount"] == pytest.approx(0.001)
+    assert breakdown["margin_total_amount"] == pytest.approx(0.001)
+
+
 @pytest.mark.parametrize(
     ("first_cached", "final_cached", "kept_breakdown"),
     [

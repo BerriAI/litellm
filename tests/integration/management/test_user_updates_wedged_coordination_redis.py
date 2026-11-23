@@ -270,11 +270,11 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         proxy_log,
                         lambda text: (
                             all(
-                                text.count(f"publish for {user} failed") >= _WEDGED_PUBLISHES_PER_BURST_USER
+                                text.count(f'publish for "{user}" failed') >= _WEDGED_PUBLISHES_PER_BURST_USER
                                 for user in wedged_users
                             )
                             and all(
-                                text.count(f"publish for {team_key} failed") >= wedged_team_updates
+                                text.count(f'publish for "{team_key}" failed') >= wedged_team_updates
                                 for team_key in wedged_team_keys
                             )
                         ),

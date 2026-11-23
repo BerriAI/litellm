@@ -130,6 +130,7 @@ def _safeguard_results(tool_uses: dict[str, dict[str, str]]) -> list[dict[str, o
 
 SAFEGUARD_RESULTS: Final = _safeguard_results({})
 REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanation": None}
+CONTAINER: Final = {"id": "container_1", "expires_at": "2026-12-01T00:00:00Z"}
 
 
 @pytest.mark.parametrize(
@@ -137,9 +138,10 @@ REFUSAL_STOP_DETAILS: Final = {"type": "refusal", "category": "cyber", "explanat
     [
         ("end_turn", {"safeguard_results": SAFEGUARD_RESULTS}),
         ("refusal", {"stop_details": REFUSAL_STOP_DETAILS}),
+        ("pause_turn", {"container": CONTAINER}),
         ("pause_turn", {}),
     ],
-    ids=["safeguard_results", "refusal_stop_details", "pause_turn"],
+    ids=["safeguard_results", "refusal_stop_details", "container", "pause_turn"],
 )
 def test_rewritten_stream_keeps_the_upstream_message_delta_fields(stop_reason: str, delta_fields: dict[str, object]):
     """A guardrail that rewrites a streamed response assembles it into the OpenAI shape, which has no

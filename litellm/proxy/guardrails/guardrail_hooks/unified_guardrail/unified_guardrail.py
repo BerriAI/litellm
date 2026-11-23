@@ -201,7 +201,7 @@ class _StreamTerminated(Exception):
     its terminal chunks (block message or in-stream error) and must stop."""
 
 
-def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: dict) -> str | None:
+def _get_a2a_request_id(responses_so_far: Sequence[object], request_data: Mapping[str, object]) -> str | None:
     """Get JSON-RPC request id from first A2A chunk or request body for in-stream error reporting."""
     for item in responses_so_far:
         if isinstance(item, dict) and "id" in item:
@@ -237,7 +237,7 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+def _ensure_litellm_metadata(data: dict[str, object], user_api_key_dict: UserAPIKeyAuth) -> None:
     """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
     if "litellm_metadata" not in data:
         from litellm.llms.base_llm.guardrail_translation.base_translation import (
