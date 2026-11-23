@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -592,6 +593,180 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_bod
     assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
     assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
     assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
+
+
+_EXTRA_BODY_REQUEST: Final = MappingProxyType(
+    {"model": "hosted_vllm/qwen3", "messages": [{"role": "user", "content": "extra-body"}]}
+)
+_LARGE_EXTRA_BODY_TEXT: Final = "x" * 70_000
+
+
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ({"chat_template_kwargs": {"enable_thinking": True}}, {"chat_template_kwargs": {"enable_thinking": False}}),
+        ({"top_k": 0}, None),
+        ({"top_k": None}, {}),
+        ({"top_k": False}, {"top_k": 0}),
+        ({"chat_template_kwargs": {}}, {}),
+        ({"stop_token_ids": [1, 2]}, {"stop_token_ids": [2, 1]}),
+        ({"stop_token_ids": (1,)}, {"stop_token_ids": [1]}),
+        ({"guided_regex": b"a"}, {"guided_regex": b"b"}),
+        ({"prompt": _LARGE_EXTRA_BODY_TEXT + "a"}, {"prompt": _LARGE_EXTRA_BODY_TEXT + "b"}),
+        ({"top_k": 5, "return_token_ids": True}, {"return_token_ids": True}),
+        ({"top_k": 5, "return_token_ids": False}, None),
+    ],
+    ids=[
+        "nested_bool",
+        "zero",
+        "null",
+        "false_vs_zero",
+        "empty_nested_dict",
+        "list_order",
+        "tuple_vs_list",
+        "bytes",
+        "large_string_tail",
+        "beside_token_ids",
+        "beside_falsy_token_ids",
+    ],
+)
+def test_default_cache_key_tells_apart_requests_whose_extra_body_differs(
+    monkeypatch: pytest.MonkeyPatch, first: object, second: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    first_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=first)
+
+    assert first_key != cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=second)
+    assert first_key == cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=copy.deepcopy(first))
+
+
+@pytest.mark.parametrize(
+    "extra_body",
+    [
+        None,
+        {},
+        "top_k=5",
+        [("top_k", 5)],
+        {"return_token_ids": False},
+        {"continuation_token": ""},
+        {"return_token_ids": None, "continuation_token": ""},
+    ],
+    ids=["none", "empty", "string", "pairs", "falsy_token_ids", "empty_continuation", "falsy_legacy_fields"],
+)
+def test_default_cache_key_ignores_extra_body_that_adds_nothing_to_the_request(
+    monkeypatch: pytest.MonkeyPatch, extra_body: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    assert cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body) == cache.get_cache_key(
+        **_EXTRA_BODY_REQUEST
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider_specific_params_keyed", "extra_body", "extra_body_preimage"),
+    [
+        (False, {"return_token_ids": True}, "extra_body.return_token_ids: True"),
+        (False, {"continuation_token": "dG9r", "return_token_ids": False}, "extra_body.continuation_token: dG9r"),
+        (False, {"return_token_ids": True, "top_k": 5}, "extra_body: {'top_k': 5}extra_body.return_token_ids: True"),
+        (True, {}, "extra_body: {}"),
+        (True, {"return_token_ids": False}, "extra_body: {'return_token_ids': False}"),
+        (
+            True,
+            {"return_token_ids": True, "top_k": 5},
+            "extra_body: {'return_token_ids': True, 'top_k': 5}extra_body.return_token_ids: True",
+        ),
+        (True, "top_k=5", "extra_body: top_k=5"),
+    ],
+    ids=[
+        "default_token_ids",
+        "default_continuation",
+        "default_beside_token_ids",
+        "flag_empty",
+        "flag_falsy_token_ids",
+        "flag_beside_token_ids",
+        "flag_string",
+    ],
+)
+def test_extra_body_cache_key_keeps_its_preimage(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, extra_body: object, extra_body_preimage: str
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    expected: Final = hashlib.sha256(f"model: mmessages: hi{extra_body_preimage}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
+
+
+def test_extra_body_keeps_preset_keys_and_namespaces_in_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", False)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    extra_body: Final = {"chat_template_kwargs": {"enable_thinking": False}}
+
+    unscoped_key: Final = cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body)
+
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, litellm_params={"preset_cache_key": "preset"})
+        == "preset"
+    )
+    assert (
+        cache.get_cache_key(**_EXTRA_BODY_REQUEST, extra_body=extra_body, cache={"namespace": "team-a"})
+        == f"team-a:{unscoped_key}"
+    )
+
+
+def test_semantic_cache_scope_separates_extra_body_but_still_ignores_the_prompt() -> None:
+    cache: Final = _semantic_cache()
+    sky, colour = _SEMANTICALLY_IDENTICAL_PROMPTS
+
+    def scope_key(messages: object, api_key: str, enable_thinking: bool) -> str:
+        return cache.get_cache_key(
+            model="gpt-4o-mini",
+            messages=messages,
+            metadata={"user_api_key": api_key},
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+        )
+
+    assert scope_key(sky, "hash-A", True) == scope_key(colour, "hash-A", True)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-A", False)
+    assert scope_key(sky, "hash-A", True) != scope_key(colour, "hash-B", True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+async def test_response_cache_answers_each_extra_body_with_its_own_reply(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+
+    async def ask(enable_thinking: bool, mock_response: str) -> tuple[str, object]:
+        response: Final = await acompletion(
+            model="hosted_vllm/qwen",
+            api_base="http://localhost:8000",
+            messages=[{"role": "user", "content": "extra-body"}],
+            extra_body={"chat_template_kwargs": {"enable_thinking": enable_thinking}},
+            mock_response=mock_response,
+        )
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        assert isinstance(response, litellm.ModelResponse), response
+        return _completion_text(response), response._hidden_params.get("cache_hit")
+
+    replies: Final = (
+        await ask(True, "WITH-THINKING"),
+        await ask(False, "NO-THINKING"),
+        await ask(True, "not served, cached reply expected"),
+        await ask(False, "not served, cached reply expected"),
+    )
+
+    assert replies == (
+        ("WITH-THINKING", None),
+        ("NO-THINKING", None),
+        ("WITH-THINKING", True),
+        ("NO-THINKING", True),
+    )
 
 
 def test_cache_key_tells_apart_requests_that_differ_only_in_tool_call_id_shape() -> None:
@@ -1810,6 +1985,18 @@ def test_cache_key_stays_the_sha256_of_the_formatted_request(case: object) -> No
     expected: Final = hashlib.sha256(f"model: mmessages: {case}stream: True".encode()).hexdigest()
 
     assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages=case, stream=True) == expected
+
+
+@pytest.mark.parametrize("provider_specific_params_keyed", [False, True])
+@pytest.mark.parametrize("case", _KEY_PREIMAGE_CASES.values(), ids=_KEY_PREIMAGE_CASES.keys())
+def test_extra_body_cache_key_formats_any_accepted_value_like_the_request(
+    monkeypatch: pytest.MonkeyPatch, provider_specific_params_keyed: bool, case: object
+) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", provider_specific_params_keyed)
+    extra_body: Final = {"payload": case}
+    expected: Final = hashlib.sha256(f"model: mmessages: hiextra_body: {extra_body}".encode()).hexdigest()
+
+    assert Cache(type=LiteLLMCacheType.LOCAL).get_cache_key(model="m", messages="hi", extra_body=extra_body) == expected
 
 
 def test_cache_key_for_a_top_level_lone_surrogate_still_raises() -> None:

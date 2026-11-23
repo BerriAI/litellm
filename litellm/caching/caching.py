@@ -102,13 +102,25 @@ def _embedding_fields(embedding_response: object) -> _SupportsFieldLookup:
     return vars(embedding_response)
 
 
-def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
-    raw_extra_body: Final = kwargs.get("extra_body")
+def _extra_body_mapping(raw_extra_body: object) -> Mapping[str, object] | None:
     if not isinstance(raw_extra_body, dict):
-        return ""
-    extra_body: Final = cast(  # cast-ok: isinstance leaves the key and value types unknown
+        return None
+    return cast(  # cast-ok: isinstance leaves the key and value types unknown
         Mapping[str, object], raw_extra_body
     )
+
+
+def _extra_body_beyond_always_keyed_params(raw_extra_body: object) -> Mapping[str, object]:
+    extra_body: Final = _extra_body_mapping(raw_extra_body)
+    if extra_body is None:
+        return {}
+    return {key: value for key, value in extra_body.items() if key not in _ALWAYS_KEYED_PROVIDER_PARAMS}
+
+
+def _keyed_provider_params_in_extra_body(kwargs: Mapping[str, object]) -> str:
+    extra_body: Final = _extra_body_mapping(kwargs.get("extra_body"))
+    if extra_body is None:
+        return ""
     return "".join(
         f"extra_body.{param}: {extra_body[param]}"
         for param in sorted(_ALWAYS_KEYED_PROVIDER_PARAMS)
@@ -625,6 +637,8 @@ class Cache:
                 and kwargs[param] is not None
             ):
                 yield param, kwargs[param]
+            elif param == "extra_body" and (forwarded := _extra_body_beyond_always_keyed_params(kwargs[param])):
+                yield param, forwarded
 
     def _cache_key_fragments(self, kwargs: dict[str, object]) -> Iterator[str]:
         is_semantic_cache: Final = self._is_semantic_cache()
