@@ -1,9 +1,10 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, HttpUrl, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -36,6 +37,18 @@ def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, objec
 
 
 MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
+
+
+def _validate_event_callback_base(value: str) -> str:
+    url: Final = HttpUrl(value)
+    if url.scheme != "https" or not urlsplit(value).netloc or any(
+        part is not None for part in (url.username, url.password, url.query, url.fragment)
+    ):
+        raise ValueError("MCP Events callback base must be an absolute HTTPS URL without credentials, query or fragment")
+    return str(url).rstrip("/")
+
+
+MCPEventCallbackBase: TypeAlias = Annotated[str, AfterValidator(_validate_event_callback_base)]
 
 
 class MCPOAuthMetadata(LiteLLMBaseModel):
