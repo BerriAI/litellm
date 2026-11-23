@@ -20,6 +20,7 @@ import litellm
 from litellm import client
 from litellm.constants import request_timeout as DEFAULT_REQUEST_TIMEOUT
 from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.images.streaming import ImageStreamingResponse
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     invalid_provider_routing_hints_message,
@@ -142,7 +143,7 @@ def _chatgpt_image_headers(model: str, params: GenericLiteLLMParams, headers: Ma
 
 ##### Image Generation #######################
 @client
-async def aimage_generation(*args, **kwargs) -> ImageResponse:
+async def aimage_generation(*args, **kwargs) -> ImageResponse | ImageStreamingResponse:
     """
     Asynchronously calls the `image_generation` function with the given arguments and keyword arguments.
 
@@ -194,6 +195,11 @@ async def aimage_generation(*args, **kwargs) -> ImageResponse:
             response = init_response
         elif asyncio.iscoroutine(init_response):
             response = await init_response
+
+        if isinstance(response, ImageStreamingResponse):
+            return response
+        if isinstance(init_response, ImageStreamingResponse):
+            return init_response
 
         if response is None:
             raise ValueError("Unable to get Image Response. Please pass a valid llm_provider.")
