@@ -12625,6 +12625,33 @@ def test_text_only_ai21_jamba_cost_is_billed_at_the_catalog_rates(_local_model_c
     )
 
 
+@pytest.mark.parametrize(
+    "discount_config, discount",
+    [
+        pytest.param({}, 0.0, id="no-discount"),
+        pytest.param({"ai21_chat": 0.1}, 0.1, id="provider-discount"),
+        pytest.param({"ai21_chat/jamba*": 0.1}, 0.1, id="model-pattern-discount"),
+        pytest.param({"ai21/jamba*": 0.1}, 0.0, id="ai21-pattern-never-applies"),
+    ],
+)
+@pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large", "ai21_chat/jamba-1.5-large"])
+def test_text_only_ai21_jamba_cost_applies_the_ai21_chat_discount(
+    _local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    discount_config: Mapping[str, float],
+    discount: float,
+) -> None:
+    monkeypatch.setattr(litellm, "cost_discount_config", {})
+    undiscounted: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+    monkeypatch.setattr(litellm, "cost_discount_config", dict(discount_config))
+
+    cost: Final = completion_cost(model=model, prompt="hi there", completion="hello there")
+
+    assert undiscounted > 0
+    assert cost == pytest.approx(undiscounted * (1 - discount))
+
+
 @pytest.mark.parametrize("model", ["ai21/jamba-1.5-large", "jamba-1.5-large"])
 def test_dict_ai21_jamba_response_without_a_provider_is_billed_at_the_catalog_rates(
     _local_model_cost_map: None, model: str

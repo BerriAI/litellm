@@ -2394,7 +2394,9 @@ def completion_cost(
                     litellm_logging_obj=litellm_logging_obj,
                     total_time=total_time,
                 )
-                model_for_discount = custom_priced_request_model or model
+                model_for_discount = custom_priced_request_model or (
+                    model.removeprefix("ai21/") if model is not None and idx >= len(potential_model_names) else model
+                )
                 if (
                     not caller_set_prices
                     and (reported_cost := billed_usage_cost(priced_response, custom_llm_provider)) is not None
